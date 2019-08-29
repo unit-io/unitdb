@@ -3,10 +3,10 @@ package main
 import (
 	"log"
 
-	kv "github.com/frontnet/tracedb"
+	"github.com/frontnet/tracedb"
 )
 
-func printGet(key string, testdb *kv.DB) {
+func printGet(key string, testdb *tracedb.DB) {
 	// Reading from a database.
 	val, err := testdb.Get([]byte(key))
 	if err != nil {
@@ -18,7 +18,7 @@ func printGet(key string, testdb *kv.DB) {
 
 func main() {
 	// Opening a database.
-	testdb, err := kv.Open("example", nil)
+	testdb, err := tracedb.Open("example", nil)
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -34,7 +34,7 @@ func main() {
 
 	// testdb.PutWithTTL([]byte("b4"), []byte("bar"), "1m")
 
-	err = testdb.Update(func(b *kv.Batch) error {
+	err = testdb.Update(func(b *tracedb.Batch) error {
 		b.Put([]byte("foo"), []byte("bar"))
 		b.Put([]byte("ayaz"), []byte("bar"))
 		b.Put([]byte("riz"), []byte("bar"))
@@ -58,15 +58,15 @@ func main() {
 
 	// Iterating over key/value pairs.
 	bit := testdb.Items()
-	for {
-		key, val, err := bit.Next()
-		if err != nil {
-			if err != kv.ErrIterationDone {
-				log.Fatal(err)
-				return
-			}
-			break
-		}
-		log.Printf("%s %s", key, val)
+	for ; bit.Valid(); bit.Next() {
+		// key, val, err := bit.Next()
+		// if err != nil {
+		// 	if err != tracedb.ErrIterationDone {
+		// 		log.Fatal(err)
+		// 		return
+		// 	}
+		// 	break
+		// }
+		log.Printf("%s %s", bit.Key(), bit.Value())
 	}
 }

@@ -1,10 +1,4 @@
-// Copyright (c) 2012, Suryandaru Triandana <syndtr@gmail.com>
-// All rights reserved.
-//
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-package kv
+package tracedb
 
 import (
 	"bytes"
@@ -12,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 const (
@@ -35,6 +30,7 @@ const (
 
 type batchIndex struct {
 	delFlag            bool
+	expiresAt          uint32
 	keyPos, keyLen     int
 	valuePos, valueLen int
 }
@@ -56,7 +52,7 @@ func (index batchIndex) kv(data []byte) (key, value []byte) {
 
 type internalKey []byte
 
-func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool) internalKey {
+func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32) internalKey {
 	if seq > keyMaxSeq {
 		panic("tracedb: invalid sequence number")
 	}
@@ -65,26 +61,28 @@ func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool) internalKey {
 	if dFlag {
 		dBit = 1
 	}
-	dst = ensureBuffer(dst, len(ukey)+8)
+	dst = ensureBuffer(dst, len(ukey)+12)
 	copy(dst, ukey)
-	binary.LittleEndian.PutUint64(dst[len(ukey):], (seq<<8)|uint64(dBit))
+	binary.LittleEndian.PutUint64(dst[len(ukey):len(ukey)+8], (seq<<8)|uint64(dBit))
+	binary.LittleEndian.PutUint32(dst[len(ukey)+8:], expiresAt)
 	return internalKey(dst)
 }
 
-func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, err error) {
+func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt uint32, err error) {
 	if len(ik) < 8 {
 		logger.Print("invalid internal key length")
-		return nil, 0, false, nil
+		return
 	}
-	num := binary.LittleEndian.Uint64(ik[len(ik)-8:])
+	expiresAt = binary.LittleEndian.Uint32(ik[len(ik)-4:])
+	num := binary.LittleEndian.Uint64(ik[len(ik)-12 : len(ik)-4])
 	seq, dFlag = uint64(num>>8), num&0xff != 0
 	ukey = ik[:len(ik)-8]
 	return
 }
 
-func (b *Batch) mput(dFlag bool, seq uint64, key, value []byte) error {
+func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte) error {
 	var k []byte
-	k = makeInternalKey(k, key, seq, dFlag)
+	k = makeInternalKey(k, key, seq, dFlag, expiresAt)
 	if err := b.mem.Put(k, value); err != nil {
 		return err
 	}
@@ -120,7 +118,7 @@ func (b *Batch) commit() error {
 				if err != nil {
 					return true, err
 				}
-				key, _, dFlag, err := parseInternalKey(memslKey)
+				key, _, dFlag, expiresAt, err := parseInternalKey(memslKey)
 				if err != nil {
 					return true, err
 				}
@@ -213,6 +211,7 @@ func (b *Batch) commit() error {
 						hash:      hash,
 						keySize:   uint16(len(key)),
 						valueSize: uint32(len(value)),
+						expiresAt: expiresAt,
 					}
 					if bh.entries[entryIdx].kvOffset, err = b.db.data.writeKeyValue(key, value); err != nil {
 						return false, err
@@ -281,7 +280,7 @@ func (b *Batch) grow(n int) {
 	}
 }
 
-func (b *Batch) appendRec(dFlag bool, key, value []byte) {
+func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
 	n := 1 + binary.MaxVarintLen32 + len(key)
 	if !dFlag {
 		n += binary.MaxVarintLen32 + len(value)
@@ -306,6 +305,7 @@ func (b *Batch) appendRec(dFlag bool, key, value []byte) {
 		index.valueLen = len(value)
 		o += copy(data[o:], value)
 	}
+	index.expiresAt = expiresAt
 	b.data = data[:o]
 	b.index = append(b.index, index)
 	b.internalLen += index.keyLen + index.valueLen + 8
@@ -315,19 +315,31 @@ func (b *Batch) appendRec(dFlag bool, key, value []byte) {
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) Put(key, value []byte) {
-	b.appendRec(false, key, value)
+	b.PutWithTTL(key, value, 0)
+}
+
+// PutWithTTL appends 'put operation' of the given key/value pair to the batch and add key expiry time.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (b *Batch) PutWithTTL(key, value []byte, ttl time.Duration) {
+	var expiresAt uint32
+	if ttl != 0 {
+		expiresAt = uint32(time.Now().Add(ttl).Unix())
+	}
+	b.appendRec(false, expiresAt, key, value)
 }
 
 // Delete appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) Delete(key []byte) {
-	b.appendRec(true, key, nil)
+	var expiresAt uint32
+	b.appendRec(true, expiresAt, key, nil)
 }
 
-func (b *Batch) writeInternal(fn func(i int, dFlag bool, k, v []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v []byte) error) error {
 	for i, index := range b.index {
-		if err := fn(i, index.delFlag, index.k(b.data), index.v(b.data)); err != nil {
+		if err := fn(i, index.delFlag, index.expiresAt, index.k(b.data), index.v(b.data)); err != nil {
 			return err
 		}
 	}
@@ -357,8 +369,8 @@ func (b *Batch) Write() (*BatchIterator, error) {
 		}
 		b.mem = mem
 	}
-	err := b.writeInternal(func(i int, dFlag bool, k, v []byte) error {
-		return b.mput(dFlag, b.mem.seq+uint64(i), k, v)
+	err := b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
+		return b.mput(dFlag, expiresAt, b.mem.seq+uint64(i), k, v)
 	})
 
 	return b.Items(), err
@@ -447,7 +459,7 @@ func (b *Batch) decode(data []byte, expectedLen int) error {
 func (b *Batch) put(seq uint64, mdb *memdb) error {
 	var ik []byte
 	for i, index := range b.index {
-		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag)
+		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag, index.expiresAt)
 		if err := mdb.Put(ik, index.v(b.data)); err != nil {
 			return err
 		}
@@ -458,7 +470,7 @@ func (b *Batch) put(seq uint64, mdb *memdb) error {
 func (b *Batch) revert(seq uint64, mdb *memdb) error {
 	var ik []byte
 	for i, index := range b.index {
-		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag)
+		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag, index.expiresAt)
 		if err := mdb.Delete(ik); err != nil {
 			return err
 		}
@@ -531,7 +543,7 @@ func decodeBatchToDB(data []byte, expectSeq uint64, mdb *memdb) (seq uint64, bat
 			logger.Print("invalid records length")
 			return nil
 		}
-		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.delFlag)
+		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.delFlag, index.expiresAt)
 		if err := mdb.Put(ik, index.v(data)); err != nil {
 			return err
 		}

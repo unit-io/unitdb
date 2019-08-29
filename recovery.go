@@ -1,10 +1,10 @@
-package kv
+package tracedb
 
 import (
 	"math"
 	"sort"
 
-	"github.com/ayaz-mumtaz/dev18/db/kv/fs"
+	"github.com/frontnet/tracedb/fs"
 )
 
 func align51264(n int64) int64 {

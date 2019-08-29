@@ -1,4 +1,4 @@
-package kv
+package tracedb
 
 import (
 	"errors"
@@ -38,10 +38,13 @@ func (it *BatchIterator) Next() ([]byte, []byte, error) {
 						return true, nil
 					}
 					ikey, value, err := it.db.data.readKeyValue(sl)
+					if err == ErrKeyExpired {
+						return false, nil
+					}
 					if err != nil {
 						return true, err
 					}
-					key, _, _, err := parseInternalKey(ikey)
+					key, _, _, _, err := parseInternalKey(ikey)
 					it.queue = append(it.queue, batchitem{key: key, value: value})
 				}
 				return false, nil

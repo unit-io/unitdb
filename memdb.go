@@ -1,4 +1,4 @@
-package kv
+package tracedb
 
 import (
 	"sync/atomic"

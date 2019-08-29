@@ -1,4 +1,4 @@
-package kv
+package tracedb
 
 import (
 	"bytes"
@@ -419,11 +419,11 @@ func (db *DB) Put(key []byte, value []byte) error {
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-	return db.PutWithTTL(key, value, "")
+	return db.PutWithTTL(key, value, 0)
 }
 
 // Put sets the value for the given key. It updates the value for the existing key.
-func (db *DB) PutWithTTL(key []byte, value []byte, ttl string) error {
+func (db *DB) PutWithTTL(key []byte, value []byte, ttl time.Duration) error {
 	switch {
 	case len(key) == 0:
 		return errKeyEmpty
@@ -451,7 +451,7 @@ func (db *DB) PutWithTTL(key []byte, value []byte, ttl string) error {
 	return nil
 }
 
-func (db *DB) put(hash uint32, key []byte, value []byte, ttl string) error {
+func (db *DB) put(hash uint32, key []byte, value []byte, ttl time.Duration) error {
 	var b *bucketHandle
 	var originalB *bucketHandle
 	entryIdx := 0
@@ -498,11 +498,9 @@ func (db *DB) put(hash uint32, key []byte, value []byte, ttl string) error {
 		defer db.data.free(b.entries[entryIdx].kvSize(), b.entries[entryIdx].kvOffset)
 	}
 
-	var duration time.Duration
 	var expiresAt uint32
-	if ttl != "" {
-		duration, _ = time.ParseDuration(ttl)
-		expiresAt = uint32(time.Now().Add(duration).Unix())
+	if ttl != 0 {
+		expiresAt = uint32(time.Now().Add(ttl).Unix())
 	}
 	b.entries[entryIdx] = entry{
 		hash:      hash,

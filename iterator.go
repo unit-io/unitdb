@@ -1,4 +1,4 @@
-package kv
+package tracedb
 
 import (
 	"errors"
@@ -8,21 +8,24 @@ import (
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
 var ErrIterationDone = errors.New("no more items in iterator")
 
-type item struct {
-	key   []byte
-	value []byte
+type Item struct {
+	key       []byte
+	value     []byte
+	expiresAt uint32
+	err       error
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
 	db            *DB
 	nextBucketIdx uint32
-	queue         []item
+	item          Item
+	queue         []Item
 	mu            sync.Mutex
 }
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
-func (it *ItemIterator) Next() ([]byte, []byte, error) {
+func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
@@ -44,12 +47,12 @@ func (it *ItemIterator) Next() ([]byte, []byte, error) {
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, item{key: key, value: value})
+					it.queue = append(it.queue, Item{key: key, value: value, expiresAt: sl.expiresAt, err: err})
 				}
 				return false, nil
 			})
 			if err != nil {
-				return nil, nil, err
+				return
 			}
 			it.nextBucketIdx++
 			if len(it.queue) > 0 {
@@ -59,12 +62,26 @@ func (it *ItemIterator) Next() ([]byte, []byte, error) {
 	}
 
 	if len(it.queue) > 0 {
-		item := it.queue[0]
+		it.item = it.queue[0]
 		it.queue = it.queue[1:]
-		return item.key, item.value, nil
+		//return item.key, item.value, nil
 	}
 
-	return nil, nil, ErrIterationDone
+	//return nil, nil, ErrIterationDone
+}
+
+// Item returns pointer to the current key-value pair.
+// This item is only valid until it.Next() gets called.
+func (it *ItemIterator) Item() Item {
+	return it.item
+}
+
+// Valid returns false when iteration is done.
+func (it *ItemIterator) Valid() bool {
+	if it.queue == nil {
+		return false
+	}
+	return len(it.queue) > 0
 }
 
 // Error returns any accumulated error. Exhausting all the key/value pairs
@@ -77,14 +94,14 @@ func (it *ItemIterator) Error() error {
 // should not modify the contents of the returned slice, and its contents may
 // change on the next call to Next.
 func (it *ItemIterator) Key() []byte {
-	return nil
+	return it.item.key
 }
 
 // Value returns the value of the current key/value pair, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (it *ItemIterator) Value() []byte {
-	return nil
+	return it.item.value
 }
 
 // Release releases associated resources. Release should always succeed and can
