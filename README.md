@@ -1,2 +1,2 @@
 # tracedb
-Write fast timeseries database for IoT and realtime gaming applications
+Blazing fast timeseries database for IoT and realtime gaming applications
