@@ -3,7 +3,7 @@ package tracedb
 import (
 	"encoding/binary"
 
-	"github.com/ayaz-mumtaz/dev18/db/kv/fs"
+	"github.com/frontnet/tracedb/fs"
 )
 
 type entry struct {
