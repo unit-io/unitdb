@@ -69,22 +69,38 @@ func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32)
 }
 
 func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt uint32, err error) {
-	if len(ik) < 8 {
+	if len(ik) < 12 {
 		logger.Print("invalid internal key length")
 		return
 	}
 	expiresAt = binary.LittleEndian.Uint32(ik[len(ik)-4:])
 	num := binary.LittleEndian.Uint64(ik[len(ik)-12 : len(ik)-4])
 	seq, dFlag = uint64(num>>8), num&0xff != 0
-	ukey = ik[:len(ik)-8]
+	ukey = ik[:len(ik)-12]
 	return
 }
 
 func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte) error {
+	switch {
+	case len(key) == 0:
+		return errKeyEmpty
+	case len(key) > MaxKeyLength:
+		return errKeyTooLarge
+	case len(value) > MaxValueLength:
+		return errValueTooLarge
+	}
+	h := b.mem.hash(key)
 	var k []byte
 	k = makeInternalKey(k, key, seq, dFlag, expiresAt)
-	if err := b.mem.Put(k, value); err != nil {
+	b.memMu.Lock()
+	defer b.memMu.Unlock()
+	if err := b.mem.put(h, k, value, expiresAt); err != nil {
 		return err
+	}
+	if float64(b.mem.count)/float64(b.mem.nBuckets*entriesPerBucket) > loadFactor {
+		if err := b.mem.split(); err != nil {
+			return err
+		}
 	}
 	b.mem.seq++
 	return nil
@@ -262,6 +278,13 @@ type Batch struct {
 // init initializes the batch.
 func (b *Batch) init(db *DB) {
 	b.db = db
+	if b.mem == nil || b.mem.getref() == 0 {
+		mem, err := b.db.newmemdb(0)
+		if err != nil {
+			return
+		}
+		b.mem = mem
+	}
 	// // Copy the meta page since it can be changed by the writer.
 	// tx.meta = &meta{}
 	// db.meta().copy(tx.meta)
@@ -362,13 +385,6 @@ func (b *Batch) Write() (*BatchIterator, error) {
 		return &BatchIterator{}, nil
 	}
 
-	if b.mem == nil || b.mem.getref() == 0 {
-		mem, err := b.db.newmemdb(0)
-		if err != nil {
-			return nil, err
-		}
-		b.mem = mem
-	}
 	err := b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
 		return b.mput(dFlag, expiresAt, b.mem.seq+uint64(i), k, v)
 	})

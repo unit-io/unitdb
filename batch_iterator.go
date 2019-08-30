@@ -39,7 +39,7 @@ func (it *BatchIterator) Next() ([]byte, []byte, error) {
 					}
 					ikey, value, err := it.db.data.readKeyValue(sl)
 					if err == ErrKeyExpired {
-						return false, nil
+						continue
 					}
 					if err != nil {
 						return true, err

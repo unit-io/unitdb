@@ -4,9 +4,7 @@
   <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time gaming application"> 
 </p>
 
-# tracedb: Blazing fast timeseries database fro IoT and real-time gaming application
-
-## Trace is an open source messaging borker for IoT and other real-time messaging service. Trace messaging API is built for speed and security.
+# tracedb: Blazing fast timeseries database for IoT and real-time gaming application
 
 tracedb is a timeseries database for IoT application and real-time gaming applications
 
@@ -75,15 +73,14 @@ Use the DB.Items() function which returns a new instance of ItemIterator:
 
 ```
 it := db.Items()
-for {
-    key, val, err := it.Next()
-    if err != nil {
+for it.First(); it.Valid(); it.Next()
+    if it.Error() != nil {
         if err != tracedb.ErrIterationDone {
             log.Fatal(err)
         }
         break
     }
-    log.Printf("%s %s", key, val)
+    log.Printf("%s %s", it.Item().Key(), it.Item().Value())
 }
 ```
 

@@ -20,7 +20,7 @@ func (m *memdb) incref() {
 
 func (m *memdb) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
-		m.DB = nil
+		m.mpoolPut(m)
 	} else if ref < 0 {
 		panic("negative memdb ref")
 	}
@@ -54,7 +54,7 @@ func (db *DB) mpoolGet(n int) *memdb {
 	}
 	if mdb == nil {
 		var opts Options
-		db, err := Open("example", opts.memWithDefaults())
+		db, err := Open("memdb", opts.memWithDefaults())
 		if err != nil {
 			logger.Printf("Unable to open database: %v", err)
 		}

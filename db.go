@@ -436,7 +436,11 @@ func (db *DB) PutWithTTL(key []byte, value []byte, ttl time.Duration) error {
 	db.metrics.Puts.Add(1)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if err := db.put(h, key, value, ttl); err != nil {
+	var expiresAt uint32
+	if ttl != 0 {
+		expiresAt = uint32(time.Now().Add(ttl).Unix())
+	}
+	if err := db.put(h, key, value, expiresAt); err != nil {
 		return err
 	}
 	if float64(db.count)/float64(db.nBuckets*entriesPerBucket) > loadFactor {
@@ -451,7 +455,7 @@ func (db *DB) PutWithTTL(key []byte, value []byte, ttl time.Duration) error {
 	return nil
 }
 
-func (db *DB) put(hash uint32, key []byte, value []byte, ttl time.Duration) error {
+func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
 	var b *bucketHandle
 	var originalB *bucketHandle
 	entryIdx := 0
@@ -498,10 +502,6 @@ func (db *DB) put(hash uint32, key []byte, value []byte, ttl time.Duration) erro
 		defer db.data.free(b.entries[entryIdx].kvSize(), b.entries[entryIdx].kvOffset)
 	}
 
-	var expiresAt uint32
-	if ttl != 0 {
-		expiresAt = uint32(time.Now().Add(ttl).Unix())
-	}
 	b.entries[entryIdx] = entry{
 		hash:      hash,
 		keySize:   uint16(len(key)),
