@@ -61,6 +61,7 @@ type DB struct {
 	// batchDB.
 	memMu   sync.RWMutex
 	memPool chan *memdb
+	mem     *memdb
 
 	// Close.
 	closeW sync.WaitGroup
@@ -297,8 +298,8 @@ func (db *DB) Close() error {
 		db.closer = nil
 	}
 
-	// // Clear memdbs.
-	// db.clearMems()
+	// Clear memdbs.
+	db.clearMems()
 
 	return nil
 }

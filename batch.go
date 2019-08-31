@@ -22,12 +22,6 @@ const (
 	keyMaxNum = (keyMaxSeq << 8) | 0
 )
 
-// // BatchReplay wraps basic batch operations.
-// type BatchReplay interface {
-// 	Put(key, value []byte)
-// 	Delete(key []byte)
-// }
-
 type batchIndex struct {
 	delFlag            bool
 	expiresAt          uint32
@@ -80,6 +74,74 @@ func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt
 	return
 }
 
+// Batch is a write batch.
+type Batch struct {
+	managed bool
+	db      *DB
+	data    []byte
+	index   []batchIndex
+
+	//Batch memdb
+	memMu sync.RWMutex
+	mem   *memdb
+
+	// internalLen is sums of key/value pair length plus 8-bytes internal key.
+	internalLen int
+}
+
+// init initializes the batch.
+func (b *Batch) init(db *DB) {
+	b.db = db
+	if b.db.mem == nil || b.db.mem.getref() == 0 {
+		b.db.newmemdb(0)
+	}
+	b.mem = b.db.mem
+}
+
+func (b *Batch) grow(n int) {
+	o := len(b.data)
+	if cap(b.data)-o < n {
+		div := 1
+		if len(b.index) > batchGrowRec {
+			div = len(b.index) / batchGrowRec
+		}
+		ndata := make([]byte, o, o+n+o/div)
+		copy(ndata, b.data)
+		b.data = ndata
+	}
+}
+
+func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
+	n := 1 + binary.MaxVarintLen32 + len(key)
+	if !dFlag {
+		n += binary.MaxVarintLen32 + len(value)
+	}
+	b.grow(n)
+	index := batchIndex{delFlag: dFlag}
+	o := len(b.data)
+	data := b.data[:o+n]
+	if dFlag {
+		data[o] = 1
+	} else {
+		data[o] = 0
+	}
+	o++
+	o += binary.PutUvarint(data[o:], uint64(len(key)))
+	index.keyPos = o
+	index.keyLen = len(key)
+	o += copy(data[o:], key)
+	if !dFlag {
+		o += binary.PutUvarint(data[o:], uint64(len(value)))
+		index.valuePos = o
+		index.valueLen = len(value)
+		o += copy(data[o:], value)
+	}
+	index.expiresAt = expiresAt
+	b.data = data[:o]
+	b.index = append(b.index, index)
+	b.internalLen += index.keyLen + index.valueLen + 8
+}
+
 func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte) error {
 	switch {
 	case len(key) == 0:
@@ -92,8 +154,8 @@ func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte
 	h := b.mem.hash(key)
 	var k []byte
 	k = makeInternalKey(k, key, seq, dFlag, expiresAt)
-	b.memMu.Lock()
-	defer b.memMu.Unlock()
+	// b.memMu.Lock()
+	// defer b.memMu.Unlock()
 	if err := b.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
@@ -104,6 +166,53 @@ func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte
 	}
 	b.mem.seq++
 	return nil
+}
+
+// Put appends 'put operation' of the given key/value pair to the batch.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (b *Batch) Put(key, value []byte) {
+	b.PutWithTTL(key, value, 0)
+}
+
+// PutWithTTL appends 'put operation' of the given key/value pair to the batch and add key expiry time.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (b *Batch) PutWithTTL(key, value []byte, ttl time.Duration) {
+	var expiresAt uint32
+	if ttl != 0 {
+		expiresAt = uint32(time.Now().Add(ttl).Unix())
+	}
+	b.appendRec(false, expiresAt, key, value)
+}
+
+// Delete appends 'delete operation' of the given key to the batch.
+// It is safe to modify the contents of the argument after Delete returns but
+// not before.
+func (b *Batch) Delete(key []byte) {
+	var expiresAt uint32
+	b.appendRec(true, expiresAt, key, nil)
+}
+
+func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v []byte) error) error {
+	for i, index := range b.index {
+		if err := fn(i, index.delFlag, index.expiresAt, index.k(b.data), index.v(b.data)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Write apply the given batch to the transaction. The batch will be applied
+// sequentially.
+// Please note that the transaction is not compacted until committed, so if you
+// writes 10 same keys, then those 10 same keys are in the transaction.
+//
+// It is safe to modify the contents of the arguments after Write returns.
+func (b *Batch) Write() error {
+	return b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
+		return b.mput(dFlag, expiresAt, b.mem.seq+uint64(i), k, v)
+	})
 }
 
 func (b *Batch) commit() error {
@@ -260,151 +369,18 @@ func (b *Batch) commit() error {
 	return nil
 }
 
-// Batch is a write batch.
-type Batch struct {
-	managed bool
-	db      *DB
-	data    []byte
-	index   []batchIndex
-
-	// batchDB.
-	memMu sync.RWMutex
-	mem   *memdb
-
-	// internalLen is sums of key/value pair length plus 8-bytes internal key.
-	internalLen int
-}
-
-// init initializes the batch.
-func (b *Batch) init(db *DB) {
-	b.db = db
-	if b.mem == nil || b.mem.getref() == 0 {
-		mem, err := b.db.newmemdb(0)
-		if err != nil {
-			return
-		}
-		b.mem = mem
-	}
-	// // Copy the meta page since it can be changed by the writer.
-	// tx.meta = &meta{}
-	// db.meta().copy(tx.meta)
-}
-
-func (b *Batch) grow(n int) {
-	o := len(b.data)
-	if cap(b.data)-o < n {
-		div := 1
-		if len(b.index) > batchGrowRec {
-			div = len(b.index) / batchGrowRec
-		}
-		ndata := make([]byte, o, o+n+o/div)
-		copy(ndata, b.data)
-		b.data = ndata
-	}
-}
-
-func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
-	n := 1 + binary.MaxVarintLen32 + len(key)
-	if !dFlag {
-		n += binary.MaxVarintLen32 + len(value)
-	}
-	b.grow(n)
-	index := batchIndex{delFlag: dFlag}
-	o := len(b.data)
-	data := b.data[:o+n]
-	if dFlag {
-		data[o] = 1
-	} else {
-		data[o] = 0
-	}
-	o++
-	o += binary.PutUvarint(data[o:], uint64(len(key)))
-	index.keyPos = o
-	index.keyLen = len(key)
-	o += copy(data[o:], key)
-	if !dFlag {
-		o += binary.PutUvarint(data[o:], uint64(len(value)))
-		index.valuePos = o
-		index.valueLen = len(value)
-		o += copy(data[o:], value)
-	}
-	index.expiresAt = expiresAt
-	b.data = data[:o]
-	b.index = append(b.index, index)
-	b.internalLen += index.keyLen + index.valueLen + 8
-}
-
-// Put appends 'put operation' of the given key/value pair to the batch.
-// It is safe to modify the contents of the argument after Put returns but not
-// before.
-func (b *Batch) Put(key, value []byte) {
-	b.PutWithTTL(key, value, 0)
-}
-
-// PutWithTTL appends 'put operation' of the given key/value pair to the batch and add key expiry time.
-// It is safe to modify the contents of the argument after Put returns but not
-// before.
-func (b *Batch) PutWithTTL(key, value []byte, ttl time.Duration) {
-	var expiresAt uint32
-	if ttl != 0 {
-		expiresAt = uint32(time.Now().Add(ttl).Unix())
-	}
-	b.appendRec(false, expiresAt, key, value)
-}
-
-// Delete appends 'delete operation' of the given key to the batch.
-// It is safe to modify the contents of the argument after Delete returns but
-// not before.
-func (b *Batch) Delete(key []byte) {
-	var expiresAt uint32
-	b.appendRec(true, expiresAt, key, nil)
-}
-
-func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v []byte) error) error {
-	for i, index := range b.index {
-		if err := fn(i, index.delFlag, index.expiresAt, index.k(b.data), index.v(b.data)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Items returns a new ItemIterator.
-func (b *Batch) Items() *BatchIterator {
-	return &BatchIterator{db: b.mem}
-}
-
-// Write apply the given batch to the transaction. The batch will be applied
-// sequentially.
-// Please note that the transaction is not compacted until committed, so if you
-// writes 10 same keys, then those 10 same keys are in the transaction.
-//
-// It is safe to modify the contents of the arguments after Write returns.
-func (b *Batch) Write() (*BatchIterator, error) {
-	if b == nil || b.Len() == 0 {
-		return &BatchIterator{}, nil
-	}
-
-	err := b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
-		return b.mput(dFlag, expiresAt, b.mem.seq+uint64(i), k, v)
-	})
-
-	return b.Items(), err
-}
-
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.mem == nil || b.mem.getref() == 0 {
 		return nil
 	}
-	defer b.mem.decref()
 	return b.commit()
 }
 
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx commit not allowed")
 	b.Reset()
-	b.mem.decref()
+	b.mem = nil
 }
 
 // Dump dumps batch contents. The returned slice can be loaded into the

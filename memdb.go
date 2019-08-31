@@ -20,7 +20,7 @@ func (m *memdb) incref() {
 
 func (m *memdb) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
-		m.mpoolPut(m)
+		m.DB = nil
 	} else if ref < 0 {
 		panic("negative memdb ref")
 	}
@@ -34,7 +34,8 @@ func (db *DB) newmemdb(n int) (mem *memdb, err error) {
 	mem = db.mpoolGet(n)
 	mem.incref() // for self
 	mem.incref() // for caller
-	return mem, nil
+	db.mem = mem
+	return
 }
 
 func (db *DB) mpoolPut(mdb *memdb) {
@@ -89,36 +90,36 @@ func (db *DB) mpoolDrain() {
 	}
 }
 
-// // Get all memdbs.
-// func (db *DB) getMems() (e *memdb) {
-// 	db.memMu.RLock()
-// 	defer db.memMu.RUnlock()
-// 	if db.mem != nil {
-// 		db.mem.incref()
-// 	} else if !db.isClosed() {
-// 		panic("nil effective mem")
-// 	}
-// 	return db.mem
-// }
+// Get all memdbs.
+func (db *DB) getMems() (e *memdb) {
+	db.memMu.RLock()
+	defer db.memMu.RUnlock()
+	if db.mem != nil {
+		db.mem.incref()
+	} else if !db.isClosed() {
+		panic("nil effective mem")
+	}
+	return db.mem
+}
 
-// // Get effective memdb.
-// func (db *DB) getEffectiveMem() *memdb {
-// 	db.memMu.RLock()
-// 	defer db.memMu.RUnlock()
-// 	if db.mem != nil {
-// 		db.mem.incref()
-// 	} else if !db.isClosed() {
-// 		panic("nil effective mem")
-// 	}
-// 	return db.mem
-// }
+// Get effective memdb.
+func (db *DB) getEffectiveMem() *memdb {
+	db.memMu.RLock()
+	defer db.memMu.RUnlock()
+	if db.mem != nil {
+		db.mem.incref()
+	} else if !db.isClosed() {
+		panic("nil effective mem")
+	}
+	return db.mem
+}
 
-// // Clear mems ptr; used by DB.Close().
-// func (db *DB) clearMems() {
-// 	db.memMu.Lock()
-// 	db.mem = nil
-// 	db.memMu.Unlock()
-// }
+// Clear mems ptr; used by DB.Close().
+func (db *DB) clearMems() {
+	db.memMu.Lock()
+	db.mem = nil
+	db.memMu.Unlock()
+}
 
 // Check whether DB was closed.
 func (db *DB) isClosed() bool {

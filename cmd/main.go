@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/frontnet/tracedb"
 )
@@ -35,20 +36,20 @@ func main() {
 	// printGet("foo", testdb)
 	// testdb.PutWithTTL([]byte("b4"), []byte("bar"), "1m")
 
-	// err = testdb.Update(func(b *tracedb.Batch) error {
-	// 	b.Put([]byte("foo"), []byte("bar"))
-	// 	b.PutWithTTL([]byte("ayaz"), []byte("bar"), time.Second*30)
-	// 	b.Put([]byte("riz"), []byte("bar"))
-	// 	b.Put([]byte("b3"), []byte("bar"))
-	// 	b.Delete([]byte("foo"))
-	// 	b.Delete([]byte("b3"))
-	// 	b.Write()
-	// 	return err
-	// })
-	// if err != nil {
-	// 	log.Fatal(err)
-	// 	return
-	// }
+	err = testdb.Update(func(b *tracedb.Batch) error {
+		b.Put([]byte("foo"), []byte("bar"))
+		b.PutWithTTL([]byte("ayaz"), []byte("bar"), time.Second*30)
+		b.Put([]byte("riz"), []byte("bar"))
+		b.Put([]byte("b3"), []byte("bar"))
+		b.Delete([]byte("foo"))
+		b.Delete([]byte("b3"))
+		b.Write()
+		return err
+	})
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
 
 	// Iterating over key/value pairs.
 	it := testdb.Items()
