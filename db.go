@@ -59,9 +59,10 @@ type DB struct {
 	dbInfo
 
 	// batchDB.
-	memMu   sync.RWMutex
-	memPool chan *memdb
-	mem     *memdb
+	writeLockC chan struct{}
+	memMu      sync.RWMutex
+	memPool    chan *memdb
+	mem        *memdb
 
 	// Close.
 	closeW sync.WaitGroup
@@ -111,12 +112,19 @@ func Open(path string, opts *Options) (*DB, error) {
 			freelistOff: -1,
 		},
 		// batchDB
-		memPool: make(chan *memdb, 1),
+		writeLockC: make(chan struct{}, 1),
+		memPool:    make(chan *memdb, 1),
 		// Close
 		closeC: make(chan struct{}),
 	}
 	if err != nil {
 		return nil, err
+	}
+	// Create a memdb.
+	if db.mem == nil {
+		if _, err := db.newmemdb(0); err != nil {
+			return nil, err
+		}
 	}
 	if index.size == 0 {
 		if data.size != 0 {
@@ -663,7 +671,7 @@ func (db *DB) Update(fn func(*Batch) error) error {
 		b.Abort()
 		return err
 	}
-
+	db.mem.seq = b.batchSeq + uint64(b.Len())
 	return b.Commit()
 }
 

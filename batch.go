@@ -76,26 +76,40 @@ func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt
 
 // Batch is a write batch.
 type Batch struct {
-	managed bool
-	db      *DB
-	data    []byte
-	index   []batchIndex
+	managed      bool
+	batchSeq     uint64
+	db           *DB
+	data         []byte
+	index        []batchIndex
+	firstKeyHash uint32
 
 	//Batch memdb
-	memMu sync.RWMutex
-	mem   *memdb
+	batchMu sync.RWMutex
+	mem     *memdb
 
 	// internalLen is sums of key/value pair length plus 8-bytes internal key.
 	internalLen int
 }
 
 // init initializes the batch.
-func (b *Batch) init(db *DB) {
-	b.db = db
-	if b.db.mem == nil || b.db.mem.getref() == 0 {
-		b.db.newmemdb(0)
+func (b *Batch) init(db *DB) error {
+	// The write happen synchronously.
+	select {
+	case db.writeLockC <- struct{}{}:
+	case <-db.closeC:
+		return errClosed
 	}
-	b.mem = b.db.mem
+
+	if b.mem != nil {
+		panic("tracedb: batch is inprogress")
+	}
+	b.db = db
+	if db.mem.getref() == 0 {
+		db.mem = db.mpoolGet(0)
+	}
+	b.mem = db.mem
+	b.mem.incref()
+	return nil
 }
 
 func (b *Batch) grow(n int) {
@@ -142,7 +156,7 @@ func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
 	b.internalLen += index.keyLen + index.valueLen + 8
 }
 
-func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte) error {
+func (b *Batch) mput(dFlag bool, expiresAt uint32, key, value []byte) error {
 	switch {
 	case len(key) == 0:
 		return errKeyEmpty
@@ -151,11 +165,10 @@ func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-	h := b.mem.hash(key)
+
 	var k []byte
-	k = makeInternalKey(k, key, seq, dFlag, expiresAt)
-	// b.memMu.Lock()
-	// defer b.memMu.Unlock()
+	k = makeInternalKey(k, key, b.mem.seq+1, dFlag, expiresAt)
+	h := b.mem.hash(k)
 	if err := b.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
@@ -163,6 +176,9 @@ func (b *Batch) mput(dFlag bool, expiresAt uint32, seq uint64, key, value []byte
 		if err := b.mem.split(); err != nil {
 			return err
 		}
+	}
+	if b.firstKeyHash == 0 {
+		b.firstKeyHash = h
 	}
 	b.mem.seq++
 	return nil
@@ -210,8 +226,13 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v 
 //
 // It is safe to modify the contents of the arguments after Write returns.
 func (b *Batch) Write() error {
+	b.batchMu.Lock()
+	defer func() {
+		b.batchMu.Unlock()
+	}()
+	b.batchSeq = b.mem.seq
 	return b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
-		return b.mput(dFlag, expiresAt, b.mem.seq+uint64(i), k, v)
+		return b.mput(dFlag, expiresAt, k, v)
 	})
 }
 
@@ -220,15 +241,12 @@ func (b *Batch) commit() error {
 	var putCount int64 = 0
 	var bh *bucketHandle
 	var originalB *bucketHandle
-	var bucketIdx uint32
 	entryIdx := 0
-	b.mem.mu.RLock()
 	b.db.mu.Lock()
 	defer func() {
-		b.mem.mu.RUnlock()
 		b.db.mu.Unlock()
 	}()
-
+	bucketIdx := b.mem.bucketIndex(b.firstKeyHash)
 	for bucketIdx < b.mem.nBuckets {
 		err := b.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {
 			for i := 0; i < entriesPerBucket; i++ {
@@ -237,17 +255,22 @@ func (b *Batch) commit() error {
 					return memb.next == 0, nil
 				}
 				memslKey, value, err := b.mem.data.readKeyValue(memsl)
-				if err == ErrKeyExpired {
-					return false, nil
+				if err == errKeyExpired {
+					continue
 				}
 				if err != nil {
 					return true, err
 				}
-				key, _, dFlag, expiresAt, err := parseInternalKey(memslKey)
+				key, seq, dFlag, expiresAt, err := parseInternalKey(memslKey)
 				if err != nil {
 					return true, err
 				}
-
+				if seq <= b.batchSeq {
+					continue
+				}
+				if seq > b.batchSeq+uint64(b.Len()) {
+					return true, errBatchSeqComplete
+				}
 				hash := b.db.hash(key)
 
 				if dFlag {
@@ -354,6 +377,9 @@ func (b *Batch) commit() error {
 			}
 			return false, nil
 		})
+		if err == errBatchSeqComplete {
+			break
+		}
 		if err != nil {
 			return err
 		}
@@ -380,7 +406,9 @@ func (b *Batch) Commit() error {
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx commit not allowed")
 	b.Reset()
+	b.mem.decref()
 	b.mem = nil
+	<-b.db.writeLockC
 }
 
 // Dump dumps batch contents. The returned slice can be loaded into the
@@ -444,28 +472,6 @@ func (b *Batch) decode(data []byte, expectedLen int) error {
 	}
 	if expectedLen >= 0 && len(b.index) != expectedLen {
 		logger.Print("invalid records length: %d vs %d", expectedLen, len(b.index))
-	}
-	return nil
-}
-
-func (b *Batch) put(seq uint64, mdb *memdb) error {
-	var ik []byte
-	for i, index := range b.index {
-		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag, index.expiresAt)
-		if err := mdb.Put(ik, index.v(b.data)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (b *Batch) revert(seq uint64, mdb *memdb) error {
-	var ik []byte
-	for i, index := range b.index {
-		ik = makeInternalKey(ik, index.k(b.data), seq+uint64(i), index.delFlag, index.expiresAt)
-		if err := mdb.Delete(ik); err != nil {
-			return err
-		}
 	}
 	return nil
 }

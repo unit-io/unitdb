@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"errors"
-	"sync"
 )
 
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
@@ -21,17 +20,10 @@ type ItemIterator struct {
 	nextBucketIdx uint32
 	item          *Item
 	queue         []*Item
-	mu            sync.Mutex
 }
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
-	it.mu.Lock()
-	defer it.mu.Unlock()
-
-	it.db.mu.RLock()
-	defer it.db.mu.RUnlock()
-
 	it.item = nil
 	if len(it.queue) == 0 {
 		for it.nextBucketIdx < it.db.nBuckets {
@@ -42,7 +34,7 @@ func (it *ItemIterator) Next() {
 						return true, nil
 					}
 					key, value, err := it.db.data.readKeyValue(sl)
-					if err == ErrKeyExpired {
+					if err == errKeyExpired {
 						continue
 					}
 					if err != nil {
@@ -73,12 +65,6 @@ func (it *ItemIterator) First() {
 	if it.nextBucketIdx >= 1 {
 		return
 	}
-	it.mu.Lock()
-	defer it.mu.Unlock()
-
-	it.db.mu.RLock()
-	defer it.db.mu.RUnlock()
-
 	for it.nextBucketIdx < it.db.nBuckets {
 		err := it.db.forEachBucket(it.nextBucketIdx, func(b bucketHandle) (bool, error) {
 			for i := 0; i < entriesPerBucket; i++ {
@@ -87,7 +73,7 @@ func (it *ItemIterator) First() {
 					return true, nil
 				}
 				key, value, err := it.db.data.readKeyValue(sl)
-				if err == ErrKeyExpired {
+				if err == errKeyExpired {
 					continue
 				}
 				if err != nil {

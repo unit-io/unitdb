@@ -20,6 +20,7 @@ func (m *memdb) incref() {
 
 func (m *memdb) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
+		m.mpoolPut(m)
 		m.DB = nil
 	} else if ref < 0 {
 		panic("negative memdb ref")

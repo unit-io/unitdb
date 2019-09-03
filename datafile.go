@@ -1,12 +1,8 @@
 package tracedb
 
 import (
-	"errors"
 	"time"
 )
-
-// ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
-var ErrKeyExpired = errors.New("key has expired")
 
 type dataFile struct {
 	file
@@ -15,7 +11,7 @@ type dataFile struct {
 
 func (f *dataFile) readKeyValue(sl entry) ([]byte, []byte, error) {
 	if sl.expiresAt != 0 && sl.expiresAt <= uint32(time.Now().Unix()) {
-		return nil, nil, ErrKeyExpired
+		return nil, nil, errKeyExpired
 	}
 	keyValue, err := f.Slice(sl.kvOffset, sl.kvOffset+int64(sl.kvSize()))
 	if err != nil {
