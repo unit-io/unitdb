@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -22,25 +21,26 @@ const (
 )
 
 type batchIndex struct {
-	delFlag            bool
-	expiresAt          uint32
-	keyPos, keyLen     int
-	valuePos, valueLen int
+	delFlag   bool
+	hash      uint32
+	keySize   uint16
+	valueSize uint32
+	expiresAt uint32
+	kvOffset  int
 }
 
 func (index batchIndex) k(data []byte) []byte {
-	return data[index.keyPos : index.keyPos+index.keyLen]
+	return data[index.kvOffset : index.kvOffset+int(index.keySize)]
 }
 
-func (index batchIndex) v(data []byte) []byte {
-	if index.valueLen != 0 {
-		return data[index.valuePos : index.valuePos+index.valueLen]
-	}
-	return nil
+func (index batchIndex) kvSize() uint32 {
+	return uint32(index.keySize) + index.valueSize
 }
 
 func (index batchIndex) kv(data []byte) (key, value []byte) {
-	return index.k(data), index.v(data)
+	keyValue := data[index.kvOffset : index.kvOffset+int(index.kvSize())]
+	return keyValue[:index.keySize], keyValue[index.keySize:]
+
 }
 
 type internalKey []byte
@@ -80,25 +80,18 @@ type Batch struct {
 	db           *DB
 	data         []byte
 	index        []batchIndex
+	uniqueWrites map[uint32]batchIndex
 	firstKeyHash uint32
 
 	//Batch memdb
-	batchMu sync.RWMutex
-	mem     *memdb
+	mem *memdb
 
 	// internalLen is sums of key/value pair length plus 8-bytes internal key.
-	internalLen int
+	internalLen uint32
 }
 
 // init initializes the batch.
 func (b *Batch) init(db *DB) error {
-	// // The write happen synchronously.
-	// select {
-	// case db.writeLockC <- struct{}{}:
-	// case <-db.closeC:
-	// 	return errClosed
-	// }
-
 	if b.mem != nil {
 		panic("tracedb: batch is inprogress")
 	}
@@ -125,12 +118,12 @@ func (b *Batch) grow(n int) {
 }
 
 func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
-	n := 1 + binary.MaxVarintLen32 + len(key)
+	n := 1 + len(key)
 	if !dFlag {
-		n += binary.MaxVarintLen32 + len(value)
+		n += len(value)
 	}
 	b.grow(n)
-	index := batchIndex{delFlag: dFlag}
+	index := batchIndex{delFlag: dFlag, hash: b.mem.hash(key), keySize: uint16(len(key))}
 	o := len(b.data)
 	data := b.data[:o+n]
 	if dFlag {
@@ -139,23 +132,19 @@ func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
 		data[o] = 0
 	}
 	o++
-	o += binary.PutUvarint(data[o:], uint64(len(key)))
-	index.keyPos = o
-	index.keyLen = len(key)
+	index.kvOffset = o
 	o += copy(data[o:], key)
 	if !dFlag {
-		o += binary.PutUvarint(data[o:], uint64(len(value)))
-		index.valuePos = o
-		index.valueLen = len(value)
+		index.valueSize = uint32(len(value))
 		o += copy(data[o:], value)
 	}
-	index.expiresAt = expiresAt
 	b.data = data[:o]
+	index.expiresAt = expiresAt
 	b.index = append(b.index, index)
-	b.internalLen += index.keyLen + index.valueLen + 8
+	b.internalLen += uint32(index.keySize) + index.valueSize + 8
 }
 
-func (b *Batch) mput(dFlag bool, expiresAt uint32, key, value []byte) error {
+func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) error {
 	switch {
 	case len(key) == 0:
 		return errKeyEmpty
@@ -167,7 +156,6 @@ func (b *Batch) mput(dFlag bool, expiresAt uint32, key, value []byte) error {
 
 	var k []byte
 	k = makeInternalKey(k, key, b.mem.seq+1, dFlag, expiresAt)
-	h := b.mem.hash(k)
 	if err := b.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
@@ -209,9 +197,11 @@ func (b *Batch) Delete(key []byte) {
 	b.appendRec(true, expiresAt, key, nil)
 }
 
-func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v []byte) error) error {
-	for i, index := range b.index {
-		if err := fn(i, index.delFlag, index.expiresAt, index.k(b.data), index.v(b.data)); err != nil {
+func (b *Batch) writeInternal(fn func(i uint32, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error) error {
+	b.uniqueAndRecent()
+	for i, index := range b.uniqueWrites {
+		key, val := index.kv(b.data)
+		if err := fn(i, index.delFlag, index.hash, index.expiresAt, key, val); err != nil {
 			return err
 		}
 	}
@@ -227,13 +217,9 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v 
 func (b *Batch) Write() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
-	b.batchMu.Lock()
-	defer func() {
-		b.batchMu.Unlock()
-	}()
 	b.batchSeq = b.mem.seq
-	return b.writeInternal(func(i int, dFlag bool, expiresAt uint32, k, v []byte) error {
-		return b.mput(dFlag, expiresAt, k, v)
+	return b.writeInternal(func(i uint32, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
+		return b.mput(dFlag, h, expiresAt, k, v)
 	})
 }
 
@@ -412,22 +398,6 @@ func (b *Batch) Abort() {
 	<-b.db.writeLockC
 }
 
-// Dump dumps batch contents. The returned slice can be loaded into the
-// batch using Load method.
-// The returned slice is not its own copy, so the contents should not be
-// modified.
-func (b *Batch) Dump() []byte {
-	return b.data
-}
-
-// Load loads given slice into the batch. Previous contents of the batch
-// will be discarded.
-// The given slice will not be copied and will be used as batch buffer, so
-// it is not safe to modify the contents of the slice.
-func (b *Batch) Load(data []byte) error {
-	return b.decode(data, -1)
-}
-
 // Len returns number of records in the batch.
 func (b *Batch) Len() int {
 	return len(b.index)
@@ -440,120 +410,16 @@ func (b *Batch) Reset() {
 	b.internalLen = 0
 }
 
-func (b *Batch) append(p *Batch) {
-	ob := len(b.data)
-	oi := len(b.index)
-	b.data = append(b.data, p.data...)
-	b.index = append(b.index, p.index...)
-	b.internalLen += p.internalLen
-
-	// Updating index offset.
-	if ob != 0 {
-		for ; oi < len(b.index); oi++ {
-			index := &b.index[oi]
-			index.keyPos += ob
-			if index.valueLen != 0 {
-				index.valuePos += ob
-			}
-		}
-	}
-}
-
-func (b *Batch) decode(data []byte, expectedLen int) error {
-	b.data = data
-	b.index = b.index[:0]
-	b.internalLen = 0
-	err := decodeBatch(data, func(i int, index batchIndex) error {
-		b.index = append(b.index, index)
-		b.internalLen += index.keyLen + index.valueLen + 8
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if expectedLen >= 0 && len(b.index) != expectedLen {
-		logger.Print("invalid records length: %d vs %d", expectedLen, len(b.index))
-	}
-	return nil
-}
-
-func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
-	var index batchIndex
-	for i, o := 0, 0; o < len(data); i++ {
-		// Key type.
-		index.delFlag = data[o] != 0
-		// if index.keyType > keyTypeVal {
-		// 	return newErrBatchCorrupted(fmt.Sprintf("bad record: invalid type %#x", uint(index.keyType)))
-		// }
-		o++
-
-		// Key.
-		x, n := binary.Uvarint(data[o:])
-		o += n
-		if n <= 0 || o+int(x) > len(data) {
-			logger.Print("bad record: invalid key length")
-			return nil
-		}
-		index.keyPos = o
-		index.keyLen = int(x)
-		o += index.keyLen
-
-		// Value.
-		if !index.delFlag {
-			x, n = binary.Uvarint(data[o:])
-			o += n
-			if n <= 0 || o+int(x) > len(data) {
-				logger.Print("bad record: invalid value length")
-				return nil
-			}
-			index.valuePos = o
-			index.valueLen = int(x)
-			o += index.valueLen
-		} else {
-			index.valuePos = 0
-			index.valueLen = 0
-		}
-
-		if err := fn(i, index); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func encodeBatchHeader(dst []byte, seq uint64, batchLen int) []byte {
-	dst = ensureBuffer(dst, batchHeaderLen)
-	binary.LittleEndian.PutUint64(dst, seq)
-	binary.LittleEndian.PutUint32(dst[8:], uint32(batchLen))
-	return dst
-}
-
-func decodeBatchHeader(data []byte) (seq uint64, batchLen int, err error) {
-	if len(data) < batchHeaderLen {
-		logger.Print("too short")
-		return 0, 0, nil
-	}
-
-	seq = binary.LittleEndian.Uint64(data)
-	batchLen = int(binary.LittleEndian.Uint32(data[8:]))
-	if batchLen < 0 {
-		logger.Print("invalid records length")
-		return 0, 0, nil
-	}
-	return
-}
-
-func batchesLen(batches []*Batch) int {
-	batchLen := 0
-	for _, batch := range batches {
-		batchLen += batch.Len()
-	}
-	return batchLen
-}
-
 // _assert will panic with a given formatted message if the given condition is false.
 func _assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
 		panic(fmt.Sprintf("assertion failed: "+msg, v...))
+	}
+}
+
+func (b *Batch) uniqueAndRecent() {
+	b.uniqueWrites = make(map[uint32]batchIndex, len(b.index))
+	for _, index := range b.index {
+		b.uniqueWrites[index.hash] = index
 	}
 }

@@ -7,6 +7,33 @@ import (
 	"github.com/frontnet/tracedb"
 )
 
+func abs(n int64) int64 {
+	y := n >> 63
+	return (n ^ y) - y
+}
+
+func batch1(testdb *tracedb.DB) {
+	b, err := testdb.Batch()
+	defer b.Abort()
+	b.Put([]byte("foo"), []byte("bar"))
+	b.PutWithTTL([]byte("ayaz"), []byte("bar"), time.Second*30)
+	b.Put([]byte("riz"), []byte("bar"))
+	b.Put([]byte("b3"), []byte("bar"))
+	b.Delete([]byte("foo"))
+	b.Put([]byte("foo"), []byte("bar"))
+	b.Put([]byte("ayaz"), []byte("newbar"))
+	b.Put([]byte("b4"), []byte("bar"))
+	b.Delete([]byte("foo"))
+	b.Delete([]byte("b3"))
+	b.Delete([]byte("b4"))
+	b.Write()
+	b.Commit()
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+}
+
 func main() {
 	berr := make(chan error, 2)
 	// Opening a database.
@@ -17,17 +44,7 @@ func main() {
 	}
 	defer testdb.Close()
 
-	go func() {
-		b, err := testdb.Batch()
-		defer b.Abort()
-		b.Put([]byte("foo"), []byte("bar"))
-		b.Write()
-		b.Commit()
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-	}()
+	batch1(testdb)
 
 	// // Reading from a database.
 	// val, err := testdb.Get([]byte("foo"))
