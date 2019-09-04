@@ -7,19 +7,8 @@ import (
 	"github.com/frontnet/tracedb"
 )
 
-func printGet(key string, testdb *tracedb.DB) {
-	// Reading from a database.
-	val, err := testdb.Get([]byte(key))
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	log.Printf("%s %s", key, val)
-}
-
-var batchC chan struct{}
-
 func main() {
+	berr := make(chan error, 2)
 	// Opening a database.
 	testdb, err := tracedb.Open("example", nil)
 	if err != nil {
@@ -28,19 +17,28 @@ func main() {
 	}
 	defer testdb.Close()
 
-	// Writing to a database.
-	err = testdb.Put([]byte("foo"), []byte("bar"))
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-
-	// printGet("foo", testdb)
-	// testdb.PutWithTTL([]byte("b4"), []byte("bar"), "1m")
-	batchC := make(chan struct{}, 1)
-	batchC <- struct{}{}
 	go func() {
-		testdb.Update(func(b *tracedb.Batch) error {
+		b, err := testdb.Batch()
+		defer b.Abort()
+		b.Put([]byte("foo"), []byte("bar"))
+		b.Write()
+		b.Commit()
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+	}()
+
+	// // Reading from a database.
+	// val, err := testdb.Get([]byte("foo"))
+	// if err != nil {
+	// 	log.Fatal(err)
+	// 	return
+	// }
+	// log.Printf("%s", val)
+
+	go func() {
+		berr <- testdb.Update(func(b *tracedb.Batch) error {
 			//b.Put([]byte("foo"), []byte("bar"))
 			b.PutWithTTL([]byte("ayaz"), []byte("bar"), time.Second*30)
 			b.Put([]byte("riz"), []byte("bar"))
@@ -53,7 +51,7 @@ func main() {
 	}()
 
 	go func() {
-		testdb.Update(func(b *tracedb.Batch) error {
+		berr <- testdb.Update(func(b *tracedb.Batch) error {
 			b.Put([]byte("foo"), []byte("bar"))
 			// b.PutWithTTL([]byte("ayaz"), []byte("bar"), time.Second*30)
 			// b.Put([]byte("riz"), []byte("bar"))
@@ -66,19 +64,20 @@ func main() {
 	}()
 
 	go func() {
-		testdb.Update(func(b *tracedb.Batch) error {
+		berr <- testdb.Update(func(b *tracedb.Batch) error {
 			b.Delete([]byte("b4"))
 			b.Write()
 			return err
 		})
 	}()
 
-	if err != nil {
-		log.Fatal(err)
-		return
+	for i := 0; i < cap(berr); i++ {
+		if err := <-berr; err != nil {
+			log.Fatal(err)
+			return
+		}
 	}
 
-	<-batchC
 	// Iterating over key/value pairs.
 	it := testdb.Items()
 	for it.First(); it.Valid(); it.Next() {

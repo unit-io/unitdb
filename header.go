@@ -5,12 +5,12 @@ import (
 )
 
 var (
-	signature  = [8]byte{'p', 'o', 'g', 'r', 'e', 'b', '\x0e', '\xfd'}
+	signature  = [7]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b'}
 	headerSize uint32
 )
 
 type header struct {
-	signature [8]byte
+	signature [7]byte
 	version   uint32
 	dbInfo
 	_ [256]byte

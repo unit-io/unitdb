@@ -418,52 +418,6 @@ func (db *DB) Sync() error {
 	return db.sync()
 }
 
-// Put sets the value for the given key. It updates the value for the existing key.
-func (db *DB) Put(key []byte, value []byte) error {
-	switch {
-	case len(key) == 0:
-		return errKeyEmpty
-	case len(key) > MaxKeyLength:
-		return errKeyTooLarge
-	case len(value) > MaxValueLength:
-		return errValueTooLarge
-	}
-	return db.PutWithTTL(key, value, 0)
-}
-
-// Put sets the value for the given key. It updates the value for the existing key.
-func (db *DB) PutWithTTL(key []byte, value []byte, ttl time.Duration) error {
-	switch {
-	case len(key) == 0:
-		return errKeyEmpty
-	case len(key) > MaxKeyLength:
-		return errKeyTooLarge
-	case len(value) > MaxValueLength:
-		return errValueTooLarge
-	}
-	h := db.hash(key)
-	db.metrics.Puts.Add(1)
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	var expiresAt uint32
-	if ttl != 0 {
-		expiresAt = uint32(time.Now().Add(ttl).Unix())
-	}
-	if err := db.put(h, key, value, expiresAt); err != nil {
-		return err
-	}
-	if float64(db.count)/float64(db.nBuckets*entriesPerBucket) > loadFactor {
-		if err := db.split(); err != nil {
-			return err
-		}
-	}
-	db.filter.Append(uint64(h))
-	if db.syncWrites {
-		return db.sync()
-	}
-	return nil
-}
-
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
 	var b *bucketHandle
 	var originalB *bucketHandle

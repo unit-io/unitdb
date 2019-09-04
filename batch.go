@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 )
@@ -93,12 +92,12 @@ type Batch struct {
 
 // init initializes the batch.
 func (b *Batch) init(db *DB) error {
-	// The write happen synchronously.
-	select {
-	case db.writeLockC <- struct{}{}:
-	case <-db.closeC:
-		return errClosed
-	}
+	// // The write happen synchronously.
+	// select {
+	// case db.writeLockC <- struct{}{}:
+	// case <-db.closeC:
+	// 	return errClosed
+	// }
 
 	if b.mem != nil {
 		panic("tracedb: batch is inprogress")
@@ -226,6 +225,8 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, expiresAt uint32, k, v 
 //
 // It is safe to modify the contents of the arguments after Write returns.
 func (b *Batch) Write() error {
+	// The write happen synchronously.
+	b.db.writeLockC <- struct{}{}
 	b.batchMu.Lock()
 	defer func() {
 		b.batchMu.Unlock()
@@ -476,10 +477,6 @@ func (b *Batch) decode(data []byte, expectedLen int) error {
 	return nil
 }
 
-func newBatch() interface{} {
-	return &Batch{}
-}
-
 func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
 	var index batchIndex
 	for i, o := 0, 0; o < len(data); i++ {
@@ -524,36 +521,6 @@ func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
 	return nil
 }
 
-func decodeBatchToDB(data []byte, expectSeq uint64, mdb *memdb) (seq uint64, batchLen int, err error) {
-	seq, batchLen, err = decodeBatchHeader(data)
-	if err != nil {
-		return 0, 0, err
-	}
-	if seq < expectSeq {
-		logger.Print("invalid sequence number")
-		return 0, 0, nil
-	}
-	data = data[batchHeaderLen:]
-	var ik []byte
-	var decodedLen int
-	err = decodeBatch(data, func(i int, index batchIndex) error {
-		if i >= batchLen {
-			logger.Print("invalid records length")
-			return nil
-		}
-		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.delFlag, index.expiresAt)
-		if err := mdb.Put(ik, index.v(data)); err != nil {
-			return err
-		}
-		decodedLen++
-		return nil
-	})
-	if err == nil && decodedLen != batchLen {
-		logger.Print("invalid records length: %d vs %d", batchLen, decodedLen)
-	}
-	return
-}
-
 func encodeBatchHeader(dst []byte, seq uint64, batchLen int) []byte {
 	dst = ensureBuffer(dst, batchHeaderLen)
 	binary.LittleEndian.PutUint64(dst, seq)
@@ -582,18 +549,6 @@ func batchesLen(batches []*Batch) int {
 		batchLen += batch.Len()
 	}
 	return batchLen
-}
-
-func writeBatchesWithHeader(wr io.Writer, batches []*Batch, seq uint64) error {
-	if _, err := wr.Write(encodeBatchHeader(nil, seq, batchesLen(batches))); err != nil {
-		return err
-	}
-	for _, batch := range batches {
-		if _, err := wr.Write(batch.data); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // _assert will panic with a given formatted message if the given condition is false.
