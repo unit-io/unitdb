@@ -48,13 +48,17 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Put() function to insert a new key/value pair:
+Use the DB.Update() function to insert a new key/value pair or delete a record:
 
 ```
-err := db.Put([]byte("foo"), []byte("bar"))
-if err != nil {
-	log.Fatal(err)
-}
+err := db.Update(func(b *tracedb.Batch) error {
+			b.PutWithTTL([]byte("b1"), []byte("bar"), time.Second*30)
+			b.Put([]byte("b2"), []byte("bar"))
+			b.Put([]byte("b3"), []byte("bar"))
+			b.Delete([]byte("b3"))
+			b.Write()
+			return err
+		})
 ```
 
 ### Reading from a database
