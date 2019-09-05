@@ -80,7 +80,6 @@ type Batch struct {
 	db           *DB
 	data         []byte
 	index        []batchIndex
-	uniqueWrites map[uint32]batchIndex
 	firstKeyHash uint32
 
 	//Batch memdb
@@ -197,9 +196,11 @@ func (b *Batch) Delete(key []byte) {
 	b.appendRec(true, expiresAt, key, nil)
 }
 
-func (b *Batch) writeInternal(fn func(i uint32, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error) error {
-	b.uniqueAndRecent()
-	for i, index := range b.uniqueWrites {
+func (b *Batch) writeInternal(fn func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error) error {
+	start := time.Now()
+	defer logger.Print("batch.Write: ", time.Since(start))
+	pendingWrites := b.uniq()
+	for i, index := range pendingWrites {
 		key, val := index.kv(b.data)
 		if err := fn(i, index.delFlag, index.hash, index.expiresAt, key, val); err != nil {
 			return err
@@ -218,7 +219,7 @@ func (b *Batch) Write() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
 	b.batchSeq = b.mem.seq
-	return b.writeInternal(func(i uint32, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
+	return b.writeInternal(func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
 		return b.mput(dFlag, h, expiresAt, k, v)
 	})
 }
@@ -417,9 +418,20 @@ func _assert(condition bool, msg string, v ...interface{}) {
 	}
 }
 
-func (b *Batch) uniqueAndRecent() {
-	b.uniqueWrites = make(map[uint32]batchIndex, len(b.index))
-	for _, index := range b.index {
-		b.uniqueWrites[index.hash] = index
+func (b *Batch) uniq() []batchIndex {
+	unique_set := make(map[uint32]int, len(b.index))
+	index_set := make(map[uint32]batchIndex, len(b.index))
+	i := 0
+	for idx := len(b.index) - 1; idx >= 0; idx-- {
+		if _, ok := unique_set[b.index[idx].hash]; !ok {
+			unique_set[b.index[idx].hash] = i
+			index_set[b.index[idx].hash] = b.index[idx]
+			i++
+		}
 	}
+	pendingWrites := make([]batchIndex, len(unique_set))
+	for x, i := range unique_set {
+		pendingWrites[len(unique_set)-i-1] = index_set[x]
+	}
+	return pendingWrites
 }
