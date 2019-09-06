@@ -301,7 +301,7 @@ func (b *Batch) commit() error {
 		b.db.mu.Unlock()
 	}()
 	time.Sleep(time.Second * time.Duration(b.order))
-	logger.Printf("Batch: commiting now...%d", b.order)
+	logger.Printf("Batch: commiting now...%d length %d", b.order, b.Len())
 	bucketIdx := b.mem.bucketIndex(b.firstKeyHash)
 	for bucketIdx < b.mem.nBuckets {
 		err := b.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {

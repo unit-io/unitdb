@@ -45,7 +45,18 @@ func main() {
 		return
 	}
 	defer testdb.Close()
-
+	// Iterating over key/value pairs.
+	fit := testdb.Items()
+	for fit.First(); fit.Valid(); fit.Next() {
+		if fit.Error() != nil {
+			if err != tracedb.ErrIterationDone {
+				log.Fatal(err)
+				return
+			}
+			break
+		}
+		log.Printf("%s %s", fit.Item().Key(), fit.Item().Value())
+	}
 	batch1(testdb)
 
 	// // Reading from a database.
@@ -56,7 +67,7 @@ func main() {
 	// }
 	// log.Printf("%s", val)
 
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		berr <- testdb.Update(&tracedb.BatchOptions{Order: 1}, func(b *tracedb.Batch) error {
@@ -108,9 +119,8 @@ func main() {
 			return
 		}
 	}
-
-	wg.Wait()
 	testdb.Update(tracedb.DefaultBatchOptions, func(b *tracedb.Batch) error {
+		defer wg.Done()
 		b.Delete([]byte("b3"))
 		err := b.Write()
 		if err != nil {
@@ -118,8 +128,7 @@ func main() {
 		}
 		return err
 	})
-
-	time.Sleep(time.Second * 3)
+	wg.Wait()
 	go func() {
 		testdb.Update(&tracedb.BatchOptions{Order: 1}, func(b *tracedb.Batch) error {
 			b.Delete([]byte("b4"))
@@ -141,7 +150,7 @@ func main() {
 		})
 	}()
 
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 10)
 	// Iterating over key/value pairs.
 	it := testdb.Items()
 	for it.First(); it.Valid(); it.Next() {
