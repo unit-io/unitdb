@@ -21,7 +21,6 @@ func (m *memdb) incref() {
 func (m *memdb) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
 		m.mpoolPut(m)
-		m.DB = nil
 	} else if ref < 0 {
 		panic("negative memdb ref")
 	}
@@ -33,8 +32,8 @@ func (db *DB) newmemdb(n int) (mem *memdb, err error) {
 	db.memMu.Lock()
 	defer db.memMu.Unlock()
 	mem = db.mpoolGet(n)
-	mem.incref() // for self
-	mem.incref() // for caller
+	//mem.incref() // for self
+	//mem.incref() // for caller
 	db.mem = mem
 	return
 }

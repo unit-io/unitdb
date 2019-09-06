@@ -14,4 +14,5 @@ var (
 	errLocked           = errors.New("database is locked")
 	errClosed           = errors.New("database is closed")
 	errBatchSeqComplete = errors.New("batch seq is complete")
+	errWriteConflict    = errors.New("batch write conflict")
 )

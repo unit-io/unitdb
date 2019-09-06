@@ -73,14 +73,46 @@ func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt
 	return
 }
 
+// BatchOptions is used to set options when using batch operation
+type BatchOptions struct {
+	// In concurrent batch writes order determines how to handle conflicts
+	Order             int16
+	reconnectInterval time.Duration
+	retryTimeout      time.Duration
+}
+
+// DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
+var DefaultBatchOptions = &BatchOptions{
+	Order:             0,
+	reconnectInterval: time.Duration(0),
+	retryTimeout:      5 * time.Second,
+}
+
+func (src *BatchOptions) copyWithDefaults() *BatchOptions {
+	opts := BatchOptions{}
+	if src != nil {
+		opts = *src
+	}
+	if opts.reconnectInterval == 0 {
+		opts.reconnectInterval = DefaultBatchOptions.reconnectInterval
+	}
+	if opts.retryTimeout == 0 {
+		opts.retryTimeout = DefaultBatchOptions.retryTimeout
+	}
+	return &opts
+}
+
 // Batch is a write batch.
 type Batch struct {
-	managed      bool
-	batchSeq     uint64
-	db           *DB
-	data         []byte
-	index        []batchIndex
-	firstKeyHash uint32
+	managed       bool
+	order         int16
+	seq           uint64
+	db            *DB
+	data          []byte
+	index         []batchIndex
+	pendingWrites []batchIndex
+	firstKeyHash  uint32
+	keys          []uint32
 
 	//Batch memdb
 	mem *memdb
@@ -90,16 +122,20 @@ type Batch struct {
 }
 
 // init initializes the batch.
-func (b *Batch) init(db *DB) error {
+func (b *Batch) init(opt *BatchOptions, db *DB) error {
 	if b.mem != nil {
-		panic("tracedb: batch is inprogress")
+		panic("tracedb: batch is in progress")
+	}
+	if db == nil {
+		panic("tracedb: db is not open")
+	}
+	if db.mem == nil {
+		panic("tracedb: memdb is not open")
 	}
 	b.db = db
-	if db.mem.getref() == 0 {
-		db.mem = db.mpoolGet(0)
-	}
 	b.mem = db.mem
 	b.mem.incref()
+	b.order = opt.Order
 	return nil
 }
 
@@ -122,7 +158,8 @@ func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
 		n += len(value)
 	}
 	b.grow(n)
-	index := batchIndex{delFlag: dFlag, hash: b.mem.hash(key), keySize: uint16(len(key))}
+	h := b.mem.hash(key)
+	index := batchIndex{delFlag: dFlag, hash: h, keySize: uint16(len(key))}
 	o := len(b.data)
 	data := b.data[:o+n]
 	if dFlag {
@@ -152,9 +189,11 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-
+	if b.hasWriteConflict(h) {
+		return errWriteConflict
+	}
 	var k []byte
-	k = makeInternalKey(k, key, b.mem.seq+1, dFlag, expiresAt)
+	k = makeInternalKey(k, key, b.seq+1, dFlag, expiresAt)
 	if err := b.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
@@ -166,7 +205,7 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	if b.firstKeyHash == 0 {
 		b.firstKeyHash = h
 	}
-	b.mem.seq++
+	b.seq++
 	return nil
 }
 
@@ -196,6 +235,17 @@ func (b *Batch) Delete(key []byte) {
 	b.appendRec(true, expiresAt, key, nil)
 }
 
+func (b *Batch) hasWriteConflict(h uint32) bool {
+	for _, batch := range b.mem.activeBatches {
+		for _, k := range batch {
+			if k == h {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (b *Batch) writeInternal(fn func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error) error {
 	start := time.Now()
 	defer logger.Print("batch.Write: ", time.Since(start))
@@ -216,12 +266,28 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, h uint32, expiresAt uin
 //
 // It is safe to modify the contents of the arguments after Write returns.
 func (b *Batch) Write() error {
+	if b.order > 0 {
+		b.uniq()
+		b.db.mu.Lock()
+		b.db.batches = append(b.db.batches, *b)
+		b.db.bwg.Done()
+		b.db.mu.Unlock()
+		return nil
+	}
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
-	b.batchSeq = b.mem.seq
-	return b.writeInternal(func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
+	b.seq = b.mem.seq
+	logger.Printf("Batch: Order %d, Seq %d", b.order, b.seq)
+	err := b.writeInternal(func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
 		return b.mput(dFlag, h, expiresAt, k, v)
 	})
+
+	if err == nil {
+		b.mem.activeBatches[b.seq] = b.Keys()
+		b.mem.seq = b.seq
+	}
+	<-b.db.writeLockC
+	return err
 }
 
 func (b *Batch) commit() error {
@@ -234,6 +300,8 @@ func (b *Batch) commit() error {
 	defer func() {
 		b.db.mu.Unlock()
 	}()
+	time.Sleep(time.Second * time.Duration(b.order))
+	logger.Printf("Batch: commiting now...%d", b.order)
 	bucketIdx := b.mem.bucketIndex(b.firstKeyHash)
 	for bucketIdx < b.mem.nBuckets {
 		err := b.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {
@@ -253,10 +321,10 @@ func (b *Batch) commit() error {
 				if err != nil {
 					return true, err
 				}
-				if seq <= b.batchSeq {
+				if seq <= b.seq-uint64(b.Len()) {
 					continue
 				}
-				if seq > b.batchSeq+uint64(b.Len()) {
+				if seq > b.seq {
 					return true, errBatchSeqComplete
 				}
 				hash := b.db.hash(key)
@@ -373,6 +441,10 @@ func (b *Batch) commit() error {
 		}
 		bucketIdx++
 	}
+
+	//remove batch from activeBatches after commit
+	delete(b.mem.activeBatches, b.seq)
+
 	b.db.metrics.Dels.Add(delCount)
 	b.db.metrics.Puts.Add(putCount)
 
@@ -392,16 +464,21 @@ func (b *Batch) Commit() error {
 }
 
 func (b *Batch) Abort() {
-	_assert(!b.managed, "managed tx commit not allowed")
+	_assert(!b.managed, "managed tx abort not allowed")
 	b.Reset()
 	b.mem.decref()
 	b.mem = nil
-	<-b.db.writeLockC
+	// <-b.db.writeLockC
+}
+
+// Len returns number of records in the batch.
+func (b *Batch) Keys() []uint32 {
+	return b.keys
 }
 
 // Len returns number of records in the batch.
 func (b *Batch) Len() int {
-	return len(b.index)
+	return len(b.pendingWrites)
 }
 
 // Reset resets the batch.
@@ -411,27 +488,42 @@ func (b *Batch) Reset() {
 	b.internalLen = 0
 }
 
+func (b *Batch) uniq() []batchIndex {
+	type indices struct {
+		idx    int
+		newidx int
+	}
+	unique_set := make(map[uint32]indices, len(b.index))
+	i := 0
+	for idx := len(b.index) - 1; idx >= 0; idx-- {
+		if _, ok := unique_set[b.index[idx].hash]; !ok {
+			unique_set[b.index[idx].hash] = indices{idx, i}
+			i++
+		}
+	}
+
+	b.pendingWrites = make([]batchIndex, len(unique_set))
+	for k, i := range unique_set {
+		b.keys = append(b.keys, k)
+		b.pendingWrites[len(unique_set)-i.newidx-1] = b.index[i.idx]
+	}
+	return b.pendingWrites
+}
+
+func (b *Batch) append(bnew *Batch) {
+	off := len(b.data)
+	for _, idx := range bnew.index {
+		idx.kvOffset = idx.kvOffset + off
+		b.index = append(b.index, idx)
+	}
+	//b.grow(len(bnew.data))
+	b.data = append(b.data, bnew.data...)
+	b.internalLen += bnew.internalLen
+}
+
 // _assert will panic with a given formatted message if the given condition is false.
 func _assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
 		panic(fmt.Sprintf("assertion failed: "+msg, v...))
 	}
-}
-
-func (b *Batch) uniq() []batchIndex {
-	unique_set := make(map[uint32]int, len(b.index))
-	index_set := make(map[uint32]batchIndex, len(b.index))
-	i := 0
-	for idx := len(b.index) - 1; idx >= 0; idx-- {
-		if _, ok := unique_set[b.index[idx].hash]; !ok {
-			unique_set[b.index[idx].hash] = i
-			index_set[b.index[idx].hash] = b.index[idx]
-			i++
-		}
-	}
-	pendingWrites := make([]batchIndex, len(unique_set))
-	for x, i := range unique_set {
-		pendingWrites[len(unique_set)-i-1] = index_set[x]
-	}
-	return pendingWrites
 }
