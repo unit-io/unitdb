@@ -58,7 +58,6 @@ type DB struct {
 	syncWrites   bool
 	dbInfo
 	//batchdb
-	once Once
 	*batchdb
 	// Close.
 	closeW sync.WaitGroup
@@ -578,4 +577,32 @@ func (db *DB) Delete(key []byte) error {
 		return db.sync()
 	}
 	return nil
+}
+
+// Count returns the number of items in the DB.
+func (db *DB) Count() uint32 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.count
+}
+
+// Metrics returns the DB metrics.
+func (db *DB) Metrics() Metrics {
+	return db.metrics
+}
+
+// FileSize returns the total size of the disk storage used by the DB.
+func (db *DB) FileSize() (int64, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	var err error
+	is, err := db.index.Stat()
+	if err != nil {
+		return -1, err
+	}
+	ds, err := db.data.Stat()
+	if err != nil {
+		return -1, err
+	}
+	return is.Size() + ds.Size(), nil
 }

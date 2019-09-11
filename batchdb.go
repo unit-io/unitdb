@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
 	writeLockC chan struct{}
@@ -16,13 +17,9 @@ type batchdb struct {
 	mem        *memdb
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
-	//bonce run batchLoop once
-	bonce Once
-	//bwg is batch wait group to process batchqueue
-	bwg sync.WaitGroup
-	//batches keeps batches with batch order
-	batches           []Batch
-	batchC            chan struct{}
+	//once run batchLoop once
+	once Once
+
 	cancelBatchWriter context.CancelFunc
 }
 
@@ -32,7 +29,6 @@ func (db *DB) newbatchdb() (*batchdb, error) {
 		writeLockC:    make(chan struct{}, 1),
 		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
-		batchC:        make(chan struct{}),
 	}
 	db.batchdb = bdb
 	// Create a memdb.
@@ -43,21 +39,13 @@ func (db *DB) newbatchdb() (*batchdb, error) {
 }
 
 // Batch starts a new batch.
-func (db *DB) Batch(opt *BatchOptions) (*Batch, error) {
-	if opt.Order > 0 {
-		db.bwg.Add(1)
-		db.bonce.Do(func() {
-			//start batchLoop
-			db.batchC = make(chan struct{})
-			go db.batchLoop(opt.reconnectInterval, opt.retryTimeout)
-		})
-	}
-	return db.initBatch(opt)
+func (db *DB) Batch() (*Batch, error) {
+	return db.initBatch()
 }
 
-func (db *DB) initBatch(opt *BatchOptions) (*Batch, error) {
+func (db *DB) initBatch() (*Batch, error) {
 	b := &Batch{}
-	b.init(opt, db)
+	b.init(db)
 	return b, nil
 }
 
@@ -68,9 +56,8 @@ func (db *DB) initBatch(opt *BatchOptions) (*Batch, error) {
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
-func (db *DB) Update(opt *BatchOptions, fn func(*Batch) error) error {
-	opt = opt.copyWithDefaults()
-	b, err := db.Batch(opt)
+func (db *DB) Update(fn func(*Batch) error) error {
+	b, err := db.Batch()
 	if err != nil {
 		return err
 	}
@@ -79,96 +66,102 @@ func (db *DB) Update(opt *BatchOptions, fn func(*Batch) error) error {
 		b.Abort()
 	}()
 
+	b.setManaged()
+
 	// If an error is returned from the function then rollback and return error.
 	err = fn(b)
 	if err != nil {
 		return err
 	}
+	b.unsetManaged()
 	return b.Commit()
 }
 
-// Count returns the number of items in the DB.
-func (db *DB) Count() uint32 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.count
+// BatchGroup runs multiple batches concurrently without causing conflicts
+type BatchGroup struct {
+	fn []func(*Batch, <-chan struct{}) error
+	*DB
+	batches []Batch
 }
 
-// Metrics returns the DB metrics.
-func (db *DB) Metrics() Metrics {
-	return db.metrics
+func (db *DB) NewBatchGroup() *BatchGroup {
+	return &BatchGroup{DB: db}
 }
 
-// FileSize returns the total size of the disk storage used by the DB.
-func (db *DB) FileSize() (int64, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	var err error
-	is, err := db.index.Stat()
+// Add adds a function to the Group.
+// The function will be exectuted in its own goroutine when Run is called.
+// Add must be called before Run.
+func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
+	g.fn = append(g.fn, fn)
+}
+
+// Run exectues each function registered via Add in its own goroutine.
+// Run blocks until all functions have returned.
+// The first function to return will trigger the closure of the channel
+// passed to each function, who should in turn, return.
+// The return value from the first function to exit will be returned to
+// the caller of Run.
+func (g *BatchGroup) Run() error {
+	start := time.Now()
+	defer logger.Print("BatchGroup.Run: ", time.Since(start))
+	// if there are no registered functions, return immediately.
+	if len(g.fn) < 1 {
+		return nil
+	}
+
+	stop := make(chan struct{})
+	b, err := g.Batch()
 	if err != nil {
-		return -1, err
+		return err
 	}
-	ds, err := db.data.Stat()
-	if err != nil {
-		return -1, err
-	}
-	return is.Size() + ds.Size(), nil
-}
+	b.setManaged()
+	b.setGrouped(g)
+	// g.Add(g.writeBatchGroup)
 
-// batchLoop handles bacthes set to write orderly
-func (db *DB) batchLoop(reconnectInterval, retryTimeout time.Duration) {
-	ctx, cancel := context.WithCancel(context.Background())
-	db.cancelBatchWriter = cancel
-	var (
-		reconnectC <-chan time.Time
-	)
+	var wg sync.WaitGroup
+	wg.Add(len(g.fn))
 
-	if reconnectInterval > 0 {
-		reconnectTicker := time.NewTicker(reconnectInterval)
-		defer reconnectTicker.Stop()
-		reconnectC = reconnectTicker.C
-	}
-
-WRITEQUEUE:
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-reconnectC:
-			goto WAIT
-		case <-db.batchC:
-			if len(db.batches) == 0 {
-				goto WAIT
-			}
-			b, err := db.Batch(DefaultBatchOptions)
-			if err != nil {
-				return
-			}
-			db.memMu.Lock()
+	result := make(chan error, len(g.fn))
+	for i, fn := range g.fn {
+		b.setOrder(int32(i))
+		go func(fn func(*Batch, <-chan struct{}) error) {
+			//TODO implement cloing to pass a copy of batch
+			b := *b
 			defer func() {
-				db.batches = db.batches[:0]
-				b.Abort()
-				db.bonce.Reset()
-				db.memMu.Unlock()
+				wg.Done()
 			}()
-			sort.Slice(db.batches, func(i, j int) bool { return db.batches[i].order < db.batches[j].order })
-			for _, batch := range db.batches {
-				batch.index = append(batch.index, batch.pendingWrites...)
-				b.append(&batch)
-				batch.Reset()
-			}
-			b.Write()
-			b.Commit()
-			return
-		default:
-			goto WAIT
-		}
+			// If an error is returned from the function then rollback and return error.
+			result <- fn(&b, stop)
+		}(fn)
 	}
-WAIT:
-	// Wait for a while
-	db.bwg.Wait()
-	close(db.batchC)
-	goto WRITEQUEUE
+
+	defer g.writeBatchGroup()
+	defer wg.Wait()
+	defer close(stop)
+
+	return <-result
+}
+
+func (g *BatchGroup) writeBatchGroup() error {
+	b, err := g.Batch()
+	if err != nil {
+		return err
+	}
+	sort.Slice(g.batches, func(i, j int) bool {
+		return g.batches[i].order < g.batches[j].order
+	})
+	for _, batch := range g.batches {
+		logger.Printf("Batchdb: writing now...%d length %d", batch.order, len(g.batches))
+		batch.index = append(batch.index, batch.pendingWrites...)
+		b.append(&batch)
+		batch.Reset()
+	}
+	err = b.Write()
+	if err != nil {
+		return err
+	}
+	defer b.Abort()
+	return b.Commit()
 }
 
 // Once is an object that will perform exactly one action

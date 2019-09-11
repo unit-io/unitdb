@@ -61,6 +61,40 @@ err := db.Update(func(b *tracedb.Batch) error {
 		})
 ```
 
+Use the BatchGroup.Add() function to group batches and run concurrently without causing write conflict. Use the BatchGroup.Run to run group of batches concurrently:
+
+```
+    g := testdb.NewBatchGroup()
+	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
+		//b.PutWithTTL([]byte("ttl1"), []byte("bar"), time.Second*30)
+		b.Put([]byte("b1"), []byte("bar"))
+		b.Put([]byte("c1"), []byte("bar"))
+		b.Put([]byte("b1"), []byte("bar2"))
+		b.Write()
+		go func() {
+			<-stop // it signals batch group completion
+			log.Printf("batch group completed")
+		}()
+		return nil
+	})
+
+	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
+		b.Put([]byte("b11"), []byte("bar"))
+		b.Put([]byte("b11"), []byte("bar2"))
+		b.Put([]byte("b1"), []byte("bar3"))
+		b.Put([]byte("c11"), []byte("bar"))
+		b.Write()
+		go func() {
+			<-stop // it signals batch group completion
+			log.Printf("batch group completed")
+		}()
+		return nil
+	})
+
+    g.Run()
+
+```
+
 ### Reading from a database
 Use the DB.Get() function to retrieve the inserted value:
 
