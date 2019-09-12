@@ -162,7 +162,7 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	if err := b.db.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
-	if float64(b.db.mem.count)/float64(b.db.mem.nBuckets*entriesPerBucket) > loadFactor {
+	if float64(b.db.mem.count)/float64(b.db.mem.nBlocks*entriesPerBlock) > loadFactor {
 		if err := b.db.mem.split(); err != nil {
 			return err
 		}
@@ -259,14 +259,14 @@ func (b *Batch) commit() error {
 	}
 	var delCount int64 = 0
 	var putCount int64 = 0
-	var bh *bucketHandle
-	var originalB *bucketHandle
+	var bh *blockHandle
+	var originalB *blockHandle
 	entryIdx := 0
 	logger.Printf("Batch: commiting now...%d length %d", b.order, b.Len())
-	bucketIdx := b.db.mem.bucketIndex(b.firstKeyHash)
-	for bucketIdx < b.db.mem.nBuckets {
-		err := b.db.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {
-			for i := 0; i < entriesPerBucket; i++ {
+	blockIdx := b.db.mem.blockIndex(b.firstKeyHash)
+	for blockIdx < b.db.mem.nBlocks {
+		err := b.db.mem.forEachBlock(blockIdx, func(memb blockHandle) (bool, error) {
+			for i := 0; i < entriesPerBlock; i++ {
 				memsl := memb.entries[i]
 				if memsl.kvOffset == 0 {
 					return memb.next == 0, nil
@@ -296,11 +296,11 @@ func (b *Batch) commit() error {
 						return false, nil
 					}
 					delCount++
-					bh := bucketHandle{}
+					bh := blockHandle{}
 					delentryIdx := -1
-					err = b.db.forEachBucket(b.db.bucketIndex(hash), func(curb bucketHandle) (bool, error) {
+					err = b.db.forEachBlock(b.db.blockIndex(hash), func(curb blockHandle) (bool, error) {
 						bh = curb
-						for i := 0; i < entriesPerBucket; i++ {
+						for i := 0; i < entriesPerBlock; i++ {
 							sl := bh.entries[i]
 							if sl.kvOffset == 0 {
 								return bh.next == 0, nil
@@ -329,9 +329,9 @@ func (b *Batch) commit() error {
 					b.db.count--
 				} else {
 					putCount++
-					err = b.db.forEachBucket(b.db.bucketIndex(hash), func(curb bucketHandle) (bool, error) {
+					err = b.db.forEachBlock(b.db.blockIndex(hash), func(curb blockHandle) (bool, error) {
 						bh = &curb
-						for i := 0; i < entriesPerBucket; i++ {
+						for i := 0; i < entriesPerBlock; i++ {
 							sl := bh.entries[i]
 							entryIdx = i
 							if sl.kvOffset == 0 {
@@ -345,14 +345,14 @@ func (b *Batch) commit() error {
 							}
 						}
 						if bh.next == 0 {
-							// Couldn't find free space in the current bucketHandle, creating a new overflow bucketHandle.
-							nextBucket, err := b.db.createOverflowBucket()
+							// Couldn't find free space in the current blockHandle, creating a new overflow blockHandle.
+							nextBlock, err := b.db.createOverflowBlock()
 							if err != nil {
 								return false, err
 							}
-							bh.next = nextBucket.offset
+							bh.next = nextBlock.offset
 							originalB = bh
-							bh = nextBucket
+							bh = nextBlock
 							entryIdx = 0
 							return true, nil
 						}
@@ -401,7 +401,7 @@ func (b *Batch) commit() error {
 			logger.Printf("Batch: error commiting %d length %d %v", b.order, b.Len(), err)
 			return err
 		}
-		bucketIdx++
+		blockIdx++
 	}
 
 	//remove batch from activeBatches after commit

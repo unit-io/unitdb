@@ -16,19 +16,19 @@ type Item struct {
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
-	db            *DB
-	nextBucketIdx uint32
-	item          *Item
-	queue         []*Item
+	db           *DB
+	nextBlockIdx uint32
+	item         *Item
+	queue        []*Item
 }
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.item = nil
 	if len(it.queue) == 0 {
-		for it.nextBucketIdx < it.db.nBuckets {
-			err := it.db.forEachBucket(it.nextBucketIdx, func(b bucketHandle) (bool, error) {
-				for i := 0; i < entriesPerBucket; i++ {
+		for it.nextBlockIdx < it.db.nBlocks {
+			err := it.db.forEachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
+				for i := 0; i < entriesPerBlock; i++ {
 					sl := b.entries[i]
 					if sl.kvOffset == 0 {
 						return true, nil
@@ -47,7 +47,7 @@ func (it *ItemIterator) Next() {
 			if err != nil {
 				return
 			}
-			it.nextBucketIdx++
+			it.nextBlockIdx++
 			if len(it.queue) > 0 {
 				break
 			}
@@ -62,12 +62,12 @@ func (it *ItemIterator) Next() {
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) First() {
-	if it.nextBucketIdx >= 1 {
+	if it.nextBlockIdx >= 1 {
 		return
 	}
-	for it.nextBucketIdx < it.db.nBuckets {
-		err := it.db.forEachBucket(it.nextBucketIdx, func(b bucketHandle) (bool, error) {
-			for i := 0; i < entriesPerBucket; i++ {
+	for it.nextBlockIdx < it.db.nBlocks {
+		err := it.db.forEachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
+			for i := 0; i < entriesPerBlock; i++ {
 				sl := b.entries[i]
 				if sl.kvOffset == 0 {
 					return true, nil
@@ -86,7 +86,7 @@ func (it *ItemIterator) First() {
 		if err != nil {
 			return
 		}
-		it.nextBucketIdx++
+		it.nextBlockIdx++
 		if len(it.queue) > 0 {
 			break
 		}

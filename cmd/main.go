@@ -13,7 +13,6 @@ func main() {
 		log.Fatal(err)
 		return
 	}
-
 	defer testdb.Close()
 
 	g := testdb.NewBatchGroup()
@@ -56,7 +55,12 @@ func main() {
 		return nil
 	})
 
-	g.Run()
+	err = g.Run()
+
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
 
 	testdb.Update(func(b *tracedb.Batch) error {
 		b.Delete([]byte("b111"))

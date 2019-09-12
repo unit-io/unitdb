@@ -7,6 +7,11 @@ import (
 	"github.com/frontnet/tracedb/fs"
 )
 
+type userdblock struct {
+	offset int64
+	size   uint32
+}
+
 func align51264(n int64) int64 {
 	return (n + 511) &^ 511
 }
@@ -36,21 +41,21 @@ func truncateFiles(db *DB) error {
 	return nil
 }
 
-func getUsedBlocks(db *DB) (uint32, []block, error) {
+func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	var itemCount uint32
-	var usedBlocks []block
-	for bucketIdx := uint32(0); bucketIdx < db.nBuckets; bucketIdx++ {
-		err := db.forEachBucket(bucketIdx, func(b bucketHandle) (bool, error) {
-			for i := 0; i < entriesPerBucket; i++ {
+	var usedBlocks []userdblock
+	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
+		err := db.forEachBlock(blockIdx, func(b blockHandle) (bool, error) {
+			for i := 0; i < entriesPerBlock; i++ {
 				sl := b.entries[i]
 				if sl.kvOffset == 0 {
 					return true, nil
 				}
 				itemCount++
-				usedBlocks = append(usedBlocks, block{size: align512(sl.kvSize()), offset: sl.kvOffset})
+				usedBlocks = append(usedBlocks, userdblock{size: align512(sl.kvSize()), offset: sl.kvOffset})
 			}
 			if b.next != 0 {
-				usedBlocks = append(usedBlocks, block{size: bucketSize, offset: b.next})
+				usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: b.next})
 			}
 			return false, nil
 		})
@@ -62,20 +67,20 @@ func getUsedBlocks(db *DB) (uint32, []block, error) {
 }
 
 func recoverSplitCrash(db *DB) error {
-	if db.nBuckets == 1 {
+	if db.nBlocks == 1 {
 		return nil
 	}
-	prevnBuckets := db.nBuckets - 1
-	prevLevel := uint8(math.Floor(math.Log2(float64(prevnBuckets))))
-	prevSplitBucketIdx := prevnBuckets - (uint32(1) << prevLevel)
+	prevnBlocks := db.nBlocks - 1
+	prevLevel := uint8(math.Floor(math.Log2(float64(prevnBlocks))))
+	prevSplitBlockIdx := prevnBlocks - (uint32(1) << prevLevel)
 	splitCrash := false
-	err := db.forEachBucket(prevSplitBucketIdx, func(b bucketHandle) (bool, error) {
-		for i := 0; i < entriesPerBucket; i++ {
+	err := db.forEachBlock(prevSplitBlockIdx, func(b blockHandle) (bool, error) {
+		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			if sl.kvOffset == 0 {
 				return true, nil
 			}
-			if db.bucketIndex(sl.hash) != prevSplitBucketIdx {
+			if db.blockIndex(sl.hash) != prevSplitBlockIdx {
 				splitCrash = true
 				return true, nil
 			}
@@ -89,20 +94,20 @@ func recoverSplitCrash(db *DB) error {
 		return nil
 	}
 	logger.Print("Detected split crash. Truncating index file...")
-	if err := db.index.Truncate(db.index.size - int64(bucketSize)); err != nil {
+	if err := db.index.Truncate(db.index.size - int64(blockSize)); err != nil {
 		return err
 	}
-	// db.index.size -= int64(bucketSize)
+	// db.index.size -= int64(blockSize)
 	// if err := db.index.Mmap(db.index.size); err != nil {
 	// 	return err
 	// }
-	db.nBuckets = prevnBuckets
+	db.nBlocks = prevnBlocks
 	db.level = prevLevel
-	db.splitBucketIdx = prevSplitBucketIdx
+	db.splitBlockIdx = prevSplitBlockIdx
 	return nil
 }
 
-func recoverFreeList(db *DB, usedBlocks []block) error {
+func recoverFreeList(db *DB, usedBlocks []userdblock) error {
 	if len(usedBlocks) == 0 {
 		return nil
 	}
@@ -139,9 +144,9 @@ func (db *DB) recover() error {
 	}
 
 	// Recover header.
-	db.nBuckets = uint32((db.index.size - int64(headerSize)) / int64(bucketSize))
-	db.level = uint8(math.Floor(math.Log2(float64(db.nBuckets))))
-	db.splitBucketIdx = db.nBuckets - (uint32(1) << db.level)
+	db.nBlocks = uint32((db.index.size - int64(headerSize)) / int64(blockSize))
+	db.level = uint8(math.Floor(math.Log2(float64(db.nBlocks))))
+	db.splitBlockIdx = db.nBlocks - (uint32(1) << db.level)
 	itemCount, usedBlocks, err := getUsedBlocks(db)
 	if err != nil {
 		return err

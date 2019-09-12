@@ -18,29 +18,29 @@ func (sl entry) kvSize() uint32 {
 	return uint32(sl.keySize) + sl.valueSize
 }
 
-type bucket struct {
-	entries [entriesPerBucket]entry
+type block struct {
+	entries [entriesPerBlock]entry
 	next    int64
 }
 
-type bucketHandle struct {
-	bucket
+type blockHandle struct {
+	block
 	file   fs.FileManager
 	offset int64
 }
 
 const (
-	bucketSize uint32 = 512
+	blockSize uint32 = 512
 )
 
 func align512(n uint32) uint32 {
 	return (n + 511) &^ 511
 }
 
-func (b bucket) MarshalBinary() ([]byte, error) {
-	buf := make([]byte, bucketSize)
+func (b block) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, blockSize)
 	data := buf
-	for i := 0; i < entriesPerBucket; i++ {
+	for i := 0; i < entriesPerBlock; i++ {
 		sl := b.entries[i]
 		binary.LittleEndian.PutUint32(buf[:4], sl.hash)
 		binary.LittleEndian.PutUint16(buf[4:6], sl.keySize)
@@ -53,8 +53,8 @@ func (b bucket) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
-func (b *bucket) UnmarshalBinary(data []byte) error {
-	for i := 0; i < entriesPerBucket; i++ {
+func (b *block) UnmarshalBinary(data []byte) error {
+	for i := 0; i < entriesPerBlock; i++ {
 		_ = data[22] // bounds check hint to compiler; see golang.org/issue/14808
 		b.entries[i].hash = binary.LittleEndian.Uint32(data[:4])
 		b.entries[i].keySize = binary.LittleEndian.Uint16(data[4:6])
@@ -67,23 +67,23 @@ func (b *bucket) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (b *bucket) del(entryIdx int) {
+func (b *block) del(entryIdx int) {
 	i := entryIdx
-	for ; i < entriesPerBucket-1; i++ {
+	for ; i < entriesPerBlock-1; i++ {
 		b.entries[i] = b.entries[i+1]
 	}
 	b.entries[i] = entry{}
 }
 
-func (b *bucketHandle) read() error {
-	buf, err := b.file.Slice(b.offset, b.offset+int64(bucketSize))
+func (b *blockHandle) read() error {
+	buf, err := b.file.Slice(b.offset, b.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
 	return b.UnmarshalBinary(buf)
 }
 
-func (b *bucketHandle) write() error {
+func (b *blockHandle) write() error {
 	buf, err := b.MarshalBinary()
 	if err != nil {
 		return err
@@ -93,32 +93,32 @@ func (b *bucketHandle) write() error {
 }
 
 type entryWriter struct {
-	bucket      *bucketHandle
-	entryIdx    int
-	prevBuckets []*bucketHandle
+	block      *blockHandle
+	entryIdx   int
+	prevblocks []*blockHandle
 }
 
 func (sw *entryWriter) insert(sl entry, db *DB) error {
-	if sw.entryIdx == entriesPerBucket {
-		nextBucket, err := db.createOverflowBucket()
+	if sw.entryIdx == entriesPerBlock {
+		nextblock, err := db.createOverflowBlock()
 		if err != nil {
 			return err
 		}
-		sw.bucket.next = nextBucket.offset
-		sw.prevBuckets = append(sw.prevBuckets, sw.bucket)
-		sw.bucket = nextBucket
+		sw.block.next = nextblock.offset
+		sw.prevblocks = append(sw.prevblocks, sw.block)
+		sw.block = nextblock
 		sw.entryIdx = 0
 	}
-	sw.bucket.entries[sw.entryIdx] = sl
+	sw.block.entries[sw.entryIdx] = sl
 	sw.entryIdx++
 	return nil
 }
 
 func (sw *entryWriter) write() error {
-	for i := len(sw.prevBuckets) - 1; i >= 0; i-- {
-		if err := sw.prevBuckets[i].write(); err != nil {
+	for i := len(sw.prevblocks) - 1; i >= 0; i-- {
+		if err := sw.prevblocks[i].write(); err != nil {
 			return err
 		}
 	}
-	return sw.bucket.write()
+	return sw.block.write()
 }

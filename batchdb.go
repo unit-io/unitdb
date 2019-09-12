@@ -11,10 +11,9 @@ import (
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	writeLockC chan struct{}
-	memMu      sync.RWMutex
-	memPool    chan *memdb
-	mem        *memdb
+	memMu   sync.RWMutex
+	memPool chan *memdb
+	mem     *memdb
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
 	batchQueue    chan *Batch
@@ -32,7 +31,6 @@ func (db *DB) Batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		writeLockC:    make(chan struct{}, 1),
 		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
 		batchQueue:    make(chan *Batch, 1),
@@ -108,8 +106,7 @@ func (g *BatchGroup) Run() error {
 	var wg sync.WaitGroup
 	wg.Add(len(g.fn))
 
-	result := make(chan error, len(g.fn))
-	//g.batches = make(chan *Batch, len(g.fn))
+	result := make(chan error, len(g.fn)+1)
 	for i, fn := range g.fn {
 		go func(order int, fn func(*Batch, <-chan struct{}) error) {
 			//TODO implement cloing to pass a copy of batch
@@ -135,6 +132,8 @@ func (g *BatchGroup) Run() error {
 }
 
 func (g *BatchGroup) writeBatchGroup() error {
+	g.closeW.Add(1)
+	defer g.closeW.Done()
 	var batches []*Batch
 	for batch := range g.batchQueue {
 		batches = append(batches, batch)

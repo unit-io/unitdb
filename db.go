@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	entriesPerBucket = 22
-	loadFactor       = 0.7
-	indexPostfix     = ".index"
-	lockPostfix      = ".lock"
-	filterPostfix    = ".filter"
-	version          = 1 // file format version
+	entriesPerBlock = 22
+	loadFactor      = 0.7
+	indexPostfix    = ".index"
+	lockPostfix     = ".lock"
+	filterPostfix   = ".filter"
+	version         = 1 // file format version
 
 	// MaxKeyLength is the maximum size of a key in bytes.
 	MaxKeyLength = 1 << 16
@@ -35,12 +35,12 @@ const (
 )
 
 type dbInfo struct {
-	level          uint8
-	count          uint32
-	nBuckets       uint32
-	splitBucketIdx uint32
-	freelistOff    int64
-	hashSeed       uint32
+	level         uint8
+	count         uint32
+	nBlocks       uint32
+	splitBlockIdx uint32
+	freelistOff   int64
+	hashSeed      uint32
 }
 
 // DB represents the key-value storage.
@@ -49,6 +49,7 @@ type DB struct {
 	// Need 64-bit alignment.
 	seq          uint64
 	mu           sync.RWMutex
+	writeLockC   chan struct{}
 	filter       Filter
 	index        file
 	data         dataFile
@@ -97,13 +98,14 @@ func Open(path string, opts *Options) (*DB, error) {
 		log.Fatal(err)
 	}
 	db := &DB{
-		index:   index,
-		data:    dataFile{file: data},
-		filter:  Filter{file: filter, cache: cache, filterBlock: fltr.NewFilterGenerator()},
-		lock:    lock,
-		metrics: newMetrics(),
+		index:      index,
+		data:       dataFile{file: data},
+		filter:     Filter{file: filter, cache: cache, filterBlock: fltr.NewFilterGenerator()},
+		lock:       lock,
+		writeLockC: make(chan struct{}, 1),
+		metrics:    newMetrics(),
 		dbInfo: dbInfo{
-			nBuckets:    1,
+			nBlocks:     1,
 			freelistOff: -1,
 		},
 		batchdb: &batchdb{},
@@ -134,7 +136,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 		db.hashSeed = seed
-		if _, err = db.index.extend(headerSize + bucketSize); err != nil {
+		if _, err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
 		if _, err = db.data.extend(headerSize); err != nil {
@@ -170,8 +172,8 @@ func Open(path string, opts *Options) (*DB, error) {
 	return db, nil
 }
 
-func bucketOffset(idx uint32) int64 {
-	return int64(headerSize) + (int64(bucketSize) * int64(idx))
+func blockOffset(idx uint32) int64 {
+	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
 func (db *DB) startSyncer(interval time.Duration) {
@@ -197,11 +199,11 @@ func (db *DB) startSyncer(interval time.Duration) {
 	}()
 }
 
-func (db *DB) forEachBucket(startBucketIdx uint32, cb func(bucketHandle) (bool, error)) error {
-	off := bucketOffset(startBucketIdx)
+func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
+	off := blockOffset(startBlockIdx)
 	f := db.index.FileManager
 	for {
-		b := bucketHandle{file: f, offset: off}
+		b := blockHandle{file: f, offset: off}
 		if err := b.read(); err != nil {
 			return err
 		}
@@ -213,16 +215,16 @@ func (db *DB) forEachBucket(startBucketIdx uint32, cb func(bucketHandle) (bool, 
 		}
 		off = b.next
 		f = db.data.FileManager
-		db.metrics.BucketProbes.Add(1)
+		db.metrics.BlockProbes.Add(1)
 	}
 }
 
-func (db *DB) createOverflowBucket() (*bucketHandle, error) {
-	off, err := db.data.allocate(bucketSize)
+func (db *DB) createOverflowBlock() (*blockHandle, error) {
+	off, err := db.data.allocate(blockSize)
 	if err != nil {
 		return nil, err
 	}
-	return &bucketHandle{file: db.data, offset: off}, nil
+	return &blockHandle{file: db.data, offset: off}, nil
 }
 
 func (db *DB) writeHeader() error {
@@ -262,6 +264,10 @@ func (db *DB) readHeader(readFreeList bool) error {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// Wait for all gorotines to exit.
+	db.closeW.Wait()
+
 	if db.cancelSyncer != nil {
 		db.cancelSyncer()
 	}
@@ -285,9 +291,6 @@ func (db *DB) Close() error {
 	// Signal all goroutines.
 	close(db.closeC)
 
-	// Wait for all gorotines to exit.
-	db.closeW.Wait()
-
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
 			err = err1
@@ -298,19 +301,19 @@ func (db *DB) Close() error {
 	// Clear memdbs.
 	db.clearMems()
 
-	return nil
+	return err
 }
 
-func (db *DB) bucketIndex(hash uint32) uint32 {
+func (db *DB) blockIndex(hash uint32) uint32 {
 	idx := hash & ((1 << db.level) - 1)
-	if idx < db.splitBucketIdx {
+	if idx < db.splitBlockIdx {
 		return hash & ((1 << (db.level + 1)) - 1)
 	}
 	return idx
 }
 
 func (db *DB) hash(data []byte) uint32 {
-	return hash.Sum32WithSeed(data, db.hashSeed)
+	return hash.WithSalt(data, db.hashSeed)
 }
 
 // Get returns the value for the given key stored in the DB or nil if the key doesn't exist.
@@ -326,8 +329,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return retValue, nil
 	}
 
-	err := db.forEachBucket(db.bucketIndex(h), func(b bucketHandle) (bool, error) {
-		for i := 0; i < entriesPerBucket; i++ {
+	err := db.forEachBlock(db.blockIndex(h), func(b blockHandle) (bool, error) {
+		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			if sl.kvOffset == 0 {
 				return b.next == 0, nil
@@ -361,8 +364,8 @@ func (db *DB) Has(key []byte) (bool, error) {
 	found := false
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	err := db.forEachBucket(db.bucketIndex(h), func(b bucketHandle) (bool, error) {
-		for i := 0; i < entriesPerBucket; i++ {
+	err := db.forEachBlock(db.blockIndex(h), func(b blockHandle) (bool, error) {
+		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			if sl.kvOffset == 0 {
 				return b.next == 0, nil
@@ -408,12 +411,12 @@ func (db *DB) Sync() error {
 }
 
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
-	var b *bucketHandle
-	var originalB *bucketHandle
+	var b *blockHandle
+	var originalB *blockHandle
 	entryIdx := 0
-	err := db.forEachBucket(db.bucketIndex(hash), func(curb bucketHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(hash), func(curb blockHandle) (bool, error) {
 		b = &curb
-		for i := 0; i < entriesPerBucket; i++ {
+		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			entryIdx = i
 			if sl.kvOffset == 0 {
@@ -427,14 +430,14 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 			}
 		}
 		if b.next == 0 {
-			// Couldn't find free space in the current bucketHandle, creating a new overflow bucketHandle.
-			nextBucket, err := db.createOverflowBucket()
+			// Couldn't find free space in the current blockHandle, creating a new overflow blockHandle.
+			nextBlock, err := db.createOverflowBlock()
 			if err != nil {
 				return false, err
 			}
-			b.next = nextBucket.offset
+			b.next = nextBlock.offset
 			originalB = b
-			b = nextBucket
+			b = nextBlock
 			entryIdx = 0
 			return true, nil
 		}
@@ -473,63 +476,63 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 }
 
 func (db *DB) split() error {
-	updatedBucketIdx := db.splitBucketIdx
-	updatedBucketOff := bucketOffset(updatedBucketIdx)
-	updatedBucket := entryWriter{
-		bucket: &bucketHandle{file: db.index, offset: updatedBucketOff},
+	updatedBlockIdx := db.splitBlockIdx
+	updatedBlockOff := blockOffset(updatedBlockIdx)
+	updatedBlock := entryWriter{
+		block: &blockHandle{file: db.index, offset: updatedBlockOff},
 	}
 
-	newBucketOff, err := db.index.extend(bucketSize)
+	newBlockOff, err := db.index.extend(blockSize)
 	if err != nil {
 		return err
 	}
-	newBucket := entryWriter{
-		bucket: &bucketHandle{file: db.index, offset: newBucketOff},
+	newBlock := entryWriter{
+		block: &blockHandle{file: db.index, offset: newBlockOff},
 	}
 
-	db.splitBucketIdx++
-	if db.splitBucketIdx == 1<<db.level {
+	db.splitBlockIdx++
+	if db.splitBlockIdx == 1<<db.level {
 		db.level++
-		db.splitBucketIdx = 0
+		db.splitBlockIdx = 0
 	}
 
-	var overflowBuckets []int64
-	if err := db.forEachBucket(updatedBucketIdx, func(curb bucketHandle) (bool, error) {
-		for j := 0; j < entriesPerBucket; j++ {
+	var overflowBlocks []int64
+	if err := db.forEachBlock(updatedBlockIdx, func(curb blockHandle) (bool, error) {
+		for j := 0; j < entriesPerBlock; j++ {
 			sl := curb.entries[j]
 			if sl.kvOffset == 0 {
 				break
 			}
-			if db.bucketIndex(sl.hash) == updatedBucketIdx {
-				if err := updatedBucket.insert(sl, db); err != nil {
+			if db.blockIndex(sl.hash) == updatedBlockIdx {
+				if err := updatedBlock.insert(sl, db); err != nil {
 					return true, err
 				}
 			} else {
-				if err := newBucket.insert(sl, db); err != nil {
+				if err := newBlock.insert(sl, db); err != nil {
 					return true, err
 				}
 			}
 		}
 		if curb.next != 0 {
-			overflowBuckets = append(overflowBuckets, curb.next)
+			overflowBlocks = append(overflowBlocks, curb.next)
 		}
 		return false, nil
 	}); err != nil {
 		return err
 	}
 
-	for _, off := range overflowBuckets {
-		db.data.free(bucketSize, off)
+	for _, off := range overflowBlocks {
+		db.data.free(blockSize, off)
 	}
 
-	if err := newBucket.write(); err != nil {
+	if err := newBlock.write(); err != nil {
 		return err
 	}
-	if err := updatedBucket.write(); err != nil {
+	if err := updatedBlock.write(); err != nil {
 		return err
 	}
 
-	db.nBuckets++
+	db.nBlocks++
 	return nil
 }
 
@@ -543,11 +546,11 @@ func (db *DB) Delete(key []byte) error {
 	db.metrics.Dels.Add(1)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	b := bucketHandle{}
+	b := blockHandle{}
 	entryIdx := -1
-	err := db.forEachBucket(db.bucketIndex(h), func(curb bucketHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(h), func(curb blockHandle) (bool, error) {
 		b = curb
-		for i := 0; i < entriesPerBucket; i++ {
+		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			if sl.kvOffset == 0 {
 				return b.next == 0, nil

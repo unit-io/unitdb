@@ -5,13 +5,13 @@ import (
 	"sort"
 )
 
-type block struct {
+type freeblock struct {
 	offset int64
 	size   uint32
 }
 
 type freelist struct {
-	blocks []block
+	blocks []freeblock
 }
 
 func (fl *freelist) search(size uint32) int {
@@ -29,9 +29,9 @@ func (fl *freelist) free(off int64, size uint32) {
 		panic("freeing already freed offset")
 	}
 
-	fl.blocks = append(fl.blocks, block{})
+	fl.blocks = append(fl.blocks, freeblock{})
 	copy(fl.blocks[i+1:], fl.blocks[i:])
-	fl.blocks[i] = block{offset: off, size: size}
+	fl.blocks[i] = freeblock{offset: off, size: size}
 }
 
 func (fl *freelist) allocate(size uint32) int64 {
@@ -45,7 +45,7 @@ func (fl *freelist) allocate(size uint32) int64 {
 	off := fl.blocks[i].offset
 	if fl.blocks[i].size == size {
 		copy(fl.blocks[i:], fl.blocks[i+1:])
-		fl.blocks[len(fl.blocks)-1] = block{}
+		fl.blocks[len(fl.blocks)-1] = freeblock{}
 		fl.blocks = fl.blocks[:len(fl.blocks)-1]
 	} else {
 		fl.blocks[i].size -= size
@@ -61,19 +61,19 @@ func (fl *freelist) defrag() {
 	sort.Slice(fl.blocks, func(i, j int) bool {
 		return fl.blocks[i].offset < fl.blocks[j].offset
 	})
-	var merged []block
+	var merged []freeblock
 	curOff := fl.blocks[0].offset
 	curSize := fl.blocks[0].size
 	for i := 1; i < len(fl.blocks); i++ {
 		if curOff+int64(curSize) == fl.blocks[i].offset {
 			curSize += fl.blocks[i].size
 		} else {
-			merged = append(merged, block{size: curSize, offset: curOff})
+			merged = append(merged, freeblock{size: curSize, offset: curOff})
 			curOff = fl.blocks[i].offset
 			curSize = fl.blocks[i].size
 		}
 	}
-	merged = append(merged, block{offset: curOff, size: curSize})
+	merged = append(merged, freeblock{offset: curOff, size: curSize})
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].size < merged[j].size
 	})
@@ -115,7 +115,7 @@ func (fl *freelist) read(f file, off int64) error {
 		blockOff := int64(binary.LittleEndian.Uint64(buf[:8]))
 		blockSize := binary.LittleEndian.Uint32(buf[8:12])
 		if blockOff != 0 {
-			fl.blocks = append(fl.blocks, block{size: blockSize, offset: blockOff})
+			fl.blocks = append(fl.blocks, freeblock{size: blockSize, offset: blockOff})
 		}
 		buf = buf[12:]
 	}
@@ -132,7 +132,7 @@ func (fl *freelist) write(f file) (int64, error) {
 	var off int64
 	if i < len(fl.blocks) {
 		off = fl.blocks[i].offset
-		fl.blocks[i] = block{}
+		fl.blocks[i] = freeblock{}
 	} else {
 		var err error
 		off, err = f.extend(marshaledSize)
