@@ -91,8 +91,7 @@ var DefaultBatchOptions = &BatchOptions{
 type Batch struct {
 	managed       bool
 	grouped       bool
-	batchGroup    *BatchGroup
-	order         int32
+	order         int8
 	seq           uint64
 	db            *DB
 	data          []byte
@@ -101,28 +100,8 @@ type Batch struct {
 	firstKeyHash  uint32
 	keys          []uint32
 
-	//Batch memdb
-	mem *memdb
-
 	// internalLen is sums of key/value pair length plus 8-bytes internal key.
 	internalLen uint32
-}
-
-// init initializes the batch.
-func (b *Batch) init(db *DB) error {
-	if b.mem != nil {
-		panic("tracedb: batch is in progress")
-	}
-	if db == nil {
-		panic("tracedb: db is not open")
-	}
-	if db.mem == nil {
-		panic("tracedb: memdb is not open")
-	}
-	b.db = db
-	b.mem = db.mem
-	b.mem.incref()
-	return nil
 }
 
 func (b *Batch) grow(n int) {
@@ -144,7 +123,7 @@ func (b *Batch) appendRec(dFlag bool, expiresAt uint32, key, value []byte) {
 		n += len(value)
 	}
 	b.grow(n)
-	h := b.mem.hash(key)
+	h := b.db.hash(key)
 	index := batchIndex{delFlag: dFlag, hash: h, keySize: uint16(len(key))}
 	o := len(b.data)
 	data := b.data[:o+n]
@@ -180,11 +159,11 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	}
 	var k []byte
 	k = makeInternalKey(k, key, b.seq+1, dFlag, expiresAt)
-	if err := b.mem.put(h, k, value, expiresAt); err != nil {
+	if err := b.db.mem.put(h, k, value, expiresAt); err != nil {
 		return err
 	}
-	if float64(b.mem.count)/float64(b.mem.nBuckets*entriesPerBucket) > loadFactor {
-		if err := b.mem.split(); err != nil {
+	if float64(b.db.mem.count)/float64(b.db.mem.nBuckets*entriesPerBucket) > loadFactor {
+		if err := b.db.mem.split(); err != nil {
 			return err
 		}
 	}
@@ -222,7 +201,7 @@ func (b *Batch) Delete(key []byte) {
 }
 
 func (b *Batch) hasWriteConflict(h uint32) bool {
-	for _, batch := range b.mem.activeBatches {
+	for _, batch := range b.db.activeBatches {
 		for _, k := range batch {
 			if k == h {
 				return true
@@ -247,29 +226,28 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, h uint32, expiresAt uin
 }
 
 func (b *Batch) Write() error {
+	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
 	defer func() {
 		<-b.db.writeLockC
 	}()
-	// append batch to batchgroup
 	b.uniq()
 	if b.grouped {
-		// The write happen synchronously.
-		// b.db.writeLockC <- struct{}{}
-		b.batchGroup.batches = append(b.batchGroup.batches, *b)
+		// append batch to batchgroup
+		b.db.batchQueue <- b
 		logger.Printf("Batch: Order %d, Seq %d Length %d", b.order, b.seq, len(b.pendingWrites))
 		// <-b.db.writeLockC
 		return nil
 	}
 
-	b.seq = b.mem.getSeq()
+	b.seq = b.db.mem.getSeq()
 	err := b.writeInternal(func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error {
 		return b.mput(dFlag, h, expiresAt, k, v)
 	})
 
 	if err == nil {
-		b.mem.activeBatches[b.seq] = b.Keys()
-		b.mem.setSeq(b.seq)
+		b.db.activeBatches[b.seq] = b.Keys()
+		b.db.mem.setSeq(b.seq)
 	}
 
 	return err
@@ -284,20 +262,16 @@ func (b *Batch) commit() error {
 	var bh *bucketHandle
 	var originalB *bucketHandle
 	entryIdx := 0
-	b.db.mu.Lock()
-	defer func() {
-		b.db.mu.Unlock()
-	}()
 	logger.Printf("Batch: commiting now...%d length %d", b.order, b.Len())
-	bucketIdx := b.mem.bucketIndex(b.firstKeyHash)
-	for bucketIdx < b.mem.nBuckets {
-		err := b.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {
+	bucketIdx := b.db.mem.bucketIndex(b.firstKeyHash)
+	for bucketIdx < b.db.mem.nBuckets {
+		err := b.db.mem.forEachBucket(bucketIdx, func(memb bucketHandle) (bool, error) {
 			for i := 0; i < entriesPerBucket; i++ {
 				memsl := memb.entries[i]
 				if memsl.kvOffset == 0 {
 					return memb.next == 0, nil
 				}
-				memslKey, value, err := b.mem.data.readKeyValue(memsl)
+				memslKey, value, err := b.db.mem.data.readKeyValue(memsl)
 				if err == errKeyExpired {
 					continue
 				}
@@ -424,13 +398,14 @@ func (b *Batch) commit() error {
 			break
 		}
 		if err != nil {
+			logger.Printf("Batch: error commiting %d length %d %v", b.order, b.Len(), err)
 			return err
 		}
 		bucketIdx++
 	}
 
 	//remove batch from activeBatches after commit
-	delete(b.mem.activeBatches, b.seq)
+	delete(b.db.activeBatches, b.seq)
 
 	b.db.metrics.Dels.Add(delCount)
 	b.db.metrics.Puts.Add(putCount)
@@ -444,7 +419,7 @@ func (b *Batch) commit() error {
 
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
-	if b.mem == nil || b.mem.getref() == 0 {
+	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
 	}
 	return b.commit()
@@ -453,9 +428,7 @@ func (b *Batch) Commit() error {
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
 	b.Reset()
-	b.mem.decref()
-	b.mem = nil
-	// <-b.db.writeLockC
+	b.db = nil
 }
 
 // Reset resets the batch.
@@ -527,7 +500,7 @@ func (b *Batch) unsetManaged() {
 
 // Len returns number of records in the batch.
 func (b *Batch) setGrouped(g *BatchGroup) {
-	b.batchGroup = g
+	// b.batchGroup = g
 	b.grouped = true
 }
 
@@ -536,6 +509,6 @@ func (b *Batch) unsetGrouped() {
 	b.grouped = false
 }
 
-func (b *Batch) setOrder(order int32) {
+func (b *Batch) setOrder(order int8) {
 	b.order = order
 }

@@ -17,36 +17,33 @@ type batchdb struct {
 	mem        *memdb
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
+	batchQueue    chan *Batch
 	//once run batchLoop once
 	once Once
 
 	cancelBatchWriter context.CancelFunc
 }
 
-func (db *DB) newbatchdb() (*batchdb, error) {
+// Batch starts a new batch.
+func (db *DB) Batch() *Batch {
+	return &Batch{db: db}
+}
+
+func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
 		writeLockC:    make(chan struct{}, 1),
 		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
+		batchQueue:    make(chan *Batch, 1),
 	}
 	db.batchdb = bdb
 	// Create a memdb.
 	if _, err := db.newmemdb(0); err != nil {
-		return nil, err
+		return err
 	}
-	return bdb, nil
-}
-
-// Batch starts a new batch.
-func (db *DB) Batch() (*Batch, error) {
-	return db.initBatch()
-}
-
-func (db *DB) initBatch() (*Batch, error) {
-	b := &Batch{}
-	b.init(db)
-	return b, nil
+	db.mem.incref()
+	return nil
 }
 
 // Update executes a function within the context of a read-write managed transaction.
@@ -57,10 +54,7 @@ func (db *DB) initBatch() (*Batch, error) {
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
 func (db *DB) Update(fn func(*Batch) error) error {
-	b, err := db.Batch()
-	if err != nil {
-		return err
-	}
+	b := db.Batch()
 	// Make sure the transaction rolls back in the event of a panic.
 	defer func() {
 		b.Abort()
@@ -69,7 +63,7 @@ func (db *DB) Update(fn func(*Batch) error) error {
 	b.setManaged()
 
 	// If an error is returned from the function then rollback and return error.
-	err = fn(b)
+	err := fn(b)
 	if err != nil {
 		return err
 	}
@@ -81,7 +75,7 @@ func (db *DB) Update(fn func(*Batch) error) error {
 type BatchGroup struct {
 	fn []func(*Batch, <-chan struct{}) error
 	*DB
-	batches []Batch
+	// batches []Batch
 }
 
 func (db *DB) NewBatchGroup() *BatchGroup {
@@ -110,32 +104,30 @@ func (g *BatchGroup) Run() error {
 	}
 
 	stop := make(chan struct{})
-	b, err := g.Batch()
-	if err != nil {
-		return err
-	}
-	b.setManaged()
-	b.setGrouped(g)
-	// g.Add(g.writeBatchGroup)
 
 	var wg sync.WaitGroup
 	wg.Add(len(g.fn))
 
 	result := make(chan error, len(g.fn))
+	//g.batches = make(chan *Batch, len(g.fn))
 	for i, fn := range g.fn {
-		b.setOrder(int32(i))
-		go func(fn func(*Batch, <-chan struct{}) error) {
+		go func(order int, fn func(*Batch, <-chan struct{}) error) {
 			//TODO implement cloing to pass a copy of batch
-			b := *b
+			b := g.Batch()
+			b.setManaged()
+			b.setGrouped(g)
+			b.setOrder(int8(order))
 			defer func() {
 				wg.Done()
 			}()
 			// If an error is returned from the function then rollback and return error.
-			result <- fn(&b, stop)
-		}(fn)
+			result <- fn(b, stop)
+		}(i, fn)
 	}
 
-	defer g.writeBatchGroup()
+	go g.writeBatchGroup()
+
+	defer close(g.batchQueue)
 	defer wg.Wait()
 	defer close(stop)
 
@@ -143,25 +135,32 @@ func (g *BatchGroup) Run() error {
 }
 
 func (g *BatchGroup) writeBatchGroup() error {
-	b, err := g.Batch()
-	if err != nil {
-		return err
+	var batches []*Batch
+	for batch := range g.batchQueue {
+		batches = append(batches, batch)
 	}
-	sort.Slice(g.batches, func(i, j int) bool {
-		return g.batches[i].order < g.batches[j].order
+	sort.Slice(batches[:], func(i, j int) bool {
+		return batches[i].order < batches[j].order
 	})
-	for _, batch := range g.batches {
-		logger.Printf("Batchdb: writing now...%d length %d", batch.order, len(g.batches))
+	b := g.Batch()
+	for _, batch := range batches {
+		logger.Printf("Batchdb: writing now...%d length %d", batch.order, len(g.batchQueue))
 		batch.index = append(batch.index, batch.pendingWrites...)
-		b.append(&batch)
-		batch.Reset()
+		b.append(batch)
 	}
-	err = b.Write()
+	err := b.Write()
 	if err != nil {
 		return err
 	}
-	defer b.Abort()
+	defer g.Abort()
 	return b.Commit()
+}
+
+func (g *BatchGroup) Abort() {
+	for b := range g.batchQueue {
+		b.unsetManaged()
+		b.Abort()
+	}
 }
 
 // Once is an object that will perform exactly one action

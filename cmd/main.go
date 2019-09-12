@@ -13,28 +13,8 @@ func main() {
 		log.Fatal(err)
 		return
 	}
+
 	defer testdb.Close()
-
-	testdb.Update(func(b *tracedb.Batch) error {
-		b.Delete([]byte("b111"))
-		err := b.Write()
-		if err != nil {
-			log.Printf("Error update1: %s", err)
-		}
-		return err
-	})
-
-	it := testdb.Items()
-	for it.First(); it.Valid(); it.Next() {
-		if it.Error() != nil {
-			if err != tracedb.ErrIterationDone {
-				log.Fatal(err)
-				return
-			}
-			break
-		}
-		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
-	}
 
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
@@ -76,26 +56,26 @@ func main() {
 		return nil
 	})
 
-	print := func(b *tracedb.Batch, stop <-chan struct{}) error {
-		select {
-		case <-stop:
-			// Iterating over key/value pairs.
-			it = testdb.Items()
-			for it.First(); it.Valid(); it.Next() {
-				if it.Error() != nil {
-					if err != tracedb.ErrIterationDone {
-						log.Fatal(err)
-						return err
-					}
-					break
-				}
-				log.Printf("%s %s", it.Item().Key(), it.Item().Value())
-			}
-		}
-		return nil
-	}
-
-	g.Add(print)
-
 	g.Run()
+
+	testdb.Update(func(b *tracedb.Batch) error {
+		b.Delete([]byte("b111"))
+		err := b.Write()
+		if err != nil {
+			log.Printf("Error update1: %s", err)
+		}
+		return err
+	})
+
+	it := testdb.Items()
+	for it.First(); it.Valid(); it.Next() {
+		if it.Error() != nil {
+			if err != tracedb.ErrIterationDone {
+				log.Fatal(err)
+				return
+			}
+			break
+		}
+		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+	}
 }

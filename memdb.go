@@ -7,6 +7,7 @@ import (
 
 type memdb struct {
 	*DB
+	*memdb
 	ref int32
 }
 
@@ -21,6 +22,8 @@ func (m *memdb) incref() {
 func (m *memdb) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
 		m.mpoolPut(m)
+		m.DB = nil
+		m.memdb = nil
 	} else if ref < 0 {
 		panic("negative memdb ref")
 	}
@@ -55,12 +58,12 @@ func (db *DB) mpoolGet(n int) *memdb {
 	}
 	if mdb == nil {
 		var opts Options
-		db, err := Open("memdb", opts.memWithDefaults())
+		newdb, err := Open("memdb", opts.memWithDefaults())
 		if err != nil {
 			logger.Printf("Unable to open database: %v", err)
 		}
 		return &memdb{
-			DB: db,
+			DB: newdb,
 		}
 	}
 	return &memdb{

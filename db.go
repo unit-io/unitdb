@@ -106,11 +106,12 @@ func Open(path string, opts *Options) (*DB, error) {
 			nBuckets:    1,
 			freelistOff: -1,
 		},
+		batchdb: &batchdb{},
 		// Close
 		closeC: make(chan struct{}),
 	}
-	//newbatchdb
-	if _, err = db.newbatchdb(); err != nil {
+	//initbatchdb
+	if err = db.initbatchdb(); err != nil {
 		return nil, err
 	}
 
