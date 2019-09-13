@@ -2,9 +2,25 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/frontnet/tracedb"
 )
+
+func print(testdb *tracedb.DB) {
+	it := testdb.Items()
+	for it.First(); it.Valid(); it.Next() {
+		err := it.Error()
+		if err != nil {
+			if err != tracedb.ErrIterationDone {
+				log.Fatal(err)
+				return
+			}
+			break
+		}
+		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+	}
+}
 
 func main() {
 	// Opening a database.
@@ -14,6 +30,25 @@ func main() {
 		return
 	}
 	defer testdb.Close()
+	testdb.Update(func(b *tracedb.Batch) error {
+		b.PutWithTTL([]byte("ttl1"), []byte("bar"), time.Minute*1)
+		b.Write()
+		return nil
+	})
+	testdb.Update(func(b *tracedb.Batch) error {
+		b.PutWithTTL([]byte("ttl2"), []byte("bar"), time.Minute*1)
+		b.Write()
+		return nil
+	})
+	testdb.Update(func(b *tracedb.Batch) error {
+		b.PutWithTTL([]byte("ttl3"), []byte("bar"), time.Minute*3)
+		b.Write()
+		return nil
+	})
+
+	print(testdb)
+	time.Sleep(time.Minute * 2)
+	print(testdb)
 
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {

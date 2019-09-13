@@ -14,6 +14,10 @@ type entry struct {
 	kvOffset  int64
 }
 
+func (sl entry) timeStamp() uint32 {
+	return sl.expiresAt
+}
+
 func (sl entry) kvSize() uint32 {
 	return uint32(sl.keySize) + sl.valueSize
 }

@@ -24,6 +24,11 @@ const (
 	filterPostfix   = ".filter"
 	version         = 1 // file format version
 
+	// keyExpirationMaxDur expired keys are deleted from db after durType*keyExpirationMaxDur.
+	// For example if durType is Minute and keyExpirationMaxDur then
+	// all expired keys are deleted from db in 5 minutes
+	keyExpirationMaxDur = 2
+
 	// MaxKeyLength is the maximum size of a key in bytes.
 	MaxKeyLength = 1 << 16
 
@@ -53,6 +58,7 @@ type DB struct {
 	filter       Filter
 	index        file
 	data         dataFile
+	ttlBucket    timeWindowBucket
 	lock         fs.LockFile
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
@@ -100,6 +106,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db := &DB{
 		index:      index,
 		data:       dataFile{file: data},
+		ttlBucket:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
 		filter:     Filter{file: filter, cache: cache, filterBlock: fltr.NewFilterGenerator()},
 		lock:       lock,
 		writeLockC: make(chan struct{}, 1),
@@ -169,6 +176,10 @@ func Open(path string, opts *Options) (*DB, error) {
 	} else if opts.BackgroundSyncInterval == -1 {
 		db.syncWrites = true
 	}
+
+	if opts.BackgroundKeyExpiry {
+		db.startExpirer(time.Minute, keyExpirationMaxDur)
+	}
 	return db, nil
 }
 
@@ -193,7 +204,24 @@ func (db *DB) startSyncer(interval time.Duration) {
 					}
 					lastModifications = modifications
 				}
+				db.expireOldEntries()
 				time.Sleep(interval)
+			}
+		}
+	}()
+}
+
+func (db *DB) startExpirer(durType time.Duration, maxDur int) {
+	ctx, cancel := context.WithCancel(context.Background())
+	db.cancelSyncer = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				db.expireOldEntries()
+				time.Sleep(durType * time.Duration(maxDur))
 			}
 		}
 	}()
@@ -410,6 +438,49 @@ func (db *DB) Sync() error {
 	return db.sync()
 }
 
+func (db *DB) expireOldEntries() {
+	expiredEntries := db.ttlBucket.expireOldEntries()
+	for _, expiredEntry := range expiredEntries {
+		entry := expiredEntry.(entry)
+		/// Test filter block for presence
+		if !db.filter.Test(uint64(entry.hash)) {
+			continue
+		}
+		db.metrics.Dels.Add(1)
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		b := blockHandle{}
+		entryIdx := -1
+		err := db.forEachBlock(db.blockIndex(entry.hash), func(curb blockHandle) (bool, error) {
+			b = curb
+			for i := 0; i < entriesPerBlock; i++ {
+				sl := b.entries[i]
+				if sl.kvOffset == 0 {
+					return b.next == 0, nil
+				} else if entry.hash == sl.hash {
+					entryIdx = i
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+		if entryIdx == -1 || err != nil {
+			continue
+		}
+		sl := b.entries[entryIdx]
+		b.del(entryIdx)
+		if err := b.write(); err != nil {
+			continue
+		}
+		db.data.free(sl.kvSize(), sl.kvOffset)
+		db.count--
+
+	}
+	if db.syncWrites {
+		db.sync()
+	}
+}
+
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
 	var b *blockHandle
 	var originalB *blockHandle
@@ -471,6 +542,9 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 	}
 	if originalB != nil {
 		return originalB.write()
+	}
+	if expiresAt > 0 {
+		db.ttlBucket.add(b.entries[entryIdx])
 	}
 	return nil
 }

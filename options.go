@@ -14,6 +14,9 @@ type Options struct {
 	// Setting the value to -1 makes the DB call fsync() after every write operation.
 	BackgroundSyncInterval time.Duration
 
+	// BackgroundKeyExpiry sets flag to run key expirer
+	BackgroundKeyExpiry bool
+
 	FileSystem fs.FileSystem
 }
 
@@ -40,6 +43,8 @@ func (src *Options) memWithDefaults() *Options {
 	if opts.BackgroundSyncInterval == 0 {
 		opts.BackgroundSyncInterval = 15 * time.Second
 	}
+
+	opts.BackgroundKeyExpiry = true
 
 	return &opts
 }
