@@ -60,7 +60,7 @@ func (db *DB) mpoolGet(n int) *memdb {
 		var opts Options
 		newdb, err := Open("memdb", opts.memWithDefaults())
 		if err != nil {
-			logger.Printf("Unable to open database: %v", err)
+			logger.Err(err).Str("context", "memdb.mpoolGet").Msg("Unable to open database")
 		}
 		return &memdb{
 			DB: newdb,

@@ -127,13 +127,13 @@ func Open(path string, opts *Options) (*DB, error) {
 	if index.size == 0 {
 		if data.size != 0 {
 			if err := index.Close(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			if err := data.Close(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			if err := lock.Unlock(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			// Data file exists, but index is missing.
 			return nil, errCorrupted
@@ -155,13 +155,13 @@ func Open(path string, opts *Options) (*DB, error) {
 	} else {
 		if err := db.readHeader(!needsRecovery); err != nil {
 			if err := index.Close(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			if err := data.Close(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			if err := lock.Unlock(); err != nil {
-				logger.Print(err)
+				logger.Err(err).Str("context", "db.Open")
 			}
 			return nil, err
 		}
@@ -200,7 +200,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 				modifications := db.metrics.Puts.Value() + db.metrics.Dels.Value()
 				if modifications != lastModifications {
 					if err := db.Sync(); err != nil {
-						logger.Printf("Error synchronizing databse: %v", err)
+						logger.Err(err).Str("context", "startSyncer").Msg("Error synchronizing database")
 					}
 					lastModifications = modifications
 				}

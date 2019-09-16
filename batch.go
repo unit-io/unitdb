@@ -48,7 +48,7 @@ type internalKey []byte
 
 func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32) internalKey {
 	if seq > keyMaxSeq {
-		panic("tracedb: invalid sequence number")
+		Fatal("context: makeInternalKey", "tracedb: invalid sequence number", nil)
 	}
 
 	var dBit int8
@@ -64,7 +64,7 @@ func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32)
 
 func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt uint32, err error) {
 	if len(ik) < 12 {
-		logger.Print("invalid internal key length")
+		Error("context: parseInternalKey", "invalid internal key length")
 		return
 	}
 	expiresAt = binary.LittleEndian.Uint32(ik[len(ik)-4:])
@@ -174,11 +174,36 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	return nil
 }
 
+func (b *Batch) put(msg *Message) error {
+	if msg.contract == 0 {
+		msg.contract = Contract
+	}
+
+	topic := new(Topic)
+	topic.Topic = msg.Topic
+	// Parse the topic
+	topic.Parse(msg.contract, false)
+	if topic.TopicType == TopicInvalid {
+		return errBadRequest
+	}
+
+	msg.setContract(topic)
+	msg.setSsid(topic.Parts)
+	return nil
+}
+
 // Put appends 'put operation' of the given key/value pair to the batch.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) Put(key, value []byte) {
-	b.PutWithTTL(key, value, 0)
+func (b *Batch) Put(key, value []byte) error {
+	return b.PutMessage(NewMessage(key, value))
+}
+
+// PutMessage appends 'put operation' of the given key/value pair to the batch.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (b *Batch) PutMessage(msg *Message) error {
+	return b.put(msg)
 }
 
 // PutWithTTL appends 'put operation' of the given key/value pair to the batch and add key expiry time.
@@ -213,14 +238,13 @@ func (b *Batch) hasWriteConflict(h uint32) bool {
 
 func (b *Batch) writeInternal(fn func(i int, dFlag bool, h uint32, expiresAt uint32, k, v []byte) error) error {
 	start := time.Now()
-	defer logger.Print("batch.Write: ", time.Since(start))
-	logger.Printf("Batch: Order %d, Seq %d Length %d", b.order, b.seq, len(b.pendingWrites))
+	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
 		key, val := index.kv(b.data)
 		if err := fn(i, index.delFlag, index.hash, index.expiresAt, key, val); err != nil {
 			return err
 		}
-		logger.Printf("Batch: key %s, value %s", string(key), string(val))
+		logger.Debug().Str("context", "batch.writeInternal").Str("key", string(key)).Str("value", string(val))
 	}
 	return nil
 }
@@ -235,8 +259,6 @@ func (b *Batch) Write() error {
 	if b.grouped {
 		// append batch to batchgroup
 		b.db.batchQueue <- b
-		logger.Printf("Batch: Order %d, Seq %d Length %d", b.order, b.seq, len(b.pendingWrites))
-		// <-b.db.writeLockC
 		return nil
 	}
 
@@ -262,7 +284,7 @@ func (b *Batch) commit() error {
 	var bh *blockHandle
 	var originalB *blockHandle
 	entryIdx := 0
-	logger.Printf("Batch: commiting now...%d length %d", b.order, b.Len())
+	logger.Debug().Str("context", "batch.commit").Int8("order", b.order).Int("length", b.Len())
 	blockIdx := b.db.mem.blockIndex(b.firstKeyHash)
 	for blockIdx < b.db.mem.nBlocks {
 		err := b.db.mem.forEachBlock(blockIdx, func(memb blockHandle) (bool, error) {
@@ -398,7 +420,7 @@ func (b *Batch) commit() error {
 			break
 		}
 		if err != nil {
-			logger.Printf("Batch: error commiting %d length %d %v", b.order, b.Len(), err)
+			logger.Err(err).Str("context", "batch.commit").Int8("order", b.order).Int("Length", b.Len())
 			return err
 		}
 		blockIdx++

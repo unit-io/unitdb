@@ -93,7 +93,7 @@ func recoverSplitCrash(db *DB) error {
 	if !splitCrash {
 		return nil
 	}
-	logger.Print("Detected split crash. Truncating index file...")
+	Error("context: recovery.recoverSplitCrash", "Detected split crash. Truncating index file...")
 	if err := db.index.Truncate(db.index.size - int64(blockSize)); err != nil {
 		return err
 	}
@@ -126,17 +126,17 @@ func recoverFreeList(db *DB, usedBlocks []userdblock) error {
 	lastOffset := int64(lastBlock.size) + lastBlock.offset
 	if db.data.size > lastOffset {
 		fl.free(lastOffset, uint32(db.data.size-lastOffset))
-		logger.Println(lastBlock, db.data.size)
+		logger.Info().Str("context", "recovery.recoverFreeList").Msgf("%v %d", lastBlock, db.data.size)
 	}
-	logger.Printf("Recovered freelist. Old len=%d; new len=%d\n", len(db.data.fl.blocks), len(fl.blocks))
+	logger.Info().Str("context", "recovery.recoverFreeList").Int("Old len", len(db.data.fl.blocks)).Int("new len", len(fl.blocks)).Msg("Recovered freelist")
 	db.data.fl = fl
 	return nil
 }
 
 func (db *DB) recover() error {
-	logger.Println("Performing recovery...")
-	logger.Printf("Index file size=%d; data file size=%d\n", db.index.size, db.data.size)
-	logger.Printf("Header dbInfo %+v\n", db.dbInfo)
+	logger.Info().Str("context", "recovery.recover").Msg("Performing recovery...")
+	logger.Info().Str("context", "recovery.recover").Int64("Index file size", db.index.size).Int64("data file size", db.data.size)
+	logger.Info().Str("context", "recovery.recover").Msgf("Header dbInfo %+v", db.dbInfo)
 
 	// Truncate index and data files.
 	if err := truncateFiles(db); err != nil {
@@ -157,12 +157,12 @@ func (db *DB) recover() error {
 	if err := recoverSplitCrash(db); err != nil {
 		return err
 	}
-	logger.Printf("Recovered dbInfo %+v\n", db.dbInfo)
+	logger.Info().Str("context", "recovery.recover").Msgf("Recovered dbInfo %+v\n", db.dbInfo)
 
 	// Recover free list.
 	if err := recoverFreeList(db, usedBlocks); err != nil {
 		return err
 	}
-	logger.Println("Recovery complete.")
+	logger.Info().Str("context", "recovery.recover").Msg("Recovery complete.")
 	return nil
 }

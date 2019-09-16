@@ -95,7 +95,7 @@ func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
 // the caller of Run.
 func (g *BatchGroup) Run() error {
 	start := time.Now()
-	defer logger.Print("BatchGroup.Run: ", time.Since(start))
+	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	// if there are no registered functions, return immediately.
 	if len(g.fn) < 1 {
 		return nil
@@ -143,7 +143,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 	})
 	b := g.Batch()
 	for _, batch := range batches {
-		logger.Printf("Batchdb: writing now...%d length %d", batch.order, len(g.batchQueue))
+		logger.Debug().Str("Context", "batchdb.writeBatchGroup").Int8("oder", batch.order).Int("length", len(g.batchQueue))
 		batch.index = append(batch.index, batch.pendingWrites...)
 		b.append(batch)
 	}
