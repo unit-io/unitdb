@@ -27,7 +27,7 @@ const (
 	// keyExpirationMaxDur expired keys are deleted from db after durType*keyExpirationMaxDur.
 	// For example if durType is Minute and keyExpirationMaxDur then
 	// all expired keys are deleted from db in 5 minutes
-	keyExpirationMaxDur = 2
+	keyExpirationMaxDur = 1
 
 	// MaxKeyLength is the maximum size of a key in bytes.
 	MaxKeyLength = 1 << 16
@@ -127,13 +127,13 @@ func Open(path string, opts *Options) (*DB, error) {
 	if index.size == 0 {
 		if data.size != 0 {
 			if err := index.Close(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			if err := data.Close(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			if err := lock.Unlock(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			// Data file exists, but index is missing.
 			return nil, errCorrupted
@@ -155,13 +155,13 @@ func Open(path string, opts *Options) (*DB, error) {
 	} else {
 		if err := db.readHeader(!needsRecovery); err != nil {
 			if err := index.Close(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			if err := data.Close(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			if err := lock.Unlock(); err != nil {
-				logger.Err(err).Str("context", "db.Open")
+				logger.Error().Err(err).Str("context", "db.Open")
 			}
 			return nil, err
 		}
@@ -200,11 +200,10 @@ func (db *DB) startSyncer(interval time.Duration) {
 				modifications := db.metrics.Puts.Value() + db.metrics.Dels.Value()
 				if modifications != lastModifications {
 					if err := db.Sync(); err != nil {
-						logger.Err(err).Str("context", "startSyncer").Msg("Error synchronizing database")
+						logger.Error().Err(err).Str("context", "startSyncer").Msg("Error synchronizing database")
 					}
 					lastModifications = modifications
 				}
-				db.expireOldEntries()
 				time.Sleep(interval)
 			}
 		}
@@ -457,7 +456,7 @@ func (db *DB) expireOldEntries() {
 				sl := b.entries[i]
 				if sl.kvOffset == 0 {
 					return b.next == 0, nil
-				} else if entry.hash == sl.hash {
+				} else if entry.hash == sl.hash && entry.keySize == sl.keySize {
 					entryIdx = i
 					return true, nil
 				}

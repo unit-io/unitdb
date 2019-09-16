@@ -7,8 +7,6 @@ import (
 	"hash/fnv"
 	"sort"
 	"strconv"
-
-	"github.com/frontnet/trace/pkg/log"
 )
 
 // Hash is a signature of a hash function used by the package.
@@ -126,8 +124,8 @@ func (ring *Ring) Signature() string {
 	return ring.signature
 }
 
-func (ring *Ring) dump() {
-	for _, e := range ring.keys {
-		log.ErrLogger.Debug().Str("key", e.key).Uint32("hash", e.hash)
-	}
-}
+// func (ring *Ring) dump() {
+// 	for _, e := range ring.keys {
+// 		log.ErrLogger.Debug().Str("key", e.key).Uint32("hash", e.hash)
+// 	}
+// }

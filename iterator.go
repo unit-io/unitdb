@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"errors"
+	"time"
 )
 
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
@@ -35,6 +36,7 @@ func (it *ItemIterator) Next() {
 					}
 					key, value, err := it.db.data.readKeyValue(sl)
 					if err == errKeyExpired {
+						logger.Printf("key expired at: %v", time.Unix(int64(sl.expiresAt), 0))
 						continue
 					}
 					if err != nil {

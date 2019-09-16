@@ -93,7 +93,7 @@ func recoverSplitCrash(db *DB) error {
 	if !splitCrash {
 		return nil
 	}
-	Error("context: recovery.recoverSplitCrash", "Detected split crash. Truncating index file...")
+	logger.Error().Str("context: recovery.recoverSplitCrash", "Detected split crash. Truncating index file...")
 	if err := db.index.Truncate(db.index.size - int64(blockSize)); err != nil {
 		return err
 	}

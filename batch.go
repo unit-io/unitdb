@@ -27,6 +27,7 @@ type batchIndex struct {
 	keySize   uint16
 	valueSize uint32
 	expiresAt uint32
+	contract  uint32
 	kvOffset  int
 }
 
@@ -48,7 +49,7 @@ type internalKey []byte
 
 func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32) internalKey {
 	if seq > keyMaxSeq {
-		Fatal("context: makeInternalKey", "tracedb: invalid sequence number", nil)
+		panic("tracedb: invalid sequence number")
 	}
 
 	var dBit int8
@@ -64,7 +65,7 @@ func makeInternalKey(dst, ukey []byte, seq uint64, dFlag bool, expiresAt uint32)
 
 func parseInternalKey(ik []byte) (ukey []byte, seq uint64, dFlag bool, expiresAt uint32, err error) {
 	if len(ik) < 12 {
-		Error("context: parseInternalKey", "invalid internal key length")
+		logger.Print("invalid internal key length")
 		return
 	}
 	expiresAt = binary.LittleEndian.Uint32(ik[len(ik)-4:])
@@ -203,18 +204,8 @@ func (b *Batch) Put(key, value []byte) error {
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) PutMessage(msg *Message) error {
+	b.appendRec(false, msg.expiresAt, msg.Topic, msg.Payload)
 	return b.put(msg)
-}
-
-// PutWithTTL appends 'put operation' of the given key/value pair to the batch and add key expiry time.
-// It is safe to modify the contents of the argument after Put returns but not
-// before.
-func (b *Batch) PutWithTTL(key, value []byte, ttl time.Duration) {
-	var expiresAt uint32
-	if ttl != 0 {
-		expiresAt = uint32(time.Now().Add(ttl).Unix())
-	}
-	b.appendRec(false, expiresAt, key, value)
 }
 
 // Delete appends 'delete operation' of the given key to the batch.
@@ -420,7 +411,7 @@ func (b *Batch) commit() error {
 			break
 		}
 		if err != nil {
-			logger.Err(err).Str("context", "batch.commit").Int8("order", b.order).Int("Length", b.Len())
+			logger.Error().Err(err).Str("context", "batch.commit").Int8("order", b.order).Int("Length", b.Len())
 			return err
 		}
 		blockIdx++

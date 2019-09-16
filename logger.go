@@ -15,10 +15,10 @@ func Info(context, action string) {
 	logger.Info().Str("context", context).Msg(action)
 }
 
-// Error logs the error messages.
-func Error(context, err string) {
-	logger.Error().Str("context", context).Msg(err)
-}
+// // Error logs the error messages.
+// func Error(context, err string) {
+// 	logger.Error().Str("context", context).Msg(err)
+// }
 
 // Fatal logs the fatal error messages.
 func Fatal(context, msg string, err error) {

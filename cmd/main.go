@@ -36,7 +36,7 @@ func main() {
 		return nil
 	})
 	testdb.Update(func(b *tracedb.Batch) error {
-		b.PutWithTTL([]byte("ttl2"), []byte("bar"), time.Minute*1)
+		b.PutWithTTL([]byte("ttl2"), []byte("bar"), time.Minute*2)
 		b.Write()
 		return nil
 	})
@@ -46,9 +46,16 @@ func main() {
 		return nil
 	})
 
-	print(testdb)
-	time.Sleep(time.Minute * 2)
-	print(testdb)
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(60 * time.Second) {
+			print(testdb)
+			if i >= retry {
+				return
+			}
+			i++
+		}
+	}(3)
 
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {

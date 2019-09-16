@@ -14,12 +14,12 @@ type entry struct {
 	kvOffset  int64
 }
 
-func (sl entry) timeStamp() uint32 {
-	return sl.expiresAt
+func (e entry) timeStamp() uint32 {
+	return e.expiresAt
 }
 
-func (sl entry) kvSize() uint32 {
-	return uint32(sl.keySize) + sl.valueSize
+func (e entry) kvSize() uint32 {
+	return uint32(e.keySize) + e.valueSize
 }
 
 type block struct {
@@ -45,12 +45,12 @@ func (b block) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, blockSize)
 	data := buf
 	for i := 0; i < entriesPerBlock; i++ {
-		sl := b.entries[i]
-		binary.LittleEndian.PutUint32(buf[:4], sl.hash)
-		binary.LittleEndian.PutUint16(buf[4:6], sl.keySize)
-		binary.LittleEndian.PutUint32(buf[6:10], sl.valueSize)
-		binary.LittleEndian.PutUint32(buf[10:14], sl.expiresAt)
-		binary.LittleEndian.PutUint64(buf[14:22], uint64(sl.kvOffset))
+		e := b.entries[i]
+		binary.LittleEndian.PutUint32(buf[:4], e.hash)
+		binary.LittleEndian.PutUint16(buf[4:6], e.keySize)
+		binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
+		binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
+		binary.LittleEndian.PutUint64(buf[14:22], uint64(e.kvOffset))
 		buf = buf[22:]
 	}
 	binary.LittleEndian.PutUint64(buf[:8], uint64(b.next))
@@ -102,27 +102,27 @@ type entryWriter struct {
 	prevblocks []*blockHandle
 }
 
-func (sw *entryWriter) insert(sl entry, db *DB) error {
-	if sw.entryIdx == entriesPerBlock {
+func (ew *entryWriter) insert(sl entry, db *DB) error {
+	if ew.entryIdx == entriesPerBlock {
 		nextblock, err := db.createOverflowBlock()
 		if err != nil {
 			return err
 		}
-		sw.block.next = nextblock.offset
-		sw.prevblocks = append(sw.prevblocks, sw.block)
-		sw.block = nextblock
-		sw.entryIdx = 0
+		ew.block.next = nextblock.offset
+		ew.prevblocks = append(ew.prevblocks, ew.block)
+		ew.block = nextblock
+		ew.entryIdx = 0
 	}
-	sw.block.entries[sw.entryIdx] = sl
-	sw.entryIdx++
+	ew.block.entries[ew.entryIdx] = sl
+	ew.entryIdx++
 	return nil
 }
 
-func (sw *entryWriter) write() error {
-	for i := len(sw.prevblocks) - 1; i >= 0; i-- {
-		if err := sw.prevblocks[i].write(); err != nil {
+func (ew *entryWriter) write() error {
+	for i := len(ew.prevblocks) - 1; i >= 0; i-- {
+		if err := ew.prevblocks[i].write(); err != nil {
 			return err
 		}
 	}
-	return sw.block.write()
+	return ew.block.write()
 }

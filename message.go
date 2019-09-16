@@ -68,7 +68,7 @@ type Message struct {
 	id        ID     // The ID of the message
 	Topic     []byte // The topic of the message
 	Payload   []byte // The payload of the message
-	expiresAt uint64 // The time-to-live of the message
+	expiresAt uint32 // The time-to-live of the message
 	contract  uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
 }
 
@@ -107,7 +107,7 @@ func (m *Message) Prefix(pref uint32) *Message {
 // WithTTL adds time to live duration to Message e. Message stored with a TTL would automatically expire
 // after the time has elapsed, and will be deleted from db.
 func (m *Message) WithTTL(dur time.Duration) *Message {
-	m.expiresAt = uint64(time.Now().Add(dur).Unix())
+	m.expiresAt = uint32(time.Now().Add(dur).Unix())
 	return m
 }
 

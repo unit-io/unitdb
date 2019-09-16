@@ -16,9 +16,10 @@ type timeWindow struct {
 type timeHash int64
 
 type timeWindowBucket struct {
-	windows      map[timeHash]timeWindow
-	durationType time.Duration
-	maxDurations int
+	windows            map[timeHash]timeWindow
+	durationType       time.Duration
+	maxDurations       int
+	earliestExpiryHash timeHash
 }
 
 func newTimeWindowBucket(durType time.Duration, maxDur int) timeWindowBucket {
@@ -30,50 +31,65 @@ func newTimeWindowBucket(durType time.Duration, maxDur int) timeWindowBucket {
 	return l
 }
 
-func (wl *timeWindowBucket) expireOldEntries() []timeWindowEntry {
+func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
 	var expiredEntries []timeWindowEntry
-	startTime := time.Now().Add(-time.Duration(wl.maxDurations) * wl.durationType).Unix()
+	startTime := uint32(time.Now().Unix())
 
-	windowTimes := make([]timeHash, 0, len(wl.windows))
-	for windowTime := range wl.windows {
+	if timeHash(startTime) < wb.earliestExpiryHash {
+		return expiredEntries
+	}
+
+	windowTimes := make([]timeHash, 0, len(wb.windows))
+	for windowTime := range wb.windows {
 		windowTimes = append(windowTimes, windowTime)
 	}
 	sort.Slice(windowTimes[:], func(i, j int) bool { return windowTimes[i] < windowTimes[j] })
 	for i := 0; i < len(windowTimes); i++ {
-		if windowTimes[i] >= timeHash(startTime) {
+		if windowTimes[i] > timeHash(startTime) {
 			break
 		}
-		window := wl.windows[windowTimes[i]]
+		window := wb.windows[windowTimes[i]]
+		expiredEntriesCount := 0
 		for i := range window.entries {
 			entry := window.entries[i]
-
-			expiredEntries = append(expiredEntries, entry)
+			if entry.timeStamp() < startTime {
+				logger.Printf("deleteing expired key: %v", time.Unix(int64(entry.timeStamp()), 0))
+				expiredEntries = append(expiredEntries, entry)
+				expiredEntriesCount++
+			}
 		}
-		delete(wl.windows, windowTimes[i])
+		if expiredEntriesCount == len(window.entries) {
+			delete(wb.windows, windowTimes[i])
+		}
 	}
 	return expiredEntries
 }
 
-func (wl *timeWindowBucket) add(entry timeWindowEntry) {
-	logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wl.durationType).Add(wl.durationType))
-	entryTime := timeHash(time.Unix(int64(entry.timeStamp()), 0).Truncate(wl.durationType).Unix())
-
-	if window, ok := wl.windows[entryTime]; ok {
-		wl.windows[entryTime] = timeWindow{entries: append(window.entries, entry)}
+func (wb *timeWindowBucket) add(entry timeWindowEntry) {
+	logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
+	entryTime := timeHash(time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
+	if wb.earliestExpiryHash == 0 {
+		wb.earliestExpiryHash = entryTime
+	}
+	if window, ok := wb.windows[entryTime]; ok {
+		wb.windows[entryTime] = timeWindow{entries: append(window.entries, entry)}
 	} else {
-		wl.windows[entryTime] = timeWindow{entries: []timeWindowEntry{entry}}
+		wb.windows[entryTime] = timeWindow{entries: []timeWindowEntry{entry}}
+		if wb.earliestExpiryHash > entryTime {
+			wb.earliestExpiryHash = entryTime
+		}
 	}
 
-	// wl.expireOldEntries()
+	// wb.expireOldEntries()
 }
 
-func (wl *timeWindowBucket) all() []timeWindowEntry {
-	wl.expireOldEntries()
-	startTime := time.Now().Add(-time.Duration(wl.maxDurations) * wl.durationType).Unix()
+func (wb *timeWindowBucket) all() []timeWindowEntry {
+	wb.expireOldEntries()
+	startTime := time.Now().Add(-time.Duration(wb.maxDurations) * wb.durationType).Unix()
 
 	var all []timeWindowEntry
-	for windowTime := range wl.windows {
-		window := wl.windows[windowTime]
+	for windowTime := range wb.windows {
+		window := wb.windows[windowTime]
 
 		for i := range window.entries {
 			entry := window.entries[i]
