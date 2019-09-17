@@ -3,6 +3,8 @@ package tracedb
 import (
 	"errors"
 	"time"
+
+	"github.com/kelindar/binary"
 )
 
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
@@ -34,7 +36,7 @@ func (it *ItemIterator) Next() {
 					if sl.kvOffset == 0 {
 						return true, nil
 					}
-					key, value, err := it.db.data.readKeyValue(sl)
+					_, value, err := it.db.data.readKeyValue(sl)
 					if err == errKeyExpired {
 						logger.Printf("key expired at: %v", time.Unix(int64(sl.expiresAt), 0))
 						continue
@@ -42,7 +44,12 @@ func (it *ItemIterator) Next() {
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, &Item{key: key, value: value, expiresAt: sl.expiresAt, err: err})
+					var msg Message
+					err = binary.Unmarshal(value, &msg)
+					if err != nil {
+						return true, err
+					}
+					it.queue = append(it.queue, &Item{key: msg.Topic, value: msg.Payload, expiresAt: sl.expiresAt, err: err})
 				}
 				return false, nil
 			})
@@ -74,14 +81,19 @@ func (it *ItemIterator) First() {
 				if sl.kvOffset == 0 {
 					return true, nil
 				}
-				key, value, err := it.db.data.readKeyValue(sl)
+				_, value, err := it.db.data.readKeyValue(sl)
 				if err == errKeyExpired {
 					continue
 				}
 				if err != nil {
 					return true, err
 				}
-				it.queue = append(it.queue, &Item{key: key, value: value, expiresAt: sl.expiresAt, err: err})
+				var msg Message
+				err = binary.Unmarshal(value, &msg)
+				if err != nil {
+					return true, err
+				}
+				it.queue = append(it.queue, &Item{key: msg.Topic, value: msg.Payload, expiresAt: sl.expiresAt, err: err})
 			}
 			return false, nil
 		})

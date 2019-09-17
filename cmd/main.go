@@ -31,17 +31,20 @@ func main() {
 	}
 	defer testdb.Close()
 	testdb.Update(func(b *tracedb.Batch) error {
-		b.PutWithTTL([]byte("ttl1"), []byte("bar"), time.Minute*1)
+		m := tracedb.NewMessage([]byte("ttl1"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 1)
+		b.PutMessage(m)
 		b.Write()
 		return nil
 	})
 	testdb.Update(func(b *tracedb.Batch) error {
-		b.PutWithTTL([]byte("ttl2"), []byte("bar"), time.Minute*2)
+		m := tracedb.NewMessage([]byte("ttl2"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 2)
+		b.PutMessage(m)
 		b.Write()
 		return nil
 	})
 	testdb.Update(func(b *tracedb.Batch) error {
-		b.PutWithTTL([]byte("ttl3"), []byte("bar"), time.Minute*3)
+		m := tracedb.NewMessage([]byte("ttl3"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 3)
+		b.PutMessage(m)
 		b.Write()
 		return nil
 	})

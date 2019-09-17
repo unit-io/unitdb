@@ -2,10 +2,12 @@ package tracedb
 
 import (
 	"bytes"
-	"encoding/binary"
+	// "encoding/binary"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/kelindar/binary"
 )
 
 const (
@@ -175,7 +177,7 @@ func (b *Batch) mput(dFlag bool, h uint32, expiresAt uint32, key, value []byte) 
 	return nil
 }
 
-func (b *Batch) put(msg *Message) error {
+func (b *Batch) setMessage(msg *Message) error {
 	if msg.contract == 0 {
 		msg.contract = Contract
 	}
@@ -190,6 +192,7 @@ func (b *Batch) put(msg *Message) error {
 
 	msg.setContract(topic)
 	msg.setSsid(topic.Parts)
+
 	return nil
 }
 
@@ -204,16 +207,27 @@ func (b *Batch) Put(key, value []byte) error {
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) PutMessage(msg *Message) error {
-	b.appendRec(false, msg.expiresAt, msg.Topic, msg.Payload)
-	return b.put(msg)
+	b.setMessage(msg)
+	val, _ := binary.Marshal(msg)
+	b.appendRec(false, msg.expiresAt, msg.id, val)
+
+	return nil
 }
 
 // Delete appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
-func (b *Batch) Delete(key []byte) {
-	var expiresAt uint32
-	b.appendRec(true, expiresAt, key, nil)
+func (b *Batch) Delete(key []byte) error {
+	return b.PutMessage(NewMessage(key, nil))
+}
+
+// Delete appends 'delete operation' of the given key to the batch.
+// It is safe to modify the contents of the argument after Delete returns but
+// not before.
+func (b *Batch) DeleteMessage(msg *Message) error {
+	b.setMessage(msg)
+	b.appendRec(true, msg.expiresAt, msg.Topic, nil)
+	return nil
 }
 
 func (b *Batch) hasWriteConflict(h uint32) bool {
