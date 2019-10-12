@@ -1,12 +1,12 @@
-# db
+# tracedb
 
 <p align="left">
-  <img src="db.png" width="70" alt="Trace" title="db: Blazing fast timeseries database fro IoT and real-time gaming application"> 
+  <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time gaming application"> 
 </p>
 
-# db: Blazing fast timeseries database for IoT and real-time gaming application
+# tracedb: Blazing fast timeseries database for IoT and real-time gaming application
 
-db is a timeseries database for IoT application and real-time gaming applications
+tracedb is a timeseries database for IoT application and real-time gaming applications
 
 # Key characteristics
 - 100% Go.
@@ -15,18 +15,19 @@ db is a timeseries database for IoT application and real-time gaming application
 - Low memory usage.
 - All DB methods are safe for concurrent use by multiple goroutines.
 
-db can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. db is perfect timeseries data store such as internet of things and internet connected devices.
+Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store such as internet of things and internet connected devices.
 
 ## Quick Start
-To build db from source code use go get command.
+To build tracedb from source code use go get command.
 
-> go get -u github.com/frontnet/db
+> go get -u github.com/frontnet/tracedb
 
 ## Usage
 
 ### Opening a database
 
-To open or create a new database, use the db.Open() function:
+To open or create a new database, use the tracedb.Open() function:
+
 
 ```
 package main
@@ -38,7 +39,7 @@ import (
 )
 
 func main() {
-    db, err := db.Open("tracedb.example", nil)
+    db, err := tracedb.Open("tracedb.example", nil)
     if err != nil {
         log.Fatal(err)
         return
@@ -171,4 +172,4 @@ func print(db *tracedb.DB) {
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
 
 ## Licensing
-Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/frontnet/db/blob/master/LICENSE).
+Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/frontnet/tracedb/blob/master/LICENSE).
