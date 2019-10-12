@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/frontnet/tracedb/fs"
 )
@@ -16,6 +17,10 @@ type entry struct {
 
 func (e entry) timeStamp() uint32 {
 	return e.expiresAt
+}
+
+func (e entry) isExpired() bool {
+	return e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix())
 }
 
 func (e entry) kvSize() uint32 {

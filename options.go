@@ -17,6 +17,9 @@ type Options struct {
 	// BackgroundKeyExpiry sets flag to run key expirer
 	BackgroundKeyExpiry bool
 
+	//Encryption Key
+	EncryptionKey []byte
+
 	FileSystem fs.FileSystem
 }
 
@@ -27,6 +30,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
+	}
+	if opts.EncryptionKey == nil {
+		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 	}
 	return &opts
 }
@@ -42,6 +48,10 @@ func (src *Options) memWithDefaults() *Options {
 
 	if opts.BackgroundSyncInterval == 0 {
 		opts.BackgroundSyncInterval = 15 * time.Second
+	}
+
+	if opts.EncryptionKey == nil {
+		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 	}
 
 	opts.BackgroundKeyExpiry = true

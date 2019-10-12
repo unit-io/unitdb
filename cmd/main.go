@@ -8,15 +8,16 @@ import (
 )
 
 func print(testdb *tracedb.DB) {
-	it := testdb.Items()
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
 	for it.First(); it.Valid(); it.Next() {
 		err := it.Error()
 		if err != nil {
-			if err != tracedb.ErrIterationDone {
-				log.Fatal(err)
-				return
-			}
-			break
+			log.Fatal(err)
+			return
 		}
 		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
 	}
@@ -30,42 +31,26 @@ func main() {
 		return
 	}
 	defer testdb.Close()
-	testdb.Update(func(b *tracedb.Batch) error {
-		m := tracedb.NewMessage([]byte("ttl1"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 1)
-		b.PutMessage(m)
-		b.Write()
-		return nil
+	err = testdb.Batch(func(b *tracedb.Batch) error {
+		opts := tracedb.DefaultBatchOptions
+		opts.Encryption = true
+		b.SetOptions(opts)
+		b.Put([]byte("ttl.ttl1?ttl=3m"), []byte("bar"))
+		b.Put([]byte("ttl.ttl2?ttl=3m"), []byte("bar"))
+		b.Put([]byte("ttl.ttl3?ttl=3m"), []byte("bar"))
+		err = b.Write()
+		return err
 	})
-	testdb.Update(func(b *tracedb.Batch) error {
-		m := tracedb.NewMessage([]byte("ttl2"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 2)
-		b.PutMessage(m)
-		b.Write()
-		return nil
-	})
-	testdb.Update(func(b *tracedb.Batch) error {
-		m := tracedb.NewMessage([]byte("ttl3"), []byte("bar")).Prefix(uint32(3376684800)).WithTTL(time.Minute * 3)
-		b.PutMessage(m)
-		b.Write()
-		return nil
-	})
-
-	func(retry int) {
-		i := 0
-		for _ = range time.Tick(60 * time.Second) {
-			print(testdb)
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(3)
+	if err != nil {
+		log.Print(err)
+	}
+	print(testdb)
 
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		//b.PutWithTTL([]byte("ttl1"), []byte("bar"), time.Second*30)
-		b.Put([]byte("b1"), []byte("bar"))
-		b.Put([]byte("c1"), []byte("bar"))
-		b.Put([]byte("b1"), []byte("bar2"))
+		b.Put([]byte("dev18.b1?ttl=2m"), []byte("bar"))
+		b.Put([]byte("dev18.c1?ttl=1m"), []byte("bar"))
+		b.Put([]byte("dev18.b1?ttl=3m"), []byte("bar2"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -75,10 +60,10 @@ func main() {
 	})
 
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("b11"), []byte("bar"))
-		b.Put([]byte("b11"), []byte("bar2"))
-		b.Put([]byte("b1"), []byte("bar3"))
-		b.Put([]byte("c11"), []byte("bar"))
+		b.Put([]byte("dev18.b.b11"), []byte("bar"))
+		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
+		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
+		b.Put([]byte("dev18.c.c11"), []byte("bar"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -88,10 +73,10 @@ func main() {
 	})
 
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("b111"), []byte("bar"))
-		b.Put([]byte("b111"), []byte("bar2"))
-		b.Put([]byte("b11"), []byte("bar3"))
-		b.Put([]byte("c111"), []byte("bar"))
+		b.Put([]byte("dev18.b.b111"), []byte("bar"))
+		b.Put([]byte("dev18.b.b111"), []byte("bar2"))
+		b.Put([]byte("dev18.b.b11"), []byte("bar3"))
+		b.Put([]byte("dev18.c.c111"), []byte("bar"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -107,8 +92,8 @@ func main() {
 		return
 	}
 
-	testdb.Update(func(b *tracedb.Batch) error {
-		b.Delete([]byte("b111"))
+	testdb.Batch(func(b *tracedb.Batch) error {
+		b.Delete([]byte("dev18.b.b111"))
 		err := b.Write()
 		if err != nil {
 			log.Printf("Error update1: %s", err)
@@ -116,15 +101,25 @@ func main() {
 		return err
 	})
 
-	it := testdb.Items()
-	for it.First(); it.Valid(); it.Next() {
-		if it.Error() != nil {
-			if err != tracedb.ErrIterationDone {
-				log.Fatal(err)
+	print(testdb)
+
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(60 * time.Second) {
+			err := testdb.Batch(func(b *tracedb.Batch) error {
+				b.Put([]byte("dev18.b.b11?ttl=1m"), []byte("bar4"))
+				err := b.Write()
+
+				return err
+			})
+			if err != nil {
+				log.Printf("Error update1: %s", err)
+			}
+			print(testdb)
+			if i >= retry {
 				return
 			}
-			break
+			i++
 		}
-		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
-	}
+	}(7)
 }

@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/allegro/bigcache"
+	"github.com/frontnet/tracedb/crypto"
 	fltr "github.com/frontnet/tracedb/filter"
 	"github.com/frontnet/tracedb/fs"
 	"github.com/frontnet/tracedb/hash"
+	"github.com/frontnet/tracedb/message"
 )
 
 const (
@@ -37,6 +39,9 @@ const (
 
 	// MaxKeys is the maximum numbers of keys in the DB.
 	MaxKeys = math.MaxUint32
+
+	// Maximum number of records to return
+	maxResults = 1024
 )
 
 type dbInfo struct {
@@ -54,11 +59,12 @@ type DB struct {
 	// Need 64-bit alignment.
 	seq          uint64
 	mu           sync.RWMutex
+	mac          *crypto.MAC
 	writeLockC   chan struct{}
 	filter       Filter
 	index        file
 	data         dataFile
-	ttlBucket    timeWindowBucket
+	timeWindow   timeWindowBucket
 	lock         fs.LockFile
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
@@ -66,6 +72,8 @@ type DB struct {
 	dbInfo
 	//batchdb
 	*batchdb
+	//trie
+	trie *message.Trie
 	// Close.
 	closeW sync.WaitGroup
 	closeC chan struct{}
@@ -106,7 +114,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db := &DB{
 		index:      index,
 		data:       dataFile{file: data},
-		ttlBucket:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		timeWindow: newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
 		filter:     Filter{file: filter, cache: cache, filterBlock: fltr.NewFilterGenerator()},
 		lock:       lock,
 		writeLockC: make(chan struct{}, 1),
@@ -116,6 +124,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			freelistOff: -1,
 		},
 		batchdb: &batchdb{},
+		trie:    message.NewTrie(),
 		// Close
 		closeC: make(chan struct{}),
 	}
@@ -143,6 +152,10 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 		db.hashSeed = seed
+		// Create a new MAC from the key.
+		if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+			return nil, err
+		}
 		if _, err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
@@ -416,8 +429,37 @@ func (db *DB) Has(key []byte) (bool, error) {
 }
 
 // Items returns a new ItemIterator.
-func (db *DB) Items() *ItemIterator {
-	return &ItemIterator{db: db}
+func (db *DB) Items(q *Query) (*ItemIterator, error) {
+	start := time.Now()
+	defer logger.Debug().Str("context", "conn.onPublish").Dur("duration", time.Since(start)).Msg("")
+
+	topic := new(message.Topic)
+	if q.Contract == 0 {
+		q.Contract = message.Contract
+	}
+	//Parse the Key
+	topic.ParseKey(q.Topic)
+	// Parse the topic
+	topic.Parse(q.Contract, false)
+	if topic.TopicType == message.TopicInvalid {
+		return nil, errBadRequest
+	}
+
+	topic.AddContract(q.Contract)
+	q.ssid = topic.NewSsid()
+
+	// In case of ttl, include it to the query
+	if t0, t1, limit, ok := topic.Last(); ok {
+		q.prefix = message.GenPrefix(q.ssid, t1.Unix())
+		q.cutoff = t0.Unix()
+		q.limit = int(limit)
+	}
+
+	if q.limit == 0 {
+		q.limit = maxResults // Maximum number of records to return
+	}
+
+	return &ItemIterator{db: db, query: q}, nil
 }
 
 func (db *DB) sync() error {
@@ -438,7 +480,7 @@ func (db *DB) Sync() error {
 }
 
 func (db *DB) expireOldEntries() {
-	expiredEntries := db.ttlBucket.expireOldEntries()
+	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
 		/// Test filter block for presence
@@ -543,7 +585,7 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 		return originalB.write()
 	}
 	if expiresAt > 0 {
-		db.ttlBucket.add(b.entries[entryIdx])
+		db.timeWindow.add(b.entries[entryIdx])
 	}
 	return nil
 }

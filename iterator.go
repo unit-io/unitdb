@@ -2,9 +2,11 @@ package tracedb
 
 import (
 	"errors"
-	"time"
 
-	"github.com/kelindar/binary"
+	"github.com/golang/snappy"
+	// "github.com/kelindar/binary"
+
+	"github.com/frontnet/tracedb/message"
 )
 
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
@@ -17,49 +19,81 @@ type Item struct {
 	err       error
 }
 
+// Query represents a topic to query and optional contract information.
+type Query struct {
+	Topic    []byte       // The topic of the message
+	Contract uint32       // The contract is used as prefix in the message Id
+	ssid     message.Ssid // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	prefix   message.ID   // The beginning of the time window.
+	cutoff   int64        // The end of the time window.
+	limit    int          // The maximum number of elements to return.
+}
+
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
-	db           *DB
-	nextBlockIdx uint32
-	item         *Item
-	queue        []*Item
+	db          *DB
+	query       *Query
+	item        *Item
+	queue       []*Item
+	keys        []uint32
+	next        int
+	expiredKeys int
 }
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.item = nil
-	if len(it.queue) == 0 {
-		for it.nextBlockIdx < it.db.nBlocks {
-			err := it.db.forEachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
-				for i := 0; i < entriesPerBlock; i++ {
-					sl := b.entries[i]
-					if sl.kvOffset == 0 {
-						return true, nil
+	if len(it.queue) == 0 && it.next < len(it.keys) {
+		//h := it.db.hash(it.keys[it.next])
+		h := uint32(it.keys[it.next])
+		err := it.db.forEachBlock(it.db.blockIndex(h), func(b blockHandle) (bool, error) {
+			for i := 0; i < entriesPerBlock; i++ {
+				sl := b.entries[i]
+				if sl.kvOffset == 0 {
+					return b.next == 0, nil
+				} else if h == sl.hash /*&& uint16(len(it.keys[it.next])) == sl.keySize*/ {
+					if sl.isExpired() {
+						return true, errKeyExpired
 					}
-					_, value, err := it.db.data.readKeyValue(sl)
-					if err == errKeyExpired {
-						logger.Printf("key expired at: %v", time.Unix(int64(sl.expiresAt), 0))
-						continue
-					}
+					key, val, err := it.db.data.readKeyValue(sl)
 					if err != nil {
 						return true, err
 					}
-					var msg Message
-					err = binary.Unmarshal(value, &msg)
+					id := message.ID(key)
+					if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
+						return true, errKeyExpired
+					}
+					// if bytes.Equal(it.keys[it.next], key) {
+					if id.IsEncrypted() {
+						val, err = it.db.mem.mac.Decrypt(nil, val)
+						if err != nil {
+							return true, err
+						}
+					}
+					var e message.Entry
+					var buffer []byte
+					val, err = snappy.Decode(buffer, val)
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, &Item{key: msg.Topic, value: msg.Payload, expiresAt: sl.expiresAt, err: err})
+					err = e.Unmarshal(val)
+					if err != nil {
+						return true, err
+					}
+					it.queue = append(it.queue, &Item{key: e.Topic, value: e.Payload, err: err})
+					it.next++
+					return true, nil
 				}
-				return false, nil
-			})
-			if err != nil {
-				return
 			}
-			it.nextBlockIdx++
-			if len(it.queue) > 0 {
-				break
-			}
+			return false, nil
+		})
+		if err == errKeyExpired {
+			it.expiredKeys++
+			it.next++
+			it.Next()
+		}
+		if err != nil {
+			return
 		}
 	}
 
@@ -71,39 +105,63 @@ func (it *ItemIterator) Next() {
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) First() {
-	if it.nextBlockIdx >= 1 {
+	if it.next >= 1 {
 		return
 	}
-	for it.nextBlockIdx < it.db.nBlocks {
-		err := it.db.forEachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
-			for i := 0; i < entriesPerBlock; i++ {
-				sl := b.entries[i]
-				if sl.kvOffset == 0 {
-					return true, nil
+	it.keys = it.db.trie.Lookup(it.query.ssid)
+	if len(it.keys) == 0 {
+		return
+	}
+	//h := it.db.hash(it.keys[it.next])
+	h := uint32(it.keys[it.next])
+	err := it.db.forEachBlock(it.db.blockIndex(h), func(b blockHandle) (bool, error) {
+		for i := 0; i < entriesPerBlock; i++ {
+			sl := b.entries[i]
+			if sl.kvOffset == 0 {
+				return b.next == 0, nil
+			} else if h == sl.hash /*&& uint16(len(it.keys[it.next])) == sl.keySize*/ {
+				if sl.isExpired() {
+					return true, errKeyExpired
 				}
-				_, value, err := it.db.data.readKeyValue(sl)
-				if err == errKeyExpired {
-					continue
-				}
+				key, val, err := it.db.data.readKeyValue(sl)
 				if err != nil {
 					return true, err
 				}
-				var msg Message
-				err = binary.Unmarshal(value, &msg)
+				id := message.ID(key)
+				if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
+					return true, errKeyExpired
+				}
+				// if bytes.Equal(it.keys[it.next], key) {
+				if id.IsEncrypted() {
+					val, err = it.db.mem.mac.Decrypt(nil, val)
+					if err != nil {
+						return true, err
+					}
+				}
+				var e message.Entry
+				var buffer []byte
+				val, err = snappy.Decode(buffer, val)
 				if err != nil {
 					return true, err
 				}
-				it.queue = append(it.queue, &Item{key: msg.Topic, value: msg.Payload, expiresAt: sl.expiresAt, err: err})
+				err = e.Unmarshal(val)
+				if err != nil {
+					return true, err
+				}
+				it.queue = append(it.queue, &Item{key: e.Topic, value: e.Payload, err: err})
+				it.next++
+				return true, nil
 			}
-			return false, nil
-		})
-		if err != nil {
-			return
 		}
-		it.nextBlockIdx++
-		if len(it.queue) > 0 {
-			break
-		}
+		return false, nil
+	})
+	if err == errKeyExpired {
+		it.expiredKeys++
+		it.next++
+		it.Next()
+	}
+	if err != nil {
+		return
 	}
 
 	if len(it.queue) > 0 {
@@ -120,6 +178,9 @@ func (it *ItemIterator) Item() *Item {
 
 // Valid returns false when iteration is done.
 func (it *ItemIterator) Valid() bool {
+	if (it.next - it.expiredKeys) > it.query.limit {
+		return false
+	}
 	if len(it.queue) > 0 {
 		return true
 	}

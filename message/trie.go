@@ -1,17 +1,16 @@
-package tracedb
+package message
 
 import (
-	"bytes"
 	"sync"
 )
 
 const nul = 0x0
 
-// MID represents a message Id set which can contain only unique valuet.
-type MID []ID
+// MID represents a message id set which can contain only unique values.
+type MID []uint32
 
-// AddUnique adds a subscriber to the set.
-func (m *MID) addUnique(value ID) (added bool) {
+// addUnique adds a message id to the set.
+func (m *MID) addUnique(value uint32) (added bool) {
 	if m.contains(value) == false {
 		*m = append(*m, value)
 		added = true
@@ -19,13 +18,14 @@ func (m *MID) addUnique(value ID) (added bool) {
 	return
 }
 
-// Remove removes a subscriber from the set.
-func (m *MID) remove(value ID) (removed bool) {
+// remove a message id from the set.
+func (m *MID) remove(value uint32) (removed bool) {
 	for i, v := range *m {
-		if bytes.Equal(v, value) {
+		//if bytes.Equal(v, value) {
+		if v == value {
 			a := *m
 			a[i] = a[len(a)-1]
-			a[len(a)-1] = nil
+			//a[len(a)-1] = nil
 			a = a[:len(a)-1]
 			*m = a
 			removed = true
@@ -35,10 +35,13 @@ func (m *MID) remove(value ID) (removed bool) {
 	return
 }
 
-// Contains checks whether a subscriber is in the set.
-func (m *MID) contains(value ID) bool {
+// contains checks whether a message id is in the set.
+func (m *MID) contains(value uint32) bool {
 	for _, v := range *m {
-		if bytes.Equal(v, value) {
+		// if bytes.Equal(v, value) {
+		// 	return true
+		// }
+		if v == value {
 			return true
 		}
 	}
@@ -51,49 +54,64 @@ type key struct {
 }
 
 type part struct {
+	k        key
 	depth    uint8
 	mid      MID
+	final    bool
 	parent   *part
 	children map[key]*part
 }
 
-// Trie represents an efficient collection of trie with lookup capability.
+func (p *part) orphan() {
+	if p.parent == nil {
+		return
+	}
+
+	delete(p.parent.children, p.k)
+	p.parent.final = true
+	if len(p.parent.mid) == 0 && len(p.parent.children) == 0 {
+		p.parent.orphan()
+	}
+}
+
+// partTrie represents an efficient collection of Trie with lookup capability.
 type partTrie struct {
 	root *part // The root node of the tree.
 }
 
-// NewTrie creates a new matcher for the trie.
+// NewPartTrie creates a new matcher for the Trie.
 func NewpartTrie() *partTrie {
 	return &partTrie{
 		root: &part{
 			mid:      MID{},
+			final:    false,
 			children: make(map[key]*part),
 		},
 	}
 }
 
-type trie struct {
+type Trie struct {
 	sync.RWMutex
 	partTrie *partTrie
-	count    int // Number of trie in the trie.
+	count    int // Number of Trie in the Trie.
 }
 
-// Creates a trie with an initialized trie.
-func newtrie() *trie {
-	return &trie{
+// Creates a Trie with an initialized Trie.
+func NewTrie() *Trie {
+	return &Trie{
 		partTrie: NewpartTrie(),
 	}
 }
 
-// Count returns the number of trie.
-func (t *trie) Count() int {
+// Count returns the number of Trie.
+func (t *Trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
 	return t.count
 }
 
-// Subscribe adds the Subscriber to the topic and returns a Subscription.
-func (t *trie) add(parts []Part, depth uint8, id ID) error {
+// add the message id to the topic.
+func (t *Trie) Add(parts []Part, depth uint8, id uint32) error {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -105,7 +123,9 @@ func (t *trie) add(parts []Part, depth uint8, id ID) error {
 		child, ok := curr.children[k]
 		if !ok {
 			child = &part{
+				k:        k,
 				mid:      MID{},
+				final:    false,
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -113,6 +133,7 @@ func (t *trie) add(parts []Part, depth uint8, id ID) error {
 		}
 		curr = child
 	}
+	curr.final = true
 	if ok := curr.mid.addUnique(id); ok {
 		curr.depth = depth
 		t.count++
@@ -121,8 +142,8 @@ func (t *trie) add(parts []Part, depth uint8, id ID) error {
 	return nil
 }
 
-// Unsubscribe remove the subscription for the topic.
-func (t *trie) remove(parts []Part, id ID) error {
+// remove the message id for the topic.
+func (t *Trie) Remove(parts []Part, id uint32) error {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -134,20 +155,24 @@ func (t *trie) remove(parts []Part, id ID) error {
 		}
 		child, ok := curr.children[k]
 		if !ok {
-			// Subscription doesn't exist.
+			// message id doesn't exist.
 			return nil
 		}
 		curr = child
 	}
-	// Remove the subscriber and decrement the counter
+	// Remove the message id and decrement the counter
 	if ok := curr.mid.remove(id); ok {
 		t.count--
+	}
+	// Remove orphans
+	if len(curr.mid) == 0 && len(curr.children) == 0 {
+		curr.orphan()
 	}
 	return nil
 }
 
-// Lookup returns the Subscribers for the given topic.
-func (t *trie) lookup(query Ssid) (mid MID) {
+// Lookup returns the message Ids for the given topic.
+func (t *Trie) Lookup(query Ssid) (mid MID) {
 	t.RLock()
 	defer t.RUnlock()
 
@@ -155,8 +180,8 @@ func (t *trie) lookup(query Ssid) (mid MID) {
 	return
 }
 
-func (t *trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
-	// Add subscribers from the current branch
+func (t *Trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
+	// Add message ids from the current branch
 	for _, s := range part.mid {
 		if part.depth == depth || (part.depth >= 23 && depth > part.depth-23) {
 			mid.addUnique(s)

@@ -1,4 +1,4 @@
-package tracedb
+package message
 
 import (
 	"bytes"
@@ -16,12 +16,48 @@ const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
 	TopicWildcard
-	TopicKeySeparator         = '/'
 	TopicAnySeparator         = '*'
 	TopicChildrenAllSeparator = "..."
 	TopicSeparator            = '.'   // The separator character.
 	MaxMessageSize            = 65536 // Maximum message size allowed from/to the peer.
 )
+
+// Ssid represents a subscription ID which contains a contract and a list of hashes
+// for various parts of the topic.
+type Ssid []uint32
+
+// NewSsid creates a new SSID.
+func (t *Topic) NewSsid() Ssid {
+	parts := t.Parts
+	ssid := make([]uint32, 0, len(parts))
+	for _, part := range parts {
+		ssid = append(ssid, part.Query)
+	}
+	return ssid
+}
+
+// GetHashCode combines the SSID into a single hash.
+func (s Ssid) GetHashCode() uint32 {
+	h := s[0]
+	for _, i := range s[1:] {
+		h ^= i
+	}
+	return h
+}
+
+// AddContract adds contract to the parts.
+func (t *Topic) AddContract(contract uint32) {
+	part := Part{
+		Wildchars: 0,
+		Query:     contract,
+	}
+	if t.Parts[0].Query == wildcard {
+		t.Parts[0].Query = contract
+	} else {
+		parts := []Part{part}
+		t.Parts = append(parts, t.Parts...)
+	}
+}
 
 // TopicOption represents a key/value pair option.
 type TopicOption struct {
@@ -31,7 +67,6 @@ type TopicOption struct {
 
 // Topic represents a parsed topic.
 type Topic struct {
-	Key          []byte // Gets or sets the API key of the topic.
 	Topic        []byte // Gets or sets the topic string.
 	TopicOptions []byte
 	Parts        []Part
@@ -47,10 +82,6 @@ type Part struct {
 
 // SplitFunc various split function to split topic using delimeter
 type splitFunc struct{}
-
-func (splitFunc) splitKey(c rune) bool {
-	return c == TopicKeySeparator
-}
 
 func (splitFunc) splitTopic(c rune) bool {
 	return c == TopicSeparator
@@ -85,7 +116,7 @@ func (t *Topic) TTL() (int64, bool) {
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.
-func (t *Topic) Last() (time.Time, time.Time, int64, bool) {
+func (t *Topic) Last() (time.Time, time.Time, uint32, bool) {
 	dur, last, ok := t.getOption("last")
 	if ok {
 		if last > 0 {
@@ -113,12 +144,12 @@ func toUnix(t int64) time.Time {
 }
 
 // getOptUint retrieves a Uint option
-func (t *Topic) getOption(name string) (string, int64, bool) {
+func (t *Topic) getOption(name string) (string, uint32, bool) {
 	for i := 0; i < len(t.Options); i++ {
 		if t.Options[i].Key == name {
 			val, err := strconv.ParseInt(t.Options[i].Value, 10, 64)
 			if err == nil {
-				return "", int64(val), true
+				return "", uint32(val), true
 			}
 			return t.Options[i].Value, 0, true
 		}
@@ -147,30 +178,19 @@ func (t *Topic) parseOptions(text []byte) (ok bool) {
 }
 
 // ParseKey attempts to parse the key
-func ParseKey(text []byte) (topic *Topic) {
-	topic = new(Topic)
+func (t *Topic) ParseKey(text []byte) {
 	var fn splitFunc
 
-	parts := bytes.FieldsFunc(text, fn.splitKey)
-	if parts == nil || len(parts) < 2 {
-		topic.TopicType = TopicInvalid
-		return topic
-	}
-
-	topic.Key = parts[0]
-
-	parts = bytes.FieldsFunc(parts[1], fn.options)
+	parts := bytes.FieldsFunc(text, fn.options)
 	l := len(parts)
 	if parts == nil || l < 1 {
-		topic.TopicType = TopicInvalid
-		return topic
+		t.TopicType = TopicInvalid
+		return
 	}
 	if l > 1 {
-		topic.TopicOptions = parts[1]
+		t.TopicOptions = parts[1]
 	}
-	topic.Topic = parts[0]
-
-	return topic
+	t.Topic = parts[0]
 }
 
 func (topic *Topic) Parse(contract uint32, wildcard bool) {
@@ -186,13 +206,13 @@ func (topic *Topic) Parse(contract uint32, wildcard bool) {
 
 // ParseTopic attempts to parse the topic from the underlying slice.
 func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
-	start := time.Now()
-	defer logger.Debug().Str("context", "topic.parseStaticTopic").Dur("duration", time.Since(start)).Msg("")
+	// start := time.Now()
+	// defer logger.Debug().Str("context", "topic.parseStaticTopic").Dur("duration", time.Since(start)).Msg("")
 
 	var part Part
 	var fn splitFunc
 	topic.Parts = make([]Part, 0, 6)
-	Debug("topic.parseStaticTopic", "topic name "+string(topic.Topic))
+	// Debug("topic.parseStaticTopic", "topic name "+string(topic.Topic))
 	ok = topic.parseOptions(topic.TopicOptions)
 
 	if !ok {
@@ -214,13 +234,13 @@ func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 
 // ParseTopic attempts to parse the topic from the underlying slice.
 func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
-	start := time.Now()
-	defer logger.Debug().Str("context", "topic.parseWildcardTopic").Dur("duration", time.Since(start)).Msg("")
+	// start := time.Now()
+	// defer logger.Debug().Str("context", "topic.parseWildcardTopic").Dur("duration", time.Since(start)).Msg("")
 
 	var part Part
 	var fn splitFunc
 	topic.Parts = make([]Part, 0, 6)
-	Debug("topic.parseWildcardTopic", "topic name "+string(topic.Topic))
+	// Debug("topic.parseWildcardTopic", "topic name "+string(topic.Topic))
 	ok = topic.parseOptions(topic.TopicOptions)
 
 	if !ok {

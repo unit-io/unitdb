@@ -16,4 +16,5 @@ var (
 	errBatchSeqComplete = errors.New("batch seq is complete")
 	errWriteConflict    = errors.New("batch write conflict")
 	errBadRequest       = errors.New("The request was invalid or cannot be otherwise served")
+	errForbidden        = errors.New("The request is understood, but it has been refused or access is not allowed.")
 )

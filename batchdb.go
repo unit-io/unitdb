@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/frontnet/tracedb/message"
 )
 
 // batchdb manages the batch execution
@@ -17,6 +19,7 @@ type batchdb struct {
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
 	batchQueue    chan *Batch
+	activeTopics  map[uint32]*message.Topic
 	//once run batchLoop once
 	once Once
 
@@ -24,8 +27,8 @@ type batchdb struct {
 }
 
 // Batch starts a new batch.
-func (db *DB) Batch() *Batch {
-	return &Batch{db: db}
+func (db *DB) batch() *Batch {
+	return &Batch{opts: DefaultBatchOptions, db: db}
 }
 
 func (db *DB) initbatchdb() error {
@@ -34,7 +37,9 @@ func (db *DB) initbatchdb() error {
 		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
 		batchQueue:    make(chan *Batch, 1),
+		activeTopics:  make(map[uint32]*message.Topic, 100),
 	}
+
 	db.batchdb = bdb
 	// Create a memdb.
 	if _, err := db.newmemdb(0); err != nil {
@@ -44,19 +49,15 @@ func (db *DB) initbatchdb() error {
 	return nil
 }
 
-// Update executes a function within the context of a read-write managed transaction.
+// Batch executes a function within the context of a read-write managed transaction.
 // If no error is returned from the function then the transaction is committed.
 // If an error is returned then the entire transaction is rolled back.
 // Any error that is returned from the function or returned from the commit is
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
-func (db *DB) Update(fn func(*Batch) error) error {
-	b := db.Batch()
-	// Make sure the transaction rolls back in the event of a panic.
-	defer func() {
-		b.Abort()
-	}()
+func (db *DB) Batch(fn func(*Batch) error) error {
+	b := db.batch()
 
 	b.setManaged()
 
@@ -66,6 +67,10 @@ func (db *DB) Update(fn func(*Batch) error) error {
 		return err
 	}
 	b.unsetManaged()
+	// Make sure the transaction rolls back in the event of a panic.
+	defer func() {
+		b.Abort()
+	}()
 	return b.Commit()
 }
 
@@ -110,7 +115,7 @@ func (g *BatchGroup) Run() error {
 	for i, fn := range g.fn {
 		go func(order int, fn func(*Batch, <-chan struct{}) error) {
 			//TODO implement cloing to pass a copy of batch
-			b := g.Batch()
+			b := g.batch()
 			b.setManaged()
 			b.setGrouped(g)
 			b.setOrder(int8(order))
@@ -141,7 +146,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 	sort.Slice(batches[:], func(i, j int) bool {
 		return batches[i].order < batches[j].order
 	})
-	b := g.Batch()
+	b := g.batch()
 	for _, batch := range batches {
 		logger.Debug().Str("Context", "batchdb.writeBatchGroup").Int8("oder", batch.order).Int("length", len(g.batchQueue))
 		batch.index = append(batch.index, batch.pendingWrites...)

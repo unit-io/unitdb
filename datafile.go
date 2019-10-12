@@ -1,18 +1,14 @@
 package tracedb
 
-import (
-	"time"
-)
-
 type dataFile struct {
 	file
 	fl freelist
 }
 
 func (f *dataFile) readKeyValue(sl entry) ([]byte, []byte, error) {
-	if sl.expiresAt != 0 && sl.expiresAt <= uint32(time.Now().Unix()) {
-		return nil, nil, errKeyExpired
-	}
+	// if sl.expiresAt != 0 && sl.expiresAt <= uint32(time.Now().Unix()) {
+	// 	return nil, nil, errKeyExpired
+	// }
 	keyValue, err := f.Slice(sl.kvOffset, sl.kvOffset+int64(sl.kvSize()))
 	if err != nil {
 		return nil, nil, err
