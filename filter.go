@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/allegro/bigcache"
-	"github.com/frontnet/tracedb/filter"
+	"github.com/saffat-in/tracedb/filter"
 )
 
 var config = bigcache.Config{

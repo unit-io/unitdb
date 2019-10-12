@@ -4,7 +4,7 @@ import (
 	"math"
 	"sync/atomic"
 
-	"github.com/frontnet/tracedb/uid"
+	"github.com/saffat-in/tracedb/uid"
 	"github.com/kelindar/binary"
 )
 

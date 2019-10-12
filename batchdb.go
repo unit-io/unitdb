@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/frontnet/tracedb/message"
+	"github.com/saffat-in/tracedb/message"
 )
 
 // batchdb manages the batch execution

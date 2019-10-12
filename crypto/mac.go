@@ -4,7 +4,7 @@ import (
 	"crypto/cipher"
 	"errors"
 
-	"github.com/frontnet/trace/pkg/hash"
+	"github.com/saffat-in/trace/pkg/hash"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

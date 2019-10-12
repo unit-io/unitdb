@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/frontnet/tracedb/hash"
-	"github.com/frontnet/tracedb/message"
 	"github.com/golang/snappy"
+	"github.com/saffat-in/tracedb/hash"
+	"github.com/saffat-in/tracedb/message"
 	// "github.com/kelindar/binary"
 )
 

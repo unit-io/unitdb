@@ -6,7 +6,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/frontnet/tracedb/hash"
+	"github.com/saffat-in/tracedb/hash"
 )
 
 var zeroTime = time.Unix(0, 0)

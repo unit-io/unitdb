@@ -20,7 +20,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 ## Quick Start
 To build tracedb from source code use go get command.
 
-> go get -u github.com/frontnet/tracedb
+> go get -u github.com/saffat-in/tracedb
 
 ## Usage
 
@@ -35,7 +35,7 @@ package main
 import (
 	"log"
 
-	"github.com/frontnet/tracedb"
+	"github.com/saffat-in/tracedb"
 )
 
 func main() {
@@ -172,4 +172,4 @@ func print(db *tracedb.DB) {
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
 
 ## Licensing
-Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/frontnet/tracedb/blob/master/LICENSE).
+Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/saffat-in/tracedb/blob/master/LICENSE).

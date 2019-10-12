@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/frontnet/trace/pkg/crypto"
-	"github.com/frontnet/trace/pkg/encoding"
+	"github.com/saffat-in/trace/pkg/crypto"
+	"github.com/saffat-in/trace/pkg/encoding"
 )
 
 // ID represents a unique ID for client connection.

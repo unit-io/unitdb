@@ -6,7 +6,7 @@ import (
 	"github.com/golang/snappy"
 	// "github.com/kelindar/binary"
 
-	"github.com/frontnet/tracedb/message"
+	"github.com/saffat-in/tracedb/message"
 )
 
 // ErrIterationDone is returned by ItemIterator.Next calls when there are no more items to return.
