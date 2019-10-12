@@ -105,9 +105,10 @@ func main() {
 
 	func(retry int) {
 		i := 0
-		for _ = range time.Tick(60 * time.Second) {
+		for j := range time.Tick(60 * time.Second) {
 			err := testdb.Batch(func(b *tracedb.Batch) error {
-				b.Put([]byte("dev18.b.b11?ttl=1m"), []byte("bar4"))
+				t, _ := j.MarshalText()
+				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
 				err := b.Write()
 
 				return err
