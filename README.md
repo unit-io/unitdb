@@ -34,11 +34,11 @@ package main
 import (
 	"log"
 
-	"github.com/frontnet/db"
+	"github.com/frontnet/tracedb"
 )
 
 func main() {
-    db, err := db.Open("db.example", nil)
+    db, err := db.Open("tracedb.example", nil)
     if err != nil {
         log.Fatal(err)
         return
@@ -51,7 +51,7 @@ func main() {
 Use the DB.Update() function to insert a new key/value pair or delete a record:
 
 ```
-    err = db.Update(func(b *db.Batch) error {
+    err = db.Update(func(b *tracedb.Batch) error {
 		b.Put([]byte("dev18.b.b11"), []byte("bar"))
 		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
 		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
@@ -61,11 +61,12 @@ Use the DB.Update() function to insert a new key/value pair or delete a record:
     })
 ```
 
-Specify ttl to expires keys. To encrypt messages use batch options to set message encryption.
+Specify ttl to expires keys. 
+To encrypt messages use batch options and set message encryption.
 
 ```
-err = db.Batch(func(b *db.Batch) error {
-		opts := db.DefaultBatchOptions
+err = db.Batch(func(b *tracedb.Batch) error {
+		opts := tracedb.DefaultBatchOptions
 		opts.Encryption = true
 		b.SetOptions(opts)
 		b.Put([]byte("ttl.ttl1?ttl=3m"), []byte("bar"))
@@ -80,7 +81,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 
 ```
     g := db.NewBatchGroup()
-	g.Add(func(b *db.Batch, stop <-chan struct{}) error {
+	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.b1?ttl=2m"), []byte("bar"))
 		b.Put([]byte("dev18.c1?ttl=1m"), []byte("bar"))
 		b.Put([]byte("dev18.b1?ttl=3m"), []byte("bar2"))
@@ -92,7 +93,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 		return nil
 	})
 
-	g.Add(func(b *db.Batch, stop <-chan struct{}) error {
+	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.b.b11"), []byte("bar"))
 		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
 		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
@@ -105,7 +106,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 		return nil
 	})
 
-	g.Add(func(b *db.Batch, stop <-chan struct{}) error {
+	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.b.b111"), []byte("bar"))
 		b.Put([]byte("dev18.b.b111"), []byte("bar2"))
 		b.Put([]byte("dev18.b.b11"), []byte("bar3"))
@@ -126,7 +127,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
     func(retry int) {
 		i := 0
 		for j := range time.Tick(60 * time.Second) {
-			err := testdb.Batch(func(b *db.Batch) error {
+			err := db.Batch(func(b *tracedb.Batch) error {
 				t, _ := j.MarshalText()
 				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
 				err := b.Write()
@@ -135,7 +136,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			print(testdb)
+			print(db)
 			if i >= retry {
 				return
 			}
@@ -145,18 +146,24 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 ```
 
 ### Iterating over items
-Use the DB.Items() function which returns a new instance of ItemIterator. Specify topic to retrives values and use last parameter to specify duration or specify number to retreive number of recent messages stored into the topic:
+Use the DB.Items() function which returns a new instance of ItemIterator. 
+Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic:
 
 ```
-it, err := db.Items(&db.Query{Topic: []byte("dev18.b.b11?last=3m")})
-for it.First(); it.Valid(); it.Next()
-    if it.Error() != nil {
-        if err != db.ErrIterationDone {
-            log.Fatal(err)
-        }
-        break
-    }
-    log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+func print(db *tracedb.DB) {
+	it, err := db.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	for it.First(); it.Valid(); it.Next() {
+		err := it.Error()
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+	}
 }
 ```
 
