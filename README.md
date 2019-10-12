@@ -49,10 +49,10 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Update() function to insert a new key/value pair or delete a record:
+Use the DB.Batch() function to insert a new key/value pair or delete a record:
 
 ```
-    err = db.Update(func(b *tracedb.Batch) error {
+    err = db.Batch(func(b *tracedb.Batch) error {
 		b.Put([]byte("dev18.b.b11"), []byte("bar"))
 		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
 		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
