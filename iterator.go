@@ -26,7 +26,7 @@ type Query struct {
 	ssid     message.Ssid // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
 	prefix   message.ID   // The beginning of the time window.
 	cutoff   int64        // The end of the time window.
-	limit    int          // The maximum number of elements to return.
+	Limit    uint32       // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
@@ -36,14 +36,14 @@ type ItemIterator struct {
 	item        *Item
 	queue       []*Item
 	keys        []uint32
-	next        int
-	expiredKeys int
+	next        uint32
+	expiredKeys uint32
 }
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.item = nil
-	if len(it.queue) == 0 && it.next < len(it.keys) {
+	if len(it.queue) == 0 && it.next < uint32(len(it.keys)) {
 		//h := it.db.hash(it.keys[it.next])
 		h := uint32(it.keys[it.next])
 		err := it.db.forEachBlock(it.db.blockIndex(h), func(b blockHandle) (bool, error) {
@@ -63,13 +63,12 @@ func (it *ItemIterator) Next() {
 					if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
 						return true, errKeyExpired
 					}
-					// if bytes.Equal(it.keys[it.next], key) {
-					if id.IsEncrypted() {
-						val, err = it.db.mem.mac.Decrypt(nil, val)
-						if err != nil {
-							return true, err
-						}
-					}
+					// if id.IsEncrypted() {
+					// 	val, err = it.db.mem.mac.Decrypt(nil, val)
+					// 	if err != nil {
+					// 		return true, err
+					// 	}
+					// }
 					var e message.Entry
 					var buffer []byte
 					val, err = snappy.Decode(buffer, val)
@@ -131,13 +130,12 @@ func (it *ItemIterator) First() {
 				if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
 					return true, errKeyExpired
 				}
-				// if bytes.Equal(it.keys[it.next], key) {
-				if id.IsEncrypted() {
-					val, err = it.db.mem.mac.Decrypt(nil, val)
-					if err != nil {
-						return true, err
-					}
-				}
+				// if id.IsEncrypted() {
+				// 	val, err = it.db.mem.mac.Decrypt(nil, val)
+				// 	if err != nil {
+				// 		return true, err
+				// 	}
+				// }
 				var e message.Entry
 				var buffer []byte
 				val, err = snappy.Decode(buffer, val)
@@ -178,7 +176,7 @@ func (it *ItemIterator) Item() *Item {
 
 // Valid returns false when iteration is done.
 func (it *ItemIterator) Valid() bool {
-	if (it.next - it.expiredKeys) > it.query.limit {
+	if (it.next - it.expiredKeys) > it.query.Limit {
 		return false
 	}
 	if len(it.queue) > 0 {

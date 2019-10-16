@@ -432,7 +432,6 @@ func (db *DB) Has(key []byte) (bool, error) {
 func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	start := time.Now()
 	defer logger.Debug().Str("context", "conn.onPublish").Dur("duration", time.Since(start)).Msg("")
-
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -440,7 +439,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	//Parse the Key
 	topic.ParseKey(q.Topic)
 	// Parse the topic
-	topic.Parse(q.Contract, false)
+	topic.Parse(q.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
@@ -452,11 +451,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if t0, t1, limit, ok := topic.Last(); ok {
 		q.prefix = message.GenPrefix(q.ssid, t1.Unix())
 		q.cutoff = t0.Unix()
-		q.limit = int(limit)
-	}
-
-	if q.limit == 0 {
-		q.limit = maxResults // Maximum number of records to return
+		q.Limit = limit
+		if q.Limit == 0 {
+			q.Limit = maxResults // Maximum number of records to return
+		}
 	}
 
 	return &ItemIterator{db: db, query: q}, nil

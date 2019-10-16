@@ -3,9 +3,10 @@ package message
 import (
 	"math"
 	"sync/atomic"
+	"time"
 
-	"github.com/saffat-in/tracedb/uid"
 	"github.com/kelindar/binary"
+	"github.com/saffat-in/tracedb/uid"
 )
 
 // Various constant parts of the SSID.
@@ -25,7 +26,11 @@ type ID []byte
 func NewID(ssid Ssid) ID {
 	id := make(ID, len(ssid)*4+fixed)
 
-	binary.BigEndian.PutUint32(id[0:4], ssid[0]^ssid[1])
+	if len(ssid) > 1 {
+		binary.BigEndian.PutUint32(id[0:4], ssid[0]^ssid[1])
+	} else {
+		binary.BigEndian.PutUint32(id[0:4], ssid[0])
+	}
 	binary.BigEndian.PutUint32(id[4:8], uid.NewApoch())
 	binary.BigEndian.PutUint32(id[8:12], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
 	binary.BigEndian.PutUint32(id[12:16], uid.NewUnique())
@@ -49,6 +54,7 @@ func (id ID) IsEncrypted() bool {
 
 // Entry represents a entry which has to be forwarded or stored.
 type Entry struct {
+	ID        ID     `json:"id,omitempty"`   // The ID of the message
 	Topic     []byte `json:"chan,omitempty"` // The topic of the message
 	Payload   []byte `json:"data,omitempty"` // The payload of the message
 	ExpiresAt uint32 // The time expiry of the message
@@ -89,6 +95,40 @@ func GenPrefix(ssid Ssid, from int64) ID {
 	binary.BigEndian.PutUint32(id[4:8], math.MaxUint32-uint32(from-uid.Offset))
 
 	return id
+}
+
+// genPrefix generates a new message identifier only containing the prefix.
+func GenID(e *Entry) ID {
+	topic := new(Topic)
+	if e.Contract == 0 {
+		e.Contract = Contract
+	}
+	//Parse the Key
+	topic.ParseKey(e.Topic)
+	e.Topic = topic.Topic
+	// Parse the topic
+	topic.Parse(e.Contract, true)
+	if topic.TopicType == TopicInvalid {
+		return nil
+	}
+	// In case of ttl, add ttl to the msg and store to the db
+	if ttl, ok := topic.TTL(); ok {
+		//1410065408 10 sec
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+	}
+
+	topic.AddContract(e.Contract)
+	ssid := topic.NewSsid()
+	return NewID(ssid)
+}
+
+// Ssid retrieves the SSID from the message ID.
+func (id ID) Ssid() Ssid {
+	ssid := make(Ssid, (len(id)-fixed)/4)
+	for i := 0; i < len(ssid); i++ {
+		ssid[i] = binary.BigEndian.Uint32(id[fixed+i*4 : fixed+4+i*4])
+	}
+	return ssid
 }
 
 // Time gets the time of the key, adjusted.

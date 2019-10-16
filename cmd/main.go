@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb"
+	m "github.com/saffat-in/tracedb/message"
 )
 
 func print(testdb *tracedb.DB) {
@@ -92,15 +93,6 @@ func main() {
 		return
 	}
 
-	testdb.Batch(func(b *tracedb.Batch) error {
-		b.Delete([]byte("dev18.b.b111"))
-		err := b.Write()
-		if err != nil {
-			log.Printf("Error update1: %s", err)
-		}
-		return err
-	})
-
 	print(testdb)
 
 	func(retry int) {
@@ -111,6 +103,17 @@ func main() {
 				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
 				err := b.Write()
 
+				return err
+			})
+			err = testdb.Batch(func(b *tracedb.Batch) error {
+				b.DeleteEntry(&m.Entry{
+					Topic:   []byte("dev18.b.b11"),
+					Payload: []byte("bar3"),
+				})
+				err := b.Write()
+				if err != nil {
+					log.Printf("Error update1: %s", err)
+				}
 				return err
 			})
 			if err != nil {

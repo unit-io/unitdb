@@ -183,7 +183,7 @@ func (t *Trie) Lookup(query Ssid) (mid MID) {
 func (t *Trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
 	// Add message ids from the current branch
 	for _, s := range part.mid {
-		if part.depth == depth || (part.depth >= 23 && depth > part.depth-23) {
+		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
 			mid.addUnique(s)
 		}
 	}

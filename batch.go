@@ -92,7 +92,8 @@ var wg sync.WaitGroup
 
 // DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
 var DefaultBatchOptions = &BatchOptions{
-	Order: 0,
+	Order:      0,
+	Encryption: false,
 }
 
 func (b *Batch) SetOptions(opts *BatchOptions) {
@@ -114,7 +115,7 @@ type Batch struct {
 	ids           []uint32
 
 	// internalLen is sums of key/value pair length plus 8-bytes internal key.
-	internalLen uint32
+	// internalLen uint32
 }
 
 func (b *Batch) grow(n int) {
@@ -130,13 +131,13 @@ func (b *Batch) grow(n int) {
 	}
 }
 
-func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, messageId, h uint32, key, value []byte) {
+func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, messageId /*, h*/ uint32, key, value []byte) {
 	n := 1 + len(key)
 	if !dFlag {
 		n += len(value)
 	}
 	b.grow(n)
-
+	h := b.db.hash(key)
 	index := batchIndex{delFlag: dFlag, topic: topic, messageId: messageId, hash: h, keySize: uint16(len(key))}
 	o := len(b.data)
 	data := b.data[:o+n]
@@ -155,7 +156,7 @@ func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, messageId
 	b.data = data[:o]
 	index.expiresAt = expiresAt
 	b.index = append(b.index, index)
-	b.internalLen += uint32(index.keySize) + index.valueSize + 12
+	// b.internalLen += uint32(index.keySize) + index.valueSize + 12
 }
 
 func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, messageId, h uint32, key, value []byte) error {
@@ -181,6 +182,9 @@ func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, messageId, h u
 		}
 	}
 	b.db.activeTopics[h] = topic
+	// if !dFlag {
+	// 	b.db.invMessageIndex[messageId] = key
+	// }
 	if b.firstKeyHash == 0 {
 		b.firstKeyHash = h
 	}
@@ -207,39 +211,38 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 	topic.ParseKey(e.Topic)
 	e.Topic = topic.Topic
 	// Parse the topic
-	topic.Parse(e.Contract, false)
+	topic.Parse(e.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return errBadRequest
 	}
-	// Put should only have static topic strings
-	if topic.TopicType != message.TopicStatic {
-		return errForbidden
-	}
+	// // Put should only have static topic strings
+	// if topic.TopicType != message.TopicStatic {
+	// 	return errForbidden
+	// }
 
 	// In case of ttl, add ttl to the msg and store to the db
 	if ttl, ok := topic.TTL(); ok {
 		//1410065408 10 sec
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
-
 	topic.AddContract(e.Contract)
 	ssid := topic.NewSsid()
-	k := message.NewID(ssid)
-
+	if e.ID == nil {
+		e.ID = message.NewID(ssid)
+	}
 	m, err := e.Marshal()
 	if err != nil {
 		return err
 	}
 	val := snappy.Encode(nil, m)
+	messageId := hash.WithSalt(val, ssid.GetHashCode())
 	// Encryption.
 	if b.opts.Encryption == true {
-		k.SetEncryption()
+		e.ID.SetEncryption()
 		val = b.db.mem.mac.Encrypt(nil, val)
 	}
 
-	h := b.db.hash(k)
-	// b.db.activeTopics[h] = topic
-	b.appendRec(false, topic, e.ExpiresAt, hash.WithSalt(val, ssid.GetHashCode()), h, k, val)
+	b.appendRec(false, topic, e.ExpiresAt, messageId, e.ID, val)
 
 	return nil
 }
@@ -255,6 +258,9 @@ func (b *Batch) Delete(key []byte) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) DeleteEntry(e *message.Entry) error {
+	if e.ID == nil {
+		return errKeyEmpty
+	}
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -263,17 +269,15 @@ func (b *Batch) DeleteEntry(e *message.Entry) error {
 	topic.ParseKey(e.Topic)
 	e.Topic = topic.Topic
 	// Parse the topic
-	topic.Parse(e.Contract, false)
+	topic.Parse(e.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return errBadRequest
 	}
 
 	topic.AddContract(e.Contract)
 	ssid := topic.NewSsid()
-	k := message.NewID(ssid)
-	h := b.db.hash(k)
-	// b.db.activeTopics[h] = topic
-	b.appendRec(true, topic, 0, ssid.GetHashCode(), h, k, nil)
+	messageId := ssid.GetHashCode()
+	b.appendRec(true, topic, 0, messageId, e.ID, nil)
 	return nil
 }
 
@@ -401,9 +405,9 @@ func (b *Batch) commit() error {
 					}
 					b.db.data.free(sl.kvSize(), sl.kvOffset)
 					// get active topics and remove key from trie
-					topic := b.db.activeTopics[hash]
-					b.db.trie.Remove(topic.Parts, hash)
-
+					if topic, exists := b.db.activeTopics[hash]; exists {
+						b.db.trie.Remove(topic.Parts, hash)
+					}
 					b.db.count--
 				} else {
 					putCount++
@@ -468,10 +472,12 @@ func (b *Batch) commit() error {
 						}
 					}
 					// get active topics and add key into trie
-					topic := b.db.activeTopics[hash]
-					b.db.trie.Add(topic.Parts, topic.Depth, hash)
+					if topic, exists := b.db.activeTopics[hash]; exists {
+						b.db.trie.Add(topic.Parts, topic.Depth, hash)
+					}
 					b.db.filter.Append(uint64(hash))
 				}
+				delete(b.db.activeTopics, hash)
 			}
 			return false, nil
 		})
@@ -519,7 +525,7 @@ func (b *Batch) Abort() {
 func (b *Batch) Reset() {
 	b.data = b.data[:0]
 	b.index = b.index[:0]
-	b.internalLen = 0
+	// b.internalLen = 0
 }
 
 func (b *Batch) uniq() []batchIndex {
@@ -552,7 +558,7 @@ func (b *Batch) append(bnew *Batch) {
 	}
 	//b.grow(len(bnew.data))
 	b.data = append(b.data, bnew.data...)
-	b.internalLen += bnew.internalLen
+	// b.internalLen += bnew.internalLen
 }
 
 // _assert will panic with a given formatted message if the given condition is false.

@@ -20,6 +20,7 @@ const (
 	TopicChildrenAllSeparator = "..."
 	TopicSeparator            = '.'   // The separator character.
 	MaxMessageSize            = 65536 // Maximum message size allowed from/to the peer.
+	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
 )
 
 // Ssid represents a subscription ID which contains a contract and a list of hashes
@@ -253,7 +254,7 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	if bytes.HasSuffix(topic.Topic, q) {
 		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicChildrenAllSeparator))
 		topic.TopicType = TopicWildcard
-		topic.Depth = 23
+		topic.Depth = TopicMaxDepth
 
 		if len(topic.Topic) == 0 {
 			part.Query = wildcard
