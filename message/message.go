@@ -3,7 +3,6 @@ package message
 import (
 	"math"
 	"sync/atomic"
-	"time"
 
 	"github.com/kelindar/binary"
 	"github.com/saffat-in/tracedb/uid"
@@ -25,7 +24,6 @@ type ID []byte
 // NewID creates a new message identifier for the current time.
 func NewID(ssid Ssid) ID {
 	id := make(ID, len(ssid)*4+fixed)
-
 	if len(ssid) > 1 {
 		binary.BigEndian.PutUint32(id[0:4], ssid[0]^ssid[1])
 	} else {
@@ -33,7 +31,7 @@ func NewID(ssid Ssid) ID {
 	}
 	binary.BigEndian.PutUint32(id[4:8], uid.NewApoch())
 	binary.BigEndian.PutUint32(id[8:12], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
-	binary.BigEndian.PutUint32(id[12:16], uid.NewUnique())
+	binary.BigEndian.PutUint32(id[12:16], uid.NewUnique()|(0<<2))                       // clear encryption bit
 	for i, v := range ssid {
 		binary.BigEndian.PutUint32(id[fixed+i*4:fixed+4+i*4], v)
 	}
@@ -41,15 +39,28 @@ func NewID(ssid Ssid) ID {
 	return id
 }
 
+// NewID creates a new message identifier for the current time.
+func (id *ID) SetSsid(ssid Ssid) {
+	newid := make(ID, len(ssid)*4+fixed)
+	if len(ssid) > 1 {
+		binary.BigEndian.PutUint32(newid[0:4], ssid[0]^ssid[1])
+	} else {
+		binary.BigEndian.PutUint32(newid[0:4], ssid[0])
+	}
+	copy(newid[4:], *id)
+	for i, v := range ssid {
+		binary.BigEndian.PutUint32(newid[fixed+i*4:fixed+4+i*4], v)
+	}
+
+	*id = newid
+}
+
 func (id ID) SetEncryption() {
-	u := binary.BigEndian.Uint32(id[12:16])
-	u |= (1 << 8)
-	binary.BigEndian.PutUint32(id[12:16], u)
+	binary.BigEndian.PutUint32(id[12:16], binary.BigEndian.Uint32(id[12:16])|(1<<2)) //set encryption bit
 }
 
 func (id ID) IsEncrypted() bool {
-	u := binary.BigEndian.Uint32(id[12:16])
-	return u&0xff != 0
+	return binary.BigEndian.Uint32(id[12:16])&(1<<2) != 0
 }
 
 // Entry represents a entry which has to be forwarded or stored.
@@ -99,27 +110,12 @@ func GenPrefix(ssid Ssid, from int64) ID {
 
 // genPrefix generates a new message identifier only containing the prefix.
 func GenID(e *Entry) ID {
-	topic := new(Topic)
-	if e.Contract == 0 {
-		e.Contract = Contract
-	}
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == TopicInvalid {
-		return nil
-	}
-	// In case of ttl, add ttl to the msg and store to the db
-	if ttl, ok := topic.TTL(); ok {
-		//1410065408 10 sec
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
-	}
-
-	topic.AddContract(e.Contract)
-	ssid := topic.NewSsid()
-	return NewID(ssid)
+	id := make(ID, 12)
+	u := (uid.NewUnique() << 4) | 0 // set first bit zero as it is used set encryption flag on id
+	binary.BigEndian.PutUint32(id[0:4], uid.NewApoch())
+	binary.BigEndian.PutUint32(id[4:8], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
+	binary.BigEndian.PutUint32(id[8:12], u)
+	return id
 }
 
 // Ssid retrieves the SSID from the message ID.

@@ -20,7 +20,6 @@ type batchdb struct {
 	activeBatches map[uint64][]uint32
 	batchQueue    chan *Batch
 	activeTopics  map[uint32]*message.Topic
-	// invMessageIndex map[uint32][]byte
 	//once run batchLoop once
 	once Once
 
@@ -39,7 +38,6 @@ func (db *DB) initbatchdb() error {
 		activeBatches: make(map[uint64][]uint32, 100),
 		batchQueue:    make(chan *Batch, 1),
 		activeTopics:  make(map[uint32]*message.Topic, 100),
-		// invMessageIndex: make(map[uint32][]byte, 100),
 	}
 
 	db.batchdb = bdb

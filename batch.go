@@ -29,7 +29,7 @@ const (
 type batchIndex struct {
 	delFlag   bool
 	topic     *message.Topic
-	messageId uint32
+	lid       uint32 // lid is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
 	hash      uint32
 	keySize   uint16
 	valueSize uint32
@@ -131,14 +131,14 @@ func (b *Batch) grow(n int) {
 	}
 }
 
-func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, messageId /*, h*/ uint32, key, value []byte) {
+func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, lid /*, h*/ uint32, key, value []byte) {
 	n := 1 + len(key)
 	if !dFlag {
 		n += len(value)
 	}
 	b.grow(n)
 	h := b.db.hash(key)
-	index := batchIndex{delFlag: dFlag, topic: topic, messageId: messageId, hash: h, keySize: uint16(len(key))}
+	index := batchIndex{delFlag: dFlag, topic: topic, lid: lid, hash: h, keySize: uint16(len(key))}
 	o := len(b.data)
 	data := b.data[:o+n]
 	if dFlag {
@@ -159,7 +159,7 @@ func (b *Batch) appendRec(dFlag bool, topic *message.Topic, expiresAt, messageId
 	// b.internalLen += uint32(index.keySize) + index.valueSize + 12
 }
 
-func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, messageId, h uint32, key, value []byte) error {
+func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, lid, h uint32, key, value []byte) error {
 	switch {
 	case len(key) == 0:
 		return errKeyEmpty
@@ -168,7 +168,7 @@ func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, messageId, h u
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-	// if b.hasWriteConflict(messageId) {
+	// if b.hasWriteConflict(lid) {
 	// 	return errWriteConflict
 	// }
 	var k []byte
@@ -182,9 +182,6 @@ func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, messageId, h u
 		}
 	}
 	b.db.activeTopics[h] = topic
-	// if !dFlag {
-	// 	b.db.invMessageIndex[messageId] = key
-	// }
 	if b.firstKeyHash == 0 {
 		b.firstKeyHash = h
 	}
@@ -227,7 +224,9 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 	}
 	topic.AddContract(e.Contract)
 	ssid := topic.NewSsid()
-	if e.ID == nil {
+	if e.ID != nil {
+		e.ID.SetSsid(ssid)
+	} else {
 		e.ID = message.NewID(ssid)
 	}
 	m, err := e.Marshal()
@@ -235,14 +234,14 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 		return err
 	}
 	val := snappy.Encode(nil, m)
-	messageId := hash.WithSalt(val, ssid.GetHashCode())
+	lid := hash.WithSalt(val, ssid.GetHashCode())
 	// Encryption.
 	if b.opts.Encryption == true {
 		e.ID.SetEncryption()
 		val = b.db.mem.mac.Encrypt(nil, val)
 	}
 
-	b.appendRec(false, topic, e.ExpiresAt, messageId, e.ID, val)
+	b.appendRec(false, topic, e.ExpiresAt, lid, e.ID, val)
 
 	return nil
 }
@@ -276,8 +275,10 @@ func (b *Batch) DeleteEntry(e *message.Entry) error {
 
 	topic.AddContract(e.Contract)
 	ssid := topic.NewSsid()
-	messageId := ssid.GetHashCode()
-	b.appendRec(true, topic, 0, messageId, e.ID, nil)
+	e.ID.SetSsid(ssid)
+
+	lid := ssid.GetHashCode()
+	b.appendRec(true, topic, 0, lid, e.ID, nil)
 	return nil
 }
 
@@ -292,12 +293,12 @@ func (b *Batch) hasWriteConflict(id uint32) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, dFlag bool, topic *message.Topic, expiresAt, messageId, h uint32, k, v []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, dFlag bool, topic *message.Topic, expiresAt, lid, h uint32, k, v []byte) error) error {
 	start := time.Now()
 	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
 		key, val := index.kv(b.data)
-		if err := fn(i, index.delFlag, index.topic, index.expiresAt, index.messageId, index.hash, key, val); err != nil {
+		if err := fn(i, index.delFlag, index.topic, index.expiresAt, index.lid, index.hash, key, val); err != nil {
 			return err
 		}
 		logger.Debug().Str("context", "batch.writeInternal").Str("key", string(key)).Str("value", string(val))
@@ -319,8 +320,8 @@ func (b *Batch) Write() error {
 	}
 
 	b.seq = b.db.mem.getSeq()
-	err := b.writeInternal(func(i int, dFlag bool, topic *message.Topic, expiresAt, messageId, h uint32, k, v []byte) error {
-		return b.mput(dFlag, topic, expiresAt, messageId, h, k, v)
+	err := b.writeInternal(func(i int, dFlag bool, topic *message.Topic, expiresAt, lid, h uint32, k, v []byte) error {
+		return b.mput(dFlag, topic, expiresAt, lid, h, k, v)
 	})
 
 	if err == nil {
@@ -536,8 +537,8 @@ func (b *Batch) uniq() []batchIndex {
 	unique_set := make(map[uint32]indices, len(b.index))
 	i := 0
 	for idx := len(b.index) - 1; idx >= 0; idx-- {
-		if _, ok := unique_set[b.index[idx].messageId]; !ok {
-			unique_set[b.index[idx].messageId] = indices{idx, i}
+		if _, ok := unique_set[b.index[idx].lid]; !ok {
+			unique_set[b.index[idx].lid] = indices{idx, i}
 			i++
 		}
 	}

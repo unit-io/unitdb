@@ -5,11 +5,10 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb"
-	m "github.com/saffat-in/tracedb/message"
 )
 
 func print(testdb *tracedb.DB) {
-	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("ttl.ttl3?last=3m")})
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -42,11 +41,17 @@ func main() {
 		err = b.Write()
 		return err
 	})
+	err = testdb.Batch(func(b *tracedb.Batch) error {
+		t, _ := time.Now().MarshalText()
+		b.Put([]byte("ttl.ttl3?ttl=3m"), t)
+		err := b.Write()
+
+		return err
+	})
 	if err != nil {
 		log.Print(err)
 	}
 	print(testdb)
-
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.b1?ttl=2m"), []byte("bar"))
@@ -103,17 +108,6 @@ func main() {
 				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
 				err := b.Write()
 
-				return err
-			})
-			err = testdb.Batch(func(b *tracedb.Batch) error {
-				b.DeleteEntry(&m.Entry{
-					Topic:   []byte("dev18.b.b11"),
-					Payload: []byte("bar3"),
-				})
-				err := b.Write()
-				if err != nil {
-					log.Printf("Error update1: %s", err)
-				}
 				return err
 			})
 			if err != nil {

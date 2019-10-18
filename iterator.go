@@ -63,12 +63,12 @@ func (it *ItemIterator) Next() {
 					if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
 						return true, errKeyExpired
 					}
-					// if id.IsEncrypted() {
-					// 	val, err = it.db.mem.mac.Decrypt(nil, val)
-					// 	if err != nil {
-					// 		return true, err
-					// 	}
-					// }
+					if id.IsEncrypted() {
+						val, err = it.db.mem.mac.Decrypt(nil, val)
+						if err != nil {
+							return true, err
+						}
+					}
 					var e message.Entry
 					var buffer []byte
 					val, err = snappy.Decode(buffer, val)
@@ -120,22 +120,23 @@ func (it *ItemIterator) First() {
 				return b.next == 0, nil
 			} else if h == sl.hash /*&& uint16(len(it.keys[it.next])) == sl.keySize*/ {
 				if sl.isExpired() {
-					return true, errKeyExpired
+					continue
+					// return true, errKeyExpired
 				}
 				key, val, err := it.db.data.readKeyValue(sl)
 				if err != nil {
 					return true, err
 				}
 				id := message.ID(key)
-				if !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
+				if it.query.cutoff > 0 && !id.EvalPrefix(it.query.ssid, it.query.cutoff) {
 					return true, errKeyExpired
 				}
-				// if id.IsEncrypted() {
-				// 	val, err = it.db.mem.mac.Decrypt(nil, val)
-				// 	if err != nil {
-				// 		return true, err
-				// 	}
-				// }
+				if id.IsEncrypted() {
+					val, err = it.db.mem.mac.Decrypt(nil, val)
+					if err != nil {
+						return true, err
+					}
+				}
 				var e message.Entry
 				var buffer []byte
 				val, err = snappy.Decode(buffer, val)

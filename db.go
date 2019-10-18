@@ -448,9 +448,9 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	q.ssid = topic.NewSsid()
 
 	// In case of ttl, include it to the query
-	if t0, t1, limit, ok := topic.Last(); ok {
-		q.prefix = message.GenPrefix(q.ssid, t1.Unix())
-		q.cutoff = t0.Unix()
+	if from, until, limit, ok := topic.Last(); ok {
+		q.prefix = message.GenPrefix(q.ssid, until.Unix())
+		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
 			q.Limit = maxResults // Maximum number of records to return
