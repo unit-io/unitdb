@@ -566,7 +566,6 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	if err := db.put(h, e.ID, val, e.ExpiresAt); err != nil {
 		return err
 	}
-	db.trie.Add(topic.Parts, topic.Depth, h)
 	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
 		if err := db.split(); err != nil {
 			return err
@@ -575,7 +574,7 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	if db.syncWrites {
 		db.sync()
 	}
-	return nil
+	return db.trie.Add(topic.Parts, topic.Depth, h)
 }
 
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
@@ -733,9 +732,9 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 	e.ID.SetSsid(ssid)
 	err := db.Delete(e.ID)
 	if err != nil {
-		db.trie.Remove(topic.Parts, db.hash(e.ID))
+		return err
 	}
-	return err
+	return db.trie.Remove(topic.Parts, db.hash(e.ID))
 }
 
 // Delete deletes the given key from the DB.
