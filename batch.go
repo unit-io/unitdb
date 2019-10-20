@@ -10,7 +10,6 @@ import (
 	"github.com/golang/snappy"
 	"github.com/saffat-in/tracedb/hash"
 	"github.com/saffat-in/tracedb/message"
-	// "github.com/kelindar/binary"
 )
 
 const (
@@ -301,7 +300,6 @@ func (b *Batch) writeInternal(fn func(i int, dFlag bool, topic *message.Topic, e
 		if err := fn(i, index.delFlag, index.topic, index.expiresAt, index.lid, index.hash, key, val); err != nil {
 			return err
 		}
-		logger.Debug().Str("context", "batch.writeInternal").Str("key", string(key)).Str("value", string(val))
 	}
 	return nil
 }
@@ -341,7 +339,6 @@ func (b *Batch) commit() error {
 	var bh *blockHandle
 	var originalB *blockHandle
 	entryIdx := 0
-	logger.Debug().Str("context", "batch.commit").Int8("order", b.order).Int("length", b.Len())
 	blockIdx := b.db.mem.blockIndex(b.firstKeyHash)
 	for blockIdx < b.db.mem.nBlocks {
 		err := b.db.mem.forEachBlock(blockIdx, func(memb blockHandle) (bool, error) {

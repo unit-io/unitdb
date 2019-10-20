@@ -53,7 +53,7 @@ func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
 		for i := range window.entries {
 			entry := window.entries[i]
 			if entry.timeStamp() < startTime {
-				logger.Printf("deleteing expired key: %v", time.Unix(int64(entry.timeStamp()), 0))
+				// logger.Printf("deleteing expired key: %v", time.Unix(int64(entry.timeStamp()), 0))
 				expiredEntries = append(expiredEntries, entry)
 				expiredEntriesCount++
 			}
@@ -66,7 +66,7 @@ func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
 }
 
 func (wb *timeWindowBucket) add(entry timeWindowEntry) {
-	logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
+	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
 	entryTime := timeHash(time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
 	if wb.earliestExpiryHash == 0 {
 		wb.earliestExpiryHash = entryTime

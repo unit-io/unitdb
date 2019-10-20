@@ -31,6 +31,9 @@ func (src *Options) copyWithDefaults() *Options {
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
 	}
+	if opts.BackgroundSyncInterval == 0 {
+		opts.BackgroundSyncInterval = 15 * time.Second
+	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 	}

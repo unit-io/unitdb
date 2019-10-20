@@ -100,7 +100,7 @@ func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
 // the caller of Run.
 func (g *BatchGroup) Run() error {
 	start := time.Now()
-	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
+	defer logger.Debug().Str("context", "batchdb.Run").Dur("duration", time.Since(start)).Msg("")
 	// if there are no registered functions, return immediately.
 	if len(g.fn) < 1 {
 		return nil

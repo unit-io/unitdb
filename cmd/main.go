@@ -8,9 +8,9 @@ import (
 )
 
 func print(testdb *tracedb.DB) {
-	it, err := testdb.Items(&tracedb.Query{Topic: []byte("ttl.ttl3?last=3m")})
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("print: %v", err)
 		return
 	}
 	for it.First(); it.Valid(); it.Next() {

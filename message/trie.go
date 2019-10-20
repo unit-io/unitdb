@@ -1,7 +1,6 @@
 package message
 
 import (
-	"log"
 	"sync"
 )
 
@@ -193,8 +192,7 @@ func (t *Trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
 	if len(query) > 0 {
 		// Go through the exact match branch
 		for k, p := range part.children {
-			log.Printf("wildcard %d, lookup query %d, part query %d", wildcard, query[0], k.query)
-			if (k.query == query[0] /*|| k.query == wildcard*/) && uint8(len(query)) >= k.wildchars+1 {
+			if k.query == query[0] && uint8(len(query)) >= k.wildchars+1 {
 				t.ilookup(query[k.wildchars+1:], depth, mid, p)
 			}
 		}

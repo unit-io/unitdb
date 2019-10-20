@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/allegro/bigcache"
+	"github.com/golang/snappy"
 	"github.com/saffat-in/tracedb/crypto"
 	fltr "github.com/saffat-in/tracedb/filter"
 	"github.com/saffat-in/tracedb/fs"
@@ -430,8 +431,6 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Items returns a new ItemIterator.
 func (db *DB) Items(q *Query) (*ItemIterator, error) {
-	start := time.Now()
-	defer logger.Debug().Str("context", "conn.onPublish").Dur("duration", time.Since(start)).Msg("")
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -456,7 +455,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
-
+	q.keys = db.trie.Lookup(q.ssid)
+	// if len(q.keys) == 0 {
+	// 	return nil, nil
+	// }
 	return &ItemIterator{db: db, query: q}, nil
 }
 
@@ -518,6 +520,62 @@ func (db *DB) expireOldEntries() {
 	if db.syncWrites {
 		db.sync()
 	}
+}
+
+func (db *DB) PutEntry(e *message.Entry) error {
+	// start := time.Now()
+	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
+	topic := new(message.Topic)
+	if e.Contract == 0 {
+		e.Contract = message.Contract
+	}
+	//Parse the Key
+	topic.ParseKey(e.Topic)
+	e.Topic = topic.Topic
+	// Parse the topic
+	topic.Parse(e.Contract, true)
+	if topic.TopicType == message.TopicInvalid {
+		return errBadRequest
+	}
+	// In case of ttl, add ttl to the msg and store to the db
+	if ttl, ok := topic.TTL(); ok {
+		//1410065408 10 sec
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+	}
+	topic.AddContract(e.Contract)
+	ssid := topic.NewSsid()
+	if e.ID != nil {
+		e.ID.SetSsid(ssid)
+	} else {
+		e.ID = message.NewID(ssid)
+	}
+	m, err := e.Marshal()
+	if err != nil {
+		return err
+	}
+	val := snappy.Encode(nil, m)
+	switch {
+	case len(e.ID) == 0:
+		return errKeyEmpty
+	case len(e.ID) > MaxKeyLength:
+		return errKeyTooLarge
+	case len(val) > MaxValueLength:
+		return errValueTooLarge
+	}
+	h := db.hash(e.ID)
+	if err := db.put(h, e.ID, val, e.ExpiresAt); err != nil {
+		return err
+	}
+	db.trie.Add(topic.Parts, topic.Depth, h)
+	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
+		if err := db.split(); err != nil {
+			return err
+		}
+	}
+	if db.syncWrites {
+		db.sync()
+	}
+	return nil
 }
 
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
@@ -582,6 +640,7 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 	if originalB != nil {
 		return originalB.write()
 	}
+	db.filter.Append(uint64(hash))
 	if expiresAt > 0 {
 		db.timeWindow.add(b.entries[entryIdx])
 	}
@@ -647,6 +706,36 @@ func (db *DB) split() error {
 
 	db.nBlocks++
 	return nil
+}
+
+// Delete appends 'delete operation' of the given key to the batch.
+// It is safe to modify the contents of the argument after Delete returns but
+// not before.
+func (db *DB) DeleteEntry(e *message.Entry) error {
+	if e.ID == nil {
+		return errKeyEmpty
+	}
+	topic := new(message.Topic)
+	if e.Contract == 0 {
+		e.Contract = message.Contract
+	}
+	//Parse the Key
+	topic.ParseKey(e.Topic)
+	e.Topic = topic.Topic
+	// Parse the topic
+	topic.Parse(e.Contract, true)
+	if topic.TopicType == message.TopicInvalid {
+		return errBadRequest
+	}
+
+	topic.AddContract(e.Contract)
+	ssid := topic.NewSsid()
+	e.ID.SetSsid(ssid)
+	err := db.Delete(e.ID)
+	if err != nil {
+		db.trie.Remove(topic.Parts, db.hash(e.ID))
+	}
+	return err
 }
 
 // Delete deletes the given key from the DB.
