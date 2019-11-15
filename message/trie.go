@@ -57,7 +57,6 @@ type part struct {
 	k        key
 	depth    uint8
 	mid      MID
-	final    bool
 	parent   *part
 	children map[key]*part
 }
@@ -68,7 +67,6 @@ func (p *part) orphan() {
 	}
 
 	delete(p.parent.children, p.k)
-	p.parent.final = true
 	if len(p.parent.mid) == 0 && len(p.parent.children) == 0 {
 		p.parent.orphan()
 	}
@@ -84,7 +82,6 @@ func NewpartTrie() *partTrie {
 	return &partTrie{
 		root: &part{
 			mid:      MID{},
-			final:    false,
 			children: make(map[key]*part),
 		},
 	}
@@ -111,7 +108,7 @@ func (t *Trie) Count() int {
 }
 
 // add the message id to the topic.
-func (t *Trie) Add(parts []Part, depth uint8, id uint32) error {
+func (t *Trie) Add(parts []Part, depth uint8, id uint32) (added bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -125,7 +122,6 @@ func (t *Trie) Add(parts []Part, depth uint8, id uint32) error {
 			child = &part{
 				k:        k,
 				mid:      MID{},
-				final:    false,
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -133,17 +129,17 @@ func (t *Trie) Add(parts []Part, depth uint8, id uint32) error {
 		}
 		curr = child
 	}
-	curr.final = true
 	if ok := curr.mid.addUnique(id); ok {
+		added = true
 		curr.depth = depth
 		t.count++
 	}
 
-	return nil
+	return
 }
 
 // remove the message id for the topic.
-func (t *Trie) Remove(parts []Part, id uint32) error {
+func (t *Trie) Remove(parts []Part, id uint32) (removed bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -155,32 +151,33 @@ func (t *Trie) Remove(parts []Part, id uint32) error {
 		}
 		child, ok := curr.children[k]
 		if !ok {
+			removed = false
 			// message id doesn't exist.
-			return nil
+			return
 		}
 		curr = child
 	}
 	// Remove the message id and decrement the counter
 	if ok := curr.mid.remove(id); ok {
+		removed = true
 		t.count--
 	}
 	// Remove orphans
 	if len(curr.mid) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
-	return nil
-}
-
-// Lookup returns the message Ids for the given topic.
-func (t *Trie) Lookup(query Ssid) (mid MID) {
-	t.RLock()
-	defer t.RUnlock()
-
-	t.ilookup(query, uint8(len(query)-1), &mid, t.partTrie.root)
 	return
 }
 
-func (t *Trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
+// Lookup returns the message Ids for the given topic.
+func (t *Trie) Lookup(parts []Part) (mid MID) {
+	t.RLock()
+	defer t.RUnlock()
+	t.ilookup(parts, uint8(len(parts)-1), &mid, t.partTrie.root)
+	return
+}
+
+func (t *Trie) ilookup(parts []Part, depth uint8, mid *MID, part *part) {
 	// Add message ids from the current branch
 	for _, s := range part.mid {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
@@ -189,11 +186,11 @@ func (t *Trie) ilookup(query Ssid, depth uint8, mid *MID, part *part) {
 	}
 
 	// If we're not yet done, continue
-	if len(query) > 0 {
+	if len(parts) > 0 {
 		// Go through the exact match branch
 		for k, p := range part.children {
-			if k.query == query[0] && uint8(len(query)) >= k.wildchars+1 {
-				t.ilookup(query[k.wildchars+1:], depth, mid, p)
+			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
+				t.ilookup(parts[k.wildchars+1:], depth, mid, p)
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strconv"
 	"time"
 	"unsafe"
@@ -23,28 +24,28 @@ const (
 	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
 )
 
-// Ssid represents a subscription ID which contains a contract and a list of hashes
-// for various parts of the topic.
-type Ssid []uint32
+// // Ssid represents a subscription ID which contains a contract and a list of hashes
+// // for various parts of the topic.
+// type Ssid []uint32
 
-// NewSsid creates a new SSID.
-func (t *Topic) NewSsid() Ssid {
-	parts := t.Parts
-	ssid := make([]uint32, 0, len(parts))
-	for _, part := range parts {
-		ssid = append(ssid, part.Query)
-	}
-	return ssid
-}
+// // NewSsid creates a new SSID.
+// func (t *Topic) NewSsid() Ssid {
+// 	parts := t.Parts
+// 	ssid := make([]uint32, 0, len(parts))
+// 	for _, part := range parts {
+// 		ssid = append(ssid, part.Query)
+// 	}
+// 	return ssid
+// }
 
-// GetHashCode combines the SSID into a single hash.
-func (s Ssid) GetHashCode() uint32 {
-	h := s[0]
-	for _, i := range s[1:] {
-		h ^= i
-	}
-	return h
-}
+// // GetHashCode combines the SSID into a single hash.
+// func (s Ssid) GetHashCode() uint32 {
+// 	h := s[0]
+// 	for _, i := range s[1:] {
+// 		h ^= i
+// 	}
+// 	return h
+// }
 
 // AddContract adds contract to the parts.
 func (t *Topic) AddContract(contract uint32) {
@@ -52,7 +53,7 @@ func (t *Topic) AddContract(contract uint32) {
 		Wildchars: 0,
 		Query:     contract,
 	}
-	if t.Parts[0].Query == wildcard {
+	if t.Parts[0].Query == Wildcard {
 		t.Parts[0].Query = contract
 	} else {
 		parts := []Part{part}
@@ -79,6 +80,81 @@ type Topic struct {
 type Part struct {
 	Query     uint32
 	Wildchars uint8
+}
+
+// nextPart is a helper function that reads the next part from a buffer and returns the data and a bool to indicate
+// success.
+func nextPart(buf *bytes.Buffer) (Part, bool) {
+	if buf.Len() < 5 {
+		// missing length
+		return Part{}, false
+	}
+	part := Part{}
+	part.Wildchars = uint8(buf.Next(1)[0])
+	part.Query = binary.LittleEndian.Uint32(buf.Next(4))
+	return part, true
+}
+
+func (t *Topic) Marshal() []byte {
+	// preallocate buffer of appropriate size
+	var size int
+	//Depth size
+	size++
+	for _ = range t.Parts {
+		size += 5
+	}
+	buf := make([]byte, size)
+
+	var n int
+	buf[n] = byte(t.Depth)
+	n++
+	for _, part := range t.Parts {
+		buf[n] = byte(part.Wildchars)
+		n++
+		binary.LittleEndian.PutUint32(buf[n:], part.Query)
+		n += 4
+	}
+	return buf
+
+	// b := newByteWriter()
+	// b.writeUint(1, uint64(t.Depth))
+	// for _, part := range t.Parts {
+	// 	b.writeUint(1, uint64(part.Wildchars))
+	// 	b.writeUint(4, uint64(part.Query))
+	// }
+	// return b.buf[:b.pos], nil
+}
+
+func (t *Topic) Unmarshal(data []byte) error {
+	buf := bytes.NewBuffer(data)
+
+	var parts []Part
+	depth := uint8(buf.Next(1)[0])
+	for i := 0; i <= int(depth); i++ {
+		if buf.Len() == 0 {
+			break
+		}
+		wildchars := uint8(buf.Next(1)[0])
+		query := binary.LittleEndian.Uint32(buf.Next(4))
+		parts = append(parts, Part{
+			Query:     query,
+			Wildchars: wildchars,
+		})
+	}
+	// for {
+	// 	if buf.Len() == 0 {
+	// 		break
+	// 	}
+
+	// 	part, ok := nextPart(buf)
+	// 	if !ok {
+	// 		return errors.New("failed to unmarshal part")
+	// 	}
+	// 	parts = append(parts, part)
+	// }
+	t.Depth = depth
+	t.Parts = parts
+	return nil
 }
 
 // SplitFunc various split function to split topic using delimeter
@@ -178,6 +254,15 @@ func (t *Topic) parseOptions(text []byte) (ok bool) {
 	return true
 }
 
+// GetHashCode combines the topic parts into a single hash.
+func (t *Topic) GetHashCode() uint32 {
+	h := t.Parts[0].Query
+	for _, i := range t.Parts[1:] {
+		h ^= i.Query
+	}
+	return h
+}
+
 // ParseKey attempts to parse the key
 func (t *Topic) ParseKey(text []byte) {
 	var fn splitFunc
@@ -257,7 +342,7 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 		topic.Depth = TopicMaxDepth
 
 		if len(topic.Topic) == 0 {
-			part.Query = wildcard
+			part.Query = Wildcard
 			topic.Parts = append(topic.Parts, part)
 			return false
 		}

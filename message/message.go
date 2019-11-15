@@ -12,7 +12,7 @@ import (
 const (
 	// system   = uint32(0)
 	Contract = uint32(3376684800)
-	wildcard = uint32(857445537)
+	Wildcard = uint32(857445537)
 
 	fixed              = 16
 	DEFAULT_BUFFER_CAP = 3000
@@ -22,35 +22,35 @@ const (
 type ID []byte
 
 // NewID creates a new message identifier for the current time.
-func NewID(ssid Ssid) ID {
-	id := make(ID, len(ssid)*4+fixed)
-	if len(ssid) > 1 {
-		binary.BigEndian.PutUint32(id[0:4], ssid[0]^ssid[1])
+func NewID(parts []Part) ID {
+	id := make(ID, fixed)
+	if len(parts) > 1 {
+		binary.BigEndian.PutUint32(id[0:4], parts[0].Query^parts[1].Query)
 	} else {
-		binary.BigEndian.PutUint32(id[0:4], ssid[0])
+		binary.BigEndian.PutUint32(id[0:4], parts[0].Query^Wildcard)
 	}
 	binary.BigEndian.PutUint32(id[4:8], uid.NewApoch())
 	binary.BigEndian.PutUint32(id[8:12], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
 	binary.BigEndian.PutUint32(id[12:16], uid.NewUnique()|(0<<2))                       // clear encryption bit
-	for i, v := range ssid {
-		binary.BigEndian.PutUint32(id[fixed+i*4:fixed+4+i*4], v)
-	}
+	// for i, v := range ssid {
+	// 	binary.BigEndian.PutUint32(id[fixed+i*4:fixed+4+i*4], v)
+	// }
 
 	return id
 }
 
 // NewID creates a new message identifier for the current time.
-func (id *ID) SetSsid(ssid Ssid) {
-	newid := make(ID, len(ssid)*4+fixed)
-	if len(ssid) > 1 {
-		binary.BigEndian.PutUint32(newid[0:4], ssid[0]^ssid[1])
+func (id *ID) SetContract(parts []Part) {
+	newid := make(ID, fixed)
+	if len(parts) == 1 {
+		binary.BigEndian.PutUint32(newid[0:4], parts[0].Query^Wildcard)
 	} else {
-		binary.BigEndian.PutUint32(newid[0:4], ssid[0])
+		binary.BigEndian.PutUint32(newid[0:4], parts[0].Query^parts[1].Query)
 	}
 	copy(newid[4:], *id)
-	for i, v := range ssid {
-		binary.BigEndian.PutUint32(newid[fixed+i*4:fixed+4+i*4], v)
-	}
+	// for i, v := range ssid {
+	// 	binary.BigEndian.PutUint32(newid[fixed+i*4:fixed+4+i*4], v)
+	// }
 
 	*id = newid
 }
@@ -82,9 +82,9 @@ func NewEntry(topic, payload []byte) *Entry {
 
 func (e *Entry) Marshal() ([]byte, error) {
 	b := newByteWriter()
-	b.WriteUint16(uint16(len(e.Topic)))
-	b.Write(e.Topic)
-	b.Write(e.Payload)
+	b.writeUint16(uint16(len(e.Topic)))
+	b.write(e.Topic)
+	b.write(e.Payload)
 	return b.buf[:b.pos], nil
 }
 
@@ -96,13 +96,13 @@ func (e *Entry) Unmarshal(data []byte) error {
 }
 
 // genPrefix generates a new message identifier only containing the prefix.
-func GenPrefix(ssid Ssid, from int64) ID {
+func GenPrefix(parts []Part, from int64) ID {
 	id := make(ID, 8)
-	if len(ssid) < 2 {
+	if len(parts) < 2 {
 		return id
 	}
 
-	binary.BigEndian.PutUint32(id[0:4], ssid[0]^ssid[1])
+	binary.BigEndian.PutUint32(id[0:4], parts[0].Query^parts[1].Query)
 	binary.BigEndian.PutUint32(id[4:8], math.MaxUint32-uint32(from-uid.Offset))
 
 	return id
@@ -118,14 +118,14 @@ func GenID(e *Entry) ID {
 	return id
 }
 
-// Ssid retrieves the SSID from the message ID.
-func (id ID) Ssid() Ssid {
-	ssid := make(Ssid, (len(id)-fixed)/4)
-	for i := 0; i < len(ssid); i++ {
-		ssid[i] = binary.BigEndian.Uint32(id[fixed+i*4 : fixed+4+i*4])
-	}
-	return ssid
-}
+// // Ssid retrieves the SSID from the message ID.
+// func (id ID) Ssid() Ssid {
+// 	ssid := make(Ssid, (len(id)-fixed)/4)
+// 	for i := 0; i < len(ssid); i++ {
+// 		ssid[i] = binary.BigEndian.Uint32(id[fixed+i*4 : fixed+4+i*4])
+// 	}
+// 	return ssid
+// }
 
 // Time gets the time of the key, adjusted.
 func (id ID) Time() int64 {
@@ -133,49 +133,16 @@ func (id ID) Time() int64 {
 }
 
 // EvalPrefix matches the prefix with the cutoff time.
-func (id ID) EvalPrefix(ssid Ssid, cutoff int64) bool {
-	return (binary.BigEndian.Uint32(id[0:4]) == ssid[0]^ssid[1]) && id.Time() >= cutoff
+func (id ID) EvalPrefix(parts []Part, cutoff int64) bool {
+	if cutoff > 0 {
+		return (binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard) && id.Time() >= cutoff
+	} else {
+		return binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard
+	}
 }
 
 func (b byteWriter) grow(n int) {
 	nbuffer := make([]byte, len(b.buf), len(b.buf)+n)
 	copy(nbuffer, b.buf)
 	b.buf = nbuffer
-}
-
-type byteWriter struct {
-	buf []byte
-	pos int
-}
-
-func newByteWriter() *byteWriter {
-	return &byteWriter{
-		buf: make([]byte, DEFAULT_BUFFER_CAP),
-		pos: 0,
-	}
-}
-
-func (b *byteWriter) WriteUint16(n uint16) int {
-	currentCap := len(b.buf) - b.pos
-	if currentCap < 1 {
-		b.grow(2)
-	}
-	for i := uint(b.pos); i < uint(2); i++ {
-		b.buf[i] =
-			byte(n >> (i * 8))
-	}
-	b.pos += 2
-	return 2
-}
-
-func (b *byteWriter) Write(p []byte) int {
-	currentCap := len(b.buf) - b.pos
-	if currentCap < len(p) {
-		b.grow(len(p) - currentCap)
-	}
-	if len(p) > 0 {
-		copy(b.buf[b.pos:], p)
-		b.pos += len(p)
-	}
-	return len(p)
 }

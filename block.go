@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/allegro/bigcache"
 	"github.com/saffat-in/tracedb/fs"
 )
 
@@ -36,6 +37,10 @@ type blockHandle struct {
 	block
 	file   fs.FileManager
 	offset int64
+
+	updated bool
+	cache   *bigcache.BigCache
+	cacheID uint64
 }
 
 const (
@@ -84,20 +89,41 @@ func (b *block) del(entryIdx int) {
 	b.entries[i] = entry{}
 }
 
-func (b *blockHandle) read() error {
-	buf, err := b.file.Slice(b.offset, b.offset+int64(blockSize))
+func (bh *blockHandle) read(fillCache bool) error {
+
+	var cacheKey string
+	if bh.cache != nil {
+		var kb [8]byte
+		binary.LittleEndian.PutUint64(kb[:8], bh.cacheID^uint64(bh.offset))
+		cacheKey = string(kb[:])
+
+		if data, _ := bh.cache.Get(cacheKey); data != nil {
+			return bh.UnmarshalBinary(data)
+		}
+	}
+
+	buf, err := bh.file.Slice(bh.offset, bh.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-	return b.UnmarshalBinary(buf)
+	if bh.cache != nil && fillCache {
+		bh.cache.Set(cacheKey, buf)
+	}
+	return bh.UnmarshalBinary(buf)
 }
 
-func (b *blockHandle) write() error {
-	buf, err := b.MarshalBinary()
+func (bh *blockHandle) write() error {
+	buf, err := bh.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	_, err = b.file.WriteAt(buf, b.offset)
+	_, err = bh.file.WriteAt(buf, bh.offset)
+	if bh.cache != nil {
+		var kb [8]byte
+		binary.LittleEndian.PutUint64(kb[:8], bh.cacheID^uint64(bh.offset))
+		cacheKey := string(kb[:])
+		bh.cache.Delete(cacheKey)
+	}
 	return err
 }
 
@@ -107,7 +133,7 @@ type entryWriter struct {
 	prevblocks []*blockHandle
 }
 
-func (ew *entryWriter) insert(sl entry, db *DB) error {
+func (ew *entryWriter) insert(e entry, db *DB) error {
 	if ew.entryIdx == entriesPerBlock {
 		nextblock, err := db.createOverflowBlock()
 		if err != nil {
@@ -118,7 +144,7 @@ func (ew *entryWriter) insert(sl entry, db *DB) error {
 		ew.block = nextblock
 		ew.entryIdx = 0
 	}
-	ew.block.entries[ew.entryIdx] = sl
+	ew.block.entries[ew.entryIdx] = e
 	ew.entryIdx++
 	return nil
 }

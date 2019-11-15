@@ -92,7 +92,8 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.FilterBlock, error) {
 	var cacheKey string
 	if f.cache != nil {
 		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], uint64(f.size))
+		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(f.size))
+		// binary.LittleEndian.PutUint64(kb[4:], uint64(f.size))
 		cacheKey = string(kb[:])
 
 		if data, err := f.cache.Get(cacheKey); data != nil {

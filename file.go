@@ -2,14 +2,19 @@ package tracedb
 
 import (
 	"encoding"
+	"math/rand"
 	"os"
 
+	"github.com/allegro/bigcache"
 	"github.com/saffat-in/tracedb/fs"
 )
 
 type file struct {
 	fs.FileManager
 	size int64
+
+	cache   *bigcache.BigCache
+	cacheID uint64
 }
 
 func openFile(fsyst fs.FileSystem, name string, flag int, perm os.FileMode) (file, error) {
@@ -24,6 +29,13 @@ func openFile(fsyst fs.FileSystem, name string, flag int, perm os.FileMode) (fil
 		return f, err
 	}
 	f.size = stat.Size()
+
+	cache, err := bigcache.NewBigCache(config)
+	if err != nil {
+		return f, err
+	}
+	f.cache = cache
+	f.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	return f, err
 }
 

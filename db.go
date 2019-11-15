@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ const (
 	loadFactor      = 0.7
 	indexPostfix    = ".index"
 	lockPostfix     = ".lock"
+	keystorePostfix = ".ks"
 	filterPostfix   = ".filter"
 	version         = 1 // file format version
 
@@ -65,12 +67,12 @@ type DB struct {
 	filter       Filter
 	index        file
 	data         dataFile
-	timeWindow   timeWindowBucket
 	lock         fs.LockFile
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
 	syncWrites   bool
 	dbInfo
+	timeWindow timeWindowBucket
 	//batchdb
 	*batchdb
 	//trie
@@ -112,11 +114,12 @@ func Open(path string, opts *Options) (*DB, error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
 		index:      index,
 		data:       dataFile{file: data},
 		timeWindow: newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:     Filter{file: filter, cache: cache, filterBlock: fltr.NewFilterGenerator()},
+		filter:     Filter{file: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:       lock,
 		writeLockC: make(chan struct{}, 1),
 		metrics:    newMetrics(),
@@ -129,6 +132,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		// Close
 		closeC: make(chan struct{}),
 	}
+
 	//initbatchdb
 	if err = db.initbatchdb(); err != nil {
 		return nil, err
@@ -185,6 +189,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
 	} else if opts.BackgroundSyncInterval == -1 {
@@ -240,12 +245,12 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
+func (db *DB) forEachBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
 	f := db.index.FileManager
 	for {
-		b := blockHandle{file: f, offset: off}
-		if err := b.read(); err != nil {
+		b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, file: f, offset: off}
+		if err := b.read(fillCache); err != nil {
 			return err
 		}
 		if stop, err := cb(b); stop || err != nil {
@@ -370,17 +375,17 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return retValue, nil
 	}
 
-	err := db.forEachBlock(db.blockIndex(h), func(b blockHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(h), true, func(b blockHandle) (bool, error) {
 		for i := 0; i < entriesPerBlock; i++ {
-			sl := b.entries[i]
-			if sl.kvOffset == 0 {
+			e := b.entries[i]
+			if e.kvOffset == 0 {
 				return b.next == 0, nil
-			} else if h == sl.hash && uint16(len(key)) == sl.keySize {
-				slKey, value, err := db.data.readKeyValue(sl)
+			} else if h == e.hash && uint16(len(key)) == e.keySize {
+				eKey, value, err := db.data.readKeyValue(e, true)
 				if err != nil {
 					return true, err
 				}
-				if bytes.Equal(key, slKey) {
+				if bytes.Equal(key, eKey) {
 					retValue = value
 					return true, nil
 				}
@@ -405,17 +410,17 @@ func (db *DB) Has(key []byte) (bool, error) {
 	found := false
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	err := db.forEachBlock(db.blockIndex(h), func(b blockHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(h), true, func(b blockHandle) (bool, error) {
 		for i := 0; i < entriesPerBlock; i++ {
-			sl := b.entries[i]
-			if sl.kvOffset == 0 {
+			e := b.entries[i]
+			if e.kvOffset == 0 {
 				return b.next == 0, nil
-			} else if h == sl.hash && uint16(len(key)) == sl.keySize {
-				slKey, err := db.data.readKey(sl)
+			} else if h == e.hash && uint16(len(key)) == e.keySize {
+				eKey, err := db.data.readKey(e)
 				if err != nil {
 					return true, err
 				}
-				if bytes.Equal(key, slKey) {
+				if bytes.Equal(key, eKey) {
 					found = true
 					return true, nil
 				}
@@ -444,18 +449,18 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	}
 
 	topic.AddContract(q.Contract)
-	q.ssid = topic.NewSsid()
+	q.parts = topic.Parts
 
 	// In case of ttl, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
-		q.prefix = message.GenPrefix(q.ssid, until.Unix())
+		q.prefix = message.GenPrefix(q.parts, until.Unix())
 		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
-	q.keys = db.trie.Lookup(q.ssid)
+	q.keys = db.trie.Lookup(q.parts)
 	// if len(q.keys) == 0 {
 	// 	return nil, nil
 	// }
@@ -492,13 +497,13 @@ func (db *DB) expireOldEntries() {
 		defer db.mu.Unlock()
 		b := blockHandle{}
 		entryIdx := -1
-		err := db.forEachBlock(db.blockIndex(entry.hash), func(curb blockHandle) (bool, error) {
+		err := db.forEachBlock(db.blockIndex(entry.hash), false, func(curb blockHandle) (bool, error) {
 			b = curb
 			for i := 0; i < entriesPerBlock; i++ {
-				sl := b.entries[i]
-				if sl.kvOffset == 0 {
+				e := b.entries[i]
+				if e.kvOffset == 0 {
 					return b.next == 0, nil
-				} else if entry.hash == sl.hash && entry.keySize == sl.keySize {
+				} else if entry.hash == e.hash && entry.keySize == e.keySize {
 					entryIdx = i
 					return true, nil
 				}
@@ -508,12 +513,12 @@ func (db *DB) expireOldEntries() {
 		if entryIdx == -1 || err != nil {
 			continue
 		}
-		sl := b.entries[entryIdx]
+		e := b.entries[entryIdx]
 		b.del(entryIdx)
 		if err := b.write(); err != nil {
 			continue
 		}
-		db.data.free(sl.kvSize(), sl.kvOffset)
+		db.data.free(e.kvSize(), e.kvOffset)
 		db.count--
 
 	}
@@ -543,11 +548,11 @@ func (db *DB) PutEntry(e *message.Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
-	ssid := topic.NewSsid()
+	// ssid := topic.NewSsid()
 	if e.ID != nil {
-		e.ID.SetSsid(ssid)
+		e.ID.SetContract(topic.Parts)
 	} else {
-		e.ID = message.NewID(ssid)
+		e.ID = message.NewID(topic.Parts)
 	}
 	m, err := e.Marshal()
 	if err != nil {
@@ -571,27 +576,30 @@ func (db *DB) PutEntry(e *message.Entry) error {
 			return err
 		}
 	}
+
 	if db.syncWrites {
 		db.sync()
 	}
-	return db.trie.Add(topic.Parts, topic.Depth, h)
+	if ok := db.trie.Add(topic.Parts, topic.Depth, h); ok {
+	}
+	return err
 }
 
 func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
 	var b *blockHandle
 	var originalB *blockHandle
 	entryIdx := 0
-	err := db.forEachBlock(db.blockIndex(hash), func(curb blockHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
-			sl := b.entries[i]
+			e := b.entries[i]
 			entryIdx = i
-			if sl.kvOffset == 0 {
+			if e.kvOffset == 0 {
 				// Found an empty entry.
 				return true, nil
-			} else if hash == sl.hash && uint16(len(key)) == sl.keySize {
+			} else if hash == e.hash && uint16(len(key)) == e.keySize {
 				// Key already exists.
-				if slKey, err := db.data.readKey(sl); bytes.Equal(key, slKey) || err != nil {
+				if eKey, err := db.data.readKey(e); bytes.Equal(key, eKey) || err != nil {
 					return true, err
 				}
 			}
@@ -668,18 +676,18 @@ func (db *DB) split() error {
 	}
 
 	var overflowBlocks []int64
-	if err := db.forEachBlock(updatedBlockIdx, func(curb blockHandle) (bool, error) {
+	if err := db.forEachBlock(updatedBlockIdx, false, func(curb blockHandle) (bool, error) {
 		for j := 0; j < entriesPerBlock; j++ {
-			sl := curb.entries[j]
-			if sl.kvOffset == 0 {
+			e := curb.entries[j]
+			if e.kvOffset == 0 {
 				break
 			}
-			if db.blockIndex(sl.hash) == updatedBlockIdx {
-				if err := updatedBlock.insert(sl, db); err != nil {
+			if db.blockIndex(e.hash) == updatedBlockIdx {
+				if err := updatedBlock.insert(e, db); err != nil {
 					return true, err
 				}
 			} else {
-				if err := newBlock.insert(sl, db); err != nil {
+				if err := newBlock.insert(e, db); err != nil {
 					return true, err
 				}
 			}
@@ -728,13 +736,16 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 	}
 
 	topic.AddContract(e.Contract)
-	ssid := topic.NewSsid()
-	e.ID.SetSsid(ssid)
+	// ssid := topic.NewSsid()
+	e.ID.SetContract(topic.Parts)
 	err := db.Delete(e.ID)
 	if err != nil {
 		return err
 	}
-	return db.trie.Remove(topic.Parts, db.hash(e.ID))
+	h := db.hash(e.ID)
+	if ok := db.trie.Remove(topic.Parts, h); ok {
+	}
+	return err
 }
 
 // Delete deletes the given key from the DB.
@@ -749,18 +760,18 @@ func (db *DB) Delete(key []byte) error {
 	defer db.mu.Unlock()
 	b := blockHandle{}
 	entryIdx := -1
-	err := db.forEachBlock(db.blockIndex(h), func(curb blockHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(h), false, func(curb blockHandle) (bool, error) {
 		b = curb
 		for i := 0; i < entriesPerBlock; i++ {
-			sl := b.entries[i]
-			if sl.kvOffset == 0 {
+			e := b.entries[i]
+			if e.kvOffset == 0 {
 				return b.next == 0, nil
-			} else if h == sl.hash && uint16(len(key)) == sl.keySize {
-				slKey, err := db.data.readKey(sl)
+			} else if h == e.hash && uint16(len(key)) == e.keySize {
+				eKey, err := db.data.readKey(e)
 				if err != nil {
 					return true, err
 				}
-				if bytes.Equal(key, slKey) {
+				if bytes.Equal(key, eKey) {
 					entryIdx = i
 					return true, nil
 				}
@@ -771,12 +782,12 @@ func (db *DB) Delete(key []byte) error {
 	if entryIdx == -1 || err != nil {
 		return err
 	}
-	sl := b.entries[entryIdx]
+	e := b.entries[entryIdx]
 	b.del(entryIdx)
 	if err := b.write(); err != nil {
 		return err
 	}
-	db.data.free(sl.kvSize(), sl.kvOffset)
+	db.data.free(e.kvSize(), e.kvOffset)
 	db.count--
 	if db.syncWrites {
 		return db.sync()

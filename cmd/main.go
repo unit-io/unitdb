@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb"
+	"github.com/saffat-in/tracedb/message"
 )
 
 func print(testdb *tracedb.DB) {
-	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b1?last=3m")})
 	if err != nil {
 		log.Printf("print: %v", err)
 		return
@@ -31,6 +32,12 @@ func main() {
 		return
 	}
 	defer testdb.Close()
+
+	testdb.PutEntry(&message.Entry{
+		Topic:   []byte("ttl.ttl1?ttl=3m"),
+		Payload: []byte("bar"),
+	})
+
 	err = testdb.Batch(func(b *tracedb.Batch) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Encryption = true

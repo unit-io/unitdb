@@ -6,8 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/saffat-in/tracedb/message"
 )
 
 // batchdb manages the batch execution
@@ -19,7 +17,6 @@ type batchdb struct {
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
 	batchQueue    chan *Batch
-	activeTopics  map[uint32]*message.Topic
 	//once run batchLoop once
 	once Once
 
@@ -37,7 +34,6 @@ func (db *DB) initbatchdb() error {
 		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
 		batchQueue:    make(chan *Batch, 1),
-		activeTopics:  make(map[uint32]*message.Topic, 100),
 	}
 
 	db.batchdb = bdb

@@ -45,7 +45,7 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	var itemCount uint32
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
-		err := db.forEachBlock(blockIdx, func(b blockHandle) (bool, error) {
+		err := db.forEachBlock(blockIdx, false, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				sl := b.entries[i]
 				if sl.kvOffset == 0 {
@@ -74,7 +74,7 @@ func recoverSplitCrash(db *DB) error {
 	prevLevel := uint8(math.Floor(math.Log2(float64(prevnBlocks))))
 	prevSplitBlockIdx := prevnBlocks - (uint32(1) << prevLevel)
 	splitCrash := false
-	err := db.forEachBlock(prevSplitBlockIdx, func(b blockHandle) (bool, error) {
+	err := db.forEachBlock(prevSplitBlockIdx, false, func(b blockHandle) (bool, error) {
 		for i := 0; i < entriesPerBlock; i++ {
 			sl := b.entries[i]
 			if sl.kvOffset == 0 {

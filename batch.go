@@ -180,9 +180,16 @@ func (b *Batch) mput(dFlag bool, topic *message.Topic, expiresAt, lid, h uint32,
 			return err
 		}
 	}
-	b.db.activeTopics[h] = topic
 	if b.firstKeyHash == 0 {
 		b.firstKeyHash = h
+	}
+	if !dFlag {
+		if ok := b.db.trie.Add(topic.Parts, topic.Depth, h); ok {
+		}
+		b.db.filter.Append(uint64(h))
+	} else {
+		if ok := b.db.trie.Remove(topic.Parts, h); ok {
+		}
 	}
 	b.seq++
 	return nil
@@ -222,18 +229,18 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
-	ssid := topic.NewSsid()
+	// ssid := topic.NewSsid()
 	if e.ID != nil {
-		e.ID.SetSsid(ssid)
+		e.ID.SetContract(topic.Parts)
 	} else {
-		e.ID = message.NewID(ssid)
+		e.ID = message.NewID(topic.Parts)
 	}
 	m, err := e.Marshal()
 	if err != nil {
 		return err
 	}
 	val := snappy.Encode(nil, m)
-	lid := hash.WithSalt(val, ssid.GetHashCode())
+	lid := hash.WithSalt(val, topic.GetHashCode())
 	// Encryption.
 	if b.opts.Encryption == true {
 		e.ID.SetEncryption()
@@ -273,10 +280,10 @@ func (b *Batch) DeleteEntry(e *message.Entry) error {
 	}
 
 	topic.AddContract(e.Contract)
-	ssid := topic.NewSsid()
-	e.ID.SetSsid(ssid)
+	// ssid := topic.NewSsid()
+	e.ID.SetContract(topic.Parts)
 
-	lid := ssid.GetHashCode()
+	lid := topic.GetHashCode()
 	b.appendRec(true, topic, 0, lid, e.ID, nil)
 	return nil
 }
@@ -341,20 +348,20 @@ func (b *Batch) commit() error {
 	entryIdx := 0
 	blockIdx := b.db.mem.blockIndex(b.firstKeyHash)
 	for blockIdx < b.db.mem.nBlocks {
-		err := b.db.mem.forEachBlock(blockIdx, func(memb blockHandle) (bool, error) {
+		err := b.db.mem.forEachBlock(blockIdx, false, func(memb blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
-				memsl := memb.entries[i]
-				// if memsl.expiresAt != 0 && memsl.expiresAt <= uint32(time.Now().Unix()) {
+				e := memb.entries[i]
+				// if e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix()) {
 				// 	continue
 				// }
-				if memsl.kvOffset == 0 {
+				if e.kvOffset == 0 {
 					return memb.next == 0, nil
 				}
-				memslKey, value, err := b.db.mem.data.readKeyValue(memsl)
+				eKey, value, err := b.db.mem.data.readKeyValue(e, false)
 				if err != nil {
 					return true, err
 				}
-				key, seq, dFlag, expiresAt, err := parseInternalKey(memslKey)
+				key, seq, dFlag, expiresAt, err := parseInternalKey(eKey)
 				if err != nil {
 					return true, err
 				}
@@ -374,18 +381,18 @@ func (b *Batch) commit() error {
 					delCount++
 					bh := blockHandle{}
 					delentryIdx := -1
-					err = b.db.forEachBlock(b.db.blockIndex(hash), func(curb blockHandle) (bool, error) {
+					err = b.db.forEachBlock(b.db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {
 						bh = curb
 						for i := 0; i < entriesPerBlock; i++ {
-							sl := bh.entries[i]
-							if sl.kvOffset == 0 {
+							e := bh.entries[i]
+							if e.kvOffset == 0 {
 								return bh.next == 0, nil
-							} else if hash == sl.hash && uint16(len(key)) == sl.keySize {
-								slKey, err := b.db.data.readKey(sl)
+							} else if hash == e.hash && uint16(len(key)) == e.keySize {
+								eKey, err := b.db.data.readKey(e)
 								if err != nil {
 									return true, err
 								}
-								if bytes.Equal(key, slKey) {
+								if bytes.Equal(key, eKey) {
 									delentryIdx = i
 									return true, nil
 								}
@@ -396,30 +403,27 @@ func (b *Batch) commit() error {
 					if delentryIdx == -1 || err != nil {
 						return false, err
 					}
-					sl := bh.entries[delentryIdx]
+					e := bh.entries[delentryIdx]
 					bh.del(delentryIdx)
 					if err := bh.write(); err != nil {
 						return false, err
 					}
-					b.db.data.free(sl.kvSize(), sl.kvOffset)
-					// get active topics and remove key from trie
-					if topic, exists := b.db.activeTopics[hash]; exists {
-						b.db.trie.Remove(topic.Parts, hash)
-					}
+					b.db.data.free(e.kvSize(), e.kvOffset)
+
 					b.db.count--
 				} else {
 					putCount++
-					err = b.db.forEachBlock(b.db.blockIndex(hash), func(curb blockHandle) (bool, error) {
+					err = b.db.forEachBlock(b.db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {
 						bh = &curb
 						for i := 0; i < entriesPerBlock; i++ {
-							sl := bh.entries[i]
+							e := bh.entries[i]
 							entryIdx = i
-							if sl.kvOffset == 0 {
+							if e.kvOffset == 0 {
 								// Found an empty entry.
 								return true, nil
-							} else if hash == sl.hash && uint16(len(key)) == sl.keySize {
+							} else if hash == e.hash && uint16(len(key)) == e.keySize {
 								// Key already exists.
-								if slKey, err := b.db.data.readKey(sl); bytes.Equal(key, slKey) || err != nil {
+								if eKey, err := b.db.data.readKey(e); bytes.Equal(key, eKey) || err != nil {
 									return true, err
 								}
 							}
@@ -469,13 +473,8 @@ func (b *Batch) commit() error {
 							return false, err
 						}
 					}
-					// get active topics and add key into trie
-					if topic, exists := b.db.activeTopics[hash]; exists {
-						b.db.trie.Add(topic.Parts, topic.Depth, hash)
-					}
-					b.db.filter.Append(uint64(hash))
 				}
-				delete(b.db.activeTopics, hash)
+				// delete(b.db.activeTopics, hash)
 			}
 			return false, nil
 		})
@@ -492,11 +491,11 @@ func (b *Batch) commit() error {
 	b.db.metrics.Dels.Add(delCount)
 	b.db.metrics.Puts.Add(putCount)
 
-	if b.db.syncWrites {
-		return b.db.sync()
-	}
+	// if b.db.syncWrites {
+	return b.db.sync()
+	// }
 
-	return nil
+	// return nil
 }
 
 func (b *Batch) Commit() error {
