@@ -25,7 +25,7 @@ const (
 	loadFactor      = 0.7
 	indexPostfix    = ".index"
 	lockPostfix     = ".lock"
-	keystorePostfix = ".ks"
+	keySize         = 16
 	filterPostfix   = ".filter"
 	version         = 1 // file format version
 
@@ -133,6 +133,11 @@ func Open(path string, opts *Options) (*DB, error) {
 		closeC: make(chan struct{}),
 	}
 
+	// Create a new MAC from the key.
+	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+		return nil, err
+	}
+
 	//initbatchdb
 	if err = db.initbatchdb(); err != nil {
 		return nil, err
@@ -157,10 +162,6 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 		db.hashSeed = seed
-		// Create a new MAC from the key.
-		if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
-			return nil, err
-		}
 		if _, err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
@@ -189,6 +190,9 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	// loadTrie on open database to load topic parts to trie from data file.
+	db.loadTrie()
 
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
@@ -293,9 +297,9 @@ func (db *DB) readHeader(readFreeList bool) error {
 	if err := db.index.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
 	}
-	if !bytes.Equal(h.signature[:], signature[:]) {
-		return errCorrupted
-	}
+	// if !bytes.Equal(h.signature[:], signature[:]) {
+	// 	return errCorrupted
+	// }
 	db.dbInfo = h.dbInfo
 	if readFreeList {
 		if err := db.data.fl.read(db.data.file, db.dbInfo.freelistOff); err != nil {
@@ -360,78 +364,6 @@ func (db *DB) blockIndex(hash uint32) uint32 {
 
 func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
-}
-
-// Get returns the value for the given key stored in the DB or nil if the key doesn't exist.
-func (db *DB) Get(key []byte) ([]byte, error) {
-	h := db.hash(key)
-	db.metrics.Gets.Add(1)
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	var retValue []byte
-
-	/// Test filter block for presence
-	if !db.filter.Test(uint64(h)) {
-		return retValue, nil
-	}
-
-	err := db.forEachBlock(db.blockIndex(h), true, func(b blockHandle) (bool, error) {
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.kvOffset == 0 {
-				return b.next == 0, nil
-			} else if h == e.hash && uint16(len(key)) == e.keySize {
-				eKey, value, err := db.data.readKeyValue(e, true)
-				if err != nil {
-					return true, err
-				}
-				if bytes.Equal(key, eKey) {
-					retValue = value
-					return true, nil
-				}
-				db.metrics.HashCollisions.Add(1)
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return retValue, nil
-}
-
-// Has returns true if the DB contains the given key.
-func (db *DB) Has(key []byte) (bool, error) {
-	h := db.hash(key)
-	/// Test filter block for presence
-	if !db.filter.Test(uint64(h)) {
-		return false, nil
-	}
-	found := false
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	err := db.forEachBlock(db.blockIndex(h), true, func(b blockHandle) (bool, error) {
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.kvOffset == 0 {
-				return b.next == 0, nil
-			} else if h == e.hash && uint16(len(key)) == e.keySize {
-				eKey, err := db.data.readKey(e)
-				if err != nil {
-					return true, err
-				}
-				if bytes.Equal(key, eKey) {
-					found = true
-					return true, nil
-				}
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		return false, err
-	}
-	return found, nil
 }
 
 // Items returns a new ItemIterator.
@@ -503,7 +435,7 @@ func (db *DB) expireOldEntries() {
 				e := b.entries[i]
 				if e.kvOffset == 0 {
 					return b.next == 0, nil
-				} else if entry.hash == e.hash && entry.keySize == e.keySize {
+				} else if entry.hash == e.hash {
 					entryIdx = i
 					return true, nil
 				}
@@ -518,13 +450,33 @@ func (db *DB) expireOldEntries() {
 		if err := b.write(); err != nil {
 			continue
 		}
+		val, err := db.data.readTopic(e)
+		if err != nil {
+			continue
+		}
+		topic := new(message.Topic)
+		topic.Unmarshal(val)
+		db.trie.Remove(topic.Parts, e.hash)
 		db.data.free(e.kvSize(), e.kvOffset)
 		db.count--
-
 	}
 	if db.syncWrites {
 		db.sync()
 	}
+}
+
+// loadTrie loads tpoics to the trie from data file
+func (db *DB) loadTrie() error {
+	it := &TopicIterator{db: db}
+	for it.First(); it.Valid(); it.Next() {
+		err := it.Error()
+		if err != nil {
+			logger.Error().Err(err).Str("context", "db.loadTrie")
+			return err
+		}
+		db.trie.Add(it.Topic().Parts(), it.Topic().Depth(), it.Topic().ID())
+	}
+	return nil
 }
 
 func (db *DB) PutEntry(e *message.Entry) error {
@@ -567,8 +519,7 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	h := db.hash(e.ID)
-	if err := db.put(h, e.ID, val, e.ExpiresAt); err != nil {
+	if err := db.put(topic.Marshal(), e.ID, val, e.ExpiresAt); err != nil {
 		return err
 	}
 	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
@@ -580,15 +531,16 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	if db.syncWrites {
 		db.sync()
 	}
-	if ok := db.trie.Add(topic.Parts, topic.Depth, h); ok {
+	if ok := db.trie.Add(topic.Parts, topic.Depth, db.hash(e.ID)); ok {
 	}
 	return err
 }
 
-func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error {
+func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	var b *blockHandle
 	var originalB *blockHandle
 	entryIdx := 0
+	hash := db.hash(key)
 	err := db.forEachBlock(db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
@@ -597,7 +549,7 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 			if e.kvOffset == 0 {
 				// Found an empty entry.
 				return true, nil
-			} else if hash == e.hash && uint16(len(key)) == e.keySize {
+			} else if hash == e.hash {
 				// Key already exists.
 				if eKey, err := db.data.readKey(e); bytes.Equal(key, eKey) || err != nil {
 					return true, err
@@ -634,11 +586,11 @@ func (db *DB) put(hash uint32, key []byte, value []byte, expiresAt uint32) error
 
 	b.entries[entryIdx] = entry{
 		hash:      hash,
-		keySize:   uint16(len(key)),
+		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
 		expiresAt: expiresAt,
 	}
-	if b.entries[entryIdx].kvOffset, err = db.data.writeKeyValue(key, value); err != nil {
+	if b.entries[entryIdx].kvOffset, err = db.data.writeKeyValue(topic, key, value); err != nil {
 		return err
 	}
 	if err := b.write(); err != nil {
@@ -700,9 +652,9 @@ func (db *DB) split() error {
 		return err
 	}
 
-	for _, off := range overflowBlocks {
-		db.data.free(blockSize, off)
-	}
+	// for _, off := range overflowBlocks {
+	// 	db.data.free(blockSize, off)
+	// }
 
 	if err := newBlock.write(); err != nil {
 		return err
@@ -738,7 +690,7 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 	topic.AddContract(e.Contract)
 	// ssid := topic.NewSsid()
 	e.ID.SetContract(topic.Parts)
-	err := db.Delete(e.ID)
+	err := db.delete(e.ID)
 	if err != nil {
 		return err
 	}
@@ -748,8 +700,8 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 	return err
 }
 
-// Delete deletes the given key from the DB.
-func (db *DB) Delete(key []byte) error {
+// delete deletes the given key from the DB.
+func (db *DB) delete(key []byte) error {
 	h := db.hash(key)
 	/// Test filter block for presence
 	if !db.filter.Test(uint64(h)) {
@@ -766,7 +718,7 @@ func (db *DB) Delete(key []byte) error {
 			e := b.entries[i]
 			if e.kvOffset == 0 {
 				return b.next == 0, nil
-			} else if h == e.hash && uint16(len(key)) == e.keySize {
+			} else if h == e.hash {
 				eKey, err := db.data.readKey(e)
 				if err != nil {
 					return true, err

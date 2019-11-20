@@ -8,9 +8,8 @@ import (
 	"github.com/saffat-in/tracedb/uid"
 )
 
-// Various constant parts of the SSID.
+// Various constant parts of the ID.
 const (
-	// system   = uint32(0)
 	Contract = uint32(3376684800)
 	Wildcard = uint32(857445537)
 
@@ -32,10 +31,6 @@ func NewID(parts []Part) ID {
 	binary.BigEndian.PutUint32(id[4:8], uid.NewApoch())
 	binary.BigEndian.PutUint32(id[8:12], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
 	binary.BigEndian.PutUint32(id[12:16], uid.NewUnique()|(0<<2))                       // clear encryption bit
-	// for i, v := range ssid {
-	// 	binary.BigEndian.PutUint32(id[fixed+i*4:fixed+4+i*4], v)
-	// }
-
 	return id
 }
 
@@ -48,10 +43,6 @@ func (id *ID) SetContract(parts []Part) {
 		binary.BigEndian.PutUint32(newid[0:4], parts[0].Query^parts[1].Query)
 	}
 	copy(newid[4:], *id)
-	// for i, v := range ssid {
-	// 	binary.BigEndian.PutUint32(newid[fixed+i*4:fixed+4+i*4], v)
-	// }
-
 	*id = newid
 }
 
@@ -117,15 +108,6 @@ func GenID(e *Entry) ID {
 	binary.BigEndian.PutUint32(id[8:12], u)
 	return id
 }
-
-// // Ssid retrieves the SSID from the message ID.
-// func (id ID) Ssid() Ssid {
-// 	ssid := make(Ssid, (len(id)-fixed)/4)
-// 	for i := 0; i < len(ssid); i++ {
-// 		ssid[i] = binary.BigEndian.Uint32(id[fixed+i*4 : fixed+4+i*4])
-// 	}
-// 	return ssid
-// }
 
 // Time gets the time of the key, adjusted.
 func (id ID) Time() int64 {

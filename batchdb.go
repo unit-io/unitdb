@@ -6,14 +6,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/saffat-in/tracedb/memdb"
 )
 
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
 	memMu   sync.RWMutex
-	memPool chan *memdb
-	mem     *memdb
+	memPool chan *memdb.DB
+	mem     *mem
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches map[uint64][]uint32
 	batchQueue    chan *Batch
@@ -31,17 +33,15 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		memPool:       make(chan *memdb, 1),
 		activeBatches: make(map[uint64][]uint32, 100),
 		batchQueue:    make(chan *Batch, 1),
 	}
 
 	db.batchdb = bdb
 	// Create a memdb.
-	if _, err := db.newmemdb(0); err != nil {
+	if _, err := db.newMem(0); err != nil {
 		return err
 	}
-	db.mem.incref()
 	return nil
 }
 

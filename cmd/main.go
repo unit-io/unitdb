@@ -9,7 +9,7 @@ import (
 )
 
 func print(testdb *tracedb.DB) {
-	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b1?last=3m")})
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=10m")})
 	if err != nil {
 		log.Printf("print: %v", err)
 		return
@@ -20,7 +20,7 @@ func print(testdb *tracedb.DB) {
 			log.Fatal(err)
 			return
 		}
-		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
 
@@ -112,7 +112,7 @@ func main() {
 		for j := range time.Tick(60 * time.Second) {
 			err := testdb.Batch(func(b *tracedb.Batch) error {
 				t, _ := j.MarshalText()
-				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
+				b.Put([]byte("dev18.b.b11?ttl=10m"), t)
 				err := b.Write()
 
 				return err

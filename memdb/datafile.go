@@ -1,33 +1,14 @@
-package tracedb
-
-import (
-	"encoding/binary"
-	"log"
-)
+package memdb
 
 type dataFile struct {
 	file
 	fl freelist
 }
 
-func (f *dataFile) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error) {
-
-	var cacheKey string
-	if f.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(e.kvOffset))
-		cacheKey = string(kb[:])
-
-		if data, err := f.cache.Get(cacheKey); data != nil {
-			return data[:keySize], data[e.topicSize+keySize:], err
-		}
-	}
+func (f *dataFile) readKeyValue(e entry) ([]byte, []byte, error) {
 	keyValue, err := f.Slice(e.kvOffset, e.kvOffset+int64(e.kvSize()))
 	if err != nil {
 		return nil, nil, err
-	}
-	if f.cache != nil && fillCache {
-		f.cache.Set(cacheKey, keyValue)
 	}
 	return keyValue[:keySize], keyValue[e.topicSize+keySize:], nil
 }
@@ -61,7 +42,6 @@ func (f *dataFile) writeKeyValue(topic, key, value []byte) (int64, error) {
 	copy(data[len(topic)+keySize:], value)
 	off := f.fl.allocate(dataLen)
 	if off != -1 {
-		log.Println("datafile.writeKeyValue: writing to free list off, ", off)
 		if _, err := f.WriteAt(data, off); err != nil {
 			return 0, err
 		}

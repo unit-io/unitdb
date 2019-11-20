@@ -1,4 +1,4 @@
-package tracedb
+package memdb
 
 import (
 	"encoding/binary"

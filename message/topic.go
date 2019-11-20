@@ -115,14 +115,6 @@ func (t *Topic) Marshal() []byte {
 		n += 4
 	}
 	return buf
-
-	// b := newByteWriter()
-	// b.writeUint(1, uint64(t.Depth))
-	// for _, part := range t.Parts {
-	// 	b.writeUint(1, uint64(part.Wildchars))
-	// 	b.writeUint(4, uint64(part.Query))
-	// }
-	// return b.buf[:b.pos], nil
 }
 
 func (t *Topic) Unmarshal(data []byte) error {

@@ -7,7 +7,7 @@ import (
 )
 
 type Item struct {
-	key       []byte
+	topic     []byte
 	value     []byte
 	expiresAt uint32
 	err       error
@@ -46,6 +46,21 @@ func (it *ItemIterator) Next() {
 					return b.next == 0, nil
 				} else if h == e.hash {
 					if e.isExpired() {
+						e := b.entries[i]
+						b.del(i)
+						if err := b.write(); err != nil {
+							return true, nil
+						}
+						val, err := it.db.data.readTopic(e)
+						if err != nil {
+							return true, nil
+						}
+						topic := new(message.Topic)
+						topic.Unmarshal(val)
+						it.db.trie.Remove(topic.Parts, e.hash)
+						// free expired keys
+						it.db.data.free(e.kvSize(), e.kvOffset)
+						it.db.count--
 						it.invalidKeys++
 						return true, nil
 					}
@@ -59,31 +74,32 @@ func (it *ItemIterator) Next() {
 						return true, nil
 					}
 					if id.IsEncrypted() {
-						val, err = it.db.mem.mac.Decrypt(nil, val)
+						val, err = it.db.mac.Decrypt(nil, val)
 						if err != nil {
 							return true, err
 						}
 					}
-					var e message.Entry
+					var entry message.Entry
 					var buffer []byte
 					val, err = snappy.Decode(buffer, val)
 					if err != nil {
 						return true, err
 					}
-					err = e.Unmarshal(val)
+					err = entry.Unmarshal(val)
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, &Item{key: e.Topic, value: e.Payload, err: err})
-					return true, nil
+					it.queue = append(it.queue, &Item{topic: entry.Topic, value: entry.Payload, err: err})
 				}
 			}
 			return false, nil
 		})
-		it.next++
 		if err != nil {
-			it.queue = append(it.queue, &Item{err: err})
-			return
+			it.item = &Item{err: err}
+		}
+		it.next++
+		if len(it.queue) == 0 {
+			it.Next()
 		}
 	}
 
@@ -124,11 +140,11 @@ func (it *ItemIterator) Error() error {
 	return nil
 }
 
-// Key returns the key of the current key/value pair, or nil if done. The caller
+// Topic returns the topic of the current key/value pair, or nil if done. The caller
 // should not modify the contents of the returned slice, and its contents may
 // change on the next call to Next.
-func (item *Item) Key() []byte {
-	return item.key
+func (item *Item) Topic() []byte {
+	return item.topic
 }
 
 // Value returns the value of the current key/value pair, or nil if done. The

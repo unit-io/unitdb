@@ -3,45 +3,46 @@ package tracedb
 import (
 	"sync/atomic"
 	"time"
+
+	"github.com/saffat-in/tracedb/memdb"
 )
 
-type memdb struct {
-	*DB
-	*memdb
+type mem struct {
+	db *DB
+	*memdb.DB
 	ref int32
 }
 
-func (m *memdb) getref() int32 {
+func (m *mem) getref() int32 {
 	return atomic.LoadInt32(&m.ref)
 }
 
-func (m *memdb) incref() {
+func (m *mem) incref() {
 	atomic.AddInt32(&m.ref, 1)
 }
 
-func (m *memdb) decref() {
+func (m *mem) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
-		m.mpoolPut(m)
+		m.db.mpoolPut(m.DB)
 		m.DB = nil
-		m.memdb = nil
 	} else if ref < 0 {
-		panic("negative memdb ref")
+		panic("negative mem ref")
 	}
 }
 
-// Create new memdb and froze the old one; need external synchronization.
+// Create new mem and froze the old one; need external synchronization.
 // newMem only called synchronously by the writer.
-func (db *DB) newmemdb(n int) (mem *memdb, err error) {
+func (db *DB) newMem(n int) (mem *mem, err error) {
 	db.memMu.Lock()
 	defer db.memMu.Unlock()
 	mem = db.mpoolGet(n)
-	//mem.incref() // for self
-	//mem.incref() // for caller
+	mem.incref() // for self
+	mem.incref() // for caller
 	db.mem = mem
 	return
 }
 
-func (db *DB) mpoolPut(mdb *memdb) {
+func (db *DB) mpoolPut(mdb *memdb.DB) {
 	if !db.isClosed() {
 		select {
 		case db.memPool <- mdb:
@@ -50,24 +51,23 @@ func (db *DB) mpoolPut(mdb *memdb) {
 	}
 }
 
-func (db *DB) mpoolGet(n int) *memdb {
-	var mdb *memdb
+func (db *DB) mpoolGet(n int) *mem {
+	var mdb *memdb.DB
 	select {
 	case mdb = <-db.memPool:
 	default:
 	}
 	if mdb == nil {
-		var opts Options
-		newdb, err := Open("memdb", opts.memWithDefaults())
+		var err error
+		var opts memdb.Options
+		mdb, err = memdb.Open("memdb", opts.CopyWithDefaults())
 		if err != nil {
-			logger.Error().Err(err).Str("context", "memdb.mpoolGet").Msg("Unable to open database")
-		}
-		return &memdb{
-			DB: newdb,
+			logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
 		}
 	}
-	return &memdb{
-		DB: mdb.DB,
+	return &mem{
+		db: db,
+		DB: mdb,
 	}
 }
 
@@ -93,8 +93,8 @@ func (db *DB) mpoolDrain() {
 	}
 }
 
-// Get all memdbs.
-func (db *DB) getMems() (e *memdb) {
+// Get all mems.
+func (db *DB) getMems() (e *mem) {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()
 	if db.mem != nil {
@@ -105,8 +105,8 @@ func (db *DB) getMems() (e *memdb) {
 	return db.mem
 }
 
-// Get effective memdb.
-func (db *DB) getEffectiveMem() *memdb {
+// Get effective mem.
+func (db *DB) getEffectiveMem() *mem {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()
 	if db.mem != nil {
@@ -130,22 +130,22 @@ func (db *DB) isClosed() bool {
 }
 
 // Get latest sequence number.
-func (db *DB) getSeq() uint64 {
-	return atomic.LoadUint64(&db.seq)
+func (m *mem) getSeq() uint64 {
+	return atomic.LoadUint64(&m.Seq)
 }
 
 // Atomically adds delta to seq.
-func (db *DB) addSeq(delta uint64) {
-	atomic.AddUint64(&db.seq, delta)
+func (m *mem) addSeq(delta uint64) {
+	atomic.AddUint64(&m.Seq, delta)
 }
 
-func (db *DB) setSeq(seq uint64) {
-	atomic.StoreUint64(&db.seq, seq)
+func (m *mem) setSeq(seq uint64) {
+	atomic.StoreUint64(&m.Seq, seq)
 }
 
-func ensureBuffer(b []byte, n int) []byte {
-	if cap(b) < n {
-		return make([]byte, n)
-	}
-	return b[:n]
-}
+// func ensureBuffer(b []byte, n int) []byte {
+// 	if cap(b) < n {
+// 		return make([]byte, n)
+// 	}
+// 	return b[:n]
+// }
