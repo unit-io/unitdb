@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"encoding/binary"
-	"log"
 )
 
 type dataFile struct {
@@ -18,7 +17,7 @@ func (f *dataFile) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error)
 		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(e.kvOffset))
 		cacheKey = string(kb[:])
 
-		if data, err := f.cache.Get(cacheKey); data != nil {
+		if data, err := f.cache.Get(cacheKey); data != nil && len(data) == int(e.kvSize()) {
 			return data[:keySize], data[e.topicSize+keySize:], err
 		}
 	}
@@ -33,10 +32,30 @@ func (f *dataFile) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error)
 }
 
 func (f *dataFile) readKey(e entry) ([]byte, error) {
+	var cacheKey string
+	if f.cache != nil {
+		var kb [8]byte
+		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(e.kvOffset))
+		cacheKey = string(kb[:])
+
+		if data, err := f.cache.Get(cacheKey); data != nil {
+			return data[:keySize], err
+		}
+	}
 	return f.Slice(e.kvOffset, e.kvOffset+int64(keySize))
 }
 
 func (f *dataFile) readTopic(e entry) ([]byte, error) {
+	var cacheKey string
+	if f.cache != nil {
+		var kb [8]byte
+		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(e.kvOffset))
+		cacheKey = string(kb[:])
+
+		if data, err := f.cache.Get(cacheKey); data != nil {
+			return data[keySize : e.topicSize+keySize], err
+		}
+	}
 	return f.Slice(e.kvOffset+int64(keySize), e.kvOffset+int64(e.topicSize)+int64(keySize))
 }
 
@@ -53,20 +72,25 @@ func (f *dataFile) free(size uint32, off int64) {
 	f.fl.free(off, size)
 }
 
-func (f *dataFile) writeKeyValue(topic, key, value []byte) (int64, error) {
+func (f *dataFile) writeKeyValue(topic, key, value []byte) (off int64, err error) {
 	dataLen := align512(uint32(len(topic) + keySize + len(value)))
 	data := make([]byte, dataLen)
 	copy(data, key)
 	copy(data[keySize:], topic)
 	copy(data[len(topic)+keySize:], value)
-	off := f.fl.allocate(dataLen)
+	off = f.fl.allocate(dataLen)
 	if off != -1 {
-		log.Println("datafile.writeKeyValue: writing to free list off, ", off)
-		if _, err := f.WriteAt(data, off); err != nil {
+		if _, err = f.WriteAt(data, off); err != nil {
 			return 0, err
 		}
 	} else {
-		return f.append(data)
+		off, err = f.append(data)
 	}
-	return off, nil
+	if f.cache != nil {
+		var kb [8]byte
+		binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(off))
+		cacheKey := string(kb[:])
+		f.cache.Delete(cacheKey)
+	}
+	return off, err
 }

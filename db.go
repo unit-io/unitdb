@@ -539,6 +539,9 @@ func (db *DB) PutEntry(e *message.Entry) error {
 func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	var b *blockHandle
 	var originalB *blockHandle
+	db.metrics.Puts.Add(1)
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	entryIdx := 0
 	hash := db.hash(key)
 	err := db.forEachBlock(db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {

@@ -303,6 +303,11 @@ func (b *Batch) commit() error {
 			}
 		} else {
 			b.db.put(it.Item().Topic(), it.Item().Key(), it.Item().Value(), it.Item().ExpiresAt())
+			if float64(b.db.count)/float64(b.db.nBlocks*entriesPerBlock) > loadFactor {
+				if err := b.db.split(); err != nil {
+					return err
+				}
+			}
 			itopic := new(message.Topic)
 			itopic.Unmarshal(it.Item().Topic())
 			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, keyHash); ok {

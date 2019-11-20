@@ -97,7 +97,7 @@ func (bh *blockHandle) read(fillCache bool) error {
 		binary.LittleEndian.PutUint64(kb[:8], bh.cacheID^uint64(bh.offset))
 		cacheKey = string(kb[:])
 
-		if data, _ := bh.cache.Get(cacheKey); data != nil {
+		if data, _ := bh.cache.Get(cacheKey); data != nil && len(data) == int(blockSize) {
 			return bh.UnmarshalBinary(data)
 		}
 	}
