@@ -39,11 +39,12 @@ func (it *ItemIterator) Next() {
 	it.item = nil
 	if len(it.queue) == 0 && it.next < uint32(len(it.query.keys)) {
 		h := uint32(it.query.keys[it.next])
+		// log.Println("iterator.Next: key, blockIndex", h, it.db.blockIndex(h))
 		err := it.db.forEachBlock(it.db.blockIndex(h), true, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
 				if e.kvOffset == 0 {
-					return b.next == 0, nil
+					return false, nil
 				} else if h == e.hash {
 					if e.isExpired() {
 						e := b.entries[i]
@@ -71,7 +72,7 @@ func (it *ItemIterator) Next() {
 					id := message.ID(key)
 					if !id.EvalPrefix(it.query.parts, it.query.cutoff) {
 						it.invalidKeys++
-						return true, nil
+						return false, nil
 					}
 					if id.IsEncrypted() {
 						val, err = it.db.mac.Decrypt(nil, val)
@@ -89,6 +90,7 @@ func (it *ItemIterator) Next() {
 					if err != nil {
 						return true, err
 					}
+					// log.Println("iterator.Next: key, blockIndex ", e.hash, it.db.blockIndex(e.hash))
 					it.queue = append(it.queue, &Item{topic: entry.Topic, value: entry.Payload, err: err})
 				}
 			}

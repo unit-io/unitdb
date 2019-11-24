@@ -131,16 +131,16 @@ func (db *DB) isClosed() bool {
 
 // Get latest sequence number.
 func (m *mem) getSeq() uint64 {
-	return atomic.LoadUint64(&m.Seq)
+	return m.GetSeq()
 }
 
 // Atomically adds delta to seq.
 func (m *mem) addSeq(delta uint64) {
-	atomic.AddUint64(&m.Seq, delta)
+	m.AddSeq(delta)
 }
 
 func (m *mem) setSeq(seq uint64) {
-	atomic.StoreUint64(&m.Seq, seq)
+	m.SetSeq(seq)
 }
 
 // func ensureBuffer(b []byte, n int) []byte {

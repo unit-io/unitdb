@@ -28,21 +28,26 @@ func (it *TopicIterator) Next() {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.kvOffset == 0 {
-						return b.next == 0, nil
+						return false, nil
 					}
 					if e.isExpired() {
-						continue
+						return false, nil
 					}
 					val, err := it.db.data.readTopic(e)
+					if err != nil {
+						return true, err
+					}
 					topic := new(message.Topic)
-					topic.Unmarshal(val)
+					err = topic.Unmarshal(val)
+					if err != nil {
+						return true, err
+					}
 					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: e.hash, err: err})
 				}
 				return false, nil
 			})
 			if err != nil {
 				it.queue = append(it.queue, &Topic{err: err})
-				return
 			}
 			it.nextBlockIdx++
 			if len(it.queue) > 0 {

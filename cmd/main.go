@@ -9,7 +9,7 @@ import (
 )
 
 func print(testdb *tracedb.DB) {
-	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=10m")})
+	it, err := testdb.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=2m")})
 	if err != nil {
 		log.Printf("print: %v", err)
 		return
@@ -59,6 +59,29 @@ func main() {
 		log.Print(err)
 	}
 	print(testdb)
+
+	func(retry int) {
+		i := 0
+		err := testdb.Batch(func(b *tracedb.Batch) error {
+			for j := range time.Tick(1 * time.Millisecond) {
+				t, _ := j.MarshalText()
+				b.Put([]byte("dev18.b.b11?ttl=10m"), t)
+				// b.Put([]byte("dev18.b.b1"), t)
+				// b.Put([]byte("dev18.c.c11"), t)
+				if i >= retry {
+					break
+				}
+				i++
+			}
+			err := b.Write()
+			return err
+		})
+		if err != nil {
+			log.Printf("Error update1: %s", err)
+		}
+		print(testdb)
+	}(30)
+
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.b1?ttl=2m"), []byte("bar"))
@@ -105,26 +128,14 @@ func main() {
 		return
 	}
 
-	print(testdb)
-
 	func(retry int) {
 		i := 0
-		for j := range time.Tick(60 * time.Second) {
-			err := testdb.Batch(func(b *tracedb.Batch) error {
-				t, _ := j.MarshalText()
-				b.Put([]byte("dev18.b.b11?ttl=10m"), t)
-				err := b.Write()
-
-				return err
-			})
-			if err != nil {
-				log.Printf("Error update1: %s", err)
-			}
+		for _ = range time.Tick(60 * time.Second) {
 			print(testdb)
 			if i >= retry {
 				return
 			}
 			i++
 		}
-	}(7)
+	}(4)
 }

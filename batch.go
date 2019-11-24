@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -302,11 +303,12 @@ func (b *Batch) commit() error {
 			if ok := b.db.trie.Remove(itopic.Parts, keyHash); ok {
 			}
 		} else {
-			b.db.put(it.Item().Topic(), it.Item().Key(), it.Item().Value(), it.Item().ExpiresAt())
+			if err := b.db.put(it.Item().Topic(), it.Item().Key(), it.Item().Value(), it.Item().ExpiresAt()); err != nil {
+				log.Println("batch.commit: error ", err)
+				continue
+			}
 			if float64(b.db.count)/float64(b.db.nBlocks*entriesPerBlock) > loadFactor {
-				if err := b.db.split(); err != nil {
-					return err
-				}
+				b.db.split()
 			}
 			itopic := new(message.Topic)
 			itopic.Unmarshal(it.Item().Topic())

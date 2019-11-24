@@ -23,11 +23,12 @@ import (
 const (
 	entriesPerBlock = 22
 	loadFactor      = 0.7
-	indexPostfix    = ".index"
-	lockPostfix     = ".lock"
-	keySize         = 16
-	filterPostfix   = ".filter"
-	version         = 1 // file format version
+	// MaxBlocks       = math.MaxUint32
+	indexPostfix  = ".index"
+	lockPostfix   = ".lock"
+	keySize       = 16
+	filterPostfix = ".filter"
+	version       = 1 // file format version
 
 	// keyExpirationMaxDur expired keys are deleted from db after durType*keyExpirationMaxDur.
 	// For example if durType is Minute and keyExpirationMaxDur then
@@ -60,10 +61,11 @@ type dbInfo struct {
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
-	seq          uint64
-	mu           sync.RWMutex
-	mac          *crypto.MAC
-	writeLockC   chan struct{}
+	seq        uint64
+	mu         sync.RWMutex
+	mac        *crypto.MAC
+	writeLockC chan struct{}
+	// consistent   *hash.Consistent
 	filter       Filter
 	index        file
 	data         dataFile
@@ -185,6 +187,9 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	// db.consistent = hash.InitConsistent(int(MaxBlocks/blockSize), int(db.nBlocks))
+
 	if needsRecovery {
 		if err := db.recover(); err != nil {
 			return nil, err
@@ -354,12 +359,13 @@ func (db *DB) Close() error {
 	return err
 }
 
-func (db *DB) blockIndex(hash uint32) uint32 {
-	idx := hash & ((1 << db.level) - 1)
+func (db *DB) blockIndex(keyHash uint32) uint32 {
+	idx := keyHash & ((1 << db.level) - 1)
 	if idx < db.splitBlockIdx {
-		return hash & ((1 << (db.level + 1)) - 1)
+		return keyHash & ((1 << (db.level + 1)) - 1)
 	}
 	return idx
+	// return db.consistent.FindBlock(keyHash)
 }
 
 func (db *DB) hash(data []byte) uint32 {
@@ -523,11 +529,8 @@ func (db *DB) PutEntry(e *message.Entry) error {
 		return err
 	}
 	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
-		if err := db.split(); err != nil {
-			return err
-		}
+		db.split()
 	}
-
 	if db.syncWrites {
 		db.sync()
 	}
@@ -543,8 +546,9 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	entryIdx := 0
-	hash := db.hash(key)
-	err := db.forEachBlock(db.blockIndex(hash), false, func(curb blockHandle) (bool, error) {
+	keyHash := db.hash(key)
+	// log.Println("db.put: key, blockIndex ", keyHash, db.blockIndex(keyHash))
+	err := db.forEachBlock(db.blockIndex(keyHash), false, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
@@ -552,7 +556,7 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 			if e.kvOffset == 0 {
 				// Found an empty entry.
 				return true, nil
-			} else if hash == e.hash {
+			} else if keyHash == e.hash {
 				// Key already exists.
 				if eKey, err := db.data.readKey(e); bytes.Equal(key, eKey) || err != nil {
 					return true, err
@@ -588,7 +592,7 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	}
 
 	b.entries[entryIdx] = entry{
-		hash:      hash,
+		hash:      keyHash,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
 		expiresAt: expiresAt,
@@ -602,7 +606,7 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	if originalB != nil {
 		return originalB.write()
 	}
-	db.filter.Append(uint64(hash))
+	db.filter.Append(uint64(keyHash))
 	if expiresAt > 0 {
 		db.timeWindow.add(b.entries[entryIdx])
 	}
@@ -655,9 +659,9 @@ func (db *DB) split() error {
 		return err
 	}
 
-	// for _, off := range overflowBlocks {
-	// 	db.data.free(blockSize, off)
-	// }
+	for _, off := range overflowBlocks {
+		db.data.free(blockSize, off)
+	}
 
 	if err := newBlock.write(); err != nil {
 		return err
@@ -705,9 +709,9 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(key []byte) error {
-	h := db.hash(key)
+	keyHash := db.hash(key)
 	/// Test filter block for presence
-	if !db.filter.Test(uint64(h)) {
+	if !db.filter.Test(uint64(keyHash)) {
 		return nil
 	}
 	db.metrics.Dels.Add(1)
@@ -715,13 +719,13 @@ func (db *DB) delete(key []byte) error {
 	defer db.mu.Unlock()
 	b := blockHandle{}
 	entryIdx := -1
-	err := db.forEachBlock(db.blockIndex(h), false, func(curb blockHandle) (bool, error) {
+	err := db.forEachBlock(db.blockIndex(keyHash), false, func(curb blockHandle) (bool, error) {
 		b = curb
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
 			if e.kvOffset == 0 {
 				return b.next == 0, nil
-			} else if h == e.hash {
+			} else if keyHash == e.hash {
 				eKey, err := db.data.readKey(e)
 				if err != nil {
 					return true, err

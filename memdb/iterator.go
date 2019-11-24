@@ -30,16 +30,16 @@ type ItemIterator struct {
 
 // Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
-	it.item = &Item{}
+	it.item = nil
 	it.mu.Lock()
 	defer it.mu.Unlock()
 	if len(it.queue) == 0 {
 		for it.nextBlockIdx < it.db.nBlocks {
-			err := it.db.forEachBlock(it.nextBlockIdx, true, func(b blockHandle) (bool, error) {
+			err := it.db.forEachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.kvOffset == 0 {
-						return true, nil
+						return false, nil
 					}
 					ikey, err := it.db.data.readKey(e)
 					if err != nil {
@@ -69,7 +69,6 @@ func (it *ItemIterator) Next() {
 			})
 			if err != nil {
 				it.item.err = err
-				return
 			}
 			it.nextBlockIdx++
 			if len(it.queue) > 0 {
@@ -85,9 +84,7 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	if it.nextBlockIdx > 0 {
-		return
-	}
+	it.nextBlockIdx = uint32(it.startSeq / entriesPerBlock)
 	it.Next()
 }
 
@@ -102,7 +99,7 @@ func (it *ItemIterator) Valid() bool {
 	if len(it.queue) > 0 {
 		return true
 	}
-	return it.item != nil && it.item.err != nil
+	return it.item != nil
 }
 
 // Error returns any accumulated error. Exhausting all the key/value pairs
