@@ -2,8 +2,6 @@ package memdb
 
 import (
 	"encoding/binary"
-
-	"github.com/saffat-in/tracedb/fs"
 )
 
 type entry struct {
@@ -25,7 +23,7 @@ type block struct {
 
 type blockHandle struct {
 	block
-	file   fs.FileManager
+	table  tableManager
 	offset int64
 }
 
@@ -40,7 +38,7 @@ func align512(n uint32) uint32 {
 
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
-		_ = data[22] // bounds check hint to compiler; see golang.org/issue/14808
+		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
 		b.entries[i].hash = binary.LittleEndian.Uint32(data[:4])
 		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[4:6])
 		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[6:10])
@@ -53,7 +51,7 @@ func (b *block) UnmarshalBinary(data []byte) error {
 }
 
 func (bh *blockHandle) read() error {
-	buf, err := bh.file.Slice(bh.offset, bh.offset+int64(blockSize))
+	buf, err := bh.table.slice(bh.offset, bh.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
@@ -84,6 +82,6 @@ func (ew *entryWriter) write() error {
 		return err
 	}
 	off := ew.block.offset + int64(ew.entryIdx*entrySize)
-	_, err = ew.block.file.WriteAt(buf, off)
+	_, err = ew.block.table.writeAt(buf, off)
 	return err
 }

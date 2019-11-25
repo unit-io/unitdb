@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"os"
 	"sync"
 	"sync/atomic"
 
@@ -35,6 +34,8 @@ const (
 	keyMaxSeq = (uint64(1) << 56) - 1
 	// Maximum value possible for packed sequence number and type.
 	keyMaxNum = (keyMaxSeq << 8) | 0
+
+	MaxTableSize = 1 << 30
 )
 
 type dbInfo struct {
@@ -51,8 +52,8 @@ type DB struct {
 	// Need 64-bit alignment.
 	seq   uint64
 	mu    sync.RWMutex
-	index file
-	data  dataFile
+	index tableManager
+	data  dataTable
 	lock  fs.LockFile
 	dbInfo
 	// Close.
@@ -61,33 +62,35 @@ type DB struct {
 }
 
 // Open opens or creates a new DB.
-func Open(path string, opts *Options) (*DB, error) {
-	opts = opts.CopyWithDefaults()
-	fileFlag := os.O_CREATE | os.O_RDWR
-	fsys := opts.FileSystem
-	fileMode := os.FileMode(0666)
-	index, err := openFile(fsys, path+indexPostfix, fileFlag, fileMode)
+func Open(path string) (*DB, error) {
+	index, err := mem.newTable(path+indexPostfix, MaxTableSize)
 	if err != nil {
 		return nil, err
 	}
-	data, err := openFile(fsys, path, fileFlag, fileMode)
+	data, err := mem.newTable(path, MaxTableSize)
 	if err != nil {
 		return nil, err
 	}
 	db := &DB{
 		index: index,
-		data:  dataFile{file: data},
+		data:  dataTable{tableManager: data},
 		dbInfo: dbInfo{
 			nBlocks: 1,
 		},
 	}
 
-	if index.size == 0 {
-		if data.size != 0 {
-			if err := index.Close(); err != nil {
+	if index.size() == 0 {
+		if data.size() != 0 {
+			if err := index.close(); err != nil {
 				log.Print(err)
 			}
-			if err := data.Close(); err != nil {
+			if err := mem.remove(index.name()); err != nil {
+				log.Print(err)
+			}
+			if err := data.close(); err != nil {
+				log.Print(err)
+			}
+			if err := mem.remove(data.name()); err != nil {
 				log.Print(err)
 			}
 			// Data file exists, but index is missing.
@@ -98,7 +101,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 		db.hashSeed = seed
-		if _, err = db.index.extend(headerSize + blockSize); err != nil {
+		if err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
 		if _, err = db.data.extend(headerSize); err != nil {
@@ -118,9 +121,9 @@ func blockOffset(idx uint32) int64 {
 
 func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
-	f := db.index.FileManager
+	t := db.index
 	for {
-		b := blockHandle{file: f, offset: off}
+		b := blockHandle{table: t, offset: off}
 		if err := b.read(); err != nil {
 			return err
 		}
@@ -138,7 +141,12 @@ func (db *DB) writeHeader() error {
 		signature: signature,
 		version:   version,
 	}
-	return db.index.writeMarshalableAt(h, 0)
+	buf, err := h.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	_, err = db.index.writeAt(buf, 0)
+	return err
 }
 
 // Close closes the DB.
@@ -146,13 +154,16 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if err := db.data.Close(); err != nil {
+	if err := db.index.close(); err != nil {
 		return err
 	}
-	if err := db.index.Close(); err != nil {
+	if err := mem.remove(db.index.name()); err != nil {
 		return err
 	}
-	if err := db.lock.Unlock(); err != nil {
+	if err := db.data.close(); err != nil {
+		return err
+	}
+	if err := mem.remove(db.data.name()); err != nil {
 		return err
 	}
 
@@ -205,7 +216,7 @@ func (db *DB) Put(topic []byte, seq uint64, dFlag bool, key, value []byte, expir
 func (db *DB) put(keyHash uint32, topic, key, value []byte, expiresAt uint32) error {
 	var b *blockHandle
 	ew := entryWriter{
-		block: &blockHandle{file: db.index, offset: blockOffset(db.blockIndex)},
+		block: &blockHandle{table: db.index, offset: blockOffset(db.blockIndex)},
 	}
 	entryIdx := 0
 	err := db.forEachBlock(db.blockIndex, func(curb blockHandle) (bool, error) {
@@ -263,16 +274,7 @@ func (db *DB) Count() uint32 {
 func (db *DB) FileSize() (int64, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	var err error
-	is, err := db.index.Stat()
-	if err != nil {
-		return -1, err
-	}
-	ds, err := db.data.Stat()
-	if err != nil {
-		return -1, err
-	}
-	return is.Size() + ds.Size(), nil
+	return db.index.size() + db.data.size, nil
 }
 
 // Get latest sequence number.

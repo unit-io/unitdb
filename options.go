@@ -45,25 +45,3 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	return &opts
 }
-
-func (src *Options) memWithDefaults() *Options {
-	opts := Options{}
-	if src != nil {
-		opts = *src
-	}
-	if opts.FileSystem == nil {
-		opts.FileSystem = fs.Mem
-	}
-
-	if opts.BackgroundSyncInterval == 0 {
-		opts.BackgroundSyncInterval = 15 * time.Second
-	}
-
-	if opts.EncryptionKey == nil {
-		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
-	}
-
-	opts.BackgroundKeyExpiry = true
-
-	return &opts
-}

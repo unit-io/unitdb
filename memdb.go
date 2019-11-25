@@ -59,8 +59,7 @@ func (db *DB) mpoolGet(n int) *mem {
 	}
 	if mdb == nil {
 		var err error
-		var opts memdb.Options
-		mdb, err = memdb.Open("memdb", opts.CopyWithDefaults())
+		mdb, err = memdb.Open("memdb")
 		if err != nil {
 			logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
 		}
