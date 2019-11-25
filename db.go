@@ -485,7 +485,11 @@ func (db *DB) loadTrie() error {
 	return nil
 }
 
-func (db *DB) PutEntry(e *message.Entry) error {
+func (db *DB) GenID() []byte {
+	return message.GenID()
+}
+
+func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
 	topic := new(message.Topic)
@@ -507,10 +511,12 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	}
 	topic.AddContract(e.Contract)
 	// ssid := topic.NewSsid()
+	var id message.ID
 	if e.ID != nil {
-		e.ID.SetContract(topic.Parts)
+		id = message.ID(e.ID)
+		id.SetContract(topic.Parts)
 	} else {
-		e.ID = message.NewID(topic.Parts)
+		id = message.NewID(topic.Parts)
 	}
 	m, err := e.Marshal()
 	if err != nil {
@@ -518,14 +524,12 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	}
 	val := snappy.Encode(nil, m)
 	switch {
-	case len(e.ID) == 0:
-		return errKeyEmpty
-	case len(e.ID) > MaxKeyLength:
+	case len(id) > MaxKeyLength:
 		return errKeyTooLarge
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	if err := db.put(topic.Marshal(), e.ID, val, e.ExpiresAt); err != nil {
+	if err := db.put(topic.Marshal(), id, val, e.ExpiresAt); err != nil {
 		return err
 	}
 	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
@@ -534,7 +538,7 @@ func (db *DB) PutEntry(e *message.Entry) error {
 	if db.syncWrites {
 		db.sync()
 	}
-	if ok := db.trie.Add(topic.Parts, topic.Depth, db.hash(e.ID)); ok {
+	if ok := db.trie.Add(topic.Parts, topic.Depth, db.hash(id)); ok {
 	}
 	return err
 }
@@ -677,7 +681,7 @@ func (db *DB) split() error {
 // Delete appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
-func (db *DB) DeleteEntry(e *message.Entry) error {
+func (db *DB) DeleteEntry(e *Entry) error {
 	if e.ID == nil {
 		return errKeyEmpty
 	}
@@ -696,12 +700,13 @@ func (db *DB) DeleteEntry(e *message.Entry) error {
 
 	topic.AddContract(e.Contract)
 	// ssid := topic.NewSsid()
-	e.ID.SetContract(topic.Parts)
-	err := db.delete(e.ID)
+	id := message.ID(e.ID)
+	id.SetContract(topic.Parts)
+	err := db.delete(id)
 	if err != nil {
 		return err
 	}
-	h := db.hash(e.ID)
+	h := db.hash(id)
 	if ok := db.trie.Remove(topic.Parts, h); ok {
 	}
 	return err

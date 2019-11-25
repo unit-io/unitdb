@@ -1,4 +1,8 @@
-package message
+package tracedb
+
+const (
+	DEFAULT_BUFFER_CAP = 3000
+)
 
 type byteWriter struct {
 	buf []byte
@@ -80,4 +84,10 @@ func (b *byteWriter) write(p []byte) int {
 		b.pos += len(p)
 	}
 	return len(p)
+}
+
+func (b byteWriter) grow(n int) {
+	nbuffer := make([]byte, len(b.buf), len(b.buf)+n)
+	copy(nbuffer, b.buf)
+	b.buf = nbuffer
 }

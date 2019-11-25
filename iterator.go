@@ -80,7 +80,7 @@ func (it *ItemIterator) Next() {
 							return true, err
 						}
 					}
-					var entry message.Entry
+					var entry Entry
 					var buffer []byte
 					val, err = snappy.Decode(buffer, val)
 					if err != nil {

@@ -54,38 +54,6 @@ func (id ID) IsEncrypted() bool {
 	return binary.BigEndian.Uint32(id[12:16])&(1<<2) != 0
 }
 
-// Entry represents a entry which has to be forwarded or stored.
-type Entry struct {
-	ID        ID     `json:"id,omitempty"`   // The ID of the message
-	Topic     []byte `json:"chan,omitempty"` // The topic of the message
-	Payload   []byte `json:"data,omitempty"` // The payload of the message
-	ExpiresAt uint32 // The time expiry of the message
-	Contract  uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
-}
-
-// NewEntry creates a new entry structure from the topic and payload.
-func NewEntry(topic, payload []byte) *Entry {
-	return &Entry{
-		Topic:   topic,
-		Payload: payload,
-	}
-}
-
-func (e *Entry) Marshal() ([]byte, error) {
-	b := newByteWriter()
-	b.writeUint16(uint16(len(e.Topic)))
-	b.write(e.Topic)
-	b.write(e.Payload)
-	return b.buf[:b.pos], nil
-}
-
-func (e *Entry) Unmarshal(data []byte) error {
-	l := binary.LittleEndian.Uint16(data[:2])
-	e.Topic = data[2 : l+2]
-	e.Payload = data[l+2:]
-	return nil
-}
-
 // genPrefix generates a new message identifier only containing the prefix.
 func GenPrefix(parts []Part, from int64) ID {
 	id := make(ID, 8)
@@ -100,7 +68,7 @@ func GenPrefix(parts []Part, from int64) ID {
 }
 
 // genPrefix generates a new message identifier only containing the prefix.
-func GenID(e *Entry) ID {
+func GenID() ID {
 	id := make(ID, 12)
 	u := (uid.NewUnique() << 4) | 0 // set first bit zero as it is used set encryption flag on id
 	binary.BigEndian.PutUint32(id[0:4], uid.NewApoch())
@@ -121,10 +89,4 @@ func (id ID) EvalPrefix(parts []Part, cutoff int64) bool {
 	} else {
 		return binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard
 	}
-}
-
-func (b byteWriter) grow(n int) {
-	nbuffer := make([]byte, len(b.buf), len(b.buf)+n)
-	copy(nbuffer, b.buf)
-	b.buf = nbuffer
 }

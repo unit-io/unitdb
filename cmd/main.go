@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb"
-	"github.com/saffat-in/tracedb/message"
 )
 
 func print(testdb *tracedb.DB) {
@@ -33,7 +32,7 @@ func main() {
 	}
 	defer testdb.Close()
 
-	testdb.PutEntry(&message.Entry{
+	testdb.PutEntry(&tracedb.Entry{
 		Topic:   []byte("ttl.ttl1?ttl=3m"),
 		Payload: []byte("bar"),
 	})
@@ -60,27 +59,27 @@ func main() {
 	}
 	print(testdb)
 
-	func(retry int) {
-		i := 0
-		err := testdb.Batch(func(b *tracedb.Batch) error {
-			for j := range time.Tick(1 * time.Millisecond) {
-				t, _ := j.MarshalText()
-				b.Put([]byte("dev18.b.b11?ttl=10m"), t)
-				// b.Put([]byte("dev18.b.b1"), t)
-				// b.Put([]byte("dev18.c.c11"), t)
-				if i >= retry {
-					break
-				}
-				i++
-			}
-			err := b.Write()
-			return err
-		})
-		if err != nil {
-			log.Printf("Error update1: %s", err)
-		}
-		print(testdb)
-	}(30)
+	// func(retry int) {
+	// 	i := 0
+	// 	err := testdb.Batch(func(b *tracedb.Batch) error {
+	// 		for j := range time.Tick(1 * time.Millisecond) {
+	// 			t, _ := j.MarshalText()
+	// 			b.Put([]byte("dev18.b.b11?ttl=10m"), t)
+	// 			// b.Put([]byte("dev18.b.b1"), t)
+	// 			// b.Put([]byte("dev18.c.c11"), t)
+	// 			if i >= retry {
+	// 				break
+	// 			}
+	// 			i++
+	// 		}
+	// 		err := b.Write()
+	// 		return err
+	// 	})
+	// 	if err != nil {
+	// 		log.Printf("Error update1: %s", err)
+	// 	}
+	// 	print(testdb)
+	// }(30)
 
 	g := testdb.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {

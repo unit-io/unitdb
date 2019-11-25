@@ -50,12 +50,12 @@ func (b *block) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (bh *blockHandle) read() error {
-	buf, err := bh.table.slice(bh.offset, bh.offset+int64(blockSize))
+func (h *blockHandle) read() error {
+	buf, err := h.table.slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-	return bh.UnmarshalBinary(buf)
+	return h.UnmarshalBinary(buf)
 }
 
 type entryWriter struct {

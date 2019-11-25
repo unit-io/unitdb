@@ -144,13 +144,13 @@ func (b *Batch) mput(dFlag bool, valHash uint32, topic, key, value []byte, expir
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) Put(key, value []byte) error {
-	return b.PutEntry(message.NewEntry(key, value))
+	return b.PutEntry(NewEntry(key, value))
 }
 
 // PutEntry appends 'put operation' of the given key/value pair to the batch.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) PutEntry(e *message.Entry) error {
+func (b *Batch) PutEntry(e *Entry) error {
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -174,10 +174,12 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
+	var id message.ID
 	if e.ID != nil {
-		e.ID.SetContract(topic.Parts)
+		id = message.ID(e.ID)
+		id.SetContract(topic.Parts)
 	} else {
-		e.ID = message.NewID(topic.Parts)
+		id = message.NewID(topic.Parts)
 	}
 	m, err := e.Marshal()
 	if err != nil {
@@ -187,11 +189,11 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 	valHash := hash.WithSalt(val, topic.GetHashCode())
 	// Encryption.
 	if b.opts.Encryption == true {
-		e.ID.SetEncryption()
+		id.SetEncryption()
 		val = b.db.mac.Encrypt(nil, val)
 	}
 
-	b.appendRec(false, valHash, topic.Marshal(), e.ID, val, e.ExpiresAt)
+	b.appendRec(false, valHash, topic.Marshal(), id, val, e.ExpiresAt)
 
 	return nil
 }
@@ -200,13 +202,13 @@ func (b *Batch) PutEntry(e *message.Entry) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) Delete(key []byte) error {
-	return b.DeleteEntry(message.NewEntry(key, nil))
+	return b.DeleteEntry(NewEntry(key, nil))
 }
 
 // Delete appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
-func (b *Batch) DeleteEntry(e *message.Entry) error {
+func (b *Batch) DeleteEntry(e *Entry) error {
 	if e.ID == nil {
 		return errKeyEmpty
 	}
@@ -224,9 +226,10 @@ func (b *Batch) DeleteEntry(e *message.Entry) error {
 	}
 
 	topic.AddContract(e.Contract)
-	e.ID.SetContract(topic.Parts)
+	id := message.ID(e.ID)
+	id.SetContract(topic.Parts)
 	valHash := topic.GetHashCode()
-	b.appendRec(true, valHash, topic.Marshal(), e.ID, nil, 0)
+	b.appendRec(true, valHash, topic.Marshal(), id, nil, 0)
 	return nil
 }
 
