@@ -27,11 +27,10 @@ type memdb interface {
 	remove(name string) error
 }
 
-// mem is a table backed by memory table.
+// mem is a store backed by memory table.
 var mem = &table{tables: map[string]*memTable{}}
 
 func (t *table) newTable(name string, size int64) (tableManager, error) {
-	// TODO: respect flag
 	tb := t.tables[name]
 	if tb == nil {
 		tb = &memTable{}

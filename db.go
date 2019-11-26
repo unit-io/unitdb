@@ -57,7 +57,7 @@ type dbInfo struct {
 	hashSeed      uint32
 }
 
-// DB represents the key-value storage.
+// DB represents the message storage for topic->keys-values.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
@@ -196,7 +196,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	// loadTrie on open database to load topic parts to trie from data file.
+	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
 	if opts.BackgroundSyncInterval > 0 {
@@ -365,7 +365,6 @@ func (db *DB) blockIndex(keyHash uint32) uint32 {
 		return keyHash & ((1 << (db.level + 1)) - 1)
 	}
 	return idx
-	// return db.consistent.FindBlock(keyHash)
 }
 
 func (db *DB) hash(data []byte) uint32 {
@@ -399,9 +398,6 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 		}
 	}
 	q.keys = db.trie.Lookup(q.parts)
-	// if len(q.keys) == 0 {
-	// 	return nil, nil
-	// }
 	return &ItemIterator{db: db, query: q}, nil
 }
 
@@ -415,7 +411,7 @@ func (db *DB) sync() error {
 	return nil
 }
 
-// Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-bdbory database. It must only be called while the database is opened.
+// Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-memory database. It must only be called while the database is opened.
 func (db *DB) Sync() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -426,7 +422,7 @@ func (db *DB) expireOldEntries() {
 	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
-		/// Test filter block for presence
+		/// Test filter block if message hash presence
 		if !db.filter.Test(uint64(entry.hash)) {
 			continue
 		}
@@ -471,7 +467,7 @@ func (db *DB) expireOldEntries() {
 	}
 }
 
-// loadTrie loads tpoics to the trie from data file
+// loadTrie loads topics to the trie from data file
 func (db *DB) loadTrie() error {
 	it := &TopicIterator{db: db}
 	for it.First(); it.Valid(); it.Next() {
@@ -489,6 +485,7 @@ func (db *DB) GenID() []byte {
 	return message.GenID()
 }
 
+// PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
@@ -510,7 +507,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
-	// ssid := topic.NewSsid()
+	//message ID is the database key
 	var id message.ID
 	if e.ID != nil {
 		id = message.ID(e.ID)
@@ -551,7 +548,6 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	defer db.mu.Unlock()
 	entryIdx := 0
 	keyHash := db.hash(key)
-	// log.Println("db.put: key, blockIndex ", keyHash, db.blockIndex(keyHash))
 	err := db.forEachBlock(db.blockIndex(keyHash), false, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
@@ -678,7 +674,7 @@ func (db *DB) split() error {
 	return nil
 }
 
-// Delete appends 'delete operation' of the given key to the batch.
+// DeleteEntry delets an entry from database. you must provide an ID to delete message.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
@@ -699,7 +695,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 
 	topic.AddContract(e.Contract)
-	// ssid := topic.NewSsid()
+	// message ID is the database key
 	id := message.ID(e.ID)
 	id.SetContract(topic.Parts)
 	err := db.delete(id)
@@ -715,7 +711,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 // delete deletes the given key from the DB.
 func (db *DB) delete(key []byte) error {
 	keyHash := db.hash(key)
-	/// Test filter block for presence
+	/// Test filter block for the message id presence
 	if !db.filter.Test(uint64(keyHash)) {
 		return nil
 	}

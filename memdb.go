@@ -141,10 +141,3 @@ func (m *mem) addSeq(delta uint64) {
 func (m *mem) setSeq(seq uint64) {
 	m.SetSeq(seq)
 }
-
-// func ensureBuffer(b []byte, n int) []byte {
-// 	if cap(b) < n {
-// 		return make([]byte, n)
-// 	}
-// 	return b[:n]
-// }

@@ -4,9 +4,9 @@
   <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time gaming application"> 
 </p>
 
-# tracedb: Blazing fast timeseries database for IoT and real-time gaming application
+# tracedb: Blazing fast timeseries database for IoT and real-time gaming applications
 
-tracedb is a timeseries database for IoT application and real-time gaming applications
+tracedb is blazing fast timeseries database for IoT, realtime gaming, messaging or chat applications. Use trace application under, github.com/saffat-in/trace to interact with tracedb using pubsub over tcp or websocket.
 
 # Key characteristics
 - 100% Go.
@@ -15,7 +15,7 @@ tracedb is a timeseries database for IoT application and real-time gaming applic
 - Low memory usage.
 - All DB methods are safe for concurrent use by multiple goroutines.
 
-Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store such as internet of things and internet connected devices.
+Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
 
 ## Quick Start
 To build tracedb from source code use go get command.
@@ -49,7 +49,7 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Batch() function to insert a new key/value pair or delete a record:
+Use the DB.Batch() function to store messages to topic or delete a message from topic:
 
 ```
     err = db.Batch(func(b *tracedb.Batch) error {
@@ -60,10 +60,31 @@ Use the DB.Batch() function to insert a new key/value pair or delete a record:
 		err = b.Write()
 		return err
     })
+
+```
+
+Deleting a message in tracedb is rare and it require additional steps to delete message from given topic. Generate a unique message ID using DB.GenID() and use this unique message ID while putting message to the tracedb using DB.PutWithID(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
+
+```
+
+	messageId := db.GenID()
+	err := a.db.PutEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("dev18.b.b11"),
+		Payload:  []byte("bar3"),
+		Contract: []byte("3376684800"),
+	})
+	
+	err := a.db.DeleteEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("dev18.b.b11"),
+		Contract: []byte("3376684800"),
+	})
+
 ```
 
 Specify ttl to expires keys. 
-To encrypt messages use batch options and set message encryption.
+To encrypt messages use batch options and set message encryption. Note, encryption can also be set on entire database using DB.Open() and provide encryption in the option parameter.
 
 ```
 err = db.Batch(func(b *tracedb.Batch) error {
@@ -143,12 +164,12 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 			}
 			i++
 		}
-	}(7)
+	}(5)
 ```
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic:
+Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic. for example, "last=1h" retrieves messsages from tracedb stored in last 1 hour, or last=100 to retreives last 100 messages from the tracedb:
 
 ```
 func print(db *tracedb.DB) {
@@ -163,7 +184,7 @@ func print(db *tracedb.DB) {
 			log.Fatal(err)
 			return
 		}
-		log.Printf("%s %s", it.Item().Key(), it.Item().Value())
+		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
 ```

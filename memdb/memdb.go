@@ -35,6 +35,7 @@ const (
 	// Maximum value possible for packed sequence number and type.
 	keyMaxNum = (keyMaxSeq << 8) | 0
 
+	// MaxTableSize value for maximum memroy use for the memdb.
 	MaxTableSize = 1 << 30
 )
 
@@ -46,7 +47,7 @@ type dbInfo struct {
 	hashSeed   uint32
 }
 
-// DB represents the key-value storage.
+// DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
@@ -190,6 +191,7 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
+// Put sets the value for the given topic->key. It updates the value for the existing key.
 func (db *DB) Put(topic []byte, seq uint64, dFlag bool, key, value []byte, expiresAt uint32) error {
 	switch {
 	case len(key) == 0:

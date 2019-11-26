@@ -9,6 +9,7 @@ type FilterGenerator struct {
 	filter *Filter
 }
 
+// NewFilterGenerator returns a new filter generator.
 func NewFilterGenerator() *FilterGenerator {
 	return &FilterGenerator{filter: newFilter(bloomBits, bloomHashes)}
 }
@@ -27,12 +28,14 @@ type FilterBlock struct {
 	filter *Filter
 }
 
+// NewFilterBlock returns new filter block, it is used to test key presense in the filter.
 func NewFilterBlock(b []byte) *FilterBlock {
 	return &FilterBlock{
 		filter: newFilterFromBytes(b, bloomBits, bloomHashes),
 	}
 }
 
+// Test is used to test for key presense in the filter
 func (b *FilterBlock) Test(h uint64) bool {
 	return b.filter.Test(h)
 }

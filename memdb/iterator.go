@@ -17,7 +17,7 @@ type Item struct {
 	err       error
 }
 
-// ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
+// ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
 	db           *DB
 	startSeq     uint64

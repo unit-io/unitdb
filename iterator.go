@@ -34,12 +34,11 @@ type ItemIterator struct {
 	invalidKeys uint32
 }
 
-// Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
+// Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.item = nil
 	if len(it.queue) == 0 && it.next < uint32(len(it.query.keys)) {
 		h := uint32(it.query.keys[it.next])
-		// log.Println("iterator.Next: key, blockIndex", h, it.db.blockIndex(h))
 		err := it.db.forEachBlock(it.db.blockIndex(h), true, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
@@ -90,7 +89,6 @@ func (it *ItemIterator) Next() {
 					if err != nil {
 						return true, err
 					}
-					// log.Println("iterator.Next: key, blockIndex ", e.hash, it.db.blockIndex(e.hash))
 					it.queue = append(it.queue, &Item{topic: entry.Topic, value: entry.Payload, err: err})
 				}
 			}

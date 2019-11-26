@@ -16,7 +16,7 @@ type File interface {
 	Truncate(size int64) error
 }
 
-// MmapFile represents a memory-mapped file.
+// FileManager is an interface to support different types of storage such file based storage or a memory-mapped file storage.
 type FileManager interface {
 	File
 	Type() string

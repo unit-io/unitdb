@@ -14,7 +14,6 @@ type memfs struct {
 var Mem = &memfs{files: map[string]*MemFile{}}
 
 func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
-	// TODO: respect flag
 	f := fs.files[name]
 	if f == nil {
 		f = &MemFile{}

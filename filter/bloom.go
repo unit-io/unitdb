@@ -69,7 +69,6 @@ func (b *Filter) Bytes() []byte {
 
 // Hashable -> hashes
 func (b *Filter) hash(h uint64) []uint64 {
-	// rawHash := v.Sum64()
 	n := len(b.keys)
 	hashes := make([]uint64, n)
 	for i := 0; i < n; i++ {

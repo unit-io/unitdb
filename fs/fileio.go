@@ -74,7 +74,3 @@ func (f *IOFile) Sync() error {
 	}
 	return nil
 }
-
-// func (f *iofile) Mmap(size int64) error {
-// 	return nil
-// }

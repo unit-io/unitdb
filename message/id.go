@@ -13,8 +13,7 @@ const (
 	Contract = uint32(3376684800)
 	Wildcard = uint32(857445537)
 
-	fixed              = 16
-	DEFAULT_BUFFER_CAP = 3000
+	fixed = 16
 )
 
 // ID represents a message ID encoded at 128bit and lexigraphically sortable
@@ -34,7 +33,7 @@ func NewID(parts []Part) ID {
 	return id
 }
 
-// NewID creates a new message identifier for the current time.
+// SetContract set contract on ID, setting contract helps to validate prefix.
 func (id *ID) SetContract(parts []Part) {
 	newid := make(ID, fixed)
 	if len(parts) == 1 {
@@ -46,15 +45,17 @@ func (id *ID) SetContract(parts []Part) {
 	*id = newid
 }
 
+// SetEncryption sets message encryption so while decoding a message it is also decrypted
 func (id ID) SetEncryption() {
 	binary.BigEndian.PutUint32(id[12:16], binary.BigEndian.Uint32(id[12:16])|(1<<2)) //set encryption bit
 }
 
+// IsEncrypted return if the encyrption is set on ID
 func (id ID) IsEncrypted() bool {
 	return binary.BigEndian.Uint32(id[12:16])&(1<<2) != 0
 }
 
-// genPrefix generates a new message identifier only containing the prefix.
+// GenPrefix generates a new message identifier only containing the prefix.
 func GenPrefix(parts []Part, from int64) ID {
 	id := make(ID, 8)
 	if len(parts) < 2 {
@@ -67,7 +68,7 @@ func GenPrefix(parts []Part, from int64) ID {
 	return id
 }
 
-// genPrefix generates a new message identifier only containing the prefix.
+// GenID generates a new message identifier without containing a prefix. Prefix is set later when arrives.
 func GenID() ID {
 	id := make(ID, 12)
 	u := (uid.NewUnique() << 4) | 0 // set first bit zero as it is used set encryption flag on id

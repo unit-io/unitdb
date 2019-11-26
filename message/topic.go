@@ -12,7 +12,7 @@ import (
 
 var zeroTime = time.Unix(0, 0)
 
-// Topic types
+// Varous constant on Topic
 const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
@@ -24,30 +24,7 @@ const (
 	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
 )
 
-// // Ssid represents a subscription ID which contains a contract and a list of hashes
-// // for various parts of the topic.
-// type Ssid []uint32
-
-// // NewSsid creates a new SSID.
-// func (t *Topic) NewSsid() Ssid {
-// 	parts := t.Parts
-// 	ssid := make([]uint32, 0, len(parts))
-// 	for _, part := range parts {
-// 		ssid = append(ssid, part.Query)
-// 	}
-// 	return ssid
-// }
-
-// // GetHashCode combines the SSID into a single hash.
-// func (s Ssid) GetHashCode() uint32 {
-// 	h := s[0]
-// 	for _, i := range s[1:] {
-// 		h ^= i
-// 	}
-// 	return h
-// }
-
-// AddContract adds contract to the parts.
+// AddContract adds contract to the parts of a topic.
 func (t *Topic) AddContract(contract uint32) {
 	part := Part{
 		Wildchars: 0,
@@ -77,6 +54,7 @@ type Topic struct {
 	TopicType    uint8
 }
 
+// Parts represents a parsed topic parts broken based on topic separator.
 type Part struct {
 	Query     uint32
 	Wildchars uint8
@@ -133,17 +111,6 @@ func (t *Topic) Unmarshal(data []byte) error {
 			Wildchars: wildchars,
 		})
 	}
-	// for {
-	// 	if buf.Len() == 0 {
-	// 		break
-	// 	}
-
-	// 	part, ok := nextPart(buf)
-	// 	if !ok {
-	// 		return errors.New("failed to unmarshal part")
-	// 	}
-	// 	parts = append(parts, part)
-	// }
 	t.Depth = depth
 	t.Parts = parts
 	return nil
@@ -167,7 +134,7 @@ func (splitFunc) splitOpsKeyValue(c rune) bool {
 	return c == '='
 }
 
-// Target returns the topic (first element of the query, second element of an SSID)
+// Target returns the topic (first element of the query, second element of Parts)
 func (t *Topic) Target() uint32 {
 	return t.Parts[0].Query
 }
@@ -271,6 +238,7 @@ func (t *Topic) ParseKey(text []byte) {
 	t.Topic = parts[0]
 }
 
+// ParseKey attempts to parse the static vs wildcard topic
 func (topic *Topic) Parse(contract uint32, wildcard bool) {
 	if wildcard {
 		parseWildcardTopic(contract, topic)
@@ -282,7 +250,7 @@ func (topic *Topic) Parse(contract uint32, wildcard bool) {
 	return
 }
 
-// ParseTopic attempts to parse the topic from the underlying slice.
+// parseStaticTopic attempts to parse the topic from the underlying slice.
 func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "topic.parseStaticTopic").Dur("duration", time.Since(start)).Msg("")
@@ -290,7 +258,6 @@ func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 	var part Part
 	var fn splitFunc
 	topic.Parts = make([]Part, 0, 6)
-	// Debug("topic.parseStaticTopic", "topic name "+string(topic.Topic))
 	ok = topic.parseOptions(topic.TopicOptions)
 
 	if !ok {
@@ -310,7 +277,7 @@ func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 	return true
 }
 
-// ParseTopic attempts to parse the topic from the underlying slice.
+// parseWildcardTopic attempts to parse the topic from the underlying slice.
 func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "topic.parseWildcardTopic").Dur("duration", time.Since(start)).Msg("")
@@ -318,7 +285,6 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	var part Part
 	var fn splitFunc
 	topic.Parts = make([]Part, 0, 6)
-	// Debug("topic.parseWildcardTopic", "topic name "+string(topic.Topic))
 	ok = topic.parseOptions(topic.TopicOptions)
 
 	if !ok {
