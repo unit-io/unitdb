@@ -89,7 +89,7 @@ func (it *ItemIterator) Next() {
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, &Item{topic: entry.Topic, value: entry.Payload, err: err})
+					it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
 				}
 			}
 			return false, nil

@@ -49,37 +49,54 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Batch() function to store messages to topic or delete a message from topic:
+Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk insert records into tracedb. Reading data is blazing fast if batch operation is used to insert records into tracedb and reading those records within short span of time for example 24 hours:
 
 ```
     err = db.Batch(func(b *tracedb.Batch) error {
-		b.Put([]byte("dev18.b.b11"), []byte("bar"))
-		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
-		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
-		b.Put([]byte("dev18.c.c11"), []byte("bar"))
+		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.1"))
+		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.2"))
+		b.Put([]byte("dev18.b.b1"), []byte("dev18.b.b1.1"))
+		b.Put([]byte("dev18.c.c11"), []byte("dev18.c.c11.1"))
 		err = b.Write()
 		return err
     })
 
 ```
 
-Deleting a message in tracedb is rare and it require additional steps to delete message from given topic. Generate a unique message ID using DB.GenID() and use this unique message ID while putting message to the tracedb using DB.PutWithID(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
+Deleting message.
+Deleting a message in tracedb is rare and it require additional steps to delete message from given topic. Generate a unique message ID using DB.GenID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
 
 ```
 
 	messageId := db.GenID()
-	err := a.db.PutEntry(&tracedb.Entry{
+	err := db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("dev18.b.b11"),
-		Payload:  []byte("bar3"),
-		Contract: []byte("3376684800"),
+		Topic:    []byte("dev18.b.b1"),
+		Payload:  []byte("dev18.b.b1.2"),
+		Contract: 3376684800,
 	})
 	
-	err := a.db.DeleteEntry(&tracedb.Entry{
+	err := db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("dev18.b.b11"),
-		Contract: []byte("3376684800"),
+		Topic:    []byte("dev18.b.b1"),
+		Contract: 3376684800,
 	})
+
+```
+
+Writing to wildcard topics.
+Tracedb supports wrting to wildcard topics. Use '*' in the topic to write to wildcard topic or use '...' at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, '*' or '...'
+
+```
+	err = db.Batch(func(b *tracedb.Batch) error {
+		b.Put([]byte("dev18.*.b11"), []byte("dev18.*.b11.1"))
+		b.Put([]byte("dev18.b.*"), []byte("dev18.b.*.1"))
+		b.Put([]byte("dev18..."), []byte("dev18...1"))
+		b.Put([]byte("*"), []byte("*.1"))
+		b.Put([]byte("..."), []byte("...1"))
+		err = b.Write()
+		return err
+    })
 
 ```
 
@@ -91,9 +108,9 @@ err = db.Batch(func(b *tracedb.Batch) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Encryption = true
 		b.SetOptions(opts)
-		b.Put([]byte("ttl.ttl1?ttl=3m"), []byte("bar"))
-		b.Put([]byte("ttl.ttl2?ttl=3m"), []byte("bar"))
-		b.Put([]byte("ttl.ttl3?ttl=3m"), []byte("bar"))
+		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("dev18.b.b1.1"))
+		b.Put([]byte("dev18.b.b11?ttl=3m"), []byte("dev18.b.b11.1"))
+		b.Put([]byte("dev18.b.b111?ttl=3m"), []byte("dev18.b.b111.1"))
 		err = b.Write()
 		return err
 	})
@@ -104,9 +121,9 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 ```
     g := db.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b1?ttl=2m"), []byte("bar"))
-		b.Put([]byte("dev18.c1?ttl=1m"), []byte("bar"))
-		b.Put([]byte("dev18.b1?ttl=3m"), []byte("bar2"))
+		b.Put([]byte("dev18.b.b1?ttl=2m"), []byte("dev18.b.b1.1"))
+		b.Put([]byte("dev18.c.c1?ttl=1m"), []byte("dev18.c.c1.1"))
+		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("dev18.b.b1.2"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -116,10 +133,10 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 	})
 
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b11"), []byte("bar"))
-		b.Put([]byte("dev18.b.b11"), []byte("bar2"))
-		b.Put([]byte("dev18.b.b1"), []byte("bar3"))
-		b.Put([]byte("dev18.c.c11"), []byte("bar"))
+		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.1"))
+		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.2"))
+		b.Put([]byte("dev18.b.b1"), []byte("dev18.b.b1.3"))
+		b.Put([]byte("dev18.c.c11"), []byte("dev18.c.c11.1"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -129,10 +146,10 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 	})
 
 	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b111"), []byte("bar"))
-		b.Put([]byte("dev18.b.b111"), []byte("bar2"))
-		b.Put([]byte("dev18.b.b11"), []byte("bar3"))
-		b.Put([]byte("dev18.c.c111"), []byte("bar"))
+		b.Put([]byte("dev18.b.b111"), []byte("dev18.b.b111.1"))
+		b.Put([]byte("dev18.b.b111"), []byte("dev18.b.b111.2"))
+		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.3"))
+		b.Put([]byte("dev18.c.c111"), []byte("dev18.c.c111"))
 		b.Write()
 		go func() {
 			<-stop // it signals batch group completion
@@ -149,22 +166,16 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
     func(retry int) {
 		i := 0
 		for j := range time.Tick(60 * time.Second) {
-			err := db.Batch(func(b *tracedb.Batch) error {
-				t, _ := j.MarshalText()
-				b.Put([]byte("dev18.b.b11?ttl=1m"), t)
-				err := b.Write()
-				return err
-			})
-			if err != nil {
-				log.Printf("Error update1: %s", err)
-			}
-			print(db)
+			print([]byte("dev18.b.b1?last=2m"), db)
+			print([]byte("dev18.b.b11?last=2m"), db)
+			print([]byte("dev18?last=2m"), db)
+			print([]byte("dev19?last=2m"), db)
 			if i >= retry {
 				return
 			}
 			i++
 		}
-	}(5)
+	}(4)
 ```
 
 ### Iterating over items
@@ -172,8 +183,8 @@ Use the DB.Items() function which returns a new instance of ItemIterator.
 Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic. for example, "last=1h" retrieves messsages from tracedb stored in last 1 hour, or last=100 to retreives last 100 messages from the tracedb:
 
 ```
-func print(db *tracedb.DB) {
-	it, err := db.Items(&tracedb.Query{Topic: []byte("dev18.b.b11?last=3m")})
+func print(topic []byte, db *tracedb.DB) {
+	it, err := db.Items(&tracedb.Query{Topic: topic})
 	if err != nil {
 		log.Fatal(err)
 		return

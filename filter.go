@@ -47,7 +47,7 @@ var config = bigcache.Config{
 }
 
 type Filter struct {
-	file
+	table
 	filterBlock *filter.FilterGenerator
 	cache       *bigcache.BigCache
 	cacheID     uint64

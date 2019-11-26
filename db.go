@@ -53,7 +53,7 @@ type dbInfo struct {
 	count         uint32
 	nBlocks       uint32
 	splitBlockIdx uint32
-	freelistOff   int64
+	freeblockOff  int64
 	hashSeed      uint32
 }
 
@@ -67,8 +67,8 @@ type DB struct {
 	writeLockC chan struct{}
 	// consistent   *hash.Consistent
 	filter       Filter
-	index        file
-	data         dataFile
+	index        table
+	data         dataTable
 	lock         fs.LockFile
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
@@ -89,10 +89,10 @@ type DB struct {
 // Open opens or creates a new DB.
 func Open(path string, opts *Options) (*DB, error) {
 	opts = opts.copyWithDefaults()
-	fileFlag := os.O_CREATE | os.O_RDWR
-	fsys := opts.FileSystem
+	// fileFlag := os.O_CREATE | os.O_RDWR
+	fs := opts.FileSystem
 	fileMode := os.FileMode(0666)
-	lock, needsRecovery, err := fsys.CreateLockFile(path+lockPostfix, fileMode)
+	lock, needsRecovery, err := fs.CreateLockFile(path+lockPostfix, fileMode)
 	if err != nil {
 		if err == os.ErrExist {
 			err = errLocked
@@ -100,15 +100,15 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
-	index, err := openFile(fsys, path+indexPostfix, fileFlag, fileMode)
+	index, err := newTable(fs, path+indexPostfix)
 	if err != nil {
 		return nil, err
 	}
-	data, err := openFile(fsys, path, fileFlag, fileMode)
+	data, err := newTable(fs, path)
 	if err != nil {
 		return nil, err
 	}
-	filter, err := openFile(fsys, path+filterPostfix, fileFlag, fileMode)
+	filter, err := newTable(fs, path+filterPostfix)
 	if err != nil {
 		return nil, err
 	}
@@ -119,15 +119,15 @@ func Open(path string, opts *Options) (*DB, error) {
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
 		index:      index,
-		data:       dataFile{file: data},
+		data:       dataTable{table: data},
 		timeWindow: newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:     Filter{file: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		filter:     Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:       lock,
 		writeLockC: make(chan struct{}, 1),
 		metrics:    newMetrics(),
 		dbInfo: dbInfo{
-			nBlocks:     1,
-			freelistOff: -1,
+			nBlocks:      1,
+			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
 		trie:    message.NewTrie(),
@@ -256,9 +256,9 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 
 func (db *DB) forEachBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
-	f := db.index.FileManager
+	t := db.index.FileManager
 	for {
-		b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, file: f, offset: off}
+		b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: t, offset: off}
 		if err := b.read(fillCache); err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func (db *DB) forEachBlock(startBlockIdx uint32, fillCache bool, cb func(blockHa
 			return nil
 		}
 		off = b.next
-		f = db.data.FileManager
+		t = db.data.FileManager
 		db.metrics.BlockProbes.Add(1)
 	}
 }
@@ -279,16 +279,16 @@ func (db *DB) createOverflowBlock() (*blockHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &blockHandle{file: db.data, offset: off}, nil
+	return &blockHandle{table: db.data, offset: off}, nil
 }
 
 func (db *DB) writeHeader() error {
-	db.data.fl.defrag()
-	freelistOff, err := db.data.fl.write(db.data.file)
+	db.data.fb.defrag()
+	freeblockOff, err := db.data.fb.write(db.data.table)
 	if err != nil {
 		return err
 	}
-	db.dbInfo.freelistOff = freelistOff
+	db.dbInfo.freeblockOff = freeblockOff
 	h := header{
 		signature: signature,
 		version:   version,
@@ -307,11 +307,11 @@ func (db *DB) readHeader(readFreeList bool) error {
 	// }
 	db.dbInfo = h.dbInfo
 	if readFreeList {
-		if err := db.data.fl.read(db.data.file, db.dbInfo.freelistOff); err != nil {
+		if err := db.data.fb.read(db.data.table, db.dbInfo.freeblockOff); err != nil {
 			return err
 		}
 	}
-	db.dbInfo.freelistOff = -1
+	db.dbInfo.freeblockOff = -1
 	return nil
 }
 
@@ -617,7 +617,7 @@ func (db *DB) split() error {
 	updatedBlockIdx := db.splitBlockIdx
 	updatedBlockOff := blockOffset(updatedBlockIdx)
 	updatedBlock := entryWriter{
-		block: &blockHandle{file: db.index, offset: updatedBlockOff},
+		block: &blockHandle{table: db.index, offset: updatedBlockOff},
 	}
 
 	newBlockOff, err := db.index.extend(blockSize)
@@ -625,7 +625,7 @@ func (db *DB) split() error {
 		return err
 	}
 	newBlock := entryWriter{
-		block: &blockHandle{file: db.index, offset: newBlockOff},
+		block: &blockHandle{table: db.index, offset: newBlockOff},
 	}
 
 	db.splitBlockIdx++

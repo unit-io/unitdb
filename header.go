@@ -28,7 +28,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint32(buf[13:17], h.count)
 	binary.LittleEndian.PutUint32(buf[17:21], h.nBlocks)
 	binary.LittleEndian.PutUint32(buf[21:25], h.splitBlockIdx)
-	binary.LittleEndian.PutUint64(buf[25:33], uint64(h.freelistOff))
+	binary.LittleEndian.PutUint64(buf[25:33], uint64(h.freeblockOff))
 	binary.LittleEndian.PutUint32(buf[33:37], h.hashSeed)
 	return buf, nil
 }
@@ -40,7 +40,7 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	h.count = binary.LittleEndian.Uint32(data[13:17])
 	h.nBlocks = binary.LittleEndian.Uint32(data[17:21])
 	h.splitBlockIdx = binary.LittleEndian.Uint32(data[21:25])
-	h.freelistOff = int64(binary.LittleEndian.Uint64(data[25:33]))
+	h.freeblockOff = int64(binary.LittleEndian.Uint64(data[25:33]))
 	h.hashSeed = binary.LittleEndian.Uint32(data[33:37])
 	return nil
 }

@@ -114,22 +114,22 @@ func recoverFreeList(db *DB, usedBlocks []userdblock) error {
 	sort.Slice(usedBlocks, func(i, j int) bool {
 		return usedBlocks[i].offset < usedBlocks[j].offset
 	})
-	fl := freelist{}
+	fb := freeblocks{}
 	expectedOff := int64(headerSize)
 	for _, bl := range usedBlocks {
 		if bl.offset > expectedOff {
-			fl.free(expectedOff, uint32(bl.offset-expectedOff))
+			fb.free(expectedOff, uint32(bl.offset-expectedOff))
 		}
 		expectedOff = bl.offset + int64(bl.size)
 	}
 	lastBlock := usedBlocks[len(usedBlocks)-1]
 	lastOffset := int64(lastBlock.size) + lastBlock.offset
 	if db.data.size > lastOffset {
-		fl.free(lastOffset, uint32(db.data.size-lastOffset))
+		fb.free(lastOffset, uint32(db.data.size-lastOffset))
 		logger.Info().Str("context", "recovery.recoverFreeList").Msgf("%v %d", lastBlock, db.data.size)
 	}
-	logger.Info().Str("context", "recovery.recoverFreeList").Int("Old len", len(db.data.fl.blocks)).Int("new len", len(fl.blocks)).Msg("Recovered freelist")
-	db.data.fl = fl
+	logger.Info().Str("context", "recovery.recoverFreeList").Int("Old len", len(db.data.fb.blocks)).Int("new len", len(fb.blocks)).Msg("Recovered freelist")
+	db.data.fb = fb
 	return nil
 }
 

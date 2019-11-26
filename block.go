@@ -35,7 +35,7 @@ type block struct {
 
 type blockHandle struct {
 	block
-	file   fs.FileManager
+	table  fs.FileManager
 	offset int64
 
 	updated bool
@@ -103,7 +103,7 @@ func (h *blockHandle) read(fillCache bool) error {
 		}
 	}
 
-	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
+	buf, err := h.table.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (h *blockHandle) write() error {
 	if err != nil {
 		return err
 	}
-	_, err = h.file.WriteAt(buf, h.offset)
+	_, err = h.table.WriteAt(buf, h.offset)
 	if h.cache != nil {
 		var kb [8]byte
 		binary.LittleEndian.PutUint64(kb[:8], h.cacheID^uint64(h.offset))
