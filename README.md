@@ -85,7 +85,7 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 ```
 
 Writing to wildcard topics.
-Tracedb supports wrting to wildcard topics. Use '*' in the topic to write to wildcard topic or use '...' at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, '*' or '...'
+Tracedb supports wrting to wildcard topics. Use "*" in the topic to write to wildcard topic or use "..." at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "*" or "..."
 
 ```
 	err = db.Batch(func(b *tracedb.Batch) error {
@@ -180,7 +180,7 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic. for example, "last=1h" retrieves messsages from tracedb stored in last 1 hour, or last=100 to retreives last 100 messages from the tracedb:
+Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic. for example, "last=1h" retrieves messsages from tracedb stored in last 1 hour, or "last=100" to retreives last 100 messages from the tracedb:
 
 ```
 func print(topic []byte, db *tracedb.DB) {

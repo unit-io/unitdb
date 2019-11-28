@@ -42,6 +42,18 @@ func (db *DB) initbatchdb() error {
 	if _, err := db.newMem(0); err != nil {
 		return err
 	}
+
+	blockCache, err := db.mem.NewBlockCache()
+	if err != nil {
+		return err
+	}
+	db.index.newCache(blockCache)
+
+	dataCache, err := db.mem.NewDataCache()
+	if err != nil {
+		return err
+	}
+	db.data.newCache(dataCache)
 	return nil
 }
 

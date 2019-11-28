@@ -24,7 +24,7 @@ func (it *TopicIterator) Next() {
 	it.topic = nil
 	if len(it.queue) == 0 {
 		for it.nextBlockIdx < it.db.nBlocks {
-			err := it.db.forEachBlock(it.nextBlockIdx, true, func(b blockHandle) (bool, error) {
+			err := it.db.forEachBlock(it.nextBlockIdx, false, func(b blockHandle) (bool, error) {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.kvOffset == 0 {

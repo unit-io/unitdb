@@ -59,7 +59,9 @@ func (db *DB) mpoolGet(n int) *mem {
 	}
 	if mdb == nil {
 		var err error
-		mdb, err = memdb.Open("memdb")
+		var opts *Options
+		opts = opts.copyWithDefaults()
+		mdb, err = memdb.Open("memdb", opts.MemdbSize)
 		if err != nil {
 			logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
 		}
@@ -119,6 +121,7 @@ func (db *DB) getEffectiveMem() *mem {
 // Clear mems ptr; used by DB.Close().
 func (db *DB) clearMems() {
 	db.memMu.Lock()
+	db.mem.Close()
 	db.mem = nil
 	db.memMu.Unlock()
 }

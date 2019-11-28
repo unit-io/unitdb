@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/allegro/bigcache"
 	"github.com/saffat-in/tracedb/fs"
+	"github.com/saffat-in/tracedb/memdb"
 )
 
 type entry struct {
@@ -39,7 +39,7 @@ type blockHandle struct {
 	offset int64
 
 	updated bool
-	cache   *bigcache.BigCache
+	cache   memdb.Cache
 	cacheID uint64
 }
 
@@ -90,15 +90,15 @@ func (b *block) del(entryIdx int) {
 	b.entries[i] = entry{}
 }
 
+func (h *blockHandle) readRaw() ([]byte, error) {
+	return h.table.Slice(h.offset, h.offset+int64(blockSize))
+}
+
 func (h *blockHandle) read(fillCache bool) error {
-
-	var cacheKey string
+	var cacheKey uint64
 	if h.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], h.cacheID^uint64(h.offset))
-		cacheKey = string(kb[:])
-
-		if data, _ := h.cache.Get(cacheKey); data != nil && len(data) == int(blockSize) {
+		cacheKey = h.cacheID ^ uint64(h.offset)
+		if data, _ := h.cache.Get(cacheKey, blockSize); data != nil && len(data) == int(blockSize) {
 			return h.UnmarshalBinary(data)
 		}
 	}
@@ -107,9 +107,11 @@ func (h *blockHandle) read(fillCache bool) error {
 	if err != nil {
 		return err
 	}
+
 	if h.cache != nil && fillCache {
-		h.cache.Set(cacheKey, buf)
+		h.cache.Set(cacheKey, h.offset, buf)
 	}
+
 	return h.UnmarshalBinary(buf)
 }
 
@@ -120,9 +122,7 @@ func (h *blockHandle) write() error {
 	}
 	_, err = h.table.WriteAt(buf, h.offset)
 	if h.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], h.cacheID^uint64(h.offset))
-		cacheKey := string(kb[:])
+		cacheKey := h.cacheID ^ uint64(h.offset)
 		h.cache.Delete(cacheKey)
 	}
 	return err
@@ -146,6 +146,10 @@ func (ew *entryWriter) insert(e entry, db *DB) error {
 		ew.entryIdx = 0
 	}
 	ew.block.entries[ew.entryIdx] = e
+	if ew.block.cache != nil {
+		cacheKey := ew.block.cacheID ^ uint64(ew.block.offset)
+		ew.block.cache.Delete(cacheKey)
+	}
 	ew.entryIdx++
 	return nil
 }
@@ -155,6 +159,10 @@ func (ew *entryWriter) write() error {
 		if err := ew.prevblocks[i].write(); err != nil {
 			return err
 		}
+	}
+	if ew.block.cache != nil {
+		cacheKey := ew.block.cacheID ^ uint64(ew.block.offset)
+		ew.block.cache.Delete(cacheKey)
 	}
 	return ew.block.write()
 }

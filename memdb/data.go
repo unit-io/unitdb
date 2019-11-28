@@ -23,6 +23,10 @@ func (t *dataTable) append(data []byte) (int64, error) {
 	return off, nil
 }
 
+func (t *dataTable) readRaw(off, kvSize int64) ([]byte, error) {
+	return t.slice(off, off+kvSize)
+}
+
 func (t *dataTable) readKeyValue(e entry) ([]byte, []byte, error) {
 	keyValue, err := t.slice(e.kvOffset, e.kvOffset+int64(e.kvSize()))
 	if err != nil {
@@ -46,4 +50,8 @@ func (t *dataTable) writeKeyValue(topic, key, value []byte) (int64, error) {
 	copy(data[keySize:], topic)
 	copy(data[len(topic)+keySize:], value)
 	return t.append(data)
+}
+
+func (t *dataTable) writeRaw(raw []byte) (int64, error) {
+	return t.append(raw)
 }

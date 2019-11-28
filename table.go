@@ -5,15 +5,15 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/allegro/bigcache"
 	"github.com/saffat-in/tracedb/fs"
+	"github.com/saffat-in/tracedb/memdb"
 )
 
 type table struct {
 	fs.FileManager
 	size int64
 
-	cache   *bigcache.BigCache
+	cache   memdb.Cache
 	cacheID uint64
 }
 
@@ -32,14 +32,12 @@ func newTable(fs fs.FileSystem, name string) (table, error) {
 		return t, err
 	}
 	t.size = stat.Size()
+	return t, err
+}
 
-	cache, err := bigcache.NewBigCache(config)
-	if err != nil {
-		return t, err
-	}
+func (t *table) newCache(cache memdb.Cache) {
 	t.cache = cache
 	t.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
-	return t, err
 }
 
 func (t *table) extend(size uint32) (int64, error) {

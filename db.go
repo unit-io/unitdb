@@ -448,19 +448,21 @@ func (db *DB) expireOldEntries() {
 			continue
 		}
 		e := b.entries[entryIdx]
-		b.del(entryIdx)
-		if err := b.write(); err != nil {
-			continue
-		}
 		val, err := db.data.readTopic(e)
 		if err != nil {
 			continue
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(val)
-		db.trie.Remove(topic.Parts, e.hash)
-		db.data.free(e.kvSize(), e.kvOffset)
-		db.count--
+		if ok := db.trie.Remove(topic.Parts, e.hash); ok {
+			b.del(entryIdx)
+			if err := b.write(); err != nil {
+				continue
+			}
+			db.data.free(e.kvSize(), e.kvOffset)
+			db.count--
+		}
+
 	}
 	if db.syncWrites {
 		db.sync()
@@ -526,8 +528,10 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	if err := db.put(topic.Marshal(), id, val, e.ExpiresAt); err != nil {
-		return err
+	if ok := db.trie.Add(topic.Parts, topic.Depth, db.hash(id)); ok {
+		if _, _, err := db.put(topic.Marshal(), id, val, e.ExpiresAt); err != nil {
+			return err
+		}
 	}
 	if float64(db.count)/float64(db.nBlocks*entriesPerBlock) > loadFactor {
 		db.split()
@@ -535,12 +539,10 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.syncWrites {
 		db.sync()
 	}
-	if ok := db.trie.Add(topic.Parts, topic.Depth, db.hash(id)); ok {
-	}
-	return err
+	return nil
 }
 
-func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
+func (db *DB) put(topic, key, value []byte, expiresAt uint32) (blockOff, kvOff int64, err error) {
 	var b *blockHandle
 	var originalB *blockHandle
 	db.metrics.Puts.Add(1)
@@ -548,7 +550,7 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 	defer db.mu.Unlock()
 	entryIdx := 0
 	keyHash := db.hash(key)
-	err := db.forEachBlock(db.blockIndex(keyHash), false, func(curb blockHandle) (bool, error) {
+	err = db.forEachBlock(db.blockIndex(keyHash), false, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
@@ -578,13 +580,13 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 		return false, nil
 	})
 	if err != nil {
-		return err
+		return blockOff, kvOff, err
 	}
 
 	// Inserting a new item.
 	if b.entries[entryIdx].kvOffset == 0 {
 		if db.count == MaxKeys {
-			return errFull
+			return blockOff, kvOff, errFull
 		}
 		db.count++
 	} else {
@@ -597,27 +599,29 @@ func (db *DB) put(topic, key, value []byte, expiresAt uint32) error {
 		valueSize: uint32(len(value)),
 		expiresAt: expiresAt,
 	}
-	if b.entries[entryIdx].kvOffset, err = db.data.writeKeyValue(topic, key, value); err != nil {
-		return err
+	if kvOff, err = db.data.writeKeyValue(topic, key, value); err != nil {
+		return blockOff, kvOff, err
 	}
+	b.entries[entryIdx].kvOffset = kvOff
 	if err := b.write(); err != nil {
-		return err
+		return blockOff, kvOff, err
 	}
 	if originalB != nil {
-		return originalB.write()
+		err = originalB.write()
+		return blockOff, kvOff, err
 	}
 	db.filter.Append(uint64(keyHash))
 	if expiresAt > 0 {
 		db.timeWindow.add(b.entries[entryIdx])
 	}
-	return nil
+	return b.offset, kvOff, nil
 }
 
 func (db *DB) split() error {
 	updatedBlockIdx := db.splitBlockIdx
 	updatedBlockOff := blockOffset(updatedBlockIdx)
 	updatedBlock := entryWriter{
-		block: &blockHandle{table: db.index, offset: updatedBlockOff},
+		block: &blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: db.index, offset: updatedBlockOff},
 	}
 
 	newBlockOff, err := db.index.extend(blockSize)
@@ -625,7 +629,7 @@ func (db *DB) split() error {
 		return err
 	}
 	newBlock := entryWriter{
-		block: &blockHandle{table: db.index, offset: newBlockOff},
+		block: &blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: db.index, offset: newBlockOff},
 	}
 
 	db.splitBlockIdx++
@@ -659,9 +663,9 @@ func (db *DB) split() error {
 		return err
 	}
 
-	for _, off := range overflowBlocks {
-		db.data.free(blockSize, off)
-	}
+	// for _, off := range overflowBlocks {
+	// 	db.data.free(blockSize, off)
+	// }
 
 	if err := newBlock.write(); err != nil {
 		return err
@@ -698,14 +702,15 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	// message ID is the database key
 	id := message.ID(e.ID)
 	id.SetContract(topic.Parts)
-	err := db.delete(id)
-	if err != nil {
-		return err
-	}
+
 	h := db.hash(id)
 	if ok := db.trie.Remove(topic.Parts, h); ok {
+		err := db.delete(id)
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 // delete deletes the given key from the DB.

@@ -16,7 +16,7 @@ type tableManager interface {
 	name() string
 	size() int64
 	slice(start int64, end int64) ([]byte, error)
-	extend(size uint32) error
+	extend(size uint32) (int64, error)
 	truncate(size int64) error
 	close() error
 }
@@ -98,8 +98,9 @@ func (m *memTable) writeAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (m *memTable) extend(size uint32) error {
-	return m.truncate(m.allocated + int64(size))
+func (m *memTable) extend(size uint32) (int64, error) {
+	off := m.allocated
+	return off, m.truncate(m.allocated + int64(size))
 }
 
 func (m *memTable) truncate(size int64) error {

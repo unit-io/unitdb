@@ -23,6 +23,9 @@ type Options struct {
 	// Block cache size
 	BlockCacheSize int64
 
+	// Size of memory db
+	MemdbSize int64
+
 	FileSystem fs.FileSystem
 }
 
@@ -39,6 +42,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.BlockCacheSize == 0 {
 		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
+	}
+	if opts.MemdbSize == 0 {
+		opts.MemdbSize = 1 << 30 // maximum size of memdb (1GB).
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

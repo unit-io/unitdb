@@ -1,23 +1,15 @@
 package tracedb
 
-import (
-	"encoding/binary"
-)
-
 type dataTable struct {
 	table
 	fb freeblocks
 }
 
 func (t *dataTable) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error) {
-
-	var cacheKey string
+	var cacheKey uint64
 	if t.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], t.cacheID^uint64(e.kvOffset))
-		cacheKey = string(kb[:])
-
-		if data, err := t.cache.Get(cacheKey); data != nil && len(data) == int(e.kvSize()) {
+		cacheKey = t.cacheID ^ uint64(e.kvOffset)
+		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil && len(data) == int(e.kvSize()) {
 			return data[:keySize], data[e.topicSize+keySize:], err
 		}
 	}
@@ -26,19 +18,15 @@ func (t *dataTable) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error
 		return nil, nil, err
 	}
 	if t.cache != nil && fillCache {
-		t.cache.Set(cacheKey, keyValue)
+		t.cache.Set(cacheKey, e.kvOffset, keyValue)
 	}
 	return keyValue[:keySize], keyValue[e.topicSize+keySize:], nil
 }
 
 func (t *dataTable) readKey(e entry) ([]byte, error) {
-	var cacheKey string
 	if t.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], t.cacheID^uint64(e.kvOffset))
-		cacheKey = string(kb[:])
-
-		if data, err := t.cache.Get(cacheKey); data != nil {
+		cacheKey := t.cacheID ^ uint64(e.kvOffset)
+		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil {
 			return data[:keySize], err
 		}
 	}
@@ -46,13 +34,9 @@ func (t *dataTable) readKey(e entry) ([]byte, error) {
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
-	var cacheKey string
 	if t.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], t.cacheID^uint64(e.kvOffset))
-		cacheKey = string(kb[:])
-
-		if data, err := t.cache.Get(cacheKey); data != nil {
+		cacheKey := t.cacheID ^ uint64(e.kvOffset)
+		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil {
 			return data[keySize : e.topicSize+keySize], err
 		}
 	}
@@ -85,12 +69,6 @@ func (t *dataTable) writeKeyValue(topic, key, value []byte) (off int64, err erro
 		}
 	} else {
 		off, err = t.append(data)
-	}
-	if t.cache != nil {
-		var kb [8]byte
-		binary.LittleEndian.PutUint64(kb[:8], t.cacheID^uint64(off))
-		cacheKey := string(kb[:])
-		t.cache.Delete(cacheKey)
 	}
 	return off, err
 }

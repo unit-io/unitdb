@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	keySize         = 28
+	keySize         = 16
 	entriesPerBlock = 23
 	indexPostfix    = ".index"
 	version         = 1 // file format version
@@ -56,19 +56,24 @@ type DB struct {
 	index tableManager
 	data  dataTable
 	lock  fs.LockFile
+	// Free blocks
+	fb freeblocks
 	dbInfo
 	// Close.
 	closed uint32
 	closer io.Closer
 }
 
-// Open opens or creates a new DB.
-func Open(path string) (*DB, error) {
-	index, err := mem.newTable(path+indexPostfix, MaxTableSize)
+// Open opens or creates a new DB. Minimum memroy size is 1GB
+func Open(path string, memSize int64) (*DB, error) {
+	if memSize < 1<<30 {
+		memSize = MaxTableSize
+	}
+	index, err := mem.newTable(path+indexPostfix, memSize)
 	if err != nil {
 		return nil, err
 	}
-	data, err := mem.newTable(path, MaxTableSize)
+	data, err := mem.newTable(path, memSize)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +107,7 @@ func Open(path string) (*DB, error) {
 			return nil, err
 		}
 		db.hashSeed = seed
-		if err = db.index.extend(headerSize + blockSize); err != nil {
+		if _, err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
 		if _, err = db.data.extend(headerSize); err != nil {
@@ -118,6 +123,10 @@ func Open(path string) (*DB, error) {
 
 func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
+}
+
+func startBlockIndex(off int64) uint32 {
+	return uint32((off - int64(headerSize)) / int64(blockSize))
 }
 
 func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
@@ -179,49 +188,51 @@ func (db *DB) Close() error {
 	return err
 }
 
-// Items returns a new ItemIterator.
-func (db *DB) Items(startSeq, endSeq uint64) *ItemIterator {
-	if startSeq >= endSeq || endSeq > db.seq {
-		return nil
-	}
-	return &ItemIterator{db: db, startSeq: startSeq, endSeq: endSeq}
-}
-
 func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
-// Put sets the value for the given topic->key. It updates the value for the existing key.
-func (db *DB) Put(topic []byte, seq uint64, dFlag bool, key, value []byte, expiresAt uint32) error {
-	switch {
-	case len(key) == 0:
-		return errors.New("key is empty")
-	case len(key) > MaxKeyLength:
-		return errors.New("key is too large")
-	case len(value) > MaxValueLength:
-		return errors.New("value is too large")
-	}
-	hash := db.hash(key)
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	var ikey []byte
-	ikey = makeInternalKey(ikey, key, seq, dFlag, expiresAt)
-	if uint32(db.count/entriesPerBlock) > db.blockIndex {
-		db.index.extend(blockSize)
-		db.blockIndex++
-		db.nBlocks++
-	}
-	err := db.put(hash, topic, ikey, value, expiresAt)
-	return err
+// newBlock adds new block to db table and return block offset
+func (db *DB) newBlock() int64 {
+	db.index.extend(blockSize)
+	db.nBlocks++
+	db.blockIndex++
+	log.Println("memdb.newBlock: blockIndex,, nBlocks ", db.blockIndex, db.nBlocks)
+	return blockOffset(db.blockIndex)
 }
 
-func (db *DB) put(keyHash uint32, topic, key, value []byte, expiresAt uint32) error {
+// Put sets the value for the given topic->key. It updates the value for the existing key.
+func (db *DB) Put(topic []byte, key, value []byte, expiresAt uint32) (blockOff, kvOff int64, err error) {
+	switch {
+	case len(key) == 0:
+		return blockOff, kvOff, errors.New("key is empty")
+	case len(key) > MaxKeyLength:
+		return blockOff, kvOff, errors.New("key is too large")
+	case len(value) > MaxValueLength:
+		return blockOff, kvOff, errors.New("value is too large")
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	blockOff, kvOff, err = db.put(topic, key, value, expiresAt)
+	if uint32(db.count/entriesPerBlock) > db.blockIndex {
+		db.newBlock()
+	}
+	return blockOff, kvOff, err
+}
+
+func (db *DB) put(topic, key, value []byte, expiresAt uint32) (blockOff, kvOff int64, err error) {
 	var b *blockHandle
 	ew := entryWriter{
 		block: &blockHandle{table: db.index, offset: blockOffset(db.blockIndex)},
 	}
 	entryIdx := 0
-	err := db.forEachBlock(db.blockIndex, func(curb blockHandle) (bool, error) {
+	keyHash := db.hash(key)
+	startBlockIdx := db.blockIndex
+	// search if any free block available
+	if ok, idx := db.fb.get(false); ok {
+		startBlockIdx = idx
+	}
+	err = db.forEachBlock(startBlockIdx, func(curb blockHandle) (bool, error) {
 		b = &curb
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
@@ -239,12 +250,12 @@ func (db *DB) put(keyHash uint32, topic, key, value []byte, expiresAt uint32) er
 		return false, nil
 	})
 	if err != nil {
-		return err
+		return blockOff, kvOff, err
 	}
 
 	// Inserting a new item.
 	if db.count == MaxKeys {
-		return errors.New("database is full")
+		return blockOff, kvOff, errors.New("database is full")
 	}
 	db.count++
 
@@ -256,13 +267,28 @@ func (db *DB) put(keyHash uint32, topic, key, value []byte, expiresAt uint32) er
 		expiresAt: expiresAt,
 	}
 	ew.block = b
-	if ew.entry.kvOffset, err = db.data.writeKeyValue(topic, key, value); err != nil {
-		return err
+	if kvOff, err = db.data.writeKeyValue(topic, key, value); err != nil {
+		return blockOff, kvOff, err
 	}
+	ew.entry.kvOffset = kvOff
 	if err := ew.write(); err != nil {
-		return err
+		return blockOff, kvOff, err
 	}
-	return nil
+	return b.offset, kvOff, nil
+}
+
+// Cleanup addds block range into freeblocks list
+func (db *DB) Cleanup(startSeq, endSeq uint64) (ok bool) {
+	if startSeq >= endSeq {
+		return false
+	}
+	for blockIdx, endBloackIdx := uint32(startSeq/entriesPerBlock), uint32(endSeq/entriesPerBlock); blockIdx <= endBloackIdx; blockIdx++ {
+		if ok := db.fb.free(blockIdx, false); !ok {
+			return false
+		}
+	}
+	db.count -= uint32(endSeq - startSeq)
+	return true
 }
 
 // Count returns the number of items in the DB.

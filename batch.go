@@ -14,16 +14,17 @@ import (
 const (
 	batchHeaderLen = 8 + 4
 	batchGrowRec   = 3000
-	// batchBufioSize = 16
 )
 
 type batchIndex struct {
-	delFlag   bool
-	valHash   uint32 // valHash is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
-	topicSize uint16
-	valueSize uint32
-	expiresAt uint32
-	kvOffset  int
+	delFlag        bool
+	valHash        uint32 // valHash is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
+	topicSize      uint16
+	valueSize      uint32
+	expiresAt      uint32
+	kvOffset       int
+	blockMemOffset int64
+	kvMemOffset    int64
 }
 
 func (index batchIndex) k(data []byte) []byte {
@@ -70,11 +71,7 @@ type Batch struct {
 	data          []byte
 	index         []batchIndex
 	pendingWrites []batchIndex
-	firstKeyHash  uint32
 	valHashs      []uint32
-
-	// internalLen is sums of key/value pair length plus 8-bytes internal key.
-	// internalLen uint32
 }
 
 func (b *Batch) grow(n int) {
@@ -118,26 +115,16 @@ func (b *Batch) appendRec(dFlag bool, valHash uint32, topic, key, value []byte, 
 	b.index = append(b.index, index)
 }
 
-func (b *Batch) mput(dFlag bool, valHash uint32, topic, key, value []byte, expiresAt uint32) error {
-	switch {
-	case len(key) == 0:
-		return errKeyEmpty
-	case len(key) > MaxKeyLength:
-		return errKeyTooLarge
-	case len(value) > MaxValueLength:
-		return errValueTooLarge
-	}
+func (b *Batch) mput(valHash uint32, topic, key, value []byte, expiresAt uint32) (blockOff, kvOff int64, err error) {
 	if b.hasWriteConflict(valHash) {
-		return errWriteConflict
+		return blockOff, kvOff, errWriteConflict
 	}
-	if err := b.db.mem.Put(topic, b.seq+1, dFlag, key, value, expiresAt); err != nil {
-		return err
-	}
-	if b.firstKeyHash == 0 {
-		b.firstKeyHash = b.db.hash(key)
+	blockOff, kvOff, err = b.db.mem.Put(topic, key, value, expiresAt)
+	if err != nil {
+		return blockOff, kvOff, err
 	}
 	b.seq++
-	return nil
+	return blockOff, kvOff, nil
 }
 
 // Put appends 'put operation' of the given key/value pair to the batch.
@@ -244,14 +231,17 @@ func (b *Batch) hasWriteConflict(valHash uint32) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, dFlag bool, valHash uint32, topic, k, v []byte, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, valHash uint32, topic, k, v []byte, expiresAt uint32) (int64, int64, error)) error {
 	start := time.Now()
 	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
 		topic, key, val := index.kv(b.data)
-		if err := fn(i, index.delFlag, index.valHash, topic, key, val, index.expiresAt); err != nil {
+		blockOff, kvOff, err := fn(i, index.valHash, topic, key, val, index.expiresAt)
+		if err != nil {
 			return err
 		}
+		b.pendingWrites[i].blockMemOffset = blockOff
+		b.pendingWrites[i].kvMemOffset = kvOff
 	}
 	return nil
 }
@@ -270,8 +260,8 @@ func (b *Batch) Write() error {
 	}
 
 	b.seq = b.db.mem.getSeq()
-	err := b.writeInternal(func(i int, dFlag bool, valHash uint32, topic, k, v []byte, expiresAt uint32) error {
-		return b.mput(dFlag, valHash, topic, k, v, expiresAt)
+	err := b.writeInternal(func(i int, valHash uint32, topic, k, v []byte, expiresAt uint32) (int64, int64, error) {
+		return b.mput(valHash, topic, k, v, expiresAt)
 	})
 
 	if err == nil {
@@ -287,38 +277,42 @@ func (b *Batch) commit() error {
 		return nil
 	}
 
-	it := b.db.mem.Items(b.seq-uint64(b.Len()), b.seq)
-	for it.First(); it.Valid(); it.Next() {
-		err := it.Error()
-		if err != nil {
-			logger.Error().Err(err).Str("context", "batch.commit").Int8("order", b.order).Int("Length", b.Len())
-			return err
-		}
-		keyHash := b.db.hash(it.Item().Key())
-		if it.Item().DeleteFlag() {
+	// t := b.db.index.FileManager
+	for _, index := range b.pendingWrites {
+		topic, key, val := index.kv(b.data)
+		keyHash := b.db.hash(key)
+		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(uint64(keyHash)) {
 				return nil
 			}
-			b.db.delete(it.Item().Key())
 			itopic := new(message.Topic)
-			itopic.Unmarshal(it.Item().Topic())
+			itopic.Unmarshal(topic)
 			if ok := b.db.trie.Remove(itopic.Parts, keyHash); ok {
+				b.db.delete(key)
 			}
 		} else {
-			if err := b.db.put(it.Item().Topic(), it.Item().Key(), it.Item().Value(), it.Item().ExpiresAt()); err != nil {
-				log.Println("batch.commit: error ", err)
-				continue
+			itopic := new(message.Topic)
+			itopic.Unmarshal(topic)
+			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, keyHash); ok {
+				_, kvOff, err := b.db.put(topic, key, val, index.expiresAt)
+				if err != nil {
+					log.Println("batch.commit: error ", err)
+					continue
+				}
+
+				kvCacheKey := b.db.data.cacheID ^ uint64(kvOff)
+				b.db.data.cache.Set(kvCacheKey, index.kvMemOffset, nil)
 			}
 			if float64(b.db.count)/float64(b.db.nBlocks*entriesPerBlock) > loadFactor {
 				b.db.split()
 			}
-			itopic := new(message.Topic)
-			itopic.Unmarshal(it.Item().Topic())
-			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, keyHash); ok {
-			}
 		}
 	}
+
+	// cleanup memdb blocks after commit is successful to free blocks
+	b.db.mem.Cleanup(b.seq-uint64(b.Len()), b.seq)
+
 	return nil
 }
 
@@ -346,7 +340,6 @@ func (b *Batch) Abort() {
 func (b *Batch) Reset() {
 	b.data = b.data[:0]
 	b.index = b.index[:0]
-	// b.internalLen = 0
 }
 
 func (b *Batch) uniq() []batchIndex {
@@ -377,9 +370,7 @@ func (b *Batch) append(bnew *Batch) {
 		idx.kvOffset = idx.kvOffset + off
 		b.index = append(b.index, idx)
 	}
-	//b.grow(len(bnew.data))
 	b.data = append(b.data, bnew.data...)
-	// b.internalLen += bnew.internalLen
 }
 
 // _assert will panic with a given formatted message if the given condition is false.
