@@ -573,43 +573,41 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	if db.count == MaxKeys {
 		return errFull
 	}
-	var b *blockHandle
+	// var b *blockHandle
 	db.metrics.Puts.Add(1)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	entryIdx := 0
+	// entryIdx := 0
 	seq := message.ID(id).Seq()
 	startBlockIdx := startBlockIndex(seq)
 	if startBlockIdx > db.blockIndex {
 		startBlockIdx = db.blockIndex
 	}
-	hash := db.hash(id)
-	err = db.forEachBlock(startBlockIdx, false, func(curb blockHandle) (bool, error) {
-		b = &curb
-		if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
-			db.newBlock()
-		}
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			entryIdx = i
-			if e.mOffset == 0 {
-				// Found an empty entry.
-				return true, nil
-			} else if hash == e.hash {
-				// Key already exists.
-				if _id, err := db.data.readId(e); bytes.Equal(id, _id) || err != nil {
-					return true, err
-				}
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
+	off := blockOffset(startBlockIdx)
+	b := &blockHandle{table: db.index, offset: off}
+	// log.Println("db.put: count, dbseq, seq, blockIdx ", db.count, db.seq, seq, startBlockIdx)
+	if err := b.read(false); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
+	if b.entryIdx == entriesPerBlock {
+		// log.Println("db.put: count, seq, blockIdx ", db.count, seq, startBlockIdx)
+		off, _ = db.newBlock()
+		// startBlockIdx++
+		// off = blockOffset(startBlockIdx)
+		b = &blockHandle{table: db.index, offset: off}
+		// if err := b.read(false); err != nil {
+		// 	db.freeseq.free(seq)
+		// 	return err
+		// }
+	}
+	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
+		db.newBlock()
+	}
 
 	db.count++
+	entryIdx := b.entryIdx
+	hash := db.hash(id)
 	b.entries[entryIdx] = entry{
 		seq:       seq,
 		hash:      hash,
@@ -624,12 +622,11 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	if expiresAt > 0 {
 		db.timeWindow.add(b.entries[entryIdx])
 	}
-	b.entryIdx++
 	if err := b.write(); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
-	// db.freeseq.evict(seq)
+	db.freeseq.evict(seq)
 	db.filter.Append(uint64(hash))
 	return err
 }
@@ -749,10 +746,10 @@ func (db *DB) FileSize() (int64, error) {
 
 func (db *DB) nextSeq() uint64 {
 	if ok, seq := db.freeseq.get(); ok {
-		// db.freeseq.queue(db.seq)
+		db.freeseq.queue(db.seq)
 		return seq
 	}
 	atomic.AddUint64(&db.seq, 1)
-	// db.freeseq.queue(db.seq)
+	db.freeseq.queue(db.seq)
 	return db.seq
 }

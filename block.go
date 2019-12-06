@@ -67,7 +67,7 @@ func (b block) MarshalBinary() ([]byte, error) {
 		buf = buf[entrySize:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
-	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
+	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx+1)
 	return data, nil
 }
 
@@ -92,18 +92,6 @@ func (b *block) del(entryIdx int) {
 		b.entries[i] = b.entries[i+1]
 	}
 	b.entries[i] = entry{}
-}
-
-func (h *blockHandle) readFooter() error {
-	// read block footer
-	off := h.offset + int64(blockSize-6)
-	buf, err := h.table.Slice(off, h.offset+int64(blockSize))
-	if err != nil {
-		return err
-	}
-	h.next = binary.LittleEndian.Uint32(buf[:4])
-	h.entryIdx = binary.LittleEndian.Uint16(buf[4:6])
-	return nil
 }
 
 func (h *blockHandle) readRaw() ([]byte, error) {
@@ -143,38 +131,3 @@ func (h *blockHandle) write() error {
 	}
 	return err
 }
-
-// type entryWriter struct {
-// 	block      *blockHandle
-// 	entryIdx   int
-// 	prevblocks []*blockHandle
-// }
-
-// func (ew *entryWriter) insert(e entry, db *DB) error {
-// 	if ew.entryIdx == entriesPerBlock {
-// 		nextblock, err := db.createOverflowBlock()
-// 		if err != nil {
-// 			return err
-// 		}
-// 		ew.block.next = uint32(nextblock.offset)
-// 		ew.prevblocks = append(ew.prevblocks, ew.block)
-// 		ew.block = nextblock
-// 		ew.entryIdx = 0
-// 	}
-// 	ew.block.entries[ew.entryIdx] = e
-// 	if ew.block.cache != nil {
-// 		cacheKey := ew.block.cacheID ^ uint64(ew.block.offset)
-// 		ew.block.cache.Set(cacheKey, ew.block.offset, nil)
-// 	}
-// 	ew.entryIdx++
-// 	return nil
-// }
-
-// func (ew *entryWriter) write() error {
-// 	for i := len(ew.prevblocks) - 1; i >= 0; i-- {
-// 		if err := ew.prevblocks[i].write(); err != nil {
-// 			return err
-// 		}
-// 	}
-// 	return ew.block.write()
-// }

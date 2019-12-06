@@ -61,17 +61,16 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 
 // Batch is a write batch.
 type Batch struct {
-	opts              *BatchOptions
-	managed           bool
-	grouped           bool
-	order             int8
-	seq               uint64
-	db                *DB
-	data              []byte
-	index             []batchIndex
-	pendingWrites     []batchIndex
-	pendingDuplicates []batchIndex
-	keys              []uint32
+	opts          *BatchOptions
+	managed       bool
+	grouped       bool
+	order         int8
+	seq           uint64
+	db            *DB
+	data          []byte
+	index         []batchIndex
+	pendingWrites []batchIndex
+	keys          []uint32
 }
 
 func (b *Batch) grow(n int) {
@@ -241,13 +240,8 @@ func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, expiresAt uint
 		// }
 		id, topic, val := index.tv(b.data)
 		if err := fn(i, id, topic, val, index.expiresAt); err != nil {
-			return err
-		}
-	}
-	for i := range b.pendingDuplicates {
-		id := b.index[i].id(b.data)
-		if len(id) == idSize {
 			b.db.freeseq.free(message.ID(id).Seq())
+			return err
 		}
 	}
 	return nil
@@ -282,9 +276,7 @@ func (b *Batch) commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
-	log.Println("batch.commit: seq, len ", b.seq, b.Len())
 
-	// t := b.db.index.FileManager
 	for _, index := range b.pendingWrites {
 		id, topic, val := index.tv(b.data)
 		hash := b.db.hash(id)
@@ -314,6 +306,8 @@ func (b *Batch) commit() error {
 	// append batch seq and length to queue for cleanup
 	q := &batchqueue{startSeq: b.seq - b.Len(), endSeq: b.seq}
 	b.db.batchCleanupQueue <- q
+
+	log.Println("batch.commit: count, seq, blockIdx ", b.db.count, b.db.seq, b.db.blockIndex)
 
 	return nil
 }
@@ -356,7 +350,8 @@ func (b *Batch) uniq() []batchIndex {
 			unique_set[b.index[idx].key] = indices{idx, i}
 			i++
 		} else {
-			b.pendingDuplicates = append(b.pendingDuplicates, b.index[idx])
+			id := b.index[i].id(b.data)
+			b.db.freeseq.free(message.ID(id).Seq())
 		}
 	}
 

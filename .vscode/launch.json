@@ -9,7 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${fileDirname}/main.go",
+            "program": "${workspaceFolder}/cmd/main.go",
             "env": {},
             "args": []
         }

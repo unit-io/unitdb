@@ -44,8 +44,8 @@ func (it *ItemIterator) Next() {
 	var id message.ID
 	if len(it.queue) == 0 && it.next < uint32(len(it.query.blockIndices)) {
 		blockIdx := it.query.blockIndices[it.next]
-		// for index, k := range it.query.blockKeys[blockIdx] {
-		// 	fmt.Println(index, "=>", k.Seq())
+		// for _, k := range it.query.blockKeys[blockIdx] {
+		// 	fmt.Println(blockIdx, "=>", k.Seq())
 		// }
 		err := it.db.forEachBlock(blockIdx, false, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {

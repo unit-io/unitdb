@@ -1,10 +1,27 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
+	"os"
 	"time"
 
+	"github.com/pkg/profile"
 	"github.com/saffat-in/tracedb"
+)
+
+var (
+	engine       = flag.String("e", "tracedb", "database engine name. tracedb, pogreb, goleveldb, bbolt or badger")
+	numKeys      = flag.Int("n", 1000000, "number of keys")
+	minKeySize   = flag.Int("mink", 16, "minimum key size")
+	maxKeySize   = flag.Int("maxk", 64, "maximum key size")
+	minValueSize = flag.Int("minv", 128, "minimum value size")
+	maxValueSize = flag.Int("maxv", 512, "maximum value size")
+	concurrency  = flag.Int("c", 271, "number of concurrent goroutines")
+	dir          = flag.String("d", ".", "database directory")
+	progress     = flag.Bool("p", false, "show progress")
+	profileMode  = flag.String("profile", "", "enable profile. cpu, mem, block or mutex")
 )
 
 func print(topic []byte, db *tracedb.DB) {
@@ -19,11 +36,34 @@ func print(topic []byte, db *tracedb.DB) {
 			log.Fatal(err)
 			return
 		}
-		// log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
+		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
 
 func main() {
+
+	flag.Parse()
+
+	if *dir == "" {
+		flag.Usage()
+		return
+	}
+
+	switch *profileMode {
+	case "cpu":
+		defer profile.Start(profile.CPUProfile).Stop()
+	case "mem":
+		defer profile.Start(profile.MemProfile).Stop()
+	case "block":
+		defer profile.Start(profile.BlockProfile).Stop()
+	case "mutex":
+		defer profile.Start(profile.MutexProfile).Stop()
+	}
+
+	if err := benchmark(*engine, *dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	}
+
 	// Opening a database.
 	db, err := tracedb.Open("example", nil)
 	if err != nil {
@@ -66,7 +106,7 @@ func main() {
 		Contract: 3376684800,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	// print([]byte("ttl.ttl1?last=2m"), db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
@@ -74,7 +114,7 @@ func main() {
 		Contract: 3376684800,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	// print([]byte("ttl.ttl1?last=2m"), db)
 
 	func(retry int) {
 		i := 0
@@ -101,8 +141,8 @@ func main() {
 		}
 	}(1)
 
-	print([]byte("dev18.b.b1?last=30m"), db)
-	print([]byte("dev18.b.b11?last=30m"), db)
+	// print([]byte("dev18.b.b1?last=30m"), db)
+	// print([]byte("dev18.b.b11?last=30m"), db)
 
 	messageId = db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
@@ -112,7 +152,7 @@ func main() {
 		Contract: 3376684800,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	// print([]byte("ttl.ttl1?last=2m"), db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
@@ -120,7 +160,7 @@ func main() {
 		Contract: 3376684800,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	// print([]byte("ttl.ttl1?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch) error {
 		// opts := tracedb.DefaultBatchOptions
@@ -144,7 +184,7 @@ func main() {
 		log.Print(err)
 	}
 
-	print([]byte("ttl.ttl3?last=2m"), db)
+	// print([]byte("ttl.ttl3?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch) error {
 		b.Put([]byte("dev18.*.b11"), []byte("dev18.*.b11.1"))

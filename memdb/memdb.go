@@ -1,7 +1,6 @@
 package memdb
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"log"
@@ -180,7 +179,7 @@ func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
 	db.nBlocks++
 	db.blockIndex++
-	log.Println("memdb.newBlock: blockIndex, nBlocks ", db.blockIndex, db.nBlocks)
+	// log.Println("memdb.newBlock: blockIndex, nBlocks ", db.blockIndex, db.nBlocks)
 	return off, err
 }
 
@@ -201,31 +200,24 @@ func (db *DB) Put(hash uint32, id, topic, value []byte, expiresAt uint32) error 
 }
 
 func (db *DB) put(hash uint32, id, topic, value []byte, expiresAt uint32) (err error) {
-	var b *blockHandle
 	seq := db.nextSeq()
 	startBlockIdx := startBlockIndex(seq)
-	err = db.forEachBlock(startBlockIdx, func(curb blockHandle) (bool, error) {
-		b = &curb
-		if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
-			db.newBlock()
-		}
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.mOffset == 0 {
-				// Found an empty entry.
-				return true, nil
-			} else if hash == e.hash {
-				// Key already exists.
-				if _id, err := db.data.readId(e); bytes.Equal(id, _id) || err != nil {
-					return true, err
-				}
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
+	if startBlockIdx > db.blockIndex {
+		startBlockIdx = db.blockIndex
+	}
+	off := blockOffset(startBlockIdx)
+	b := &blockHandle{table: db.index, offset: off}
+	// log.Println("db.put: count, dbseq, seq, blockIdx ", db.count, db.seq, seq, startBlockIdx)
+	if err := b.readFooter(); err != nil {
 		db.freeseq.free(seq)
 		return err
+	}
+	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock {
+		off, _ = db.newBlock()
+		b = &blockHandle{table: db.index, offset: off}
+	}
+	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
+		db.newBlock()
 	}
 	db.count++
 
