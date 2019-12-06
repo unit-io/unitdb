@@ -1,7 +1,6 @@
 package tracedb
 
 import (
-	"math"
 	"sort"
 
 	"github.com/saffat-in/tracedb/fs"
@@ -47,15 +46,15 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		err := db.forEachBlock(blockIdx, false, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
-				sl := b.entries[i]
-				if sl.kvOffset == 0 {
+				e := b.entries[i]
+				if e.mOffset == 0 {
 					return true, nil
 				}
 				itemCount++
-				usedBlocks = append(usedBlocks, userdblock{size: align512(sl.kvSize()), offset: sl.kvOffset})
+				usedBlocks = append(usedBlocks, userdblock{size: align512(e.mSize()), offset: e.mOffset})
 			}
 			if b.next != 0 {
-				usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: b.next})
+				usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: int64(b.next)})
 			}
 			return false, nil
 		})
@@ -64,47 +63,6 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 		}
 	}
 	return itemCount, usedBlocks, nil
-}
-
-func recoverSplitCrash(db *DB) error {
-	if db.nBlocks == 1 {
-		return nil
-	}
-	prevnBlocks := db.nBlocks - 1
-	prevLevel := uint8(math.Floor(math.Log2(float64(prevnBlocks))))
-	prevSplitBlockIdx := prevnBlocks - (uint32(1) << prevLevel)
-	splitCrash := false
-	err := db.forEachBlock(prevSplitBlockIdx, false, func(b blockHandle) (bool, error) {
-		for i := 0; i < entriesPerBlock; i++ {
-			sl := b.entries[i]
-			if sl.kvOffset == 0 {
-				return true, nil
-			}
-			if db.blockIndex(sl.hash) != prevSplitBlockIdx {
-				splitCrash = true
-				return true, nil
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		return err
-	}
-	if !splitCrash {
-		return nil
-	}
-	logger.Error().Str("context: recovery.recoverSplitCrash", "Detected split crash. Truncating index file...")
-	if err := db.index.Truncate(db.index.size - int64(blockSize)); err != nil {
-		return err
-	}
-	// db.index.size -= int64(blockSize)
-	// if err := db.index.Mmap(db.index.size); err != nil {
-	// 	return err
-	// }
-	db.nBlocks = prevnBlocks
-	db.level = prevLevel
-	db.splitBlockIdx = prevSplitBlockIdx
-	return nil
 }
 
 func recoverFreeList(db *DB, usedBlocks []userdblock) error {
@@ -145,19 +103,11 @@ func (db *DB) recover() error {
 
 	// Recover header.
 	db.nBlocks = uint32((db.index.size - int64(headerSize)) / int64(blockSize))
-	db.level = uint8(math.Floor(math.Log2(float64(db.nBlocks))))
-	db.splitBlockIdx = db.nBlocks - (uint32(1) << db.level)
 	itemCount, usedBlocks, err := getUsedBlocks(db)
 	if err != nil {
 		return err
 	}
 	db.count = itemCount
-
-	// Check if crash occurred during split.
-	if err := recoverSplitCrash(db); err != nil {
-		return err
-	}
-	logger.Info().Str("context", "recovery.recover").Msgf("Recovered dbInfo %+v\n", db.dbInfo)
 
 	// Recover free list.
 	if err := recoverFreeList(db, usedBlocks); err != nil {

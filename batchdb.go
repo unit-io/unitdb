@@ -10,6 +10,12 @@ import (
 	"github.com/saffat-in/tracedb/memdb"
 )
 
+// batch queue keeps active batches and batches marked for cleanup
+type batchqueue struct {
+	startSeq uint64
+	endSeq   uint64
+}
+
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
@@ -17,8 +23,9 @@ type batchdb struct {
 	memPool chan *memdb.DB
 	mem     *mem
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
-	activeBatches map[uint64][]uint32
-	batchQueue    chan *Batch
+	activeBatches     map[uint64][]uint32
+	batchQueue        chan *Batch
+	batchCleanupQueue chan *batchqueue
 	//once run batchLoop once
 	once Once
 
@@ -33,8 +40,9 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		activeBatches: make(map[uint64][]uint32, 100),
-		batchQueue:    make(chan *Batch, 1),
+		activeBatches:     make(map[uint64][]uint32, 100),
+		batchQueue:        make(chan *Batch, 1),
+		batchCleanupQueue: make(chan *batchqueue, 1),
 	}
 
 	db.batchdb = bdb
@@ -43,18 +51,31 @@ func (db *DB) initbatchdb() error {
 		return err
 	}
 
-	blockCache, err := db.mem.NewBlockCache()
-	if err != nil {
-		return err
-	}
-	db.index.newCache(blockCache)
-
-	dataCache, err := db.mem.NewDataCache()
-	if err != nil {
-		return err
-	}
-	db.data.newCache(dataCache)
 	return nil
+}
+
+func (db *DB) startBatchCleanup(interval time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	db.cancelSyncer = cancel
+	cleanupTicker := time.NewTicker(interval)
+	defer cleanupTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		// case <-cleanupTicker.C:
+		case q := <-db.batchCleanupQueue:
+			// memdbSize, err := db.mem.FileSize()
+			// if err != nil {
+			// 	logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
+			// }
+			// if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
+			if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
+				// logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
+			}
+			// }
+		}
+	}
 }
 
 // Batch executes a function within the context of a read-write managed transaction.

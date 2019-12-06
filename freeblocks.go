@@ -5,6 +5,56 @@ import (
 	"sort"
 )
 
+type freesequence struct {
+	seqs []uint64 // seq holds free sequence
+	// squeue []uint64 // squeue holds sequence allocated to a message but not yet committed to db
+}
+
+func (fs *freesequence) search(seq uint64) int {
+	return sort.Search(len(fs.seqs), func(i int) bool {
+		return fs.seqs[i] == seq
+	})
+}
+
+// get first free seq
+func (fs *freesequence) get() (ok bool, seq uint64) {
+	if len(fs.seqs) == 0 {
+		return ok, seq
+	}
+	seq = fs.seqs[0]
+	fs.seqs = fs.seqs[1:]
+	return true, seq
+}
+
+func (fs *freesequence) free(seq uint64) (ok bool) {
+	i := fs.search(seq)
+	if i < len(fs.seqs) && seq == fs.seqs[i] {
+		return false
+	}
+	fs.seqs = append(fs.seqs, seq)
+	return true
+}
+
+// func (fs *freesequence) queue(seq uint64) (ok bool) {
+// 	fs.squeue = append(fs.squeue, seq)
+// 	return true
+// }
+
+func (fs *freesequence) len() int {
+	return len(fs.seqs)
+}
+
+// func (fs *freesequence) evict(seq uint64) (ok bool) {
+// 	for i := range fs.squeue {
+// 		if ok = fs.squeue[i] == seq; !ok {
+// 			fs.squeue[i] = fs.squeue[len(fs.squeue)-1]
+// 			fs.squeue = fs.squeue[:len(fs.squeue)-1]
+// 			return true
+// 		}
+// 	}
+// 	return true
+// }
+
 type freeblock struct {
 	offset int64
 	size   uint32

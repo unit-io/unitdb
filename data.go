@@ -5,42 +5,42 @@ type dataTable struct {
 	fb freeblocks
 }
 
-func (t *dataTable) readKeyValue(e entry, fillCache bool) ([]byte, []byte, error) {
+func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error) {
 	var cacheKey uint64
 	if t.cache != nil {
-		cacheKey = t.cacheID ^ uint64(e.kvOffset)
-		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil && len(data) == int(e.kvSize()) {
-			return data[:keySize], data[e.topicSize+keySize:], err
+		cacheKey = t.cacheID ^ uint64(e.mOffset)
+		if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil && len(data) == int(e.mSize()) {
+			return data[:idSize], data[e.topicSize+idSize:], err
 		}
 	}
-	keyValue, err := t.Slice(e.kvOffset, e.kvOffset+int64(e.kvSize()))
+	message, err := t.Slice(e.mOffset, e.mOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
 	if t.cache != nil && fillCache {
-		t.cache.Set(cacheKey, e.kvOffset, keyValue)
+		t.cache.Set(cacheKey, e.mOffset, message)
 	}
-	return keyValue[:keySize], keyValue[e.topicSize+keySize:], nil
+	return message[:idSize], message[e.topicSize+idSize:], nil
 }
 
-func (t *dataTable) readKey(e entry) ([]byte, error) {
+func (t *dataTable) readId(e entry) ([]byte, error) {
 	if t.cache != nil {
-		cacheKey := t.cacheID ^ uint64(e.kvOffset)
-		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil {
-			return data[:keySize], err
+		cacheKey := t.cacheID ^ uint64(e.mOffset)
+		if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil {
+			return data[:idSize], err
 		}
 	}
-	return t.Slice(e.kvOffset, e.kvOffset+int64(keySize))
+	return t.Slice(e.mOffset, e.mOffset+int64(idSize))
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
 	if t.cache != nil {
-		cacheKey := t.cacheID ^ uint64(e.kvOffset)
-		if data, err := t.cache.Get(cacheKey, e.kvSize()); data != nil {
-			return data[keySize : e.topicSize+keySize], err
+		cacheKey := t.cacheID ^ uint64(e.mOffset)
+		if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil {
+			return data[idSize : e.topicSize+idSize], err
 		}
 	}
-	return t.Slice(e.kvOffset+int64(keySize), e.kvOffset+int64(e.topicSize)+int64(keySize))
+	return t.Slice(e.mOffset+int64(idSize), e.mOffset+int64(e.topicSize)+int64(idSize))
 }
 
 func (t *dataTable) allocate(size uint32) (int64, error) {
@@ -56,12 +56,12 @@ func (t *dataTable) free(size uint32, off int64) {
 	t.fb.free(off, size)
 }
 
-func (t *dataTable) writeKeyValue(topic, key, value []byte) (off int64, err error) {
-	dataLen := align512(uint32(len(topic) + keySize + len(value)))
+func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error) {
+	dataLen := align512(uint32(idSize + len(topic) + len(value)))
 	data := make([]byte, dataLen)
-	copy(data, key)
-	copy(data[keySize:], topic)
-	copy(data[len(topic)+keySize:], value)
+	copy(data, id)
+	copy(data[idSize:], topic)
+	copy(data[len(topic)+idSize:], value)
 	off = t.fb.allocate(dataLen)
 	if off != -1 {
 		if _, err = t.WriteAt(data, off); err != nil {

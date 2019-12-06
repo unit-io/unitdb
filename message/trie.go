@@ -1,16 +1,17 @@
 package message
 
 import (
+	"bytes"
 	"sync"
 )
 
 const nul = 0x0
 
 // MID represents a message id set which can contain only unique values.
-type MID []uint32
+type MID []ID
 
 // addUnique adds a message id to the set.
-func (m *MID) addUnique(value uint32) (added bool) {
+func (m *MID) addUnique(value ID) (added bool) {
 	if m.contains(value) == false {
 		*m = append(*m, value)
 		added = true
@@ -19,10 +20,10 @@ func (m *MID) addUnique(value uint32) (added bool) {
 }
 
 // remove a message id from the set.
-func (m *MID) remove(value uint32) (removed bool) {
+func (m *MID) remove(value ID) (removed bool) {
 	for i, v := range *m {
-		//if bytes.Equal(v, value) {
-		if v == value {
+		if bytes.Equal(v, value) {
+			// if v == value {
 			a := *m
 			a[i] = a[len(a)-1]
 			//a[len(a)-1] = nil
@@ -36,14 +37,14 @@ func (m *MID) remove(value uint32) (removed bool) {
 }
 
 // contains checks whether a message id is in the set.
-func (m *MID) contains(value uint32) bool {
+func (m *MID) contains(value ID) bool {
 	for _, v := range *m {
-		// if bytes.Equal(v, value) {
-		// 	return true
-		// }
-		if v == value {
+		if bytes.Equal(v, value) {
 			return true
 		}
+		// if v == value {
+		// 	return true
+		// }
 	}
 	return false
 }
@@ -108,7 +109,7 @@ func (t *Trie) Count() int {
 }
 
 // add the message id to the topic.
-func (t *Trie) Add(parts []Part, depth uint8, id uint32) (added bool) {
+func (t *Trie) Add(parts []Part, depth uint8, id ID) (added bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -139,7 +140,7 @@ func (t *Trie) Add(parts []Part, depth uint8, id uint32) (added bool) {
 }
 
 // remove the message id for the topic.
-func (t *Trie) Remove(parts []Part, id uint32) (removed bool) {
+func (t *Trie) Remove(parts []Part, id ID) (removed bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root

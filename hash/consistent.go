@@ -69,10 +69,10 @@ func InitConsistent(blocks, used int) *Consistent {
 func (c *Consistent) FindBlock(key uint32) uint32 {
 	A, K := c.A, c.K
 	ha, hb, hc, hd := fleaInit(uint64(key))
-	b := fastMod(uint64(hd), uint64(len(A)))
+	b := FastMod(uint64(hd), uint64(len(A)))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := fastMod(uint64(hd), uint64(A[b]))
+		h := FastMod(uint64(hd), uint64(A[b]))
 		for A[h] >= A[b] {
 			h = K[h]
 		}
@@ -88,10 +88,10 @@ func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
 	K[cb] = W[N]
 
 	ha, hb, hc, hd := fleaInit(uint64(key))
-	b := fastMod(uint64(hd), uint64(len(A)))
+	b := FastMod(uint64(hd), uint64(len(A)))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := fastMod(uint64(hd), uint64(A[b]))
+		h := FastMod(uint64(hd), uint64(A[b]))
 		for A[h] >= A[b] {
 			h = K[h]
 		}
@@ -129,11 +129,11 @@ func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
 func (c *Consistent) GetPath(key uint32, pathBuffer []uint32) []uint32 {
 	A, K := c.A, c.K
 	ha, hb, hc, hd := fleaInit(uint64(key))
-	b := fastMod(uint64(hd), uint64(len(A)))
+	b := FastMod(uint64(hd), uint64(len(A)))
 	pathBuffer = append(pathBuffer, b)
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := fastMod(uint64(hd), uint64(A[b]))
+		h := FastMod(uint64(hd), uint64(A[b]))
 		pathBuffer = append(pathBuffer, h)
 		for A[h] >= A[b] {
 			h = K[h]

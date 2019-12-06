@@ -1,6 +1,8 @@
 package tracedb
 
 import (
+	"log"
+
 	"github.com/golang/snappy"
 
 	"github.com/saffat-in/tracedb/message"
@@ -15,13 +17,15 @@ type Item struct {
 
 // Query represents a topic to query and optional contract information.
 type Query struct {
-	Topic    []byte         // The topic of the message
-	Contract uint32         // The contract is used as prefix in the message Id
-	parts    []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
-	prefix   message.ID     // The beginning of the time window.
-	cutoff   int64          // The end of the time window.
-	keys     []uint32
-	Limit    uint32 // The maximum number of elements to return.
+	Topic        []byte         // The topic of the message
+	Contract     uint32         // The contract is used as prefix in the message Id
+	parts        []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	prefix       message.ID     // The beginning of the time window.
+	cutoff       int64          // The end of the time window.
+	keys         []message.ID
+	blockIndices []uint32
+	blockKeys    map[uint32][]message.ID
+	Limit        uint32 // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
@@ -37,14 +41,24 @@ type ItemIterator struct {
 // Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.item = nil
-	if len(it.queue) == 0 && it.next < uint32(len(it.query.keys)) {
-		h := uint32(it.query.keys[it.next])
-		err := it.db.forEachBlock(it.db.blockIndex(h), true, func(b blockHandle) (bool, error) {
+	var id message.ID
+	if len(it.queue) == 0 && it.next < uint32(len(it.query.blockIndices)) {
+		blockIdx := it.query.blockIndices[it.next]
+		// for index, k := range it.query.blockKeys[blockIdx] {
+		// 	fmt.Println(index, "=>", k.Seq())
+		// }
+		err := it.db.forEachBlock(blockIdx, false, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
-				if e.kvOffset == 0 {
-					return false, nil
-				} else if h == e.hash {
+				if e.mOffset == 0 {
+					continue
+				} else {
+					if ok := Contains(len(it.query.blockKeys[blockIdx]), func(k uint32) bool {
+						id = it.query.blockKeys[blockIdx][k]
+						return it.db.hash(id) == e.hash
+					}); !ok {
+						continue
+					}
 					if e.isExpired() {
 						e := b.entries[i]
 						b.del(i)
@@ -57,23 +71,23 @@ func (it *ItemIterator) Next() {
 						}
 						topic := new(message.Topic)
 						topic.Unmarshal(val)
-						it.db.trie.Remove(topic.Parts, e.hash)
+						it.db.trie.Remove(topic.Parts, id)
 						// free expired keys
-						it.db.data.free(e.kvSize(), e.kvOffset)
+						it.db.data.free(e.mSize(), e.mOffset)
 						it.db.count--
 						it.invalidKeys++
 						return true, nil
 					}
-					key, val, err := it.db.data.readKeyValue(e, true)
+					id, val, err := it.db.data.readMessage(e, true)
 					if err != nil {
 						return true, err
 					}
-					id := message.ID(key)
-					if !id.EvalPrefix(it.query.parts, it.query.cutoff) {
+					_id := message.ID(id)
+					if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
 						it.invalidKeys++
 						return false, nil
 					}
-					if id.IsEncrypted() {
+					if _id.IsEncrypted() {
 						val, err = it.db.mac.Decrypt(nil, val)
 						if err != nil {
 							return true, err
@@ -95,6 +109,7 @@ func (it *ItemIterator) Next() {
 			return false, nil
 		})
 		if err != nil {
+			log.Println("iterator.Next: error ", err)
 			it.item = &Item{err: err}
 		}
 		it.next++
@@ -114,6 +129,16 @@ func (it *ItemIterator) First() {
 	if len(it.query.keys) == 0 || it.next >= 1 {
 		return
 	}
+	it.query.blockKeys = make(map[uint32][]message.ID, 1)
+	var blockIndices []uint32
+	for _, k := range it.query.keys {
+		seq := k.Seq()
+		blockIdx := startBlockIndex(seq)
+		blockIndices = append(blockIndices, blockIdx)
+		it.query.blockKeys[blockIdx] = append(it.query.blockKeys[blockIdx], k)
+	}
+	it.query.blockIndices = uniqueNonEmptyKeys(blockIndices)
+
 	it.Next()
 }
 
@@ -158,4 +183,29 @@ func (item *Item) Value() []byte {
 // be called multiple times without causing error.
 func (it *ItemIterator) Release() {
 	return
+}
+
+func Contains(n int, match func(i uint32) bool) bool {
+	for i := uint32(0); i < uint32(n); i++ {
+		if match(i) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueNonEmptyKeys(keys []uint32) []uint32 {
+	unique := make(map[uint32]bool, len(keys))
+	uk := make([]uint32, len(unique))
+	for _, k := range keys {
+		// if k != 0 {
+		if !unique[k] {
+			uk = append(uk, k)
+			unique[k] = true
+		}
+		// }
+	}
+
+	return uk
+
 }

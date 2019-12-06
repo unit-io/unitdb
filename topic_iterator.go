@@ -7,7 +7,7 @@ import (
 type Topic struct {
 	parts []message.Part
 	depth uint8
-	id    uint32
+	id    message.ID
 	err   error
 }
 
@@ -27,22 +27,26 @@ func (it *TopicIterator) Next() {
 			err := it.db.forEachBlock(it.nextBlockIdx, false, func(b blockHandle) (bool, error) {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
-					if e.kvOffset == 0 {
+					if e.mOffset == 0 {
 						return false, nil
 					}
 					if e.isExpired() {
 						return false, nil
 					}
-					val, err := it.db.data.readTopic(e)
+					id, err := it.db.data.readId(e)
+					if err != nil {
+						return true, err
+					}
+					etopic, err := it.db.data.readTopic(e)
 					if err != nil {
 						return true, err
 					}
 					topic := new(message.Topic)
-					err = topic.Unmarshal(val)
+					err = topic.Unmarshal(etopic)
 					if err != nil {
 						return true, err
 					}
-					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: e.hash, err: err})
+					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: message.ID(id), err: err})
 				}
 				return false, nil
 			})
@@ -106,7 +110,7 @@ func (Topic *Topic) Depth() uint8 {
 // ID returns the id to store into topic part, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
-func (Topic *Topic) ID() uint32 {
+func (Topic *Topic) ID() message.ID {
 	return Topic.id
 }
 

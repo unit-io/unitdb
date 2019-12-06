@@ -31,8 +31,8 @@ func (m *mem) decref() {
 }
 
 // Create new mem and froze the old one; need external synchronization.
-// newMem only called synchronously by the writer.
-func (db *DB) newMem(n int) (mem *mem, err error) {
+// newMem only called synchronously by the batchdb.
+func (db *DB) newMem(n int64) (mem *mem, err error) {
 	db.memMu.Lock()
 	defer db.memMu.Unlock()
 	mem = db.mpoolGet(n)
@@ -51,16 +51,17 @@ func (db *DB) mpoolPut(mdb *memdb.DB) {
 	}
 }
 
-func (db *DB) mpoolGet(n int) *mem {
+func (db *DB) mpoolGet(n int64) *mem {
 	var mdb *memdb.DB
 	select {
 	case mdb = <-db.memPool:
 	default:
 	}
-	if mdb == nil {
+	var opts *Options
+	opts = opts.copyWithDefaults()
+	if mdb == nil || opts.MemdbSize < n {
 		var err error
-		var opts *Options
-		opts = opts.copyWithDefaults()
+
 		mdb, err = memdb.Open("memdb", opts.MemdbSize)
 		if err != nil {
 			logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
@@ -131,16 +132,16 @@ func (db *DB) isClosed() bool {
 	return atomic.LoadUint32(&db.closed) != 0
 }
 
-// Get latest sequence number.
-func (m *mem) getSeq() uint64 {
-	return m.GetSeq()
-}
+// // Get latest sequence number.
+// func (m *mem) getSeq() uint64 {
+// 	return m.GetSeq()
+// }
 
-// Atomically adds delta to seq.
-func (m *mem) addSeq(delta uint64) {
-	m.AddSeq(delta)
-}
+// // Atomically adds delta to seq.
+// func (m *mem) addSeq(delta uint64) {
+// 	m.AddSeq(delta)
+// }
 
-func (m *mem) setSeq(seq uint64) {
-	m.SetSeq(seq)
-}
+// func (m *mem) setSeq(seq uint64) {
+// 	m.SetSeq(seq)
+// }

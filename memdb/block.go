@@ -5,20 +5,22 @@ import (
 )
 
 type entry struct {
+	seq       uint64
 	hash      uint32
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	kvOffset  int64
+	mOffset   int64
 }
 
-func (e entry) kvSize() uint32 {
-	return uint32(e.topicSize) + keySize + e.valueSize
+func (e entry) mSize() uint32 {
+	return uint32(e.topicSize) + idSize + e.valueSize
 }
 
 type block struct {
-	entries [entriesPerBlock]entry
-	next    int64
+	entries  [entriesPerBlock]entry
+	next     uint32
+	entryIdx uint16
 }
 
 type blockHandle struct {
@@ -28,8 +30,8 @@ type blockHandle struct {
 }
 
 const (
-	entrySize        = 22
-	blockSize uint32 = 512
+	entrySize        = 30
+	blockSize uint32 = 696
 )
 
 func align512(n uint32) uint32 {
@@ -39,14 +41,16 @@ func align512(n uint32) uint32 {
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
 		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
-		b.entries[i].hash = binary.LittleEndian.Uint32(data[:4])
-		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[4:6])
-		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[6:10])
-		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[10:14])
-		b.entries[i].kvOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
+		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
+		b.entries[i].hash = binary.LittleEndian.Uint32(data[8:12])
+		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[12:14])
+		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[14:18])
+		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[18:22])
+		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[22:30]))
 		data = data[entrySize:]
 	}
-	b.next = int64(binary.LittleEndian.Uint32(data[:4]))
+	b.next = binary.LittleEndian.Uint32(data[:4])
+	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
 	return nil
 }
 
@@ -62,26 +66,49 @@ func (h *blockHandle) read() error {
 	return h.UnmarshalBinary(buf)
 }
 
+func (h *blockHandle) readFooter() error {
+	// read block footer
+	off := h.offset + int64(blockSize-6)
+	buf, err := h.table.slice(off, h.offset+int64(blockSize))
+	if err != nil {
+		return err
+	}
+	h.next = binary.LittleEndian.Uint32(buf[:4])
+	h.entryIdx = binary.LittleEndian.Uint16(buf[4:6])
+	return nil
+}
+
+func (h *blockHandle) writeFooter() error {
+	// write next entry idx to the block
+	off := h.offset + int64(blockSize-6)
+	buf := make([]byte, 6)
+	binary.LittleEndian.PutUint32(buf[:4], h.next)
+	binary.LittleEndian.PutUint16(buf[4:6], h.entryIdx)
+	_, err := h.table.writeAt(buf, off)
+	return err
+}
+
 func (h *blockHandle) writeRaw(raw []byte) error {
 	_, err := h.table.writeAt(raw, h.offset)
 	return err
 }
 
 type entryWriter struct {
-	block    *blockHandle
-	entryIdx int
-	entry    entry
+	block *blockHandle
+	entry entry
 }
 
 func (ew *entryWriter) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
 	e := ew.entry
-	binary.LittleEndian.PutUint32(buf[:4], e.hash)
-	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
-	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
-	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
-	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.kvOffset))
+	binary.LittleEndian.PutUint64(buf[:8], e.seq)
+	binary.LittleEndian.PutUint32(buf[8:12], e.hash)
+	binary.LittleEndian.PutUint16(buf[12:14], e.topicSize)
+	binary.LittleEndian.PutUint32(buf[14:18], e.valueSize)
+	binary.LittleEndian.PutUint32(buf[18:22], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[22:30], uint64(e.mOffset))
+
 	return data, nil
 }
 
@@ -90,7 +117,24 @@ func (ew *entryWriter) write() error {
 	if err != nil {
 		return err
 	}
-	off := ew.block.offset + int64(ew.entryIdx*entrySize)
+	off := ew.block.offset + int64(ew.block.entryIdx*entrySize)
 	_, err = ew.block.table.writeAt(buf, off)
-	return err
+	if err != nil {
+		return err
+	}
+	ew.block.entryIdx = ew.block.entryIdx + 1
+	return ew.block.writeFooter()
+}
+
+func (ew *entryWriter) del() error {
+	ew.entry = entry{}
+	buf, err := ew.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	off := ew.block.offset + int64(ew.block.entryIdx*entrySize)
+	if _, err = ew.block.table.writeAt(buf, off); err != nil {
+		return err
+	}
+	return nil
 }
