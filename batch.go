@@ -232,8 +232,8 @@ func (b *Batch) hasWriteConflict(key uint32) bool {
 }
 
 func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, expiresAt uint32) error) error {
-	start := time.Now()
-	defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
+	// start := time.Now()
+	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.key) {
 		// 	return errWriteConflict
@@ -261,6 +261,7 @@ func (b *Batch) Write() error {
 	}
 
 	b.seq = b.db.mem.GetSeq()
+	b.db.mem.Extend(b.seq + uint64(b.Len()))
 	err := b.writeInternal(func(i int, id, topic, v []byte, expiresAt uint32) error {
 		return b.mput(id, topic, v, expiresAt)
 	})
@@ -276,6 +277,43 @@ func (b *Batch) commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
+	// The commit happen synchronously.
+	b.db.writeLockC <- struct{}{}
+	defer func() {
+		<-b.db.writeLockC
+	}()
+
+	//precommit steps
+	b.db.extend()
+
+	// l := b.Len()
+	// for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
+	// 	index := b.pendingWrites[i]
+	// 	id, topic, val := index.tv(b.data)
+	// 	hash := b.db.hash(id)
+	// 	if index.delFlag {
+	// 		/// Test filter block for presence
+	// 		if !b.db.filter.Test(uint64(hash)) {
+	// 			return nil
+	// 		}
+	// 		itopic := new(message.Topic)
+	// 		itopic.Unmarshal(topic)
+	// 		if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
+	// 			// b.db.delete(key)
+	// 		}
+	// 	} else {
+	// 		itopic := new(message.Topic)
+	// 		itopic.Unmarshal(topic)
+	// 		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
+	// 			off := db.blockOffset()
+	// 			b := &blockHandle{table: db.index, offset: off}
+	// 			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
+	// 				log.Println("batch.commit: error ", err)
+	// 				continue
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	for _, index := range b.pendingWrites {
 		id, topic, val := index.tv(b.data)
@@ -304,11 +342,8 @@ func (b *Batch) commit() error {
 
 	// cleanup memdb blocks after commit is successful to free used blocks
 	// append batch seq and length to queue for cleanup
-	q := &batchqueue{startSeq: b.seq - b.Len(), endSeq: b.seq}
+	q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
 	b.db.batchCleanupQueue <- q
-
-	log.Println("batch.commit: count, seq, blockIdx ", b.db.count, b.db.seq, b.db.blockIndex)
-
 	return nil
 }
 
@@ -350,8 +385,8 @@ func (b *Batch) uniq() []batchIndex {
 			unique_set[b.index[idx].key] = indices{idx, i}
 			i++
 		} else {
-			id := b.index[i].id(b.data)
-			b.db.freeseq.free(message.ID(id).Seq())
+			// id := b.index[i].id(b.data)
+			// b.db.freeseq.free(message.ID(id).Seq())
 		}
 	}
 
@@ -385,8 +420,8 @@ func (b *Batch) Keys() []uint32 {
 }
 
 // Len returns number of records in the batch.
-func (b *Batch) Len() uint64 {
-	return uint64(len(b.pendingWrites))
+func (b *Batch) Len() int {
+	return len(b.pendingWrites)
 }
 
 // setManaged sets batch managed.

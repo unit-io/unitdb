@@ -48,10 +48,10 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 30 // maximum size of memdb (1GB).
+		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
 	}
 	if opts.BatchCleanupInterval == 0 {
-		opts.BatchCleanupInterval = 1 * time.Second
+		opts.BatchCleanupInterval = 15 * time.Second
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

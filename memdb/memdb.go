@@ -168,9 +168,7 @@ func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, err
 		if stop, err := cb(b); stop || err != nil {
 			return err
 		}
-		if b.next == 0 {
-			return nil
-		}
+
 	}
 }
 
@@ -181,6 +179,17 @@ func (db *DB) newBlock() (int64, error) {
 	db.blockIndex++
 	// log.Println("memdb.newBlock: blockIndex, nBlocks ", db.blockIndex, db.nBlocks)
 	return off, err
+}
+
+// extend adds new block to db table for the batch write
+func (db *DB) Extend(endSeq uint64) error {
+	// precommit steps
+	for uint32(float64(endSeq-1)/float64(entriesPerBlock)) > db.blockIndex {
+		if _, err := db.newBlock(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
@@ -211,10 +220,6 @@ func (db *DB) put(hash uint32, id, topic, value []byte, expiresAt uint32) (err e
 	if err := b.readFooter(); err != nil {
 		db.freeseq.free(seq)
 		return err
-	}
-	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock {
-		off, _ = db.newBlock()
-		b = &blockHandle{table: db.index, offset: off}
 	}
 	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
 		db.newBlock()
@@ -257,7 +262,7 @@ func (db *DB) delete(seq uint64) error {
 				return true, nil
 			}
 		}
-		return false, nil
+		return true, nil
 	})
 	if entryIdx == -1 || err != nil {
 		return err

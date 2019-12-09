@@ -63,17 +63,17 @@ func (db *DB) startBatchCleanup(interval time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
-		// case <-cleanupTicker.C:
+		case <-cleanupTicker.C:
 		case q := <-db.batchCleanupQueue:
-			// memdbSize, err := db.mem.FileSize()
-			// if err != nil {
-			// 	logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
-			// }
-			// if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
-			if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
-				// logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
+			memdbSize, err := db.mem.FileSize()
+			if err != nil {
+				logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
 			}
-			// }
+			if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
+				if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
+					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
+				}
+			}
 		}
 	}
 }

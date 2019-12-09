@@ -218,7 +218,7 @@ func (bc BlockCache) Delete(key uint64) error {
 	return nil
 }
 
-type NewDataCache struct {
+type DataCache struct {
 	mcache *MemCache
 	cache  map[uint64]int64
 }
@@ -227,15 +227,15 @@ func (mcache *MemCache) NewDataCache() (Cache, error) {
 	if mcache.data.tableManager == nil {
 		return nil, errors.New("memcache table is empty")
 	}
-	return NewDataCache{mcache: mcache, cache: make(map[uint64]int64)}, nil
+	return DataCache{mcache: mcache, cache: make(map[uint64]int64)}, nil
 }
 
-func (dc NewDataCache) Has(key uint64) bool {
+func (dc DataCache) Has(key uint64) bool {
 	_, ok := dc.cache[key]
 	return ok
 }
 
-func (dc NewDataCache) Get(key uint64, kvSize uint32) ([]byte, error) {
+func (dc DataCache) Get(key uint64, kvSize uint32) ([]byte, error) {
 	off, ok := dc.cache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
@@ -243,7 +243,7 @@ func (dc NewDataCache) Get(key uint64, kvSize uint32) ([]byte, error) {
 	return dc.mcache.data.readRaw(off, int64(kvSize))
 }
 
-func (dc NewDataCache) Set(key uint64, off int64, raw []byte) (err error) {
+func (dc DataCache) Set(key uint64, off int64, raw []byte) (err error) {
 	if _, ok := dc.cache[key]; !ok {
 		if raw != nil {
 			off, err = dc.mcache.data.writeRaw(raw)
@@ -256,7 +256,7 @@ func (dc NewDataCache) Set(key uint64, off int64, raw []byte) (err error) {
 	return nil
 }
 
-func (dc NewDataCache) Delete(key uint64) error {
+func (dc DataCache) Delete(key uint64) error {
 	_, ok := dc.cache[key]
 	if !ok {
 		return errors.New("cache key not found")

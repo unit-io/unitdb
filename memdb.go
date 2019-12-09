@@ -131,17 +131,3 @@ func (db *DB) clearMems() {
 func (db *DB) isClosed() bool {
 	return atomic.LoadUint32(&db.closed) != 0
 }
-
-// // Get latest sequence number.
-// func (m *mem) getSeq() uint64 {
-// 	return m.GetSeq()
-// }
-
-// // Atomically adds delta to seq.
-// func (m *mem) addSeq(delta uint64) {
-// 	m.AddSeq(delta)
-// }
-
-// func (m *mem) setSeq(seq uint64) {
-// 	m.SetSeq(seq)
-// }

@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"log"
+	"sync"
 
 	"github.com/golang/snappy"
 
@@ -31,6 +32,7 @@ type Query struct {
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
 	db          *DB
+	mu          sync.Mutex
 	query       *Query
 	item        *Item
 	queue       []*Item
@@ -40,6 +42,11 @@ type ItemIterator struct {
 
 // Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
+	it.mu.Lock()
+	defer it.mu.Unlock()
+
+	it.db.mu.RLock()
+	defer it.db.mu.RUnlock()
 	it.item = nil
 	var id message.ID
 	if len(it.queue) == 0 && it.next < uint32(len(it.query.blockIndices)) {
@@ -47,66 +54,65 @@ func (it *ItemIterator) Next() {
 		// for _, k := range it.query.blockKeys[blockIdx] {
 		// 	fmt.Println(blockIdx, "=>", k.Seq())
 		// }
-		err := it.db.forEachBlock(blockIdx, false, func(b blockHandle) (bool, error) {
+		err := it.db.readBlock(blockIdx, false, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
 				if e.mOffset == 0 {
 					continue
-				} else {
-					if ok := Contains(len(it.query.blockKeys[blockIdx]), func(k uint32) bool {
-						id = it.query.blockKeys[blockIdx][k]
-						return it.db.hash(id) == e.hash
-					}); !ok {
-						continue
-					}
-					if e.isExpired() {
-						e := b.entries[i]
-						b.del(i)
-						if err := b.write(); err != nil {
-							return true, nil
-						}
-						val, err := it.db.data.readTopic(e)
-						if err != nil {
-							return true, nil
-						}
-						topic := new(message.Topic)
-						topic.Unmarshal(val)
-						it.db.trie.Remove(topic.Parts, id)
-						// free expired keys
-						it.db.data.free(e.mSize(), e.mOffset)
-						it.db.count--
-						it.invalidKeys++
+				}
+				if ok := Contains(len(it.query.blockKeys[blockIdx]), func(k uint32) bool {
+					id = it.query.blockKeys[blockIdx][k]
+					return it.db.hash(id) == e.hash
+				}); !ok {
+					continue
+				}
+				if e.isExpired() {
+					e := b.entries[i]
+					b.del(i)
+					if err := b.write(); err != nil {
 						return true, nil
 					}
-					id, val, err := it.db.data.readMessage(e, true)
+					val, err := it.db.data.readTopic(e)
 					if err != nil {
-						return true, err
+						return true, nil
 					}
-					_id := message.ID(id)
-					if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
-						it.invalidKeys++
-						return false, nil
-					}
-					if _id.IsEncrypted() {
-						val, err = it.db.mac.Decrypt(nil, val)
-						if err != nil {
-							return true, err
-						}
-					}
-					var entry Entry
-					var buffer []byte
-					val, err = snappy.Decode(buffer, val)
-					if err != nil {
-						return true, err
-					}
-					err = entry.Unmarshal(val)
-					if err != nil {
-						return true, err
-					}
-					it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
+					topic := new(message.Topic)
+					topic.Unmarshal(val)
+					it.db.trie.Remove(topic.Parts, id)
+					// free expired keys
+					it.db.data.free(e.mSize(), e.mOffset)
+					it.db.count--
+					it.invalidKeys++
+					return true, nil
 				}
+				id, val, err := it.db.data.readMessage(e, true)
+				if err != nil {
+					return true, err
+				}
+				_id := message.ID(id)
+				if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
+					it.invalidKeys++
+					return false, nil
+				}
+				if _id.IsEncrypted() {
+					val, err = it.db.mac.Decrypt(nil, val)
+					if err != nil {
+						return true, err
+					}
+				}
+				var entry Entry
+				var buffer []byte
+				val, err = snappy.Decode(buffer, val)
+				if err != nil {
+					return true, err
+				}
+				err = entry.Unmarshal(val)
+				if err != nil {
+					return true, err
+				}
+				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
 			}
-			return false, nil
+			return true, nil
 		})
 		if err != nil {
 			log.Println("iterator.Next: error ", err)
@@ -126,6 +132,7 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
+	it.mu.Lock()
 	if len(it.query.keys) == 0 || it.next >= 1 {
 		return
 	}
@@ -138,7 +145,7 @@ func (it *ItemIterator) First() {
 		it.query.blockKeys[blockIdx] = append(it.query.blockKeys[blockIdx], k)
 	}
 	it.query.blockIndices = uniqueNonEmptyKeys(blockIndices)
-
+	it.mu.Unlock()
 	it.Next()
 }
 

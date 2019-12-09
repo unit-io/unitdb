@@ -67,7 +67,7 @@ func (b block) MarshalBinary() ([]byte, error) {
 		buf = buf[entrySize:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
-	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx+1)
+	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
 	return data, nil
 }
 
@@ -130,4 +130,37 @@ func (h *blockHandle) write() error {
 		h.cache.Delete(cacheKey)
 	}
 	return err
+}
+
+func (h *blockHandle) writeRaw(raw []byte) error {
+	_, err := h.table.WriteAt(raw, h.offset)
+	return err
+}
+
+type entryWriter struct {
+	block *blockHandle
+	buf   []byte
+	entry entry
+}
+
+func (ew *entryWriter) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, entrySize)
+	data := buf
+	e := ew.entry
+	binary.LittleEndian.PutUint32(buf[:4], e.hash)
+	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
+	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
+	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
+
+	return data, nil
+}
+
+func (ew *entryWriter) write() error {
+	buf, err := ew.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	ew.buf = append(ew.buf, buf...)
+	return nil
 }

@@ -147,23 +147,22 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 
 	// init memcache
+	// memcache, err := memdb.NewCache("memcach", opts.MemdbSize)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// blockCache, err := memcache.NewBlockCache()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// db.index.newCache(blockCache)
 
-	memcache, err := memdb.NewCache("memcach", opts.MemdbSize)
-	if err != nil {
-		return nil, err
-	}
-	blockCache, err := memcache.NewBlockCache()
-	if err != nil {
-		return nil, err
-	}
-	db.index.newCache(blockCache)
-
-	dataCache, err := memcache.NewDataCache()
-	if err != nil {
-		return nil, err
-	}
-	db.data.newCache(dataCache)
-	db.memcache = memcache
+	// dataCache, err := memcache.NewDataCache()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// db.data.newCache(dataCache)
+	// db.memcache = memcache
 
 	//initbatchdb
 	if err = db.initbatchdb(); err != nil {
@@ -285,22 +284,16 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) forEachBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
+func (db *DB) readBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
-	t := db.index.FileManager
-	for {
-		b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: t, offset: off}
-		if err := b.read(fillCache); err != nil {
-			return err
-		}
-		if stop, err := cb(b); stop || err != nil {
-			return err
-		}
-		if b.next == 0 {
-			return nil
-		}
-		db.metrics.BlockProbes.Add(1)
+	b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: db.index.FileManager, offset: off}
+	if err := b.read(fillCache); err != nil {
+		return err
 	}
+	if stop, err := cb(b); stop || err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) writeHeader() error {
@@ -375,6 +368,7 @@ func (db *DB) Close() error {
 	}
 
 	// Clear memdbs.
+	// db.memcache.Close()
 	db.clearMems()
 
 	return err
@@ -386,6 +380,20 @@ func startBlockIndex(seq uint64) uint32 {
 
 func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
+}
+
+// Get returns a new ItemIterator.
+func (db *DB) Get(topic []byte) ([]byte, error) {
+	it, err := db.Items(&Query{Topic: topic})
+	if err != nil {
+		return nil, err
+	}
+	it.First()
+	if it.Item() != nil {
+		db.metrics.Gets.Add(1)
+		return it.Item().Value(), nil
+	}
+	return nil, nil
 }
 
 // Items returns a new ItemIterator.
@@ -448,18 +456,16 @@ func (db *DB) expireOldEntries() {
 		defer db.mu.Unlock()
 		b := blockHandle{}
 		entryIdx := -1
-		err := db.forEachBlock(startBlockIndex(entry.seq), false, func(curb blockHandle) (bool, error) {
+		err := db.readBlock(startBlockIndex(entry.seq), false, func(curb blockHandle) (bool, error) {
 			b = curb
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
-				if e.mOffset == 0 {
-					return b.next == 0, nil
-				} else if entry.hash == e.hash {
+				if entry.hash == e.hash {
 					entryIdx = i
 					return true, nil
 				}
 			}
-			return false, nil
+			return true, nil
 		})
 		if entryIdx == -1 || err != nil {
 			continue
@@ -516,10 +522,49 @@ func (db *DB) newBlock() (int64, error) {
 	return off, err
 }
 
+// extend adds new block to db table for the batch commit
+func (db *DB) extend() error {
+	// precommit steps
+	for uint32(float64(db.seq-1)/float64(entriesPerBlock)) > db.blockIndex {
+		if _, err := db.newBlock(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// func (db *DB) putEntry(seq uint64, hash uint32, topicSize uint16, valueSize, expiresAt uint32, mOffset int64) (uint16, error) {
+// 	off := blockOffset(db.blockIndex)
+// 	b := &blockHandle{table: db.index, offset: off}
+// 	if b.entryIdx == entriesPerBlock-1 {
+// 		db.newBlock()
+// 	}
+// 	db.count++
+
+// 	ew := entryWriter{
+// 		block: b,
+// 	}
+// 	ew.entry = entry{
+// 		seq:       seq,
+// 		hash:      hash,
+// 		topicSize: uint16(len(topic)),
+// 		valueSize: uint32(len(value)),
+// 		expiresAt: expiresAt,
+// 		mOffset:   mOffset,
+// 	}
+// 	if err := ew.write(); err != nil {
+// 		db.freeseq.free(seq)
+// 		return b.entryIdx, err
+// 	}
+// 	return b.entryIdx, nil
+// }
+
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -563,6 +608,10 @@ func (db *DB) PutEntry(e *Entry) error {
 			return err
 		}
 	}
+	if uint32(float64(db.count)/float64(entriesPerBlock)) > db.blockIndex {
+		db.newBlock()
+	}
+
 	if db.syncWrites {
 		db.sync()
 	}
@@ -573,36 +622,15 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	if db.count == MaxKeys {
 		return errFull
 	}
-	// var b *blockHandle
 	db.metrics.Puts.Add(1)
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	// entryIdx := 0
 	seq := message.ID(id).Seq()
 	startBlockIdx := startBlockIndex(seq)
-	if startBlockIdx > db.blockIndex {
-		startBlockIdx = db.blockIndex
-	}
+
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	// log.Println("db.put: count, dbseq, seq, blockIdx ", db.count, db.seq, seq, startBlockIdx)
 	if err := b.read(false); err != nil {
 		db.freeseq.free(seq)
 		return err
-	}
-	if b.entryIdx == entriesPerBlock {
-		// log.Println("db.put: count, seq, blockIdx ", db.count, seq, startBlockIdx)
-		off, _ = db.newBlock()
-		// startBlockIdx++
-		// off = blockOffset(startBlockIdx)
-		b = &blockHandle{table: db.index, offset: off}
-		// if err := b.read(false); err != nil {
-		// 	db.freeseq.free(seq)
-		// 	return err
-		// }
-	}
-	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
-		db.newBlock()
 	}
 
 	db.count++
@@ -622,11 +650,12 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	if expiresAt > 0 {
 		db.timeWindow.add(b.entries[entryIdx])
 	}
+	b.entryIdx++
 	if err := b.write(); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
-	db.freeseq.evict(seq)
+	// db.freeseq.evict(seq)
 	db.filter.Append(uint64(hash))
 	return err
 }
@@ -638,6 +667,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	if e.ID == nil {
 		return errIdEmpty
 	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -673,34 +704,32 @@ func (db *DB) delete(id []byte) error {
 		return nil
 	}
 	db.metrics.Dels.Add(1)
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	b := blockHandle{}
 	entryIdx := -1
 	seq := message.ID(id).Seq()
 	startBlockIdx := startBlockIndex(seq)
-	err := db.forEachBlock(startBlockIdx, false, func(curb blockHandle) (bool, error) {
-		b = curb
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.mOffset == 0 {
-				return b.next == 0, nil
-			} else if hash == e.hash {
-				_id, err := db.data.readId(e)
-				if err != nil {
-					return true, err
-				}
-				if bytes.Equal(id, _id) {
-					entryIdx = i
-					return true, nil
-				}
-			}
-		}
-		return false, nil
-	})
-	if entryIdx == -1 || err != nil {
+	off := blockOffset(startBlockIdx)
+	b := &blockHandle{table: db.index, offset: off}
+	if err := b.read(false); err != nil {
+		db.freeseq.free(seq)
 		return err
 	}
+	for i := 0; i < entriesPerBlock; i++ {
+		e := b.entries[i]
+		if hash == e.hash {
+			_id, err := db.data.readId(e)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(id, _id) {
+				entryIdx = i
+				break
+			}
+		}
+	}
+	if entryIdx == -1 {
+		return errIdEmpty
+	}
+
 	e := b.entries[entryIdx]
 	b.del(entryIdx)
 	b.entryIdx--
@@ -745,11 +774,11 @@ func (db *DB) FileSize() (int64, error) {
 }
 
 func (db *DB) nextSeq() uint64 {
-	if ok, seq := db.freeseq.get(); ok {
-		db.freeseq.queue(db.seq)
-		return seq
-	}
-	atomic.AddUint64(&db.seq, 1)
-	db.freeseq.queue(db.seq)
-	return db.seq
+	// if ok, seq := db.freeseq.get(); ok {
+	// 	db.freeseq.queue(db.seq)
+	// 	return seq
+	// }
+	return atomic.AddUint64(&db.seq, 1)
+	// db.freeseq.queue(db.seq)
+	// return db.seq
 }

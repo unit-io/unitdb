@@ -24,11 +24,11 @@ func (it *TopicIterator) Next() {
 	it.topic = nil
 	if len(it.queue) == 0 {
 		for it.nextBlockIdx < it.db.nBlocks {
-			err := it.db.forEachBlock(it.nextBlockIdx, false, func(b blockHandle) (bool, error) {
+			err := it.db.readBlock(it.nextBlockIdx, false, func(b blockHandle) (bool, error) {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.mOffset == 0 {
-						return false, nil
+						continue
 					}
 					if e.isExpired() {
 						return false, nil
@@ -48,7 +48,7 @@ func (it *TopicIterator) Next() {
 					}
 					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: message.ID(id), err: err})
 				}
-				return false, nil
+				return true, nil
 			})
 			if err != nil {
 				it.queue = append(it.queue, &Topic{err: err})

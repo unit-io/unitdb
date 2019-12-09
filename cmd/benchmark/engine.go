@@ -10,7 +10,7 @@ import (
 
 type kvEngine interface {
 	Batch(func(b *tracedb.Batch) error) error
-	// Get(key []byte) ([]byte, error)
+	Get(key []byte) ([]byte, error)
 	Close() error
 	FileSize() (int64, error)
 }
@@ -40,5 +40,9 @@ func dirSize(path string) (int64, error) {
 }
 
 func newTracedb(path string) (kvEngine, error) {
-	return tracedb.Open(path, nil)
+	opts := tracedb.Options{}
+	// opts.FileSystem = fs.FileIO
+	// opts.BackgroundSyncInterval = 60 * time.Second
+	// opts.BatchCleanupInterval = 60 * time.Second
+	return tracedb.Open(path, &opts)
 }

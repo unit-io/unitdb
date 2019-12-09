@@ -46,7 +46,10 @@ func generateKeys(count int, minL int, maxL int) [][]byte {
 			continue
 		}
 		seen[k] = struct{}{}
-		keys = append(keys, []byte(k))
+		topic := make([]byte, len(k)+5)
+		topic = append(topic, []byte("dev18.")...)
+		topic = append(topic, []byte(k)...)
+		keys = append(keys, topic)
 	}
 	return keys
 }
@@ -109,10 +112,7 @@ func benchmark(engine string, dir string, numKeys int, minKS int, maxKS int, min
 		rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
 		err = db.Batch(func(b *tracedb.Batch) error {
 			for i, k := range batch {
-				topic := make([]byte, len(k)+5)
-				topic = append(topic, []byte("dev18.")...)
-				topic = append(topic, k...)
-				if err := b.Put(topic, randValue(rnd, valSrc, minVS, maxVS)); err != nil {
+				if err := b.Put(k, randValue(rnd, valSrc, minVS, maxVS)); err != nil {
 					return err
 				}
 				if progress {
@@ -143,28 +143,28 @@ func benchmark(engine string, dir string, numKeys int, minKS int, maxKS int, min
 	}
 	forceGC()
 
-	// start = time.Now()
-	// err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
-	// 	for i, k := range batch {
-	// 		v, err := db.Get(k)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		if v == nil {
-	// 			return errors.New("key doesn't exist")
-	// 		}
-	// 		if progress {
-	// 			showProgress(gid, i, len(batch))
-	// 		}
-	// 	}
-	// 	return nil
-	// })
-	// if err != nil {
-	// 	return err
-	// }
-	// endsecs = time.Since(start).Seconds()
-	// totalalsecs += endsecs
-	// fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+	start = time.Now()
+	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
+		for i, k := range batch {
+			_, err := db.Get(k)
+			if err != nil {
+				return err
+			}
+			// if v == nil {
+			// 	return errors.New("key doesn't exist")
+			// }
+			if progress {
+				showProgress(gid, i, len(batch))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	endsecs = time.Since(start).Seconds()
+	totalalsecs += endsecs
+	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
 	fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
 	sz, err := db.FileSize()
 	if err != nil {
