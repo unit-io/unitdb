@@ -18,7 +18,6 @@ import (
 	fltr "github.com/saffat-in/tracedb/filter"
 	"github.com/saffat-in/tracedb/fs"
 	"github.com/saffat-in/tracedb/hash"
-	"github.com/saffat-in/tracedb/memdb"
 	"github.com/saffat-in/tracedb/message"
 )
 
@@ -79,8 +78,7 @@ type DB struct {
 	freeseq      freesequence
 	dbInfo
 	timeWindow timeWindowBucket
-	// memcache
-	memcache *memdb.MemCache
+
 	//batchdb
 	*batchdb
 	//trie
@@ -146,28 +144,12 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
-	// init memcache
-	// memcache, err := memdb.NewCache("memcach", opts.MemdbSize)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// blockCache, err := memcache.NewBlockCache()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// db.index.newCache(blockCache)
-
-	// dataCache, err := memcache.NewDataCache()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// db.data.newCache(dataCache)
-	// db.memcache = memcache
-
 	//initbatchdb
 	if err = db.initbatchdb(); err != nil {
 		return nil, err
 	}
+
+	db.data.newCache(db.cacheID, db.mem.DB)
 
 	if index.size == 0 {
 		if data.size != 0 {
@@ -229,11 +211,11 @@ func Open(path string, opts *Options) (*DB, error) {
 		db.syncWrites = true
 	}
 
-	if opts.BatchCleanupInterval > 0 {
-		go db.startBatchCleanup(opts.BatchCleanupInterval)
-	} else {
-		go db.startBatchCleanup(15 * time.Second)
-	}
+	// if opts.BatchCleanupInterval > 0 {
+	// 	go db.startBatchCleanup(opts.BatchCleanupInterval)
+	// } else {
+	// 	go db.startBatchCleanup(15 * time.Second)
+	// }
 
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
@@ -286,7 +268,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 
 func (db *DB) readBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
-	b := blockHandle{cache: db.index.cache, cacheID: db.index.cacheID, table: db.index.FileManager, offset: off}
+	b := blockHandle{cache: db.mem.DB, cacheID: db.cacheID, table: db.index.FileManager, offset: off}
 	if err := b.read(fillCache); err != nil {
 		return err
 	}
@@ -523,14 +505,14 @@ func (db *DB) newBlock() (int64, error) {
 }
 
 // extend adds new block to db table for the batch commit
-func (db *DB) extend() error {
+func (db *DB) extend(size uint32) (off int64, err error) {
 	// precommit steps
 	for uint32(float64(db.seq-1)/float64(entriesPerBlock)) > db.blockIndex {
-		if _, err := db.newBlock(); err != nil {
-			return err
+		if _, err = db.newBlock(); err != nil {
+			return off, err
 		}
 	}
-	return nil
+	return db.data.allocate(size)
 }
 
 // func (db *DB) putEntry(seq uint64, hash uint32, topicSize uint16, valueSize, expiresAt uint32, mOffset int64) (uint16, error) {
@@ -771,6 +753,16 @@ func (db *DB) FileSize() (int64, error) {
 		return -1, err
 	}
 	return is.Size() + ds.Size(), nil
+}
+
+func (db *DB) getSeq() uint64 {
+	// if ok, seq := db.freeseq.get(); ok {
+	// 	db.freeseq.queue(db.seq)
+	// 	return seq
+	// }
+	return atomic.LoadUint64(&db.seq)
+	// db.freeseq.queue(db.seq)
+	// return db.seq
 }
 
 func (db *DB) nextSeq() uint64 {

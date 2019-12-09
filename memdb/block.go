@@ -4,13 +4,18 @@ import (
 	"encoding/binary"
 )
 
+type entryHeader struct {
+	seq        uint64
+	blockIndex uint32
+	offset     int64
+}
+
 type entry struct {
-	seq       uint64
 	hash      uint32
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	mOffset   int64
+	tmOffset  int64
 }
 
 func (e entry) mSize() uint32 {
@@ -30,7 +35,7 @@ type blockHandle struct {
 }
 
 const (
-	entrySize        = 30
+	entrySize        = 22
 	blockSize uint32 = 696
 )
 
@@ -41,12 +46,11 @@ func align512(n uint32) uint32 {
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
 		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
-		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
-		b.entries[i].hash = binary.LittleEndian.Uint32(data[8:12])
-		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[12:14])
-		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[14:18])
-		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[18:22])
-		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[22:30]))
+		b.entries[i].hash = binary.LittleEndian.Uint32(data[:4])
+		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[4:6])
+		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[6:10])
+		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[10:14])
+		b.entries[i].tmOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
 		data = data[entrySize:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
@@ -102,12 +106,11 @@ func (ew *entryWriter) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
 	e := ew.entry
-	binary.LittleEndian.PutUint64(buf[:8], e.seq)
-	binary.LittleEndian.PutUint32(buf[8:12], e.hash)
-	binary.LittleEndian.PutUint16(buf[12:14], e.topicSize)
-	binary.LittleEndian.PutUint32(buf[14:18], e.valueSize)
-	binary.LittleEndian.PutUint32(buf[18:22], e.expiresAt)
-	binary.LittleEndian.PutUint64(buf[22:30], uint64(e.mOffset))
+	binary.LittleEndian.PutUint32(buf[:4], e.hash)
+	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
+	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
+	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.tmOffset))
 
 	return data, nil
 }

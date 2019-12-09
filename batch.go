@@ -23,19 +23,19 @@ type batchIndex struct {
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	kvOffset  int64
+	tmOffset  int64
 }
 
 func (index batchIndex) id(data []byte) []byte {
-	return data[index.kvOffset : index.kvOffset+int64(index.idSize)]
+	return data[index.tmOffset : index.tmOffset+int64(index.idSize)]
 }
 
-func (index batchIndex) tvSize() uint32 {
+func (index batchIndex) tmSize() uint32 {
 	return uint32(index.idSize) + uint32(index.topicSize) + index.valueSize
 }
 
-func (index batchIndex) tv(data []byte) (id, topic, value []byte) {
-	keyValue := data[index.kvOffset : index.kvOffset+int64(index.tvSize())]
+func (index batchIndex) tm(data []byte) (id, topic, value []byte) {
+	keyValue := data[index.tmOffset : index.tmOffset+int64(index.tmSize())]
 	return keyValue[:index.idSize], keyValue[index.idSize : index.idSize+index.topicSize], keyValue[index.idSize+index.topicSize:]
 
 }
@@ -102,7 +102,7 @@ func (b *Batch) appendRec(dFlag bool, key uint32, id, topic, value []byte, expir
 		data[o] = 0
 	}
 	o++
-	index.kvOffset = int64(o)
+	index.tmOffset = int64(o)
 	index.key = key
 	index.idSize = uint16(len(id))
 	index.topicSize = uint16(len(topic))
@@ -117,9 +117,10 @@ func (b *Batch) appendRec(dFlag bool, key uint32, id, topic, value []byte, expir
 	b.index = append(b.index, index)
 }
 
-func (b *Batch) mput(id, topic, value []byte, expiresAt uint32) error {
+func (b *Batch) mput(id, topic, value []byte, offset int64, expiresAt uint32) error {
 	hash := b.db.hash(id)
-	if err := b.db.mem.Put(hash, id, topic, value, expiresAt); err != nil {
+	seq := b.db.cacheID ^ message.ID(id).Seq()
+	if err := b.db.mem.Put(seq, hash, id, topic, value, offset, expiresAt); err != nil {
 		return err
 	}
 	b.seq++
@@ -231,15 +232,19 @@ func (b *Batch) hasWriteConflict(key uint32) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.key) {
 		// 	return errWriteConflict
 		// }
-		id, topic, val := index.tv(b.data)
-		if err := fn(i, id, topic, val, index.expiresAt); err != nil {
+		id, topic, val := index.tm(b.data)
+		off, err := b.db.extend(uint32(len(val)))
+		if err != nil {
+			return err
+		}
+		if err := fn(i, id, topic, val, off, index.expiresAt); err != nil {
 			b.db.freeseq.free(message.ID(id).Seq())
 			return err
 		}
@@ -260,10 +265,10 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	b.seq = b.db.mem.GetSeq()
-	b.db.mem.Extend(b.seq + uint64(b.Len()))
-	err := b.writeInternal(func(i int, id, topic, v []byte, expiresAt uint32) error {
-		return b.mput(id, topic, v, expiresAt)
+	b.seq = b.db.getSeq() + 1
+	// b.db.Extend(b.seq + uint64(b.Len()))
+	err := b.writeInternal(func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error {
+		return b.mput(id, topic, v, offset, expiresAt)
 	})
 
 	if err == nil {
@@ -284,7 +289,7 @@ func (b *Batch) commit() error {
 	}()
 
 	//precommit steps
-	b.db.extend()
+	// b.db.extend(0)
 
 	// l := b.Len()
 	// for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
@@ -316,7 +321,7 @@ func (b *Batch) commit() error {
 	// }
 
 	for _, index := range b.pendingWrites {
-		id, topic, val := index.tv(b.data)
+		id, topic, val := index.tm(b.data)
 		hash := b.db.hash(id)
 		if index.delFlag {
 			/// Test filter block for presence
@@ -342,8 +347,8 @@ func (b *Batch) commit() error {
 
 	// cleanup memdb blocks after commit is successful to free used blocks
 	// append batch seq and length to queue for cleanup
-	q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
-	b.db.batchCleanupQueue <- q
+	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
+	// b.db.batchCleanupQueue <- q
 	return nil
 }
 
@@ -401,7 +406,7 @@ func (b *Batch) uniq() []batchIndex {
 func (b *Batch) append(bnew *Batch) {
 	off := len(b.data)
 	for _, idx := range bnew.index {
-		idx.kvOffset = idx.kvOffset + int64(off)
+		idx.tmOffset = idx.tmOffset + int64(off)
 		b.index = append(b.index, idx)
 	}
 	b.data = append(b.data, bnew.data...)

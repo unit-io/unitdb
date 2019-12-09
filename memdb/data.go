@@ -29,7 +29,7 @@ func (t *dataTable) readRaw(off, kvSize int64) ([]byte, error) {
 }
 
 func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
-	message, err := t.slice(e.mOffset, e.mOffset+int64(e.mSize()))
+	message, err := t.slice(e.tmOffset, e.tmOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -37,7 +37,7 @@ func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 }
 
 func (t *dataTable) readId(e entry) ([]byte, error) {
-	return t.slice(e.mOffset, e.mOffset+idSize)
+	return t.slice(e.tmOffset, e.tmOffset+idSize)
 }
 
 func (t *dataTable) allocate(size uint32) (int64, error) {
@@ -48,7 +48,7 @@ func (t *dataTable) allocate(size uint32) (int64, error) {
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
-	return t.slice(e.mOffset+idSize, e.mOffset+int64(e.topicSize)+idSize)
+	return t.slice(e.tmOffset+idSize, e.tmOffset+int64(e.topicSize)+idSize)
 }
 
 func (t *dataTable) free(size uint32, off int64) {

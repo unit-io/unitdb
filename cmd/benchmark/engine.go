@@ -43,6 +43,5 @@ func newTracedb(path string) (kvEngine, error) {
 	opts := tracedb.Options{}
 	// opts.FileSystem = fs.FileIO
 	// opts.BackgroundSyncInterval = 60 * time.Second
-	// opts.BatchCleanupInterval = 60 * time.Second
 	return tracedb.Open(path, &opts)
 }

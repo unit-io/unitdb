@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"encoding"
-	"math/rand"
 	"os"
 
 	"github.com/saffat-in/tracedb/fs"
@@ -13,7 +12,7 @@ type table struct {
 	fs.FileManager
 	size int64
 
-	cache   memdb.Cache
+	cache   *memdb.DB
 	cacheID uint64
 }
 
@@ -35,9 +34,9 @@ func newTable(fs fs.FileSystem, name string) (table, error) {
 	return t, err
 }
 
-func (t *table) newCache(cache memdb.Cache) {
+func (t *table) newCache(cacheID uint64, cache *memdb.DB) {
 	t.cache = cache
-	t.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
+	t.cacheID = cacheID
 }
 
 func (t *table) extend(size uint32) (int64, error) {

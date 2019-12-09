@@ -41,7 +41,7 @@ type blockHandle struct {
 	offset int64
 
 	updated bool
-	cache   memdb.Cache
+	cache   *memdb.DB
 	cacheID uint64
 }
 
@@ -99,22 +99,22 @@ func (h *blockHandle) readRaw() ([]byte, error) {
 }
 
 func (h *blockHandle) read(fillCache bool) error {
-	var cacheKey uint64
-	if h.cache != nil {
-		cacheKey = h.cacheID ^ uint64(h.offset)
-		if data, _ := h.cache.Get(cacheKey, blockSize); data != nil && len(data) == int(blockSize) {
-			return h.UnmarshalBinary(data)
-		}
-	}
+	// var cacheKey uint64
+	// if h.cache != nil {
+	// 	cacheKey = h.cacheID ^ uint64(h.offset)
+	// 	if data, _ := h.cache.Get(cacheKey, blockSize); data != nil && len(data) == int(blockSize) {
+	// 		return h.UnmarshalBinary(data)
+	// 	}
+	// }
 
 	buf, err := h.table.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
 
-	if h.cache != nil && fillCache {
-		h.cache.Set(cacheKey, h.offset, buf)
-	}
+	// if h.cache != nil && fillCache {
+	// 	h.cache.Set(cacheKey, h.offset, buf)
+	// }
 
 	return h.UnmarshalBinary(buf)
 }
@@ -125,10 +125,10 @@ func (h *blockHandle) write() error {
 		return err
 	}
 	_, err = h.table.WriteAt(buf, h.offset)
-	if h.cache != nil {
-		cacheKey := h.cacheID ^ uint64(h.offset)
-		h.cache.Delete(cacheKey)
-	}
+	// if h.cache != nil {
+	// 	cacheKey := h.cacheID ^ uint64(h.offset)
+	// 	h.cache.Delete(cacheKey)
+	// }
 	return err
 }
 

@@ -46,10 +46,11 @@ type dbInfo struct {
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
-	mu      sync.RWMutex
-	index   tableManager
-	data    dataTable
-	freeseq freesequence
+	mu    sync.RWMutex
+	index tableManager
+	data  dataTable
+	//block cache
+	blockCache map[uint64]*entryHeader
 	dbInfo
 	// Close.
 	closed uint32
@@ -70,8 +71,9 @@ func Open(path string, memSize int64) (*DB, error) {
 		return nil, err
 	}
 	db := &DB{
-		index: index,
-		data:  dataTable{tableManager: data},
+		index:      index,
+		data:       dataTable{tableManager: data},
+		blockCache: make(map[uint64]*entryHeader, 100),
 		dbInfo: dbInfo{
 			nBlocks: 1,
 		},
@@ -181,19 +183,19 @@ func (db *DB) newBlock() (int64, error) {
 	return off, err
 }
 
-// extend adds new block to db table for the batch write
-func (db *DB) Extend(endSeq uint64) error {
-	// precommit steps
-	for uint32(float64(endSeq-1)/float64(entriesPerBlock)) > db.blockIndex {
-		if _, err := db.newBlock(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// // extend adds new block to db table for the batch write
+// func (db *DB) Extend(endSeq uint64) error {
+// 	// precommit steps
+// 	for uint32(float64(endSeq-1)/float64(entriesPerBlock)) > db.blockIndex {
+// 		if _, err := db.newBlock(); err != nil {
+// 			return err
+// 		}
+// 	}
+// 	return nil
+// }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
-func (db *DB) Put(hash uint32, id, topic, value []byte, expiresAt uint32) error {
+func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	switch {
 	case len(id) == 0:
 		return errors.New("id is empty")
@@ -204,24 +206,17 @@ func (db *DB) Put(hash uint32, id, topic, value []byte, expiresAt uint32) error 
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	err := db.put(hash, id, topic, value, expiresAt)
+	memoff, err := db.put(hash, id, topic, value, offset, expiresAt)
+	if err == nil {
+		db.blockCache[seq] = &entryHeader{seq: db.nextSeq(), blockIndex: db.blockIndex, offset: memoff}
+	}
 	return err
 }
 
-func (db *DB) put(hash uint32, id, topic, value []byte, expiresAt uint32) (err error) {
-	seq := db.nextSeq()
-	startBlockIdx := startBlockIndex(seq)
-	if startBlockIdx > db.blockIndex {
-		startBlockIdx = db.blockIndex
-	}
-	off := blockOffset(startBlockIdx)
+func (db *DB) put(hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) (memoff int64, err error) {
+	off := blockOffset(db.blockIndex)
 	b := &blockHandle{table: db.index, offset: off}
-	// log.Println("db.put: count, dbseq, seq, blockIdx ", db.count, db.seq, seq, startBlockIdx)
-	if err := b.readFooter(); err != nil {
-		db.freeseq.free(seq)
-		return err
-	}
-	if startBlockIdx == db.blockIndex && b.entryIdx == entriesPerBlock-1 {
+	if b.entryIdx == entriesPerBlock-1 {
 		db.newBlock()
 	}
 	db.count++
@@ -230,67 +225,68 @@ func (db *DB) put(hash uint32, id, topic, value []byte, expiresAt uint32) (err e
 		block: b,
 	}
 	ew.entry = entry{
-		seq:       seq,
+		// seq:       seq,
 		hash:      hash,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
+		tmOffset:  offset,
 		expiresAt: expiresAt,
 	}
-	if ew.entry.mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
-		db.freeseq.free(seq)
-		return err
+	if memoff, err = db.data.writeMessage(id, topic, value); err != nil {
+		// db.freeseq.free(seq)
+		return memoff, err
 	}
 	if err := ew.write(); err != nil {
-		db.freeseq.free(seq)
-		return err
+		// db.freeseq.free(seq)
+		return memoff, err
 	}
-	return err
+	return memoff, err
 }
 
-// delete deletes the given key from the DB.
-func (db *DB) delete(seq uint64) error {
-	b := blockHandle{}
-	entryIdx := -1
-	startBlockIdx := startBlockIndex(seq)
-	err := db.forEachBlock(startBlockIdx, func(curb blockHandle) (bool, error) {
-		b = curb
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if seq == e.seq {
-				entryIdx = i
-				db.data.free(e.mSize(), e.mOffset)
-				return true, nil
-			}
-		}
-		return true, nil
-	})
-	if entryIdx == -1 || err != nil {
-		return err
-	}
-	b.entryIdx = uint16(entryIdx)
-	ew := entryWriter{
-		block: &b,
-	}
-	if err := ew.write(); err != nil {
-		return err
-	}
-	db.freeseq.free(seq)
-	db.count--
-	return nil
-}
+// // delete deletes the given key from the DB.
+// func (db *DB) delete(seq uint64) error {
+// 	b := blockHandle{}
+// 	entryIdx := -1
+// 	startBlockIdx := startBlockIndex(seq)
+// 	err := db.forEachBlock(startBlockIdx, func(curb blockHandle) (bool, error) {
+// 		b = curb
+// 		for i := 0; i < entriesPerBlock; i++ {
+// 			e := b.entries[i]
+// 			if seq == e.seq {
+// 				entryIdx = i
+// 				db.data.free(e.mSize(), e.mOffset)
+// 				return true, nil
+// 			}
+// 		}
+// 		return true, nil
+// 	})
+// 	if entryIdx == -1 || err != nil {
+// 		return err
+// 	}
+// 	b.entryIdx = uint16(entryIdx)
+// 	ew := entryWriter{
+// 		block: &b,
+// 	}
+// 	if err := ew.write(); err != nil {
+// 		return err
+// 	}
+// 	db.freeseq.free(seq)
+// 	db.count--
+// 	return nil
+// }
 
-// Cleanup addds block range into freeblocks list
-func (db *DB) Cleanup(startSeq, endSeq uint64) (ok bool) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	if startSeq >= endSeq && endSeq >= db.GetSeq() {
-		return false
-	}
-	for seq := startSeq; seq <= endSeq; seq++ {
-		db.delete(seq)
-	}
-	return true
-}
+// // Cleanup addds block range into freeblocks list
+// func (db *DB) Cleanup(startSeq, endSeq uint64) (ok bool) {
+// 	db.mu.RLock()
+// 	defer db.mu.RUnlock()
+// 	if startSeq >= endSeq && endSeq >= db.GetSeq() {
+// 		return false
+// 	}
+// 	for seq := startSeq; seq <= endSeq; seq++ {
+// 		db.delete(seq)
+// 	}
+// 	return true
+// }
 
 // Count returns the number of items in the DB.
 func (db *DB) Count() uint32 {
@@ -306,19 +302,6 @@ func (db *DB) FileSize() (int64, error) {
 	return db.index.size() + db.data.size, nil
 }
 
-// Get latest sequence number.
-func (db *DB) GetSeq() uint64 {
-	if ok, seq := db.freeseq.get(); ok {
-		return seq
-	}
-	return atomic.AddUint64(&db.seq, 1)
-}
-
 func (db *DB) nextSeq() uint64 {
-	if ok, seq := db.freeseq.get(); ok {
-		return seq
-	}
-	seq := atomic.LoadUint64(&db.seq)
-	atomic.AddUint64(&db.seq, 1)
-	return seq
+	return atomic.AddUint64(&db.seq, 1)
 }

@@ -4,39 +4,6 @@ import (
 	"sort"
 )
 
-type freesequence struct {
-	seqs []uint64 // seq holds free sequence
-}
-
-func (fs *freesequence) search(seq uint64) int {
-	return sort.Search(len(fs.seqs), func(i int) bool {
-		return fs.seqs[i] == seq
-	})
-}
-
-// get first free seq
-func (fs *freesequence) get() (ok bool, seq uint64) {
-	if len(fs.seqs) == 0 {
-		return ok, seq
-	}
-	seq = fs.seqs[0]
-	fs.seqs = fs.seqs[1:]
-	return true, seq
-}
-
-func (fs *freesequence) free(seq uint64) (ok bool) {
-	i := fs.search(seq)
-	if i < len(fs.seqs) && seq == fs.seqs[i] {
-		return false
-	}
-	fs.seqs = append(fs.seqs, seq)
-	return true
-}
-
-func (fs *freesequence) len() int {
-	return len(fs.seqs)
-}
-
 type freeblock struct {
 	offset int64
 	size   uint32

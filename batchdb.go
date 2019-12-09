@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"context"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,8 @@ type batchdb struct {
 	memMu   sync.RWMutex
 	memPool chan *memdb.DB
 	mem     *mem
+	// memcache
+	cacheID uint64
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches     map[uint64][]uint32
 	batchQueue        chan *Batch
@@ -44,39 +47,40 @@ func (db *DB) initbatchdb() error {
 		batchQueue:        make(chan *Batch, 1),
 		batchCleanupQueue: make(chan *batchqueue, 1),
 	}
+	// memcache
+	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 
 	db.batchdb = bdb
 	// Create a memdb.
 	if _, err := db.newMem(0); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-func (db *DB) startBatchCleanup(interval time.Duration) {
-	ctx, cancel := context.WithCancel(context.Background())
-	db.cancelSyncer = cancel
-	cleanupTicker := time.NewTicker(interval)
-	defer cleanupTicker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-cleanupTicker.C:
-		case q := <-db.batchCleanupQueue:
-			memdbSize, err := db.mem.FileSize()
-			if err != nil {
-				logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
-			}
-			if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
-				if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
-					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
-				}
-			}
-		}
-	}
-}
+// func (db *DB) startBatchCleanup(interval time.Duration) {
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	db.cancelSyncer = cancel
+// 	cleanupTicker := time.NewTicker(interval)
+// 	defer cleanupTicker.Stop()
+// 	for {
+// 		select {
+// 		case <-ctx.Done():
+// 			return
+// 		case <-cleanupTicker.C:
+// 		case q := <-db.batchCleanupQueue:
+// 			memdbSize, err := db.mem.FileSize()
+// 			if err != nil {
+// 				logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
+// 			}
+// 			if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
+// 				if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
+// 					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
+// 				}
+// 			}
+// 		}
+// 	}
+// }
 
 // Batch executes a function within the context of a read-write managed transaction.
 // If no error is returned from the function then the transaction is committed.
