@@ -106,7 +106,9 @@ func (h *blockHandle) read(seq uint64) error {
 			return h.UnmarshalBinary(data)
 		}
 	}
-
+	if seq > 0 {
+		h.offset = blockOffset(startBlockIndex(seq))
+	}
 	buf, err := h.table.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err

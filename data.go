@@ -9,7 +9,7 @@ func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error)
 	var cacheKey uint64
 	if t.cache != nil {
 		cacheKey = t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil && len(data) == int(e.mSize()) {
+		if data, err := t.cache.GetData(cacheKey); data != nil && len(data) == int(e.mSize()) {
 			return data[:idSize], data[e.topicSize+idSize:], err
 		}
 	}
@@ -26,7 +26,7 @@ func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error)
 func (t *dataTable) readId(e entry) ([]byte, error) {
 	if t.cache != nil {
 		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil {
+		if data, err := t.cache.GetData(cacheKey); data != nil {
 			return data[:idSize], err
 		}
 	}
@@ -36,7 +36,7 @@ func (t *dataTable) readId(e entry) ([]byte, error) {
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
 	if t.cache != nil {
 		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil {
+		if data, err := t.cache.GetData(cacheKey); data != nil {
 			return data[idSize : e.topicSize+idSize], err
 		}
 	}
@@ -71,4 +71,11 @@ func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error)
 		off, err = t.append(data)
 	}
 	return off, err
+}
+
+func (t *dataTable) writeRaw(data []byte, off int64) error {
+	if _, err := t.WriteAt(data, off); err != nil {
+		return err
+	}
+	return nil
 }

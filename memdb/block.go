@@ -5,9 +5,8 @@ import (
 )
 
 type entryHeader struct {
-	seq        uint64
-	hash uint32
 	blockIndex uint32
+	valueSize  uint32
 	offset     int64
 }
 
@@ -126,7 +125,7 @@ func (ew *entryWriter) write() error {
 	if err != nil {
 		return err
 	}
-	ew.block.entryIdx = ew.block.entryIdx + 1
+	ew.block.entryIdx++
 	return ew.block.writeFooter()
 }
 

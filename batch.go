@@ -17,6 +17,7 @@ const (
 
 type batchIndex struct {
 	delFlag   bool
+	seq       uint64
 	key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
 	idSize    uint16
 	topicSize uint16
@@ -60,16 +61,16 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 
 // Batch is a write batch.
 type Batch struct {
-	opts          *BatchOptions
-	managed       bool
-	grouped       bool
-	order         int8
-	seq           uint64
-	db            *DB
-	data          []byte
-	index         []batchIndex
-	pendingWrites []batchIndex
-	keys          []uint32
+	opts             *BatchOptions
+	managed          bool
+	grouped          bool
+	order            int8
+	seq              uint64
+	db               *DB
+	data             []byte
+	index            []batchIndex
+	pendingWrites    []batchIndex
+	pendingWriteSeqs []uint64
 }
 
 func (b *Batch) grow(n int) {
@@ -85,7 +86,7 @@ func (b *Batch) grow(n int) {
 	}
 }
 
-func (b *Batch) appendRec(dFlag bool, key uint32, id, topic, value []byte, expiresAt uint32) {
+func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value []byte, expiresAt uint32) {
 	n := 1 + len(id)
 	n += len(topic)
 	if !dFlag {
@@ -102,6 +103,7 @@ func (b *Batch) appendRec(dFlag bool, key uint32, id, topic, value []byte, expir
 	}
 	o++
 	index.tmOffset = int64(o)
+	index.seq = seq
 	index.key = key
 	index.idSize = uint16(len(id))
 	index.topicSize = uint16(len(topic))
@@ -117,6 +119,14 @@ func (b *Batch) appendRec(dFlag bool, key uint32, id, topic, value []byte, expir
 }
 
 func (b *Batch) mput(id, topic, value []byte, offset int64, expiresAt uint32) error {
+	switch {
+	case len(id) == 0:
+		return errIdEmpty
+	case len(id) > MaxKeyLength:
+		return errIdTooLarge
+	case len(value) > MaxValueLength:
+		return errValueTooLarge
+	}
 	hash := b.db.hash(id)
 	seq := b.db.cacheID ^ message.ID(id).Seq()
 	if err := b.db.mem.Put(seq, hash, id, topic, value, offset, expiresAt); err != nil {
@@ -180,7 +190,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 		val = b.db.mac.Encrypt(nil, val)
 	}
 
-	b.appendRec(false, key, id, topic.Marshal(), val, e.ExpiresAt)
+	b.appendRec(false, seq, key, id, topic.Marshal(), val, e.ExpiresAt)
 
 	return nil
 }
@@ -216,14 +226,14 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	id := message.ID(e.ID)
 	id.AddContract(topic.Parts)
 	key := topic.GetHashCode()
-	b.appendRec(true, key, id, topic.Marshal(), nil, 0)
+	b.appendRec(true, id.Seq(), key, id, topic.Marshal(), nil, 0)
 	return nil
 }
 
-func (b *Batch) hasWriteConflict(key uint32) bool {
+func (b *Batch) hasWriteConflict(seq uint64) bool {
 	for _, batch := range b.db.activeBatches {
-		for _, hash := range batch {
-			if hash == key {
+		for _, s := range batch {
+			if s == seq {
 				return true
 			}
 		}
@@ -235,7 +245,7 @@ func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, offset int64, 
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	for i, index := range b.pendingWrites {
-		// if b.hasWriteConflict(index.key) {
+		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
 		id, topic, val := index.tm(b.data)
@@ -271,7 +281,7 @@ func (b *Batch) Write() error {
 	})
 
 	if err == nil {
-		b.db.activeBatches[b.seq] = b.Keys()
+		b.db.activeBatches[b.seq] = b.Seqs()
 	}
 
 	return err
@@ -356,14 +366,13 @@ func (b *Batch) commit() error {
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
 	}
-		if len(b.pendingWrites) == 0 {
+	if len(b.pendingWrites) == 0 {
 		return nil
 	}
 	// err := b.commit()
-	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
-	// b.db.batchCommitQueue <- q
-		//remove batch from activeBatches after commit
-		delete(b.db.activeBatches, b.seq)
+	b.db.batchCommitQueue <- b.seq
+	//remove batch from activeBatches after commit
+	// delete(b.db.activeBatches, b.seq)
 	return nil
 }
 
@@ -397,8 +406,8 @@ func (b *Batch) uniq() []batchIndex {
 	}
 
 	b.pendingWrites = make([]batchIndex, len(unique_set))
-	for k, i := range unique_set {
-		b.keys = append(b.keys, k)
+	for _, i := range unique_set {
+		b.pendingWriteSeqs = append(b.pendingWriteSeqs, b.index[i.idx].seq)
 		b.pendingWrites[len(unique_set)-i.newidx-1] = b.index[i.idx]
 	}
 	return b.pendingWrites
@@ -420,9 +429,9 @@ func _assert(condition bool, msg string, v ...interface{}) {
 	}
 }
 
-// keys returns keys in active batch.
-func (b *Batch) Keys() []uint32 {
-	return b.keys
+// Seqs returns Seqs in active batch.
+func (b *Batch) Seqs() []uint64 {
+	return b.pendingWriteSeqs
 }
 
 // Len returns number of records in the batch.

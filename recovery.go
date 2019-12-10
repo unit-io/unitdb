@@ -44,7 +44,7 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	var itemCount uint32
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
-		err := db.readBlock(blockIdx, 0, func(b blockHandle) (bool, error) {
+		err := db.foreachBlock(blockIdx, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
 				if e.mOffset == 0 {

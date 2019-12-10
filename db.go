@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	entriesPerBlock    = 23
-	loadFactor         = 0.7
+	entriesPerBlock = 23
+	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
 	lockPostfix   = ".lock"
@@ -204,6 +204,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
+	db.startBatchCommit()
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
 	} else if opts.BackgroundSyncInterval == -1 {
@@ -265,16 +266,25 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) readBlock(startBlockIdx uint32, seq uint64, cb func(blockHandle) (bool, error)) error {
+func (db *DB) foreachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
-	b := blockHandle{cache: db.mem.DB, cacheID: db.cacheID, table: db.index.FileManager, offset: off}
-	if err := b.read(seq); err != nil {
+	b := blockHandle{table: db.index.FileManager, offset: off}
+	if err := b.read(0); err != nil {
 		return err
 	}
 	if stop, err := cb(b); stop || err != nil {
 		return err
 	}
 	return nil
+}
+
+func (db *DB) readBlock(seq uint64) (blockHandle, error) {
+	// off := blockOffset(startBlockIdx)
+	b := blockHandle{cache: db.mem.DB, cacheID: db.cacheID, table: db.index.FileManager}
+	if err := b.read(seq); err != nil {
+		return b, err
+	}
+	return b, nil
 }
 
 func (db *DB) writeHeader() error {
@@ -403,7 +413,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
-	q.keys = db.trie.Lookup(q.parts)
+
 	return &ItemIterator{db: db, query: q}, nil
 }
 
@@ -437,17 +447,17 @@ func (db *DB) expireOldEntries() {
 		defer db.mu.Unlock()
 		b := blockHandle{}
 		entryIdx := -1
-		err := db.readBlock(startBlockIndex(entry.seq), entry.seq, func(curb blockHandle) (bool, error) {
-			b = curb
-			for i := 0; i < entriesPerBlock; i++ {
-				e := b.entries[i]
-				if entry.hash == e.hash {
-					entryIdx = i
-					return true, nil
-				}
+		b, err := db.readBlock(entry.seq)
+		if err != nil {
+			continue
+		}
+		for i := 0; i < entriesPerBlock; i++ {
+			e := b.entries[i]
+			if entry.hash == e.hash {
+				entryIdx = i
+				break
 			}
-			return true, nil
-		})
+		}
 		if entryIdx == -1 || err != nil {
 			continue
 		}
@@ -609,7 +619,7 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(seq); err != nil {
+	if err := b.read(0); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
@@ -641,9 +651,50 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
-func (db *DB) commit(startSeq, endSeq uint64) error {
-return nil
+func (db *DB) commit(batchSeq uint64) error {
+	for _, seq := range db.activeBatches[batchSeq] {
+		key := db.cacheID ^ seq
+		iblock, idata, err := db.mem.Get(key)
+		if err != nil {
+			return err
+		}
+		ib := &blockHandle{}
+		err = ib.UnmarshalBinary(iblock)
+		if err != nil {
+			return err
+		}
+		entryIdx := -1
+		id := idata[:idSize]
+		hash := db.hash(id)
+		for i := 0; i < entriesPerBlock; i++ {
+			e := ib.entries[i]
+			if hash == e.hash {
+				entryIdx = i
+				break
+			}
+		}
+		if entryIdx == -1 {
+			return errIdEmpty
+		}
+		db.data.writeRaw(idata, ib.entries[entryIdx].mOffset)
+		startBlockIdx := startBlockIndex(seq)
+		off := blockOffset(startBlockIdx)
+		b := &blockHandle{table: db.index, offset: off}
+		if err := b.read(0); err != nil {
+			return err
+		}
+		if ib.entries[entryIdx].expiresAt > 0 {
+			db.timeWindow.add(ib.entries[entryIdx])
+		}
+		b.entryIdx++
+		if err := b.write(); err != nil {
+			return err
+		}
+		db.filter.Append(uint64(hash))
+	}
+	return nil
 }
+
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
@@ -693,7 +744,7 @@ func (db *DB) delete(id []byte) error {
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(seq); err != nil {
+	if err := b.read(0); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}

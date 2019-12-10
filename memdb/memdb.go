@@ -160,19 +160,19 @@ func (db *DB) Close() error {
 	return err
 }
 
-func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
-	off := blockOffset(startBlockIdx)
-	for {
-		b := blockHandle{table: db.index, offset: off}
-		if err := b.read(); err != nil {
-			return err
-		}
-		if stop, err := cb(b); stop || err != nil {
-			return err
-		}
+// func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
+// 	off := blockOffset(startBlockIdx)
+// 	for {
+// 		b := blockHandle{table: db.index, offset: off}
+// 		if err := b.read(); err != nil {
+// 			return err
+// 		}
+// 		if stop, err := cb(b); stop || err != nil {
+// 			return err
+// 		}
 
-	}
-}
+// 	}
+// }
 
 // newBlock adds new block to db table and return block offset
 func (db *DB) newBlock() (int64, error) {
@@ -199,12 +199,27 @@ func (db *DB) Has(key uint64) bool {
 	return ok
 }
 
+func (db *DB) Get(key uint64) ([]byte, []byte, error) {
+	e, ok := db.blockCache[key]
+	if !ok {
+		return nil, nil, errors.New("cache key not found")
+	}
+	off := blockOffset(e.blockIndex)
+	b := blockHandle{table: db.index, offset: off}
+	block, err := b.readRaw()
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := db.data.readRaw(e.offset, int64(e.valueSize))
+	return block, data, err
+}
+
 func (db *DB) GetBlock(key uint64) ([]byte, error) {
-	entryHeader, ok := db.blockCache[key]
+	e, ok := db.blockCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
 	}
-	off := blockOffset(entryHeader.blockIndex)
+	off := blockOffset(e.blockIndex)
 	b := blockHandle{table: db.index, offset: off}
 	raw, err := b.readRaw()
 	if err != nil {
@@ -213,41 +228,24 @@ func (db *DB) GetBlock(key uint64) ([]byte, error) {
 	return raw, nil
 }
 
-func (db *DB) GetData(key uint64, size uint32) ([]byte, error) {
-	entryHeader, ok := db.blockCache[key]
+func (db *DB) GetData(key uint64) ([]byte, error) {
+	e, ok := db.blockCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
 	}
-	return db.data.readRaw(entryHeader.offset, int64(size))
+	return db.data.readRaw(e.offset, int64(e.valueSize))
 }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
 func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
-	switch {
-	case len(id) == 0:
-		return errors.New("id is empty")
-	case len(id) > MaxKeyLength:
-		return errors.New("id is too large")
-	case len(value) > MaxValueLength:
-		return errors.New("value is too large")
-	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	memoff, err := db.put(hash, id, topic, value, offset, expiresAt)
-	if err == nil {
-		db.blockCache[seq] = &entryHeader{seq: db.nextSeq(), hash:hash, blockIndex: db.blockIndex, offset: memoff}
-	}
-	return err
-}
-
-func (db *DB) put(hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) (memoff int64, err error) {
 	off := blockOffset(db.blockIndex)
 	b := &blockHandle{table: db.index, offset: off}
-	if b.entryIdx == entriesPerBlock-1 {
-		db.newBlock()
+	if err := b.readFooter(); err != nil {
+		return err
 	}
 	db.count++
-
 	ew := entryWriter{
 		block: b,
 	}
@@ -259,16 +257,51 @@ func (db *DB) put(hash uint32, id, topic, value []byte, offset int64, expiresAt 
 		tmOffset:  offset,
 		expiresAt: expiresAt,
 	}
-	if memoff, err = db.data.writeMessage(id, topic, value); err != nil {
-		// db.freeseq.free(seq)
-		return memoff, err
+	memoff, err := db.data.writeMessage(id, topic, value)
+	if err != nil {
+		return err
 	}
 	if err := ew.write(); err != nil {
-		// db.freeseq.free(seq)
-		return memoff, err
+		return err
 	}
-	return memoff, err
+	db.blockCache[seq] = &entryHeader{blockIndex: db.blockIndex, valueSize: uint32(len(value)), offset: memoff}
+	if b.entryIdx == entriesPerBlock-1 {
+		if _, err := db.newBlock(); err != nil {
+			return err
+		}
+	}
+	return err
 }
+
+// func (db *DB) put(hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) (memoff int64, err error) {
+// 	off := blockOffset(db.blockIndex)
+// 	b := &blockHandle{table: db.index, offset: off}
+// 	if b.entryIdx == entriesPerBlock-1 {
+// 		db.newBlock()
+// 	}
+// 	db.count++
+
+// 	ew := entryWriter{
+// 		block: b,
+// 	}
+// 	ew.entry = entry{
+// 		// seq:       seq,
+// 		hash:      hash,
+// 		topicSize: uint16(len(topic)),
+// 		valueSize: uint32(len(value)),
+// 		tmOffset:  offset,
+// 		expiresAt: expiresAt,
+// 	}
+// 	if memoff, err = db.data.writeMessage(id, topic, value); err != nil {
+// 		// db.freeseq.free(seq)
+// 		return memoff, err
+// 	}
+// 	if err := ew.write(); err != nil {
+// 		// db.freeseq.free(seq)
+// 		return memoff, err
+// 	}
+// 	return memoff, err
+// }
 
 // // delete deletes the given key from the DB.
 // func (db *DB) delete(seq uint64) error {
