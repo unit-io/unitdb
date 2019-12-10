@@ -194,6 +194,33 @@ func (db *DB) newBlock() (int64, error) {
 // 	return nil
 // }
 
+func (db *DB) Has(key uint64) bool {
+	_, ok := db.blockCache[key]
+	return ok
+}
+
+func (db *DB) GetBlock(key uint64) ([]byte, error) {
+	entryHeader, ok := db.blockCache[key]
+	if !ok {
+		return nil, errors.New("cache key not found")
+	}
+	off := blockOffset(entryHeader.blockIndex)
+	b := blockHandle{table: db.index, offset: off}
+	raw, err := b.readRaw()
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (db *DB) GetData(key uint64, size uint32) ([]byte, error) {
+	entryHeader, ok := db.blockCache[key]
+	if !ok {
+		return nil, errors.New("cache key not found")
+	}
+	return db.data.readRaw(entryHeader.offset, int64(size))
+}
+
 // Put sets the value for the given topic->key. It updates the value for the existing key.
 func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	switch {
@@ -208,7 +235,7 @@ func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64
 	defer db.mu.Unlock()
 	memoff, err := db.put(hash, id, topic, value, offset, expiresAt)
 	if err == nil {
-		db.blockCache[seq] = &entryHeader{seq: db.nextSeq(), blockIndex: db.blockIndex, offset: memoff}
+		db.blockCache[seq] = &entryHeader{seq: db.nextSeq(), hash:hash, blockIndex: db.blockIndex, offset: memoff}
 	}
 	return err
 }
@@ -300,6 +327,10 @@ func (db *DB) FileSize() (int64, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return db.index.size() + db.data.size, nil
+}
+
+func (db *DB) GetSeq() uint64 {
+	return atomic.LoadUint64(&db.seq)
 }
 
 func (db *DB) nextSeq() uint64 {

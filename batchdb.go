@@ -28,7 +28,7 @@ type batchdb struct {
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches     map[uint64][]uint32
 	batchQueue        chan *Batch
-	batchCleanupQueue chan *batchqueue
+	batchCommitQueue chan *batchqueue
 	//once run batchLoop once
 	once Once
 
@@ -45,7 +45,7 @@ func (db *DB) initbatchdb() error {
 		// batchDB
 		activeBatches:     make(map[uint64][]uint32, 100),
 		batchQueue:        make(chan *Batch, 1),
-		batchCleanupQueue: make(chan *batchqueue, 1),
+		batchCommitQueue: make(chan *batchqueue, 1),
 	}
 	// memcache
 	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
@@ -58,29 +58,22 @@ func (db *DB) initbatchdb() error {
 	return nil
 }
 
-// func (db *DB) startBatchCleanup(interval time.Duration) {
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	db.cancelSyncer = cancel
-// 	cleanupTicker := time.NewTicker(interval)
-// 	defer cleanupTicker.Stop()
-// 	for {
-// 		select {
-// 		case <-ctx.Done():
-// 			return
-// 		case <-cleanupTicker.C:
-// 		case q := <-db.batchCleanupQueue:
-// 			memdbSize, err := db.mem.FileSize()
-// 			if err != nil {
-// 				logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error getting memdb file size")
-// 			}
-// 			if float64(memdbSize) > float64(memdb.MaxTableSize)*memdbCleanupFactor {
-// 				if ok := db.mem.Cleanup(q.startSeq, q.endSeq); !ok {
-// 					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error cleaning up memdb")
-// 				}
-// 			}
-// 		}
-// 	}
-// }
+func (db *DB) startBatchCommit() {
+	ctx, cancel := context.WithCancel(context.Background())
+	db.cancelSyncer = cancel
+	go func() {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case q := <-db.batchCommitQueue:
+				if err := db.commit(q.startSeq, q.endSeq); err!=nil {
+					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error commiting batch")
+				}
+		}
+	}
+}()
+}
 
 // Batch executes a function within the context of a read-write managed transaction.
 // If no error is returned from the function then the transaction is committed.
@@ -104,7 +97,7 @@ func (db *DB) Batch(fn func(*Batch) error) error {
 	defer func() {
 		b.Abort()
 	}()
-	return b.Commit()
+	return b.commit()
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -190,7 +183,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 		return err
 	}
 	defer g.Abort()
-	return b.Commit()
+	return b.commit()
 }
 
 func (g *BatchGroup) Abort() {

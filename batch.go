@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -265,7 +264,7 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	b.seq = b.db.getSeq() + 1
+	b.seq = b.db.mem.GetSeq() + 1
 	// b.db.Extend(b.seq + uint64(b.Len()))
 	err := b.writeInternal(func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error {
 		return b.mput(id, topic, v, offset, expiresAt)
@@ -278,92 +277,94 @@ func (b *Batch) Write() error {
 	return err
 }
 
+// func (b *Batch) commit() error {
+// 	if len(b.pendingWrites) == 0 {
+// 		return nil
+// 	}
+// 	// The commit happen synchronously.
+// 	b.db.writeLockC <- struct{}{}
+// 	defer func() {
+// 		<-b.db.writeLockC
+// 	}()
+
+// 	//precommit steps
+// 	// b.db.extend(0)
+
+// 	// l := b.Len()
+// 	// for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
+// 	// 	index := b.pendingWrites[i]
+// 	// 	id, topic, val := index.tv(b.data)
+// 	// 	hash := b.db.hash(id)
+// 	// 	if index.delFlag {
+// 	// 		/// Test filter block for presence
+// 	// 		if !b.db.filter.Test(uint64(hash)) {
+// 	// 			return nil
+// 	// 		}
+// 	// 		itopic := new(message.Topic)
+// 	// 		itopic.Unmarshal(topic)
+// 	// 		if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
+// 	// 			// b.db.delete(key)
+// 	// 		}
+// 	// 	} else {
+// 	// 		itopic := new(message.Topic)
+// 	// 		itopic.Unmarshal(topic)
+// 	// 		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
+// 	// 			off := db.blockOffset()
+// 	// 			b := &blockHandle{table: db.index, offset: off}
+// 	// 			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
+// 	// 				log.Println("batch.commit: error ", err)
+// 	// 				continue
+// 	// 			}
+// 	// 		}
+// 	// 	}
+// 	// }
+
+// 	for _, index := range b.pendingWrites {
+// 		id, topic, val := index.tm(b.data)
+// 		hash := b.db.hash(id)
+// 		if index.delFlag {
+// 			/// Test filter block for presence
+// 			if !b.db.filter.Test(uint64(hash)) {
+// 				return nil
+// 			}
+// 			itopic := new(message.Topic)
+// 			itopic.Unmarshal(topic)
+// 			if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
+// 				// b.db.delete(key)
+// 			}
+// 		} else {
+// 			itopic := new(message.Topic)
+// 			itopic.Unmarshal(topic)
+// 			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
+// 				if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
+// 					log.Println("batch.commit: error ", err)
+// 					continue
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	// cleanup memdb blocks after commit is successful to free used blocks
+// 	// append batch seq and length to queue for cleanup
+// 	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
+// 	// b.db.batchCleanupQueue <- q
+// 	return nil
+// }
+
 func (b *Batch) commit() error {
-	if len(b.pendingWrites) == 0 {
-		return nil
-	}
-	// The commit happen synchronously.
-	b.db.writeLockC <- struct{}{}
-	defer func() {
-		<-b.db.writeLockC
-	}()
-
-	//precommit steps
-	// b.db.extend(0)
-
-	// l := b.Len()
-	// for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
-	// 	index := b.pendingWrites[i]
-	// 	id, topic, val := index.tv(b.data)
-	// 	hash := b.db.hash(id)
-	// 	if index.delFlag {
-	// 		/// Test filter block for presence
-	// 		if !b.db.filter.Test(uint64(hash)) {
-	// 			return nil
-	// 		}
-	// 		itopic := new(message.Topic)
-	// 		itopic.Unmarshal(topic)
-	// 		if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
-	// 			// b.db.delete(key)
-	// 		}
-	// 	} else {
-	// 		itopic := new(message.Topic)
-	// 		itopic.Unmarshal(topic)
-	// 		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
-	// 			off := db.blockOffset()
-	// 			b := &blockHandle{table: db.index, offset: off}
-	// 			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
-	// 				log.Println("batch.commit: error ", err)
-	// 				continue
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	for _, index := range b.pendingWrites {
-		id, topic, val := index.tm(b.data)
-		hash := b.db.hash(id)
-		if index.delFlag {
-			/// Test filter block for presence
-			if !b.db.filter.Test(uint64(hash)) {
-				return nil
-			}
-			itopic := new(message.Topic)
-			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
-				// b.db.delete(key)
-			}
-		} else {
-			itopic := new(message.Topic)
-			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
-				if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
-					log.Println("batch.commit: error ", err)
-					continue
-				}
-			}
-		}
-	}
-
-	// cleanup memdb blocks after commit is successful to free used blocks
-	// append batch seq and length to queue for cleanup
-	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
-	// b.db.batchCleanupQueue <- q
-	return nil
-}
-
-func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
 	}
-	err := b.commit()
-	if err == nil {
+		if len(b.pendingWrites) == 0 {
+		return nil
+	}
+	// err := b.commit()
+	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
+	// b.db.batchCommitQueue <- q
 		//remove batch from activeBatches after commit
 		delete(b.db.activeBatches, b.seq)
-	}
-
-	return err
+	return nil
 }
 
 func (b *Batch) Abort() {

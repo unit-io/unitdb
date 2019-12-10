@@ -10,7 +10,7 @@ import (
 
 var (
 	engine       = flag.String("e", "tracedb", "database engine name. tracedb, pogreb, goleveldb, bbolt or badger")
-	numKeys      = flag.Int("n", 100000, "number of keys")
+	numKeys      = flag.Int("n", 1000000, "number of keys")
 	minKeySize   = flag.Int("mink", 16, "minimum key size")
 	maxKeySize   = flag.Int("maxk", 64, "maximum key size")
 	minValueSize = flag.Int("minv", 128, "minimum value size")

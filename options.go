@@ -28,7 +28,6 @@ type Options struct {
 
 	// Size of memory db
 	MemdbSize int64
-	// BatchCleanupInterval time.Duration
 
 	FileSystem fs.FileSystem
 }
@@ -50,9 +49,6 @@ func (src *Options) copyWithDefaults() *Options {
 	if opts.MemdbSize == 0 {
 		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
 	}
-	// if opts.BatchCleanupInterval == 0 {
-	// 	opts.BatchCleanupInterval = 15 * time.Second
-	// }
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 	}

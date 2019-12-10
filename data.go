@@ -6,13 +6,13 @@ type dataTable struct {
 }
 
 func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error) {
-	// var cacheKey uint64
-	// if t.cache != nil {
-	// 	cacheKey = t.cacheID ^ uint64(e.mOffset)
-	// 	if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil && len(data) == int(e.mSize()) {
-	// 		return data[:idSize], data[e.topicSize+idSize:], err
-	// 	}
-	// }
+	var cacheKey uint64
+	if t.cache != nil {
+		cacheKey = t.cacheID ^ e.seq
+		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil && len(data) == int(e.mSize()) {
+			return data[:idSize], data[e.topicSize+idSize:], err
+		}
+	}
 	message, err := t.Slice(e.mOffset, e.mOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
@@ -24,22 +24,22 @@ func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error)
 }
 
 func (t *dataTable) readId(e entry) ([]byte, error) {
-	// if t.cache != nil {
-	// 	cacheKey := t.cacheID ^ uint64(e.mOffset)
-	// 	if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil {
-	// 		return data[:idSize], err
-	// 	}
-	// }
+	if t.cache != nil {
+		cacheKey := t.cacheID ^ e.seq
+		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil {
+			return data[:idSize], err
+		}
+	}
 	return t.Slice(e.mOffset, e.mOffset+int64(idSize))
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
-	// if t.cache != nil {
-	// 	cacheKey := t.cacheID ^ uint64(e.mOffset)
-	// 	if data, err := t.cache.Get(cacheKey, e.mSize()); data != nil {
-	// 		return data[idSize : e.topicSize+idSize], err
-	// 	}
-	// }
+	if t.cache != nil {
+		cacheKey := t.cacheID ^ e.seq
+		if data, err := t.cache.GetData(cacheKey, e.mSize()); data != nil {
+			return data[idSize : e.topicSize+idSize], err
+		}
+	}
 	return t.Slice(e.mOffset+int64(idSize), e.mOffset+int64(e.topicSize)+int64(idSize))
 }
 

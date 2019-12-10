@@ -54,7 +54,8 @@ func (it *ItemIterator) Next() {
 		// for _, k := range it.query.blockKeys[blockIdx] {
 		// 	fmt.Println(blockIdx, "=>", k.Seq())
 		// }
-		err := it.db.readBlock(blockIdx, false, func(b blockHandle) (bool, error) {
+		seq := message.ID(it.query.blockKeys[blockIdx][0]).Seq()
+		err := it.db.readBlock(blockIdx, seq, func(b blockHandle) (bool, error) {
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
 				if e.mOffset == 0 {

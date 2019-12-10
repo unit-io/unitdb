@@ -6,6 +6,7 @@ import (
 
 type entryHeader struct {
 	seq        uint64
+	hash uint32
 	blockIndex uint32
 	offset     int64
 }

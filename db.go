@@ -24,7 +24,6 @@ import (
 const (
 	entriesPerBlock    = 23
 	loadFactor         = 0.7
-	memdbCleanupFactor = 0.5
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
 	lockPostfix   = ".lock"
@@ -266,10 +265,10 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) readBlock(startBlockIdx uint32, fillCache bool, cb func(blockHandle) (bool, error)) error {
+func (db *DB) readBlock(startBlockIdx uint32, seq uint64, cb func(blockHandle) (bool, error)) error {
 	off := blockOffset(startBlockIdx)
 	b := blockHandle{cache: db.mem.DB, cacheID: db.cacheID, table: db.index.FileManager, offset: off}
-	if err := b.read(fillCache); err != nil {
+	if err := b.read(seq); err != nil {
 		return err
 	}
 	if stop, err := cb(b); stop || err != nil {
@@ -438,7 +437,7 @@ func (db *DB) expireOldEntries() {
 		defer db.mu.Unlock()
 		b := blockHandle{}
 		entryIdx := -1
-		err := db.readBlock(startBlockIndex(entry.seq), false, func(curb blockHandle) (bool, error) {
+		err := db.readBlock(startBlockIndex(entry.seq), entry.seq, func(curb blockHandle) (bool, error) {
 			b = curb
 			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
@@ -610,7 +609,7 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(false); err != nil {
+	if err := b.read(seq); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
@@ -642,6 +641,9 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
+func (db *DB) commit(startSeq, endSeq uint64) error {
+return nil
+}
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
@@ -691,7 +693,7 @@ func (db *DB) delete(id []byte) error {
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(false); err != nil {
+	if err := b.read(seq); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}

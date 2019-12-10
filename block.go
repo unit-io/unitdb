@@ -98,24 +98,19 @@ func (h *blockHandle) readRaw() ([]byte, error) {
 	return h.table.Slice(h.offset, h.offset+int64(blockSize))
 }
 
-func (h *blockHandle) read(fillCache bool) error {
-	// var cacheKey uint64
-	// if h.cache != nil {
-	// 	cacheKey = h.cacheID ^ uint64(h.offset)
-	// 	if data, _ := h.cache.Get(cacheKey, blockSize); data != nil && len(data) == int(blockSize) {
-	// 		return h.UnmarshalBinary(data)
-	// 	}
-	// }
+func (h *blockHandle) read(seq uint64) error {
+	var cacheKey uint64
+	if h.cache != nil {
+		cacheKey = h.cacheID ^ seq
+		if data, _ := h.cache.GetBlock(cacheKey); data != nil && len(data) == int(blockSize) {
+			return h.UnmarshalBinary(data)
+		}
+	}
 
 	buf, err := h.table.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-
-	// if h.cache != nil && fillCache {
-	// 	h.cache.Set(cacheKey, h.offset, buf)
-	// }
-
 	return h.UnmarshalBinary(buf)
 }
 
@@ -125,10 +120,6 @@ func (h *blockHandle) write() error {
 		return err
 	}
 	_, err = h.table.WriteAt(buf, h.offset)
-	// if h.cache != nil {
-	// 	cacheKey := h.cacheID ^ uint64(h.offset)
-	// 	h.cache.Delete(cacheKey)
-	// }
 	return err
 }
 
