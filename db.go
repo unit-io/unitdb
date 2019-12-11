@@ -260,17 +260,17 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) foreachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
-	off := blockOffset(startBlockIdx)
-	b := blockHandle{table: db.index.FileManager, offset: off}
-	if err := b.read(0); err != nil {
-		return err
-	}
-	if stop, err := cb(b); stop || err != nil {
-		return err
-	}
-	return nil
-}
+// func (db *DB) foreachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
+// 	off := blockOffset(startBlockIdx)
+// 	b := blockHandle{table: db.index.FileManager, offset: off}
+// 	if err := b.read(0); err != nil {
+// 		return err
+// 	}
+// 	if stop, err := cb(b); stop || err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }
 
 func (db *DB) readBlock(seq uint64) (blockHandle, error) {
 	// off := blockOffset(startBlockIdx)
@@ -506,14 +506,18 @@ func (db *DB) newBlock() (int64, error) {
 	return off, err
 }
 
-// extend adds new block to db table for the batch commit
-func (db *DB) extend(size uint32) (off int64, err error) {
-	// precommit steps
+// extendBlocks adds new blocks to db table for the batch write
+func (db *DB) extendBlocks() error {
 	for uint32(float64(db.seq-1)/float64(entriesPerBlock)) > db.blockIndex {
-		if _, err = db.newBlock(); err != nil {
-			return off, err
+		if _, err := db.newBlock(); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// allocate adds size to data table for the batch write
+func (db *DB) allocate(size uint32) (off int64, err error) {
 	return db.data.allocate(size)
 }
 
@@ -566,9 +570,9 @@ func (db *DB) PutEntry(e *Entry) error {
 			return err
 		}
 	}
-	if uint32(float64(db.count)/float64(entriesPerBlock)) > db.blockIndex {
-		db.newBlock()
-	}
+	// if uint32(float64(db.count)/float64(entriesPerBlock)) > db.blockIndex {
+	// 	db.newBlock()
+	// }
 
 	if db.syncWrites {
 		db.sync()
@@ -592,26 +596,30 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	}
 
 	db.count++
-	entryIdx := b.entryIdx
 	hash := db.hash(id)
-	b.entries[entryIdx] = entry{
+	b.entries[b.entryIdx] = entry{
 		seq:       seq,
 		hash:      hash,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
 		expiresAt: expiresAt,
 	}
-	if b.entries[entryIdx].mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
+	if b.entries[b.entryIdx].mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
 	if expiresAt > 0 {
-		db.timeWindow.add(b.entries[entryIdx])
+		db.timeWindow.add(b.entries[b.entryIdx])
 	}
 	b.entryIdx++
 	if err := b.write(); err != nil {
 		db.freeseq.free(seq)
 		return err
+	}
+	if b.entryIdx == entriesPerBlock {
+		if _, err := db.newBlock(); err != nil {
+			return err
+		}
 	}
 	// db.freeseq.evict(seq)
 	db.filter.Append(uint64(hash))
@@ -619,22 +627,24 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 }
 
 func (db *DB) commit(batchSeq uint64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	for _, seq := range db.activeBatches[batchSeq] {
 		key := db.cacheID ^ seq
-		iblock, idata, err := db.mem.Get(key)
+		mblock, mdata, err := db.mem.Get(key)
 		if err != nil {
 			return err
 		}
-		ib := &blockHandle{}
-		err = ib.UnmarshalBinary(iblock)
+		mb := &blockHandle{}
+		err = mb.UnmarshalBinary(mblock)
 		if err != nil {
 			return err
 		}
 		entryIdx := -1
-		id := idata[:idSize]
+		id := mdata[:idSize]
 		hash := db.hash(id)
 		for i := 0; i < entriesPerBlock; i++ {
-			e := ib.entries[i]
+			e := mb.entries[i]
 			if hash == e.hash {
 				entryIdx = i
 				break
@@ -643,20 +653,24 @@ func (db *DB) commit(batchSeq uint64) error {
 		if entryIdx == -1 {
 			return errIdEmpty
 		}
-		db.data.writeRaw(idata, ib.entries[entryIdx].mOffset)
+		db.metrics.Puts.Add(1)
+		db.count++
+		db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
 		startBlockIdx := startBlockIndex(seq)
 		off := blockOffset(startBlockIdx)
 		b := &blockHandle{table: db.index, offset: off}
 		if err := b.read(0); err != nil {
 			return err
 		}
-		if ib.entries[entryIdx].expiresAt > 0 {
-			db.timeWindow.add(ib.entries[entryIdx])
+		b.entries[b.entryIdx] = mb.entries[entryIdx]
+		if b.entries[b.entryIdx].expiresAt > 0 {
+			db.timeWindow.add(b.entries[b.entryIdx])
 		}
 		b.entryIdx++
 		if err := b.write(); err != nil {
 			return err
 		}
+
 		db.filter.Append(uint64(hash))
 	}
 	return nil

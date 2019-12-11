@@ -44,22 +44,21 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	var itemCount uint32
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
-		err := db.foreachBlock(blockIdx, func(b blockHandle) (bool, error) {
-			for i := 0; i < entriesPerBlock; i++ {
-				e := b.entries[i]
-				if e.mOffset == 0 {
-					return true, nil
-				}
-				itemCount++
-				usedBlocks = append(usedBlocks, userdblock{size: align512(e.mSize()), offset: e.mOffset})
-			}
-			if b.next != 0 {
-				usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: int64(b.next)})
-			}
-			return true, nil
-		})
-		if err != nil {
+		off := blockOffset(blockIdx)
+		b := blockHandle{table: db.index.FileManager, offset: off}
+		if err := b.read(0); err != nil {
 			return 0, nil, err
+		}
+		for i := 0; i < entriesPerBlock; i++ {
+			e := b.entries[i]
+			if e.mOffset == 0 {
+				continue
+			}
+			itemCount++
+			usedBlocks = append(usedBlocks, userdblock{size: align512(e.mSize()), offset: e.mOffset})
+		}
+		if b.next != 0 {
+			usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: int64(b.next)})
 		}
 	}
 	return itemCount, usedBlocks, nil

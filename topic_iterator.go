@@ -24,32 +24,38 @@ func (it *TopicIterator) Next() {
 	it.topic = nil
 	if len(it.queue) == 0 {
 		for it.nextBlockIdx < it.db.nBlocks {
-			err := it.db.foreachBlock(it.nextBlockIdx, func(b blockHandle) (bool, error) {
+			err := func() error {
+				off := blockOffset(it.nextBlockIdx)
+				b := blockHandle{table: it.db.index.FileManager, offset: off}
+				if err := b.read(0); err != nil {
+					return err
+				}
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.mOffset == 0 {
 						continue
 					}
 					if e.isExpired() {
-						return false, nil
+						continue
 					}
 					id, err := it.db.data.readId(e)
 					if err != nil {
-						return true, err
+						return err
 					}
 					etopic, err := it.db.data.readTopic(e)
 					if err != nil {
-						return true, err
+						return err
 					}
 					topic := new(message.Topic)
 					err = topic.Unmarshal(etopic)
 					if err != nil {
-						return true, err
+						return err
 					}
 					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: message.ID(id), err: err})
 				}
-				return true, nil
-			})
+				return nil
+			}()
+
 			if err != nil {
 				it.queue = append(it.queue, &Topic{err: err})
 			}

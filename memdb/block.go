@@ -5,9 +5,9 @@ import (
 )
 
 type entryHeader struct {
-	blockIndex uint32
-	valueSize  uint32
-	offset     int64
+	blockIndex  uint32
+	messageSize uint32
+	offset      int64
 }
 
 type entry struct {
@@ -15,7 +15,7 @@ type entry struct {
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	tmOffset  int64
+	mOffset   int64
 }
 
 func (e entry) mSize() uint32 {
@@ -50,7 +50,7 @@ func (b *block) UnmarshalBinary(data []byte) error {
 		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[4:6])
 		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[6:10])
 		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[10:14])
-		b.entries[i].tmOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
+		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
 		data = data[entrySize:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
@@ -110,7 +110,7 @@ func (ew *entryWriter) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
 	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
 	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
-	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.tmOffset))
+	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
 
 	return data, nil
 }

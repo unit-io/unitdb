@@ -16,10 +16,10 @@ const (
 )
 
 type batchIndex struct {
-	delFlag   bool
-	seq       uint64
-	key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
-	idSize    uint16
+	delFlag bool
+	seq     uint64
+	key     uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
+	// idSize    uint16
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
@@ -27,16 +27,16 @@ type batchIndex struct {
 }
 
 func (index batchIndex) id(data []byte) []byte {
-	return data[index.mOffset : index.mOffset+int64(index.idSize)]
+	return data[index.mOffset : index.mOffset+int64(idSize)]
 }
 
 func (index batchIndex) mSize() uint32 {
-	return uint32(index.idSize) + uint32(index.topicSize) + index.valueSize
+	return uint32(idSize) + uint32(index.topicSize) + index.valueSize
 }
 
 func (index batchIndex) message(data []byte) (id, topic, value []byte) {
 	keyValue := data[index.mOffset : index.mOffset+int64(index.mSize())]
-	return keyValue[:index.idSize], keyValue[index.idSize : index.idSize+index.topicSize], keyValue[index.idSize+index.topicSize:]
+	return keyValue[:idSize], keyValue[idSize : idSize+index.topicSize], keyValue[idSize+index.topicSize:]
 
 }
 
@@ -105,7 +105,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	index.mOffset = int64(o)
 	index.seq = seq
 	index.key = key
-	index.idSize = uint16(len(id))
+	// index.idSize = uint16(len(id))
 	index.topicSize = uint16(len(topic))
 	o += copy(data[o:], id)
 	o += copy(data[o:], topic)
@@ -118,7 +118,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	b.index = append(b.index, index)
 }
 
-func (b *Batch) mput(id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (b *Batch) mput(key uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	switch {
 	case len(id) == 0:
 		return errIdEmpty
@@ -128,8 +128,8 @@ func (b *Batch) mput(id, topic, value []byte, offset int64, expiresAt uint32) er
 		return errValueTooLarge
 	}
 	hash := b.db.hash(id)
-	seq := b.db.cacheID ^ message.ID(id).Seq()
-	if err := b.db.mem.Put(seq, hash, id, topic, value, offset, expiresAt); err != nil {
+
+	if err := b.db.mem.Put(key, hash, id, topic, value, offset, expiresAt); err != nil {
 		return err
 	}
 	b.seq++
@@ -241,19 +241,23 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, key uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
+	if err := b.db.extendBlocks(); err != nil {
+		return err
+	}
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
+		key := b.db.cacheID ^ index.seq
 		id, topic, val := index.message(b.data)
-		off, err := b.db.extend(uint32(len(val)))
+		off, err := b.db.allocate(uint32(len(val)))
 		if err != nil {
 			return err
 		}
-		if err := fn(i, id, topic, val, off, index.expiresAt); err != nil {
+		if err := fn(i, key, id, topic, val, off, index.expiresAt); err != nil {
 			b.db.freeseq.free(message.ID(id).Seq())
 			return err
 		}
@@ -261,39 +265,7 @@ func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, offset int64, 
 	return nil
 }
 
-func (b *Batch) Write() error {
-	// The write happen synchronously.
-	b.db.writeLockC <- struct{}{}
-	defer func() {
-		<-b.db.writeLockC
-	}()
-	b.uniq()
-	if b.grouped {
-		// append batch to batchgroup
-		b.db.batchQueue <- b
-		return nil
-	}
-
-	b.seq = b.db.getSeq() + 1
-	// b.db.Extend(b.seq + uint64(b.Len()))
-	err := b.writeInternal(func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error {
-		return b.mput(id, topic, v, offset, expiresAt)
-	})
-
-	if err == nil {
-		b.db.activeBatches[b.seq] = b.Seqs()
-	}
-
-	return err
-}
-
-func (b *Batch) precommit() error {
-	// The commit happen synchronously.
-	b.db.writeLockC <- struct{}{}
-	defer func() {
-		<-b.db.writeLockC
-	}()
-
+func (b *Batch) writeTrie() error {
 	l := b.Len()
 	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
 		index := b.pendingWrites[i]
@@ -320,6 +292,36 @@ func (b *Batch) precommit() error {
 	return nil
 }
 
+func (b *Batch) Write() error {
+	// The write happen synchronously.
+	b.db.writeLockC <- struct{}{}
+	defer func() {
+		<-b.db.writeLockC
+	}()
+	b.uniq()
+	if b.grouped {
+		// append batch to batchgroup
+		b.db.batchQueue <- b
+		return nil
+	}
+
+	b.seq = b.db.getSeq() + 1
+	// b.db.Extend(b.seq + uint64(b.Len()))
+	err := b.writeInternal(func(i int, key uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
+		return b.mput(key, id, topic, v, offset, expiresAt)
+	})
+
+	if err := b.writeTrie(); err != nil {
+		return err
+	}
+
+	if err == nil {
+		b.db.activeBatches[b.seq] = b.Seqs()
+	}
+
+	return err
+}
+
 func (b *Batch) commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
@@ -327,9 +329,6 @@ func (b *Batch) commit() error {
 	}
 	if len(b.pendingWrites) == 0 {
 		return nil
-	}
-	if err := b.precommit(); err != nil {
-		return err
 	}
 	b.db.batchCommitQueue <- b.seq
 	//remove batch from activeBatches after commit
@@ -360,7 +359,7 @@ func (b *Batch) uniq() []batchIndex {
 		if _, ok := unique_set[b.index[idx].key]; !ok {
 			unique_set[b.index[idx].key] = indices{idx, i}
 			i++
-		} 
+		}
 	}
 
 	b.pendingWrites = make([]batchIndex, len(unique_set))

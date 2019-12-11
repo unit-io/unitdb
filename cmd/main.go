@@ -32,61 +32,64 @@ func main() {
 	}
 	defer db.Close()
 
+	db.PutEntry(&tracedb.Entry{
+		Topic:   []byte("ttl.ttl1?ttl=3m"),
+		Payload: []byte("ttl.ttl1.1"),
+	})
+
+	val, err := db.Get([]byte("ttl.ttl1?ttl=3m"))
+	if err != nil {
+		log.Println("db.Get: error ", err)
+	}
+	log.Println("db.Get: val ", val)
+
+	messageId := db.NewID()
+	err = db.PutEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1?ttl=3m"),
+		Payload:  []byte("ttl.ttl1.2"),
+		Contract: 3376684800,
+	})
+
+	print([]byte("ttl.ttl1?last=2m"), db)
+
+	err = db.DeleteEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1"),
+		Contract: 3376684800,
+	})
+
+	print([]byte("ttl.ttl1?last=2m"), db)
+
 	var start time.Time
-	// func(retry int) {
-	// 	i := 0
-	// 	for _ = range time.Tick(100 * time.Millisecond) {
-	// 		start = time.Now()
-	// 		for j := 0; j < 500; j++ {
-	// 			t := time.Now().Add(time.Duration(j) * time.Millisecond)
-	// 			p, _ := t.MarshalText()
-	// 			db.PutEntry(&tracedb.Entry{Topic: []byte("dev18.b.*?ttl=30m"), Payload: p})
-	// 		}
-	// 		log.Println("db.write ", time.Since(start).Seconds())
-	// 		if err != nil {
-	// 			log.Printf("Error update1: %s", err)
-	// 		}
-	// 		if i >= retry {
-	// 			break
-	// 		}
-	// 		i++
-	// 	}
-	// }(0)
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(100 * time.Millisecond) {
+			start = time.Now()
+			for j := 0; j < 500; j++ {
+				t := time.Now().Add(time.Duration(j) * time.Millisecond)
+				p, _ := t.MarshalText()
+				db.PutEntry(&tracedb.Entry{Topic: []byte("dev18.b.*?ttl=30m"), Payload: p})
+			}
+			log.Println("db.write ", time.Since(start).Seconds())
+			if err != nil {
+				log.Printf("Error update1: %s", err)
+			}
+			if i >= retry {
+				break
+			}
+			i++
+		}
+	}(0)
 
-	// db.PutEntry(&tracedb.Entry{
-	// 	Topic:   []byte("ttl.ttl1?ttl=3m"),
-	// 	Payload: []byte("ttl.ttl1.1"),
-	// })
-
-	// val, err := db.Get([]byte("ttl.ttl1?ttl=3m"))
-	// if err != nil {
-	// 	log.Println("db.Get: error ", err)
-	// }
-	// log.Println("db.Get: val ", val)
-
-	// messageId := db.NewID()
-	// err = db.PutEntry(&tracedb.Entry{
-	// 	ID:       messageId,
-	// 	Topic:    []byte("ttl.ttl1?ttl=3m"),
-	// 	Payload:  []byte("ttl.ttl1.2"),
-	// 	Contract: 3376684800,
-	// })
-
-	// print([]byte("ttl.ttl1?last=2m"), db)
-
-	// err = db.DeleteEntry(&tracedb.Entry{
-	// 	ID:       messageId,
-	// 	Topic:    []byte("ttl.ttl1"),
-	// 	Contract: 3376684800,
-	// })
-
-	// print([]byte("ttl.ttl1?last=2m"), db)
+	print([]byte("dev18.b.b1?last=30m"), db)
+	print([]byte("dev18.b.b11?last=30m"), db)
 
 	func(retry int) {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 5; j++{
+				for j := 0; j < 500; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -110,23 +113,23 @@ func main() {
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)
 
-	// messageId = db.NewID()
-	// err = db.PutEntry(&tracedb.Entry{
-	// 	ID:       messageId,
-	// 	Topic:    []byte("ttl.ttl1?ttl=3m"),
-	// 	Payload:  []byte("ttl.ttl1.3"),
-	// 	Contract: 3376684800,
-	// })
+	messageId = db.NewID()
+	err = db.PutEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1?ttl=3m"),
+		Payload:  []byte("ttl.ttl1.3"),
+		Contract: 3376684800,
+	})
 
-	// print([]byte("ttl.ttl1?last=2m"), db)
+	print([]byte("ttl.ttl1?last=2m"), db)
 
-	// err = db.DeleteEntry(&tracedb.Entry{
-	// 	ID:       messageId,
-	// 	Topic:    []byte("ttl.ttl1"),
-	// 	Contract: 3376684800,
-	// })
+	err = db.DeleteEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1"),
+		Contract: 3376684800,
+	})
 
-	// print([]byte("ttl.ttl1?last=2m"), db)
+	print([]byte("ttl.ttl1?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch) error {
 		// opts := tracedb.DefaultBatchOptions

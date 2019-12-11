@@ -188,7 +188,7 @@ func (db *DB) Get(key uint64) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := db.data.readRaw(e.offset, int64(e.valueSize))
+	data, err := db.data.readRaw(e.offset, int64(e.messageSize))
 	return block, data, err
 }
 
@@ -215,11 +215,11 @@ func (db *DB) GetData(key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("cache key not found")
 	}
-	return db.data.readRaw(e.offset, int64(e.valueSize))
+	return db.data.readRaw(e.offset, int64(e.messageSize))
 }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
-func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (db *DB) Put(key uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	off := blockOffset(db.blockIndex)
@@ -236,7 +236,7 @@ func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64
 		hash:      hash,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
-		tmOffset:  offset,
+		mOffset:   offset,
 		expiresAt: expiresAt,
 	}
 	memoff, err := db.data.writeMessage(id, topic, value)
@@ -246,7 +246,7 @@ func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64
 	if err := ew.write(); err != nil {
 		return err
 	}
-	db.blockCache[seq] = &entryHeader{blockIndex: db.blockIndex, valueSize: uint32(len(value)), offset: memoff}
+	db.blockCache[key] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
 	if b.entryIdx == entriesPerBlock {
 		if _, err := db.newBlock(); err != nil {
 			return err
