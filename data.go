@@ -5,11 +5,11 @@ type dataTable struct {
 	fb freeblocks
 }
 
-func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error) {
+func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 	var cacheKey uint64
 	if t.cache != nil {
 		cacheKey = t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil && len(data) == int(e.mSize()) {
+		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize(){
 			return data[:idSize], data[e.topicSize+idSize:], err
 		}
 	}
@@ -17,9 +17,6 @@ func (t *dataTable) readMessage(e entry, fillCache bool) ([]byte, []byte, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	// if t.cache != nil && fillCache {
-	// 	t.cache.Set(cacheKey, e.mOffset, message)
-	// }
 	return message[:idSize], message[e.topicSize+idSize:], nil
 }
 

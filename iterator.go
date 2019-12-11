@@ -62,6 +62,7 @@ func (it *ItemIterator) Next() {
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
 					if e.hash == hash {
+						e.seq = seq // seq is used to get data from memcache
 						if e.isExpired() {
 							e := b.entries[i]
 							b.del(i)
@@ -82,14 +83,14 @@ func (it *ItemIterator) Next() {
 							// if id is expired it does not return an error but continue the iteration
 							return nil
 						}
-						id, val, err := it.db.data.readMessage(e, true)
+						id, val, err := it.db.data.readMessage(e)
 						if err != nil {
 							return err
 						}
 						_id := message.ID(id)
 						if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
 							it.invalidKeys++
-							return errIdPrefixMismatch
+							return nil
 						}
 						if _id.IsEncrypted() {
 							val, err = it.db.mac.Decrypt(nil, val)

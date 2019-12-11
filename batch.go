@@ -23,19 +23,19 @@ type batchIndex struct {
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	tmOffset  int64
+	mOffset   int64
 }
 
 func (index batchIndex) id(data []byte) []byte {
-	return data[index.tmOffset : index.tmOffset+int64(index.idSize)]
+	return data[index.mOffset : index.mOffset+int64(index.idSize)]
 }
 
-func (index batchIndex) tmSize() uint32 {
+func (index batchIndex) mSize() uint32 {
 	return uint32(index.idSize) + uint32(index.topicSize) + index.valueSize
 }
 
-func (index batchIndex) tm(data []byte) (id, topic, value []byte) {
-	keyValue := data[index.tmOffset : index.tmOffset+int64(index.tmSize())]
+func (index batchIndex) message(data []byte) (id, topic, value []byte) {
+	keyValue := data[index.mOffset : index.mOffset+int64(index.mSize())]
 	return keyValue[:index.idSize], keyValue[index.idSize : index.idSize+index.topicSize], keyValue[index.idSize+index.topicSize:]
 
 }
@@ -102,7 +102,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 		data[o] = 0
 	}
 	o++
-	index.tmOffset = int64(o)
+	index.mOffset = int64(o)
 	index.seq = seq
 	index.key = key
 	index.idSize = uint16(len(id))
@@ -248,7 +248,7 @@ func (b *Batch) writeInternal(fn func(i int, id, topic, v []byte, offset int64, 
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
-		id, topic, val := index.tm(b.data)
+		id, topic, val := index.message(b.data)
 		off, err := b.db.extend(uint32(len(val)))
 		if err != nil {
 			return err
@@ -274,7 +274,7 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	b.seq = b.db.mem.GetSeq() + 1
+	b.seq = b.db.getSeq() + 1
 	// b.db.Extend(b.seq + uint64(b.Len()))
 	err := b.writeInternal(func(i int, id, topic, v []byte, offset int64, expiresAt uint32) error {
 		return b.mput(id, topic, v, offset, expiresAt)
@@ -287,79 +287,38 @@ func (b *Batch) Write() error {
 	return err
 }
 
-// func (b *Batch) commit() error {
-// 	if len(b.pendingWrites) == 0 {
-// 		return nil
-// 	}
-// 	// The commit happen synchronously.
-// 	b.db.writeLockC <- struct{}{}
-// 	defer func() {
-// 		<-b.db.writeLockC
-// 	}()
+func (b *Batch) precommit() error {
+	// The commit happen synchronously.
+	b.db.writeLockC <- struct{}{}
+	defer func() {
+		<-b.db.writeLockC
+	}()
 
-// 	//precommit steps
-// 	// b.db.extend(0)
-
-// 	// l := b.Len()
-// 	// for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
-// 	// 	index := b.pendingWrites[i]
-// 	// 	id, topic, val := index.tv(b.data)
-// 	// 	hash := b.db.hash(id)
-// 	// 	if index.delFlag {
-// 	// 		/// Test filter block for presence
-// 	// 		if !b.db.filter.Test(uint64(hash)) {
-// 	// 			return nil
-// 	// 		}
-// 	// 		itopic := new(message.Topic)
-// 	// 		itopic.Unmarshal(topic)
-// 	// 		if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
-// 	// 			// b.db.delete(key)
-// 	// 		}
-// 	// 	} else {
-// 	// 		itopic := new(message.Topic)
-// 	// 		itopic.Unmarshal(topic)
-// 	// 		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
-// 	// 			off := db.blockOffset()
-// 	// 			b := &blockHandle{table: db.index, offset: off}
-// 	// 			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
-// 	// 				log.Println("batch.commit: error ", err)
-// 	// 				continue
-// 	// 			}
-// 	// 		}
-// 	// 	}
-// 	// }
-
-// 	for _, index := range b.pendingWrites {
-// 		id, topic, val := index.tm(b.data)
-// 		hash := b.db.hash(id)
-// 		if index.delFlag {
-// 			/// Test filter block for presence
-// 			if !b.db.filter.Test(uint64(hash)) {
-// 				return nil
-// 			}
-// 			itopic := new(message.Topic)
-// 			itopic.Unmarshal(topic)
-// 			if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); ok {
-// 				// b.db.delete(key)
-// 			}
-// 		} else {
-// 			itopic := new(message.Topic)
-// 			itopic.Unmarshal(topic)
-// 			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); ok {
-// 				if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
-// 					log.Println("batch.commit: error ", err)
-// 					continue
-// 				}
-// 			}
-// 		}
-// 	}
-
-// 	// cleanup memdb blocks after commit is successful to free used blocks
-// 	// append batch seq and length to queue for cleanup
-// 	// q := &batchqueue{startSeq: b.seq - uint64(b.Len()), endSeq: b.seq}
-// 	// b.db.batchCleanupQueue <- q
-// 	return nil
-// }
+	l := b.Len()
+	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
+		index := b.pendingWrites[i]
+		id, topic, _ := index.message(b.data)
+		if index.delFlag {
+			hash := b.db.hash(id)
+			/// Test filter block for presence
+			if !b.db.filter.Test(uint64(hash)) {
+				return nil
+			}
+			itopic := new(message.Topic)
+			itopic.Unmarshal(topic)
+			if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); !ok {
+				return errBadRequest
+			}
+		} else {
+			itopic := new(message.Topic)
+			itopic.Unmarshal(topic)
+			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); !ok {
+				return errBadRequest
+			}
+		}
+	}
+	return nil
+}
 
 func (b *Batch) commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
@@ -369,7 +328,9 @@ func (b *Batch) commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
-	// err := b.commit()
+	if err := b.precommit(); err != nil {
+		return err
+	}
 	b.db.batchCommitQueue <- b.seq
 	//remove batch from activeBatches after commit
 	// delete(b.db.activeBatches, b.seq)
@@ -399,10 +360,7 @@ func (b *Batch) uniq() []batchIndex {
 		if _, ok := unique_set[b.index[idx].key]; !ok {
 			unique_set[b.index[idx].key] = indices{idx, i}
 			i++
-		} else {
-			// id := b.index[i].id(b.data)
-			// b.db.freeseq.free(message.ID(id).Seq())
-		}
+		} 
 	}
 
 	b.pendingWrites = make([]batchIndex, len(unique_set))
@@ -416,7 +374,7 @@ func (b *Batch) uniq() []batchIndex {
 func (b *Batch) append(bnew *Batch) {
 	off := len(b.data)
 	for _, idx := range bnew.index {
-		idx.tmOffset = idx.tmOffset + int64(off)
+		idx.mOffset = idx.mOffset + int64(off)
 		b.index = append(b.index, idx)
 	}
 	b.data = append(b.data, bnew.data...)

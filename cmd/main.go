@@ -86,7 +86,7 @@ func main() {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 5; j++ {
+				for j := 0; j < 5; j++{
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)

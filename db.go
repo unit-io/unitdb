@@ -211,12 +211,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		db.syncWrites = true
 	}
 
-	// if opts.BatchCleanupInterval > 0 {
-	// 	go db.startBatchCleanup(opts.BatchCleanupInterval)
-	// } else {
-	// 	go db.startBatchCleanup(15 * time.Second)
-	// }
-
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
 	}
@@ -359,7 +353,6 @@ func (db *DB) Close() error {
 	}
 
 	// Clear memdbs.
-	// db.memcache.Close()
 	db.clearMems()
 
 	return err
@@ -523,32 +516,6 @@ func (db *DB) extend(size uint32) (off int64, err error) {
 	}
 	return db.data.allocate(size)
 }
-
-// func (db *DB) putEntry(seq uint64, hash uint32, topicSize uint16, valueSize, expiresAt uint32, mOffset int64) (uint16, error) {
-// 	off := blockOffset(db.blockIndex)
-// 	b := &blockHandle{table: db.index, offset: off}
-// 	if b.entryIdx == entriesPerBlock-1 {
-// 		db.newBlock()
-// 	}
-// 	db.count++
-
-// 	ew := entryWriter{
-// 		block: b,
-// 	}
-// 	ew.entry = entry{
-// 		seq:       seq,
-// 		hash:      hash,
-// 		topicSize: uint16(len(topic)),
-// 		valueSize: uint32(len(value)),
-// 		expiresAt: expiresAt,
-// 		mOffset:   mOffset,
-// 	}
-// 	if err := ew.write(); err != nil {
-// 		db.freeseq.free(seq)
-// 		return b.entryIdx, err
-// 	}
-// 	return b.entryIdx, nil
-// }
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
@@ -809,21 +776,9 @@ func (db *DB) FileSize() (int64, error) {
 }
 
 func (db *DB) getSeq() uint64 {
-	// if ok, seq := db.freeseq.get(); ok {
-	// 	db.freeseq.queue(db.seq)
-	// 	return seq
-	// }
 	return atomic.LoadUint64(&db.seq)
-	// db.freeseq.queue(db.seq)
-	// return db.seq
 }
 
 func (db *DB) nextSeq() uint64 {
-	// if ok, seq := db.freeseq.get(); ok {
-	// 	db.freeseq.queue(db.seq)
-	// 	return seq
-	// }
 	return atomic.AddUint64(&db.seq, 1)
-	// db.freeseq.queue(db.seq)
-	// return db.seq
 }

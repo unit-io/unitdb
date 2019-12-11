@@ -6,7 +6,6 @@ import (
 	"log"
 	"math"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -160,20 +159,6 @@ func (db *DB) Close() error {
 	return err
 }
 
-// func (db *DB) forEachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
-// 	off := blockOffset(startBlockIdx)
-// 	for {
-// 		b := blockHandle{table: db.index, offset: off}
-// 		if err := b.read(); err != nil {
-// 			return err
-// 		}
-// 		if stop, err := cb(b); stop || err != nil {
-// 			return err
-// 		}
-
-// 	}
-// }
-
 // newBlock adds new block to db table and return block offset
 func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
@@ -183,23 +168,16 @@ func (db *DB) newBlock() (int64, error) {
 	return off, err
 }
 
-// // extend adds new block to db table for the batch write
-// func (db *DB) Extend(endSeq uint64) error {
-// 	// precommit steps
-// 	for uint32(float64(endSeq-1)/float64(entriesPerBlock)) > db.blockIndex {
-// 		if _, err := db.newBlock(); err != nil {
-// 			return err
-// 		}
-// 	}
-// 	return nil
-// }
-
 func (db *DB) Has(key uint64) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	_, ok := db.blockCache[key]
 	return ok
 }
 
 func (db *DB) Get(key uint64) ([]byte, []byte, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	e, ok := db.blockCache[key]
 	if !ok {
 		return nil, nil, errors.New("cache key not found")
@@ -215,6 +193,8 @@ func (db *DB) Get(key uint64) ([]byte, []byte, error) {
 }
 
 func (db *DB) GetBlock(key uint64) ([]byte, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	e, ok := db.blockCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
@@ -229,6 +209,8 @@ func (db *DB) GetBlock(key uint64) ([]byte, error) {
 }
 
 func (db *DB) GetData(key uint64) ([]byte, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	e, ok := db.blockCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
@@ -265,88 +247,13 @@ func (db *DB) Put(seq uint64, hash uint32, id, topic, value []byte, offset int64
 		return err
 	}
 	db.blockCache[seq] = &entryHeader{blockIndex: db.blockIndex, valueSize: uint32(len(value)), offset: memoff}
-	if b.entryIdx == entriesPerBlock-1 {
+	if b.entryIdx == entriesPerBlock {
 		if _, err := db.newBlock(); err != nil {
 			return err
 		}
 	}
 	return err
 }
-
-// func (db *DB) put(hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) (memoff int64, err error) {
-// 	off := blockOffset(db.blockIndex)
-// 	b := &blockHandle{table: db.index, offset: off}
-// 	if b.entryIdx == entriesPerBlock-1 {
-// 		db.newBlock()
-// 	}
-// 	db.count++
-
-// 	ew := entryWriter{
-// 		block: b,
-// 	}
-// 	ew.entry = entry{
-// 		// seq:       seq,
-// 		hash:      hash,
-// 		topicSize: uint16(len(topic)),
-// 		valueSize: uint32(len(value)),
-// 		tmOffset:  offset,
-// 		expiresAt: expiresAt,
-// 	}
-// 	if memoff, err = db.data.writeMessage(id, topic, value); err != nil {
-// 		// db.freeseq.free(seq)
-// 		return memoff, err
-// 	}
-// 	if err := ew.write(); err != nil {
-// 		// db.freeseq.free(seq)
-// 		return memoff, err
-// 	}
-// 	return memoff, err
-// }
-
-// // delete deletes the given key from the DB.
-// func (db *DB) delete(seq uint64) error {
-// 	b := blockHandle{}
-// 	entryIdx := -1
-// 	startBlockIdx := startBlockIndex(seq)
-// 	err := db.forEachBlock(startBlockIdx, func(curb blockHandle) (bool, error) {
-// 		b = curb
-// 		for i := 0; i < entriesPerBlock; i++ {
-// 			e := b.entries[i]
-// 			if seq == e.seq {
-// 				entryIdx = i
-// 				db.data.free(e.mSize(), e.mOffset)
-// 				return true, nil
-// 			}
-// 		}
-// 		return true, nil
-// 	})
-// 	if entryIdx == -1 || err != nil {
-// 		return err
-// 	}
-// 	b.entryIdx = uint16(entryIdx)
-// 	ew := entryWriter{
-// 		block: &b,
-// 	}
-// 	if err := ew.write(); err != nil {
-// 		return err
-// 	}
-// 	db.freeseq.free(seq)
-// 	db.count--
-// 	return nil
-// }
-
-// // Cleanup addds block range into freeblocks list
-// func (db *DB) Cleanup(startSeq, endSeq uint64) (ok bool) {
-// 	db.mu.RLock()
-// 	defer db.mu.RUnlock()
-// 	if startSeq >= endSeq && endSeq >= db.GetSeq() {
-// 		return false
-// 	}
-// 	for seq := startSeq; seq <= endSeq; seq++ {
-// 		db.delete(seq)
-// 	}
-// 	return true
-// }
 
 // Count returns the number of items in the DB.
 func (db *DB) Count() uint32 {
@@ -362,10 +269,10 @@ func (db *DB) FileSize() (int64, error) {
 	return db.index.size() + db.data.size, nil
 }
 
-func (db *DB) GetSeq() uint64 {
-	return atomic.LoadUint64(&db.seq)
-}
+// func (db *DB) GetSeq() uint64 {
+// 	return atomic.LoadUint64(&db.seq)
+// }
 
-func (db *DB) nextSeq() uint64 {
-	return atomic.AddUint64(&db.seq, 1)
-}
+// func (db *DB) nextSeq() uint64 {
+// 	return atomic.AddUint64(&db.seq, 1)
+// }
