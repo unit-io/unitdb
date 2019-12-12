@@ -23,9 +23,7 @@ type Query struct {
 	parts        []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
 	prefix       message.ID     // The beginning of the time window.
 	cutoff       int64          // The end of the time window.
-	keys         []message.ID
-	blockIndices []uint32
-	blockKeys    map[uint32][]message.ID
+	seqs         []uint64
 	Limit        uint32 // The maximum number of elements to return.
 }
 
@@ -49,10 +47,8 @@ func (it *ItemIterator) Next() {
 	defer it.db.mu.RUnlock()
 	it.item = nil
 	if len(it.queue) == 0 {
-		for _, id := range it.query.keys[it.next:] {
+		for _, seq := range it.query.seqs[it.next:] {
 			err := func() error {
-				hash := it.db.hash(id)
-				seq := id.Seq()
 				b, err := it.db.readBlock(seq)
 				if err != nil {
 					log.Println("iterator.Next: error ", err)
@@ -61,7 +57,11 @@ func (it *ItemIterator) Next() {
 				}
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
-					if e.hash == hash {
+					id, err := it.db.data.readId(e)
+					if err != nil {
+						return err
+					}
+					if message.ID(id).Seq() == seq {
 						e.seq = seq // seq is used to get data from memcache
 						if e.isExpired() {
 							e := b.entries[i]
@@ -75,7 +75,7 @@ func (it *ItemIterator) Next() {
 							}
 							topic := new(message.Topic)
 							topic.Unmarshal(val)
-							it.db.trie.Remove(topic.Parts, id)
+							it.db.trie.Remove(topic.Parts, seq)
 							// free expired keys
 							it.db.data.free(e.mSize(), e.mOffset)
 							it.db.count--
@@ -133,8 +133,8 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	it.query.keys = it.db.trie.Lookup(it.query.parts)
-	if len(it.query.keys) == 0 || it.next >= 1 {
+	it.query.seqs = it.db.trie.Lookup(it.query.parts)
+	if len(it.query.seqs) == 0 || it.next >= 1 {
 		return
 	}
 	it.Next()

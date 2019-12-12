@@ -7,7 +7,7 @@ import (
 type Topic struct {
 	parts []message.Part
 	depth uint8
-	id    message.ID
+	seq    uint64
 	err   error
 }
 
@@ -51,7 +51,7 @@ func (it *TopicIterator) Next() {
 					if err != nil {
 						return err
 					}
-					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, id: message.ID(id), err: err})
+					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, seq: message.ID(id).Seq(), err: err})
 				}
 				return nil
 			}()
@@ -113,11 +113,11 @@ func (Topic *Topic) Depth() uint8 {
 	return Topic.depth
 }
 
-// ID returns the id to store into topic part, or nil if done. The
+// Seq returns the seq of topic, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
-func (Topic *Topic) ID() message.ID {
-	return Topic.id
+func (Topic *Topic) Seq() uint64 {
+	return Topic.seq
 }
 
 // Release releases associated resources. Release should always succeed and can

@@ -1,34 +1,33 @@
 package message
 
 import (
-	"bytes"
 	"sync"
 )
 
 const nul = 0x0
 
-// MID represents a message id set which can contain only unique values.
-type MID []ID
+// SID represents a message id set which can contain only unique values.
+type SID []uint64
 
 // addUnique adds a message id to the set.
-func (m *MID) addUnique(value ID) (added bool) {
-	if m.contains(value) == false {
-		*m = append(*m, value)
+func (sid *SID) addUnique(value uint64) (added bool) {
+	if sid.contains(value) == false {
+		*sid = append(*sid, value)
 		added = true
 	}
 	return
 }
 
 // remove a message id from the set.
-func (m *MID) remove(value ID) (removed bool) {
-	for i, v := range *m {
-		if bytes.Equal(v, value) {
-			// if v == value {
-			a := *m
+func (sid *SID) remove(value uint64) (removed bool) {
+	for i, v := range *sid {
+		// if bytes.Equal(v, value) {
+		if v == value {
+			a := *sid
 			a[i] = a[len(a)-1]
 			//a[len(a)-1] = nil
 			a = a[:len(a)-1]
-			*m = a
+			*sid = a
 			removed = true
 			return
 		}
@@ -37,14 +36,14 @@ func (m *MID) remove(value ID) (removed bool) {
 }
 
 // contains checks whether a message id is in the set.
-func (m *MID) contains(value ID) bool {
-	for _, v := range *m {
-		if bytes.Equal(v, value) {
-			return true
-		}
-		// if v == value {
+func (sid *SID) contains(value uint64) bool {
+	for _, v := range *sid {
+		// if bytes.Equal(v, value) {
 		// 	return true
 		// }
+		if v == value {
+			return true
+		}
 	}
 	return false
 }
@@ -57,7 +56,7 @@ type key struct {
 type part struct {
 	k        key
 	depth    uint8
-	mid      MID
+	sid      SID
 	parent   *part
 	children map[key]*part
 }
@@ -68,7 +67,7 @@ func (p *part) orphan() {
 	}
 
 	delete(p.parent.children, p.k)
-	if len(p.parent.mid) == 0 && len(p.parent.children) == 0 {
+	if len(p.parent.sid) == 0 && len(p.parent.children) == 0 {
 		p.parent.orphan()
 	}
 }
@@ -82,7 +81,7 @@ type partTrie struct {
 func NewpartTrie() *partTrie {
 	return &partTrie{
 		root: &part{
-			mid:      MID{},
+			sid:      SID{},
 			children: make(map[key]*part),
 		},
 	}
@@ -108,8 +107,8 @@ func (t *Trie) Count() int {
 	return t.count
 }
 
-// add the message id to the topic.
-func (t *Trie) Add(parts []Part, depth uint8, id ID) (added bool) {
+// add the message seq to the topic.
+func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -122,7 +121,7 @@ func (t *Trie) Add(parts []Part, depth uint8, id ID) (added bool) {
 		if !ok {
 			child = &part{
 				k:        k,
-				mid:      MID{},
+				sid:      SID{},
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -130,7 +129,7 @@ func (t *Trie) Add(parts []Part, depth uint8, id ID) (added bool) {
 		}
 		curr = child
 	}
-	if ok := curr.mid.addUnique(id); ok {
+	if ok := curr.sid.addUnique(seq); ok {
 		added = true
 		curr.depth = depth
 		t.count++
@@ -139,8 +138,8 @@ func (t *Trie) Add(parts []Part, depth uint8, id ID) (added bool) {
 	return
 }
 
-// remove the message id for the topic.
-func (t *Trie) Remove(parts []Part, id ID) (removed bool) {
+// remove the message seq of the topic.
+func (t *Trie) Remove(parts []Part, seq uint64) (removed bool) {
 	t.Lock()
 	defer t.Unlock()
 	curr := t.partTrie.root
@@ -159,30 +158,30 @@ func (t *Trie) Remove(parts []Part, id ID) (removed bool) {
 		curr = child
 	}
 	// Remove the message id and decrement the counter
-	if ok := curr.mid.remove(id); ok {
+	if ok := curr.sid.remove(seq); ok {
 		removed = true
 		t.count--
 	}
 	// Remove orphans
-	if len(curr.mid) == 0 && len(curr.children) == 0 {
+	if len(curr.sid) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
 	return
 }
 
 // Lookup returns the message Ids for the given topic.
-func (t *Trie) Lookup(parts []Part) (mid MID) {
+func (t *Trie) Lookup(parts []Part) (sid SID) {
 	t.RLock()
 	defer t.RUnlock()
-	t.ilookup(parts, uint8(len(parts)-1), &mid, t.partTrie.root)
+	t.ilookup(parts, uint8(len(parts)-1), &sid, t.partTrie.root)
 	return
 }
 
-func (t *Trie) ilookup(parts []Part, depth uint8, mid *MID, part *part) {
+func (t *Trie) ilookup(parts []Part, depth uint8, sid *SID, part *part) {
 	// Add message ids from the current branch
-	for _, s := range part.mid {
+	for _, s := range part.sid {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
-			mid.addUnique(s)
+			sid.addUnique(s)
 		}
 	}
 
@@ -191,7 +190,7 @@ func (t *Trie) ilookup(parts []Part, depth uint8, mid *MID, part *part) {
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(parts[k.wildchars+1:], depth, mid, p)
+				t.ilookup(parts[k.wildchars+1:], depth, sid, p)
 			}
 		}
 	}

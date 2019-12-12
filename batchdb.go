@@ -52,14 +52,17 @@ func (db *DB) initbatchdb() error {
 	return nil
 }
 
-func (db *DB) startBatchCommit() {
+func (db *DB) startBatchCommit(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	db.cancelSyncer = cancel
+	commitTicker := time.NewTicker(interval)
+	defer commitTicker.Stop()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-commitTicker.C:
 			case bseq := <-db.batchCommitQueue:
 				if err := db.commit(bseq); err != nil {
 					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error commiting batch")

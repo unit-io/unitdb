@@ -171,11 +171,13 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 	topic.AddContract(e.Contract)
 	var id message.ID
-	seq := b.db.nextSeq()
+	var seq uint64
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		id.AddContract(topic.Parts)
+		seq = id.Seq()
 	} else {
+		seq = b.db.nextSeq()
 		id = message.NewID(seq, b.opts.Encryption)
 		id.AddContract(topic.Parts)
 	}
@@ -278,13 +280,13 @@ func (b *Batch) writeTrie() error {
 			}
 			itopic := new(message.Topic)
 			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Remove(itopic.Parts, message.ID(id)); !ok {
+			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
 				return errBadRequest
 			}
 		} else {
 			itopic := new(message.Topic)
 			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, message.ID(id)); !ok {
+			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
 				return errBadRequest
 			}
 		}

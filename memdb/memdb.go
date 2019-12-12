@@ -268,11 +268,3 @@ func (db *DB) FileSize() (int64, error) {
 	defer db.mu.RUnlock()
 	return db.index.size() + db.data.size, nil
 }
-
-// func (db *DB) GetSeq() uint64 {
-// 	return atomic.LoadUint64(&db.seq)
-// }
-
-// func (db *DB) nextSeq() uint64 {
-// 	return atomic.AddUint64(&db.seq, 1)
-// }

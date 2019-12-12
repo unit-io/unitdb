@@ -204,7 +204,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	db.startBatchCommit()
+	db.startBatchCommit(opts.BackgroundSyncInterval)
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
 	} else if opts.BackgroundSyncInterval == -1 {
@@ -259,18 +259,6 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 		}
 	}()
 }
-
-// func (db *DB) foreachBlock(startBlockIdx uint32, cb func(blockHandle) (bool, error)) error {
-// 	off := blockOffset(startBlockIdx)
-// 	b := blockHandle{table: db.index.FileManager, offset: off}
-// 	if err := b.read(0); err != nil {
-// 		return err
-// 	}
-// 	if stop, err := cb(b); stop || err != nil {
-// 		return err
-// 	}
-// 	return nil
-// }
 
 func (db *DB) readBlock(seq uint64) (blockHandle, error) {
 	// off := blockOffset(startBlockIdx)
@@ -455,17 +443,17 @@ func (db *DB) expireOldEntries() {
 			continue
 		}
 		e := b.entries[entryIdx]
-		id, err := db.data.readId(e)
-		if err != nil {
-			continue
-		}
+		// id, err := db.data.readId(e)
+		// if err != nil {
+		// 	continue
+		// }
 		etopic, err := db.data.readTopic(e)
 		if err != nil {
 			continue
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
-		if ok := db.trie.Remove(topic.Parts, message.ID(id)); ok {
+		if ok := db.trie.Remove(topic.Parts, entry.seq); ok {
 			b.del(entryIdx)
 			if err := b.write(); err != nil {
 				continue
@@ -489,7 +477,7 @@ func (db *DB) loadTrie() error {
 			logger.Error().Err(err).Str("context", "db.loadTrie")
 			return err
 		}
-		db.trie.Add(it.Topic().Parts(), it.Topic().Depth(), it.Topic().ID())
+		db.trie.Add(it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
 	}
 	return nil
 }
@@ -547,11 +535,18 @@ func (db *DB) PutEntry(e *Entry) error {
 	topic.AddContract(e.Contract)
 	//message ID is the database key
 	var id message.ID
+	var ok bool
+	var seq uint64
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		id.AddContract(topic.Parts)
+		seq = id.Seq()
 	} else {
-		id = message.NewID(db.nextSeq(), false)
+		ok, seq = db.freeseq.get()
+		if !ok {
+			seq = db.nextSeq()
+		}
+		id = message.NewID(seq, false)
 		id.AddContract(topic.Parts)
 	}
 	m, err := e.Marshal()
@@ -565,14 +560,11 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	if ok := db.trie.Add(topic.Parts, topic.Depth, message.ID(id)); ok {
+	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
 		if err := db.put(id, topic.Marshal(), val, e.ExpiresAt); err != nil {
 			return err
 		}
 	}
-	// if uint32(float64(db.count)/float64(entriesPerBlock)) > db.blockIndex {
-	// 	db.newBlock()
-	// }
 
 	if db.syncWrites {
 		db.sync()
@@ -621,7 +613,6 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 			return err
 		}
 	}
-	// db.freeseq.evict(seq)
 	db.filter.Append(uint64(hash))
 	return err
 }
@@ -703,7 +694,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	id := message.ID(e.ID)
 	id.AddContract(topic.Parts)
 
-	if ok := db.trie.Remove(topic.Parts, id); ok {
+	if ok := db.trie.Remove(topic.Parts, id.Seq()); ok {
 		err := db.delete(id)
 		if err != nil {
 			return err
