@@ -307,6 +307,9 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Signal all goroutines.
+	close(db.closeC)
+
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
 
@@ -330,8 +333,6 @@ func (db *DB) Close() error {
 	}
 
 	var err error
-	// Signal all goroutines.
-	close(db.closeC)
 
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
@@ -617,10 +618,10 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
-func (db *DB) commit(batchSeq uint64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	for _, seq := range db.activeBatches[batchSeq] {
+func (db *DB) commit(batchSeq []uint64) error {
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+	for _, seq := range batchSeq {
 		key := db.cacheID ^ seq
 		mblock, mdata, err := db.mem.Get(key)
 		if err != nil {

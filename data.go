@@ -9,7 +9,7 @@ func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 	var cacheKey uint64
 	if t.cache != nil {
 		cacheKey = t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize(){
+		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
 			return data[:idSize], data[e.topicSize+idSize:], err
 		}
 	}
@@ -23,7 +23,7 @@ func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 func (t *dataTable) readId(e entry) ([]byte, error) {
 	if t.cache != nil {
 		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil {
+		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
 			return data[:idSize], err
 		}
 	}
@@ -33,7 +33,7 @@ func (t *dataTable) readId(e entry) ([]byte, error) {
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
 	if t.cache != nil {
 		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil {
+		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
 			return data[idSize : e.topicSize+idSize], err
 		}
 	}

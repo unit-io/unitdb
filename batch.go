@@ -332,9 +332,9 @@ func (b *Batch) commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
-	b.db.batchCommitQueue <- b.seq
-	//remove batch from activeBatches after commit
-	// delete(b.db.activeBatches, b.seq)
+	b.db.batchCommitQueue <- b.db.activeBatches[b.seq]
+	// remove batch from activeBatches after commit
+	delete(b.db.activeBatches, b.seq)
 	return nil
 }
 

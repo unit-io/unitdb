@@ -1,7 +1,6 @@
 package tracedb
 
 import (
-	"log"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -18,13 +17,13 @@ type Item struct {
 
 // Query represents a topic to query and optional contract information.
 type Query struct {
-	Topic        []byte         // The topic of the message
-	Contract     uint32         // The contract is used as prefix in the message Id
-	parts        []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
-	prefix       message.ID     // The beginning of the time window.
-	cutoff       int64          // The end of the time window.
-	seqs         []uint64
-	Limit        uint32 // The maximum number of elements to return.
+	Topic    []byte         // The topic of the message
+	Contract uint32         // The contract is used as prefix in the message Id
+	parts    []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	prefix   message.ID     // The beginning of the time window.
+	cutoff   int64          // The end of the time window.
+	seqs     []uint64
+	Limit    uint32 // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
@@ -51,18 +50,16 @@ func (it *ItemIterator) Next() {
 			err := func() error {
 				b, err := it.db.readBlock(seq)
 				if err != nil {
-					log.Println("iterator.Next: error ", err)
-					it.item = &Item{err: err}
 					return err
 				}
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
+					e.seq = seq // seq is used to get data from memcache
 					id, err := it.db.data.readId(e)
 					if err != nil {
 						return err
 					}
 					if message.ID(id).Seq() == seq {
-						e.seq = seq // seq is used to get data from memcache
 						if e.isExpired() {
 							e := b.entries[i]
 							b.del(i)
@@ -83,14 +80,14 @@ func (it *ItemIterator) Next() {
 							// if id is expired it does not return an error but continue the iteration
 							return nil
 						}
-						id, val, err := it.db.data.readMessage(e)
-						if err != nil {
-							return err
-						}
 						_id := message.ID(id)
 						if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
 							it.invalidKeys++
 							return nil
+						}
+						_, val, err := it.db.data.readMessage(e)
+						if err != nil {
+							return err
 						}
 						if _id.IsEncrypted() {
 							val, err = it.db.mac.Decrypt(nil, val)
@@ -115,7 +112,6 @@ func (it *ItemIterator) Next() {
 				return nil
 			}()
 			if err != nil {
-				log.Println("iterator.Next: error ", err)
 				it.item = &Item{err: err}
 			}
 			it.next++

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/saffat-in/tracedb"
 )
@@ -41,7 +42,6 @@ func dirSize(path string) (int64, error) {
 
 func newTracedb(path string) (kvEngine, error) {
 	opts := tracedb.Options{}
-	// opts.FileSystem = fs.FileIO
-	// opts.BackgroundSyncInterval = 60 * time.Second
+	opts.BackgroundSyncInterval = 15 * time.Second
 	return tracedb.Open(path, &opts)
 }

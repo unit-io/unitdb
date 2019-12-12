@@ -49,7 +49,7 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk insert records into tracedb. Reading data is blazing fast if batch operation is used to insert records into tracedb and reading those records within short span of time for example 24 hours:
+Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk insert records into tracedb. Reading data is blazing fast if batch operation is used for inserting records into tracedb and then reading records within short span of time while db is still open:
 
 ```
     err = db.Batch(func(b *tracedb.Batch) error {
@@ -68,7 +68,7 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 
 ```
 
-	messageId := db.GenID()
+	messageId := db.NewID()
 	err := db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
 		Topic:    []byte("dev18.b.b1"),
@@ -85,7 +85,7 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 ```
 
 Writing to wildcard topics.
-Tracedb supports wrting to wildcard topics. Use "*" in the topic to write to wildcard topic or use "..." at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "*" or "..."
+Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
 
 ```
 	err = db.Batch(func(b *tracedb.Batch) error {

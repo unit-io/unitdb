@@ -64,7 +64,7 @@ func main() {
 	var start time.Time
 	func(retry int) {
 		i := 0
-		for _ = range time.Tick(1000 * time.Millisecond) {
+		for _ = range time.Tick(100 * time.Millisecond) {
 			start = time.Now()
 			for j := 0; j < 50; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
@@ -96,7 +96,7 @@ func main() {
 			for j := 0; j < 10; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
-				db.PutEntry(&tracedb.Entry{Topic: []byte("dev18.b.*?ttl=30m"), Payload: p})
+				db.PutEntry(&tracedb.Entry{Topic: []byte("dev18.c.*?ttl=30m"), Payload: p})
 			}
 			log.Println("db.write ", time.Since(start).Seconds())
 			if err != nil {
@@ -109,8 +109,8 @@ func main() {
 		}
 	}(5)
 
-	print([]byte("dev18.b.b1?last=30m"), db)
-	print([]byte("dev18.b.b11?last=30m"), db)
+	print([]byte("dev18.c.c1?last=30m"), db)
+	print([]byte("dev18.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 0
@@ -139,6 +139,24 @@ func main() {
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)
+
+	messageId = db.NewID()
+	err = db.PutEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1?ttl=3m"),
+		Payload:  []byte("ttl.ttl1.3"),
+		Contract: 3376684800,
+	})
+
+	print([]byte("ttl.ttl1?last=2m"), db)
+
+	err = db.DeleteEntry(&tracedb.Entry{
+		ID:       messageId,
+		Topic:    []byte("ttl.ttl1"),
+		Contract: 3376684800,
+	})
+
+	print([]byte("ttl.ttl1?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch) error {
 		// opts := tracedb.DefaultBatchOptions
@@ -213,24 +231,6 @@ func main() {
 		return nil
 	})
 
-	messageId = db.NewID()
-	err = db.PutEntry(&tracedb.Entry{
-		ID:       messageId,
-		Topic:    []byte("ttl.ttl1?ttl=3m"),
-		Payload:  []byte("ttl.ttl1.3"),
-		Contract: 3376684800,
-	})
-
-	print([]byte("ttl.ttl1?last=2m"), db)
-
-	err = db.DeleteEntry(&tracedb.Entry{
-		ID:       messageId,
-		Topic:    []byte("ttl.ttl1"),
-		Contract: 3376684800,
-	})
-
-	print([]byte("ttl.ttl1?last=2m"), db)
-
 	err = g.Run()
 
 	if err != nil {
@@ -241,6 +241,7 @@ func main() {
 	func(retry int) {
 		i := 0
 		for _ = range time.Tick(10000 * time.Millisecond) {
+			print([]byte("dev18.b1?last=10m"), db)
 			print([]byte("dev18.b.b1?last=10m"), db)
 			print([]byte("dev18.b.b11?last=10m"), db)
 			print([]byte("dev18?last=10m"), db)

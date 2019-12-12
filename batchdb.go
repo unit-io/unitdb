@@ -22,7 +22,7 @@ type batchdb struct {
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches    map[uint64][]uint64
 	batchQueue       chan *Batch
-	batchCommitQueue chan uint64
+	batchCommitQueue chan []uint64
 	//once run batchLoop once
 	once Once
 
@@ -37,9 +37,9 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		activeBatches:    make(map[uint64][]uint64, 100),
-		batchQueue:       make(chan *Batch, 100),
-		batchCommitQueue: make(chan uint64, 100),
+		activeBatches:    make(map[uint64][]uint64, 10),
+		batchQueue:       make(chan *Batch, 10),
+		batchCommitQueue: make(chan []uint64, 1),
 	}
 	// memcache
 	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
@@ -65,9 +65,11 @@ func (db *DB) startBatchCommit(interval time.Duration) {
 			case <-commitTicker.C:
 			case bseq := <-db.batchCommitQueue:
 				if err := db.commit(bseq); err != nil {
-					logger.Error().Err(err).Str("context", "startBatchCleanup").Msg("Error commiting batch")
+					logger.Error().Err(err).Str("context", "startBatchCommit").Msg("Error commiting batch")
 				}
-				delete(db.activeBatches, bseq)
+			case <-db.closeC:
+				commitTicker.Stop()
+				return
 			}
 		}
 	}()
