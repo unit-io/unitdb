@@ -49,7 +49,7 @@ type DB struct {
 	index tableManager
 	data  dataTable
 	//block cache
-	blockCache map[uint64]*entryHeader
+	entryCache map[uint64]*entryHeader
 	dbInfo
 	// Close.
 	closed uint32
@@ -72,7 +72,7 @@ func Open(path string, memSize int64) (*DB, error) {
 	db := &DB{
 		index:      index,
 		data:       dataTable{tableManager: data},
-		blockCache: make(map[uint64]*entryHeader, 100),
+		entryCache: make(map[uint64]*entryHeader, 100),
 		dbInfo: dbInfo{
 			nBlocks: 1,
 		},
@@ -171,14 +171,14 @@ func (db *DB) newBlock() (int64, error) {
 func (db *DB) Has(key uint64) bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	_, ok := db.blockCache[key]
+	_, ok := db.entryCache[key]
 	return ok
 }
 
 func (db *DB) Get(key uint64) ([]byte, []byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.blockCache[key]
+	e, ok := db.entryCache[key]
 	if !ok {
 		return nil, nil, errors.New("cache key not found")
 	}
@@ -195,7 +195,7 @@ func (db *DB) Get(key uint64) ([]byte, []byte, error) {
 func (db *DB) GetBlock(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.blockCache[key]
+	e, ok := db.entryCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
 	}
@@ -211,7 +211,7 @@ func (db *DB) GetBlock(key uint64) ([]byte, error) {
 func (db *DB) GetData(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.blockCache[key]
+	e, ok := db.entryCache[key]
 	if !ok {
 		return nil, errors.New("cache key not found")
 	}
@@ -246,7 +246,7 @@ func (db *DB) Put(key uint64, hash uint32, id, topic, value []byte, offset int64
 	if err := ew.write(); err != nil {
 		return err
 	}
-	db.blockCache[key] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
+	db.entryCache[key] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
 	if b.entryIdx == entriesPerBlock {
 		if _, err := db.newBlock(); err != nil {
 			return err

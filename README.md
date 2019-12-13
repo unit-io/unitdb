@@ -49,7 +49,7 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk insert records into tracedb. Reading data is blazing fast if batch operation is used for inserting records into tracedb and then reading records within short span of time while db is still open:
+Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk inserting records into tracedb. Reading data is blazing fast if batch operation is used for inserting records into tracedb and then reading records within short span of time while db is still open:
 
 ```
     err = db.Batch(func(b *tracedb.Batch) error {

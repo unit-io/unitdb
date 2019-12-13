@@ -97,7 +97,7 @@ func (db *DB) Batch(fn func(*Batch) error) error {
 	defer func() {
 		b.Abort()
 	}()
-	return b.commit()
+	return b.Commit()
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -183,7 +183,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 		return err
 	}
 	defer g.Abort()
-	return b.commit()
+	return b.Commit()
 }
 
 func (g *BatchGroup) Abort() {

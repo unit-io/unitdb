@@ -324,7 +324,7 @@ func (b *Batch) Write() error {
 	return err
 }
 
-func (b *Batch) commit() error {
+func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil

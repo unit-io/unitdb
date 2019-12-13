@@ -507,6 +507,8 @@ func (db *DB) extendBlocks() error {
 
 // allocate adds size to data table for the batch write
 func (db *DB) allocate(size uint32) (off int64, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	return db.data.allocate(size)
 }
 
