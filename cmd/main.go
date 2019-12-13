@@ -19,7 +19,7 @@ func print(topic []byte, db *tracedb.DB) {
 			log.Fatal(err)
 			return
 		}
-		// log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
+		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
 
@@ -116,17 +116,16 @@ func main() {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 50000; j++ {
+				for j := 0; j < 500; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
 				}
 				start = time.Now()
 				err := b.Write()
-				log.Println("batch.write ", time.Since(start).Seconds())
 				return err
 			})
-			log.Println("batch.commit ", time.Since(start).Seconds())
+			log.Println("batch.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	entriesPerBlock = 23
+	entriesPerBlock = 19
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
@@ -310,12 +310,13 @@ func (db *DB) Close() error {
 	// Signal all goroutines.
 	close(db.closeC)
 
-	// Wait for all gorotines to exit.
-	db.closeW.Wait()
-
 	if db.cancelSyncer != nil {
 		db.cancelSyncer()
 	}
+
+	// Wait for all gorotines to exit.
+	db.closeW.Wait()
+
 	if err := db.writeHeader(); err != nil {
 		return err
 	}
@@ -333,7 +334,6 @@ func (db *DB) Close() error {
 	}
 
 	var err error
-
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
 			err = err1
@@ -421,7 +421,7 @@ func (db *DB) expireOldEntries() {
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
 		/// Test filter block if message hash presence
-		if !db.filter.Test(uint64(entry.hash)) {
+		if !db.filter.Test(entry.seq) {
 			continue
 		}
 		db.metrics.Dels.Add(1)
@@ -435,7 +435,7 @@ func (db *DB) expireOldEntries() {
 		}
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
-			if entry.hash == e.hash {
+			if e.seq == entry.seq {
 				entryIdx = i
 				break
 			}
@@ -444,10 +444,6 @@ func (db *DB) expireOldEntries() {
 			continue
 		}
 		e := b.entries[entryIdx]
-		// id, err := db.data.readId(e)
-		// if err != nil {
-		// 	continue
-		// }
 		etopic, err := db.data.readTopic(e)
 		if err != nil {
 			continue
@@ -594,7 +590,6 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	hash := db.hash(id)
 	b.entries[b.entryIdx] = entry{
 		seq:       seq,
-		hash:      hash,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
 		expiresAt: expiresAt,
@@ -623,6 +618,7 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 func (db *DB) commit(batchSeq []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
+
 	for _, seq := range batchSeq {
 		key := db.cacheID ^ seq
 		mblock, mdata, err := db.mem.Get(key)
@@ -639,7 +635,7 @@ func (db *DB) commit(batchSeq []uint64) error {
 		hash := db.hash(id)
 		for i := 0; i < entriesPerBlock; i++ {
 			e := mb.entries[i]
-			if hash == e.hash {
+			if seq == e.seq {
 				entryIdx = i
 				break
 			}
@@ -725,7 +721,7 @@ func (db *DB) delete(id []byte) error {
 	}
 	for i := 0; i < entriesPerBlock; i++ {
 		e := b.entries[i]
-		if hash == e.hash {
+		if seq == e.seq {
 			_id, err := db.data.readId(e)
 			if err != nil {
 				return err

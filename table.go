@@ -18,7 +18,6 @@ type table struct {
 
 func newTable(fs fs.FileSystem, name string) (table, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
-	// fs := opts.FileSystem
 	fileMode := os.FileMode(0666)
 	fi, err := fs.OpenFile(name, fileFlag, fileMode)
 	t := table{}

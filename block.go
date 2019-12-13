@@ -10,7 +10,6 @@ import (
 
 type entry struct {
 	seq       uint64
-	hash      uint32
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
@@ -46,7 +45,7 @@ type blockHandle struct {
 }
 
 const (
-	entrySize        = 22
+	entrySize        = 26
 	blockSize uint32 = 512
 )
 
@@ -59,11 +58,11 @@ func (b block) MarshalBinary() ([]byte, error) {
 	data := buf
 	for i := 0; i < entriesPerBlock; i++ {
 		e := b.entries[i]
-		binary.LittleEndian.PutUint32(buf[:4], e.hash)
-		binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
-		binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
-		binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
-		binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
+		binary.LittleEndian.PutUint64(buf[:8], e.seq)
+		binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
+		binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
+		binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
+		binary.LittleEndian.PutUint64(buf[18:26], uint64(e.mOffset))
 		buf = buf[entrySize:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
@@ -74,11 +73,11 @@ func (b block) MarshalBinary() ([]byte, error) {
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
 		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
-		b.entries[i].hash = binary.LittleEndian.Uint32(data[:4])
-		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[4:6])
-		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[6:10])
-		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[10:14])
-		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
+		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
+		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[8:10])
+		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[10:14])
+		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[14:18])
+		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
 		data = data[entrySize:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
@@ -140,7 +139,7 @@ func (ew *entryWriter) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
 	e := ew.entry
-	binary.LittleEndian.PutUint32(buf[:4], e.hash)
+	binary.LittleEndian.PutUint64(buf[:4], e.seq)
 	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
 	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
 	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)

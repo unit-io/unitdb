@@ -37,9 +37,9 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		activeBatches:    make(map[uint64][]uint64, 10),
-		batchQueue:       make(chan *Batch, 10),
-		batchCommitQueue: make(chan []uint64, 1),
+		activeBatches:    make(map[uint64][]uint64, 100),
+		batchQueue:       make(chan *Batch, 100),
+		batchCommitQueue: make(chan []uint64, 100),
 	}
 	// memcache
 	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
@@ -56,20 +56,17 @@ func (db *DB) startBatchCommit(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	db.cancelSyncer = cancel
 	commitTicker := time.NewTicker(interval)
-	defer commitTicker.Stop()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
+				commitTicker.Stop()
 				return
 			case <-commitTicker.C:
 			case bseq := <-db.batchCommitQueue:
 				if err := db.commit(bseq); err != nil {
 					logger.Error().Err(err).Str("context", "startBatchCommit").Msg("Error commiting batch")
 				}
-			case <-db.closeC:
-				commitTicker.Stop()
-				return
 			}
 		}
 	}()

@@ -16,10 +16,9 @@ const (
 )
 
 type batchIndex struct {
-	delFlag bool
-	seq     uint64
-	key     uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
-	// idSize    uint16
+	delFlag   bool
+	seq       uint64
+	key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
@@ -118,7 +117,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	b.index = append(b.index, index)
 }
 
-func (b *Batch) mput(key uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (b *Batch) mput(key, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	switch {
 	case len(id) == 0:
 		return errIdEmpty
@@ -127,9 +126,7 @@ func (b *Batch) mput(key uint64, id, topic, value []byte, offset int64, expiresA
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-	hash := b.db.hash(id)
-
-	if err := b.db.mem.Put(key, hash, id, topic, value, offset, expiresAt); err != nil {
+	if err := b.db.mem.Put(key, seq, id, topic, value, offset, expiresAt); err != nil {
 		return err
 	}
 	b.seq++
@@ -243,7 +240,7 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, key uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	if err := b.db.extendBlocks(); err != nil {
@@ -259,8 +256,7 @@ func (b *Batch) writeInternal(fn func(i int, key uint64, id, topic, v []byte, of
 		if err != nil {
 			return err
 		}
-		if err := fn(i, key, id, topic, val, off, index.expiresAt); err != nil {
-			b.db.freeseq.free(message.ID(id).Seq())
+		if err := fn(i, key, index.seq, id, topic, val, off, index.expiresAt); err != nil {
 			return err
 		}
 	}
@@ -308,9 +304,8 @@ func (b *Batch) Write() error {
 	}
 
 	b.seq = b.db.getSeq() + 1
-	// b.db.Extend(b.seq + uint64(b.Len()))
-	err := b.writeInternal(func(i int, key uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
-		return b.mput(key, id, topic, v, offset, expiresAt)
+	err := b.writeInternal(func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
+		return b.mput(key, seq, id, topic, v, offset, expiresAt)
 	})
 
 	if err := b.writeTrie(); err != nil {
@@ -410,7 +405,6 @@ func (b *Batch) unsetManaged() {
 
 // setGrouped set grouping of multiple batches.
 func (b *Batch) setGrouped(g *BatchGroup) {
-	// b.batchGroup = g
 	b.grouped = true
 }
 

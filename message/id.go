@@ -31,11 +31,6 @@ func (id *ID) AddContract(parts []Part) {
 	*id = newid
 }
 
-// // SetEncryption sets message encryption so while decoding a message it is also decrypted
-// func (id ID) SetEncryption() {
-// 	binary.BigEndian.PutUint32(id[12:16], binary.BigEndian.Uint32(id[12:16])|(1<<2)) //set encryption bit
-// }
-
 // IsEncrypted return if the encyrption is set on ID
 func (id ID) IsEncrypted() bool {
 	num := binary.BigEndian.Uint64(id[12:20])

@@ -4,31 +4,14 @@ import (
 	"errors"
 	"io"
 	"log"
-	"math"
 	"sync"
 )
 
 const (
 	idSize          = 20
-	entriesPerBlock = 23
+	entriesPerBlock = 19
 	indexPostfix    = ".index"
 	version         = 1 // file format version
-
-	// MaxKeyLength is the maximum size of a key in bytes.
-	MaxKeyLength = 1 << 16
-
-	// MaxValueLength is the maximum size of a value in bytes.
-	MaxValueLength = 1 << 30
-
-	// MaxKeys is the maximum numbers of keys in the DB.
-	MaxKeys = math.MaxUint32
-
-	// Maximum value possible for sequence number; the 8-bits are
-	// used by value type, so its can packed together in single
-	// 64-bit integer.
-	keyMaxSeq = (uint64(1) << 56) - 1
-	// Maximum value possible for packed sequence number and type.
-	keyMaxNum = (keyMaxSeq << 8) | 0
 
 	// MaxTableSize value for maximum memroy use for the memdb.
 	MaxTableSize = (int64(1) << 30) - 1
@@ -111,10 +94,6 @@ func Open(path string, memSize int64) (*DB, error) {
 
 func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
-}
-
-func startBlockIndex(seq uint64) uint32 {
-	return uint32(float64(seq-1) / float64(entriesPerBlock))
 }
 
 func (db *DB) writeHeader() error {
@@ -219,7 +198,7 @@ func (db *DB) GetData(key uint64) ([]byte, error) {
 }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
-func (db *DB) Put(key uint64, hash uint32, id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (db *DB) Put(key uint64, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	off := blockOffset(db.blockIndex)
@@ -232,8 +211,7 @@ func (db *DB) Put(key uint64, hash uint32, id, topic, value []byte, offset int64
 		block: b,
 	}
 	ew.entry = entry{
-		// seq:       seq,
-		hash:      hash,
+		seq:       seq,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
 		mOffset:   offset,
