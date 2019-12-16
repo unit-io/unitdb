@@ -64,6 +64,7 @@ type Batch struct {
 	managed          bool
 	grouped          bool
 	order            int8
+	startSeq uint64
 	seq              uint64
 	db               *DB
 	data             []byte
@@ -113,6 +114,10 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 		o += copy(data[o:], value)
 	}
 	b.data = data[:o]
+	if b.startSeq == 0 {
+b.startSeq = seq
+	}
+	
 	index.expiresAt = expiresAt
 	b.index = append(b.index, index)
 }
@@ -129,7 +134,6 @@ func (b *Batch) mput(key, seq uint64, id, topic, value []byte, offset int64, exp
 	if err := b.db.mem.Put(key, seq, id, topic, value, offset, expiresAt); err != nil {
 		return err
 	}
-	b.seq++
 	return nil
 }
 
@@ -243,6 +247,8 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
+	
+	b.seq = b.db.getSeq()
 	if err := b.db.extendBlocks(); err != nil {
 		return err
 	}
@@ -303,7 +309,6 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	b.seq = b.db.getSeq() + 1
 	err := b.writeInternal(func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
 		return b.mput(key, seq, id, topic, v, offset, expiresAt)
 	})
@@ -327,6 +332,9 @@ func (b *Batch) Commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
+	// startSeq := b.db.cacheID ^ b.startSeq
+	// endSeq := b.db.cacheID ^ b.seq
+	// b.db.mem.Sync(startSeq, endSeq)
 	b.db.batchCommitQueue <- b.db.activeBatches[b.seq]
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.seq)

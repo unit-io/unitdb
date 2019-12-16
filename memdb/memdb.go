@@ -14,7 +14,7 @@ const (
 	version         = 1 // file format version
 
 	// MaxTableSize value for maximum memroy use for the memdb.
-	MaxTableSize = (int64(1) << 30) - 1
+	MaxTableSize = (int64(1) << 33) - 1
 )
 
 type dbInfo struct {
@@ -31,6 +31,7 @@ type DB struct {
 	mu    sync.RWMutex
 	index tableManager
 	data  dataTable
+	logWriter *writer
 	//block cache
 	entryCache map[uint64]*entryHeader
 	dbInfo
@@ -89,6 +90,19 @@ func Open(path string, memSize int64) (*DB, error) {
 		}
 	}
 
+	var nextSeq uint64
+	// nextSeq, err := db.recoverLog(lastAppliedSeqNo)
+	// if err != nil {
+	// 	errors.New("Failed to recover log file")
+	// }
+
+	logOpts := options{Dirname: path, TargetSize: memSize}
+	logWriter, err := newWriter(nextSeq, logOpts)
+	if err != nil {
+		errors.New("Error creating WAL writer")
+	}
+	db.logWriter = logWriter
+
 	return db, nil
 }
 
@@ -126,7 +140,9 @@ func (db *DB) Close() error {
 	if err := mem.remove(db.data.name()); err != nil {
 		return err
 	}
-
+	if err := db.logWriter.close(); err != nil {
+		return err
+	}
 	var err error
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
@@ -136,6 +152,27 @@ func (db *DB) Close() error {
 	}
 
 	return err
+}
+
+func (db *DB) Sync(startSeq, endSeq uint64) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	start, ok := db.entryCache[startSeq]
+	if !ok {
+		return errors.New("seq not found")
+	}
+	end, ok := db.entryCache[endSeq]
+	if !ok {
+		return errors.New("seq not found")
+	}
+	data, err := db.data.readRaw(start.offset, end.offset + int64(end.messageSize))
+	if err != nil {
+		return errors.New("write failed")
+	}
+	if err := db.logWriter.append(data); err != nil {
+		return errors.New("write failed")
+	}
+	return db.logWriter.sync()
 }
 
 // newBlock adds new block to db table and return block offset

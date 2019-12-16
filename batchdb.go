@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb/memdb"
+	"golang.org/x/sync/errgroup"
 )
 
 // batchdb manages the batch execution
@@ -38,8 +39,8 @@ func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
 		activeBatches:    make(map[uint64][]uint64, 100),
-		batchQueue:       make(chan *Batch, 100),
-		batchCommitQueue: make(chan []uint64, 100),
+		batchQueue:       make(chan *Batch, 10),
+		batchCommitQueue: make(chan []uint64, 1),
 	}
 	// memcache
 	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
@@ -55,14 +56,14 @@ func (db *DB) initbatchdb() error {
 func (db *DB) startBatchCommit(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	db.cancelSyncer = cancel
-	commitTicker := time.NewTicker(interval)
+	// commitTicker := time.NewTicker(interval)
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				commitTicker.Stop()
+				// commitTicker.Stop()
 				return
-			case <-commitTicker.C:
+			// case <-commitTicker.C:
 			case bseq := <-db.batchCommitQueue:
 				if err := db.commit(bseq); err != nil {
 					logger.Error().Err(err).Str("context", "startBatchCommit").Msg("Error commiting batch")
@@ -130,33 +131,36 @@ func (g *BatchGroup) Run() error {
 	}
 
 	stop := make(chan struct{})
-
-	var wg sync.WaitGroup
-	wg.Add(len(g.fn))
-
-	result := make(chan error, len(g.fn)+1)
+	eg := &errgroup.Group{}
+	g.batchQueue = make(chan *Batch, len(g.fn))
 	for i, fn := range g.fn {
-		go func(order int, fn func(*Batch, <-chan struct{}) error) {
+		func(order int, fn func(*Batch, <-chan struct{}) error) {
 			//TODO implement cloing to pass a copy of batch
 			b := g.batch()
 			b.setManaged()
 			b.setGrouped(g)
 			b.setOrder(int8(order))
-			defer func() {
-				wg.Done()
-			}()
-			// If an error is returned from the function then rollback and return error.
-			result <- fn(b, stop)
+			eg.Go(func() error{
+			return fn(b, stop)
+		})
 		}(i, fn)
 	}
 
-	go g.writeBatchGroup()
+	 // Check whether any of the goroutines failed. Since eg is accumulating the
+    // errors, we don't need to send them (or check for them) in the individual
+    // results sent on the channel.
+    if err := eg.Wait(); err != nil {
+        return err
+	}
 
-	defer close(g.batchQueue)
-	defer wg.Wait()
+	close(g.batchQueue)
+	eg.Go(func() error {
+		return g.writeBatchGroup()
+	})
+	
 	defer close(stop)
 
-	return <-result
+	return eg.Wait()
 }
 
 func (g *BatchGroup) writeBatchGroup() error {

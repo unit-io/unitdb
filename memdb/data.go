@@ -14,6 +14,10 @@ func (t *dataTable) append(data []byte) (int64, error) {
 	return off, nil
 }
 
+func (t *dataTable) allocate(size uint32) (int64, error) {
+	return t.extend(size)
+}
+
 func (t *dataTable) readRaw(off, kvSize int64) ([]byte, error) {
 	return t.slice(off, off+kvSize)
 }
@@ -24,6 +28,7 @@ func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error)
 	copy(data, id)
 	copy(data[idSize:], topic)
 	copy(data[len(topic)+idSize:], value)
+	t.allocate(dataLen)
 	off, err = t.append(data)
 	return off, err
 }

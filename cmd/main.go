@@ -37,11 +37,13 @@ func main() {
 		Payload: []byte("ttl.ttl1.1"),
 	})
 
-	val, err := db.Get([]byte("ttl.ttl1?ttl=3m"))
+	vals, err := db.Get(&tracedb.Query{Topic: []byte("ttl.ttl1?ttl=3m")})
 	if err != nil {
 		log.Println("db.Get: error ", err)
 	}
-	log.Println("db.Get: val ", val)
+	for _, val := range vals {
+		log.Println("db.Get: val ", val)
+	}
 
 	messageId := db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
@@ -116,7 +118,7 @@ func main() {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 500; j++ {
+				for j := 0; j < 5; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -237,18 +239,18 @@ func main() {
 		return
 	}
 
-	func(retry int) {
-		i := 0
-		for _ = range time.Tick(10000 * time.Millisecond) {
-			print([]byte("dev18.b1?last=10m"), db)
-			print([]byte("dev18.b.b1?last=10m"), db)
-			print([]byte("dev18.b.b11?last=10m"), db)
-			print([]byte("dev18?last=10m"), db)
-			print([]byte("dev19?last=10m"), db)
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
+	// func(retry int) {
+	// 	i := 0
+	// 	for _ = range time.Tick(10000 * time.Millisecond) {
+	// 		print([]byte("dev18.b1?last=10m"), db)
+	// 		print([]byte("dev18.b.b1?last=10m"), db)
+	// 		print([]byte("dev18.b.b11?last=10m"), db)
+	// 		print([]byte("dev18?last=10m"), db)
+	// 		print([]byte("dev19?last=10m"), db)
+	// 		if i >= retry {
+	// 			return
+	// 		}
+	// 		i++
+	// 	}
+	// }(1)
 }

@@ -64,7 +64,7 @@ Use the DB.Batch() function to store messages to topic or delete a message from 
 ```
 
 Deleting message.
-Deleting a message in tracedb is rare and it require additional steps to delete message from given topic. Generate a unique message ID using DB.GenID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
+Deleting a message in tracedb is rare and it require additional steps to delete message from given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
 
 ```
 

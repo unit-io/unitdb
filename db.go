@@ -307,9 +307,6 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Signal all goroutines.
-	close(db.closeC)
-
 	if db.cancelSyncer != nil {
 		db.cancelSyncer()
 	}
@@ -334,6 +331,9 @@ func (db *DB) Close() error {
 	}
 
 	var err error
+	// Signal all goroutines.
+	close(db.closeC)
+
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
 			err = err1
@@ -356,17 +356,100 @@ func (db *DB) hash(data []byte) uint32 {
 }
 
 // Get returns a new ItemIterator.
-func (db *DB) Get(topic []byte) ([]byte, error) {
-	it, err := db.Items(&Query{Topic: topic})
-	if err != nil {
-		return nil, err
+func (db *DB) Get(q *Query) (items [][]byte, err error) {
+	topic := new(message.Topic)
+	if q.Contract == 0 {
+		q.Contract = message.Contract
 	}
-	it.First()
-	if it.Item() != nil {
+	//Parse the Key
+	topic.ParseKey(q.Topic)
+	// Parse the topic
+	topic.Parse(q.Contract, true)
+	if topic.TopicType == message.TopicInvalid {
+		return nil, errBadRequest
+	}
+
+	topic.AddContract(q.Contract)
+	q.parts = topic.Parts
+
+	// In case of ttl, include it to the query
+	if from, until, limit, ok := topic.Last(); ok {
+		q.prefix = message.GenPrefix(q.parts, until.Unix())
+		q.cutoff = from.Unix()
+		q.Limit = limit
+		if q.Limit == 0 {
+			q.Limit = maxResults // Maximum number of records to return
+		}
+	}
+	q.seqs = db.trie.Lookup(q.parts)
+	if len(q.seqs) == 0 {
+		return
+	}
+	for _, seq := range q.seqs {
+		err = func() error {
+			b, err := db.readBlock(seq)
+			if err != nil {
+				return err
+			}
+			for i := 0; i < entriesPerBlock; i++ {
+				e := b.entries[i]
+				if e.seq == seq {
+					if e.isExpired() {
+						e := b.entries[i]
+						b.del(i)
+						if err := b.write(); err != nil {
+							return err
+						}
+						val, err := db.data.readTopic(e)
+						if err != nil {
+							return err
+						}
+						topic := new(message.Topic)
+						topic.Unmarshal(val)
+						db.trie.Remove(topic.Parts, seq)
+						// free expired keys
+						db.data.free(e.mSize(), e.mOffset)
+						db.count--
+						// if id is expired it does not return an error but continue the iteration
+						return nil
+					}
+					id, val, err := db.data.readMessage(e)
+					if err != nil {
+						return err
+					}
+					_id := message.ID(id)
+					if !_id.EvalPrefix(q.parts, q.cutoff) {
+						return nil
+					}
+
+					if _id.IsEncrypted() {
+						val, err = db.mac.Decrypt(nil, val)
+						if err != nil {
+							return err
+						}
+					}
+					var entry Entry
+					var buffer []byte
+					val, err = snappy.Decode(buffer, val)
+					if err != nil {
+						return err
+					}
+					err = entry.Unmarshal(val)
+					if err != nil {
+						return err
+					}
+					items = append(items, entry.Payload)
+					return nil
+				}
+			}
+			return nil
+		}()
+		if err != nil {
+			return items, err
+		}
 		db.metrics.Gets.Add(1)
-		return it.Item().Value(), nil
 	}
-	return nil, nil
+	return items, nil
 }
 
 // Items returns a new ItemIterator.
@@ -503,8 +586,6 @@ func (db *DB) extendBlocks() error {
 
 // allocate adds size to data table for the batch write
 func (db *DB) allocate(size uint32) (off int64, err error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
 	return db.data.allocate(size)
 }
 
