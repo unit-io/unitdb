@@ -12,7 +12,8 @@ var (
 type header struct {
 	signature [8]byte
 	version   uint32
-	_         [256]byte
+	dbInfo
+	_ [256]byte
 }
 
 func init() {
@@ -23,11 +24,17 @@ func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:8], h.signature[:])
 	binary.LittleEndian.PutUint32(buf[8:12], h.version)
+	binary.LittleEndian.PutUint32(buf[12:16], h.nBlocks)
+	binary.LittleEndian.PutUint32(buf[16:20], h.blockIndex)
+	binary.LittleEndian.PutUint32(buf[20:24], h.lastCommitedBlockIndex)
 	return buf, nil
 }
 
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:8])
 	h.version = binary.LittleEndian.Uint32(data[8:12])
+	h.nBlocks = binary.LittleEndian.Uint32(data[12:16])
+	h.blockIndex = binary.LittleEndian.Uint32(data[16:20])
+	h.lastCommitedBlockIndex = binary.LittleEndian.Uint32(data[20:24])
 	return nil
 }

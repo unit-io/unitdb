@@ -2,6 +2,7 @@ package memdb
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -18,19 +19,20 @@ const (
 )
 
 type dbInfo struct {
-	seq        uint64
-	count      uint32
-	nBlocks    uint32
-	blockIndex uint32
+	seq                    uint64
+	count                  uint32
+	nBlocks                uint32
+	blockIndex             uint32
+	lastCommitedBlockIndex uint32
 }
 
 // DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
-	mu    sync.RWMutex
-	index tableManager
-	data  dataTable
+	mu        sync.RWMutex
+	index     tableManager
+	data      dataTable
 	logWriter *writer
 	//block cache
 	entryCache map[uint64]*entryHeader
@@ -88,16 +90,27 @@ func Open(path string, memSize int64) (*DB, error) {
 		if err := db.writeHeader(); err != nil {
 			return nil, err
 		}
+	} else {
+		if err := db.readHeader(); err != nil {
+			if err := index.close(); err != nil {
+				log.Print(err)
+			}
+			if err := mem.remove(index.name()); err != nil {
+				log.Print(err)
+			}
+			if err := data.close(); err != nil {
+				log.Print(err)
+			}
+			if err := mem.remove(data.name()); err != nil {
+				log.Print(err)
+			}
+			// Data file exists, but index is missing.
+			return nil, errors.New("database is corrupted")
+		}
 	}
 
-	var nextSeq uint64
-	// nextSeq, err := db.recoverLog(lastAppliedSeqNo)
-	// if err != nil {
-	// 	errors.New("Failed to recover log file")
-	// }
-
 	logOpts := options{Dirname: path, TargetSize: memSize}
-	logWriter, err := newWriter(nextSeq, logOpts)
+	logWriter, err := newWriter(db.lastCommitedBlockIndex, logOpts)
 	if err != nil {
 		errors.New("Error creating WAL writer")
 	}
@@ -106,14 +119,11 @@ func Open(path string, memSize int64) (*DB, error) {
 	return db, nil
 }
 
-func blockOffset(idx uint32) int64 {
-	return int64(headerSize) + (int64(blockSize) * int64(idx))
-}
-
 func (db *DB) writeHeader() error {
 	h := header{
 		signature: signature,
 		version:   version,
+		dbInfo:    db.dbInfo,
 	}
 	buf, err := h.MarshalBinary()
 	if err != nil {
@@ -123,11 +133,34 @@ func (db *DB) writeHeader() error {
 	return err
 }
 
+func (db *DB) readHeader() error {
+	h := &header{}
+	buf := make([]byte, headerSize)
+	if _, err := db.index.readAt(buf, 0); err != nil {
+		return err
+	}
+	if err := h.UnmarshalBinary(buf); err != nil {
+		return err
+	}
+	// if !bytes.Equal(h.signature[:], signature[:]) {
+	// 	return errCorrupted
+	// }
+	db.dbInfo = h.dbInfo
+	return nil
+}
+
+func blockOffset(idx uint32) int64 {
+	return int64(headerSize) + (int64(blockSize) * int64(idx))
+}
+
 // Close closes the DB.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if err := db.writeHeader(); err != nil {
+		return err
+	}
 	if err := db.index.close(); err != nil {
 		return err
 	}
@@ -157,22 +190,35 @@ func (db *DB) Close() error {
 func (db *DB) Sync(startSeq, endSeq uint64) error {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
+
 	start, ok := db.entryCache[startSeq]
 	if !ok {
-		return errors.New("seq not found")
+		return errors.New("startSeq not found")
+	}
+	if start.blockIndex < db.lastCommitedBlockIndex {
+		return errors.New(fmt.Sprintf("memdb.Sync: received start blockIndex less than last commited blockIndex: %d < %d", start.blockIndex, db.lastCommitedBlockIndex))
 	}
 	end, ok := db.entryCache[endSeq]
 	if !ok {
-		return errors.New("seq not found")
+		return errors.New("endSeq not found")
 	}
-	data, err := db.data.readRaw(start.offset, end.offset + int64(end.messageSize))
+	data, err := db.data.readRaw(start.offset, (end.offset-start.offset)+int64(end.messageSize))
 	if err != nil {
 		return errors.New("write failed")
 	}
-	if err := db.logWriter.append(data); err != nil {
+	if err := db.logWriter.append(start.blockIndex, data); err != nil {
 		return errors.New("write failed")
 	}
 	return db.logWriter.sync()
+}
+
+func (db *DB) SignalBatchCommited(mseq uint64) error {
+	e, ok := db.entryCache[mseq]
+	if !ok {
+		return errors.New("Seq not found")
+	}
+	db.lastCommitedBlockIndex = e.blockIndex
+	return db.writeHeader()
 }
 
 // newBlock adds new block to db table and return block offset
@@ -184,19 +230,19 @@ func (db *DB) newBlock() (int64, error) {
 	return off, err
 }
 
-func (db *DB) Has(key uint64) bool {
+func (db *DB) Has(mseq uint64) bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	_, ok := db.entryCache[key]
+	_, ok := db.entryCache[mseq]
 	return ok
 }
 
-func (db *DB) Get(key uint64) ([]byte, []byte, error) {
+func (db *DB) Get(mseq uint64) ([]byte, []byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.entryCache[key]
+	e, ok := db.entryCache[mseq]
 	if !ok {
-		return nil, nil, errors.New("cache key not found")
+		return nil, nil, errors.New("cache for entry seq not found")
 	}
 	off := blockOffset(e.blockIndex)
 	b := blockHandle{table: db.index, offset: off}
@@ -208,12 +254,12 @@ func (db *DB) Get(key uint64) ([]byte, []byte, error) {
 	return block, data, err
 }
 
-func (db *DB) GetBlock(key uint64) ([]byte, error) {
+func (db *DB) GetBlock(mseq uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.entryCache[key]
+	e, ok := db.entryCache[mseq]
 	if !ok {
-		return nil, errors.New("cache key not found")
+		return nil, errors.New("cache for entry seq not found")
 	}
 	off := blockOffset(e.blockIndex)
 	b := blockHandle{table: db.index, offset: off}
@@ -224,18 +270,18 @@ func (db *DB) GetBlock(key uint64) ([]byte, error) {
 	return raw, nil
 }
 
-func (db *DB) GetData(key uint64) ([]byte, error) {
+func (db *DB) GetData(mseq uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	e, ok := db.entryCache[key]
+	e, ok := db.entryCache[mseq]
 	if !ok {
-		return nil, errors.New("cache key not found")
+		return nil, errors.New("cache for entry seq not found")
 	}
 	return db.data.readRaw(e.offset, int64(e.messageSize))
 }
 
 // Put sets the value for the given topic->key. It updates the value for the existing key.
-func (db *DB) Put(key uint64, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (db *DB) Put(mseq uint64, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	off := blockOffset(db.blockIndex)
@@ -261,7 +307,7 @@ func (db *DB) Put(key uint64, seq uint64, id, topic, value []byte, offset int64,
 	if err := ew.write(); err != nil {
 		return err
 	}
-	db.entryCache[key] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
+	db.entryCache[mseq] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
 	if b.entryIdx == entriesPerBlock {
 		if _, err := db.newBlock(); err != nil {
 			return err

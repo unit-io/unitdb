@@ -1,9 +1,9 @@
 package memdb
 
 import (
-	"fmt"
-	"encoding/binary"
 	"bufio"
+	"encoding/binary"
+	"fmt"
 	"hash"
 	"hash/crc32"
 	"os"
@@ -23,17 +23,18 @@ var (
 // Writer writes entries to the write ahead log.
 // Thread-safe.
 type writer struct {
-	nextSeq  uint64
-	crc      hash.Hash32
-	filename string
-	size     int64
-	opts     options
-	mu       sync.Mutex
+	blockIndex uint32
+	crc        hash.Hash32
+	filename   string
+	size       int64
+	opts       options
+	mu         sync.Mutex
 	// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 	// ensure a clean shutdown
 	wg sync.WaitGroup
 
 	f         *os.File
+	h         *os.File
 	bufWriter *bufio.Writer
 }
 
@@ -42,27 +43,52 @@ type options struct {
 	TargetSize int64
 }
 
-func newWriter(nextSeq uint64, opts options) (*writer, error) {
+func newWriter(blockIndex uint32, opts options) (*writer, error) {
 	w := &writer{
-		nextSeq: nextSeq,
-		crc:     crc32.New(crcTable),
-		opts:    opts,
+		blockIndex: blockIndex,
+		crc:        crc32.New(crcTable),
+		opts:       opts,
 	}
-	if err := w.rollover(nextSeq); err != nil {
+	if err := w.rollover(blockIndex); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
 type rawRecord struct {
-	seq      uint64
-	data     []byte
-	checkSum uint32
+	blockIndex uint32
+	data       []byte
+	checkSum   uint32
+}
+
+func (w *writer) writeHeader(r rawRecord) error {
+	w.wg.Add(1)
+	defer w.wg.Done()
+	fn := fmt.Sprintf("%s%cwal-header.log", w.opts.Dirname, os.PathSeparator)
+	ensureDir(fn)
+
+	f, err := os.Create(fn)
+	if err != nil {
+		return err
+	}
+
+	w.filename = fn
+	w.f = f
+	w.bufWriter = bufio.NewWriter(f)
+	w.size = 0
+
+	if _, err := w.bufWriter.Write(r.data); err != nil {
+		return err
+	}
+	if err := w.bufWriter.Flush(); err != nil {
+		return err
+	}
+	return w.f.Sync()
 }
 
 // Append appends a log record to the WAL. The log record is modified with the log sequence number.
 // cb is invoked serially, in log sequence number order.
-func (w *writer) append(data []byte) error {
+func (w *writer) append(blockIndex uint32, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -81,23 +107,26 @@ func (w *writer) append(data []byte) error {
 	copy(dataCopy, data)
 
 	r := rawRecord{
-		seq:      w.nextSeq,
-		data:     dataCopy,
-		checkSum: c,
+		blockIndex: blockIndex,
+		data:       dataCopy,
+		checkSum:   c,
 	}
 	if err := w.writeRawRecord(r); err != nil {
 		return err
 	}
-	w.nextSeq++
 	return nil
 }
 
-func logName(nextSeq uint64, o options) string {
-	return fmt.Sprintf("%s%cwal-%d.log", o.Dirname, os.PathSeparator, nextSeq)
+func logHeader(o options) string {
+	return fmt.Sprintf("%s%cwal-header.log", o.Dirname, os.PathSeparator)
 }
 
-func (w *writer) rollover(seq uint64) error {
-	fn := logName(seq, w.opts)
+func logName(blockIndex uint32, o options) string {
+	return fmt.Sprintf("%s%cwal-%d.log", o.Dirname, os.PathSeparator, blockIndex)
+}
+
+func (w *writer) rollover(blockIndex uint32) error {
+	fn := logName(blockIndex, w.opts)
 	ensureDir(fn)
 	if w.bufWriter != nil {
 		if err := w.bufWriter.Flush(); err != nil {
@@ -115,6 +144,7 @@ func (w *writer) rollover(seq uint64) error {
 		return err
 	}
 
+	w.blockIndex = blockIndex
 	w.filename = fn
 	w.f = f
 	w.bufWriter = bufio.NewWriter(f)
@@ -126,8 +156,8 @@ func (w *writer) rollover(seq uint64) error {
 func (w *writer) writeRawRecord(r rawRecord) error {
 	w.wg.Add(1)
 	defer w.wg.Done()
-	if w.size > w.opts.TargetSize {
-		if err := w.rollover(r.seq); err != nil {
+	if w.blockIndex < r.blockIndex || w.size > w.opts.TargetSize {
+		if err := w.rollover(r.blockIndex); err != nil {
 			return err
 		}
 	}
@@ -168,10 +198,9 @@ func (w *writer) close() error {
 func ensureDir(fileName string) {
 	dirName := filepath.Dir(fileName)
 	if _, serr := os.Stat(dirName); serr != nil {
-	  merr := os.MkdirAll(dirName, os.ModePerm)
-	  if merr != nil {
-		  panic(merr)
-	  }
+		merr := os.MkdirAll(dirName, os.ModePerm)
+		if merr != nil {
+			panic(merr)
+		}
 	}
-  }
-  
+}

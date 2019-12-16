@@ -64,7 +64,7 @@ type Batch struct {
 	managed          bool
 	grouped          bool
 	order            int8
-	startSeq uint64
+	startSeq         uint64
 	seq              uint64
 	db               *DB
 	data             []byte
@@ -114,10 +114,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 		o += copy(data[o:], value)
 	}
 	b.data = data[:o]
-	if b.startSeq == 0 {
-b.startSeq = seq
-	}
-	
+
 	index.expiresAt = expiresAt
 	b.index = append(b.index, index)
 }
@@ -247,8 +244,7 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
-	
-	b.seq = b.db.getSeq()
+
 	if err := b.db.extendBlocks(); err != nil {
 		return err
 	}
@@ -256,16 +252,20 @@ func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byt
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
-		key := b.db.cacheID ^ index.seq
 		id, topic, val := index.message(b.data)
 		off, err := b.db.allocate(uint32(len(val)))
 		if err != nil {
 			return err
 		}
-		if err := fn(i, key, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+		if b.startSeq == 0 {
+			b.startSeq = index.seq
+		}
+		mseq := b.db.cacheID ^ index.seq
+		if err := fn(i, mseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
 			return err
 		}
 	}
+	b.seq = b.pendingWriteSeqs[b.Len()-1]
 	return nil
 }
 
@@ -332,9 +332,9 @@ func (b *Batch) Commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
-	// startSeq := b.db.cacheID ^ b.startSeq
-	// endSeq := b.db.cacheID ^ b.seq
-	// b.db.mem.Sync(startSeq, endSeq)
+	startSeq := b.db.cacheID ^ b.startSeq
+	endSeq := b.db.cacheID ^ b.seq
+	b.db.mem.Sync(startSeq, endSeq)
 	b.db.batchCommitQueue <- b.db.activeBatches[b.seq]
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.seq)

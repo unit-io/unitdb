@@ -699,7 +699,6 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 func (db *DB) commit(batchSeq []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
-
 	for _, seq := range batchSeq {
 		key := db.cacheID ^ seq
 		mblock, mdata, err := db.mem.Get(key)
@@ -741,9 +740,10 @@ func (db *DB) commit(batchSeq []uint64) error {
 		if err := b.write(); err != nil {
 			return err
 		}
-
 		db.filter.Append(uint64(hash))
 	}
+	key := db.cacheID ^ batchSeq[len(batchSeq)-1]
+	db.mem.SignalBatchCommited(key)
 	return nil
 }
 
