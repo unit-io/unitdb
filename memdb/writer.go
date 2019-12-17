@@ -61,29 +61,28 @@ type rawRecord struct {
 	checkSum   uint32
 }
 
-func (w *writer) writeHeader(r rawRecord) error {
+func (w *writer) writeHeader(hdr []byte) error {
 	w.wg.Add(1)
 	defer w.wg.Done()
-	fn := fmt.Sprintf("%s%cwal-header.log", w.opts.Dirname, os.PathSeparator)
-	ensureDir(fn)
+	if w.h == nil {
+		fn := fmt.Sprintf("%s%cwal-header.log", w.opts.Dirname, os.PathSeparator)
+		ensureDir(fn)
 
-	f, err := os.Create(fn)
-	if err != nil {
-		return err
+		h, err := os.Create(fn)
+		if err != nil {
+			return err
+		}
+		w.h = h
 	}
 
-	w.filename = fn
-	w.f = f
-	w.bufWriter = bufio.NewWriter(f)
-	w.size = 0
-
-	if _, err := w.bufWriter.Write(r.data); err != nil {
+	bufWriter := bufio.NewWriter(w.h)
+	if _, err := bufWriter.Write(hdr); err != nil {
 		return err
 	}
-	if err := w.bufWriter.Flush(); err != nil {
+	if err := bufWriter.Flush(); err != nil {
 		return err
 	}
-	return w.f.Sync()
+	return w.h.Sync()
 }
 
 // Append appends a log record to the WAL. The log record is modified with the log sequence number.

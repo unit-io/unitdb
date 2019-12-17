@@ -87,27 +87,25 @@ func Open(path string, memSize int64) (*DB, error) {
 		if _, err = db.data.extend(headerSize); err != nil {
 			return nil, err
 		}
-		if err := db.writeHeader(); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := db.readHeader(); err != nil {
-			if err := index.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(index.name()); err != nil {
-				log.Print(err)
-			}
-			if err := data.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(data.name()); err != nil {
-				log.Print(err)
-			}
-			// Data file exists, but index is missing.
-			return nil, errors.New("database is corrupted")
-		}
 	}
+	// else {
+	// 	if err := db.readHeader(); err != nil {
+	// 		if err := index.close(); err != nil {
+	// 			log.Print(err)
+	// 		}
+	// 		if err := mem.remove(index.name()); err != nil {
+	// 			log.Print(err)
+	// 		}
+	// 		if err := data.close(); err != nil {
+	// 			log.Print(err)
+	// 		}
+	// 		if err := mem.remove(data.name()); err != nil {
+	// 			log.Print(err)
+	// 		}
+	// 		// Data file exists, but index is missing.
+	// 		return nil, errors.New("database is corrupted")
+	// 	}
+	// }
 
 	logOpts := options{Dirname: path, TargetSize: memSize}
 	logWriter, err := newWriter(db.lastCommitedBlockIndex, logOpts)
@@ -115,7 +113,9 @@ func Open(path string, memSize int64) (*DB, error) {
 		errors.New("Error creating WAL writer")
 	}
 	db.logWriter = logWriter
-
+	if err := db.writeHeader(); err != nil {
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -129,8 +129,7 @@ func (db *DB) writeHeader() error {
 	if err != nil {
 		return err
 	}
-	_, err = db.index.writeAt(buf, 0)
-	return err
+	return db.logWriter.writeHeader(buf)
 }
 
 func (db *DB) readHeader() error {
