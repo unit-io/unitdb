@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"sync"
+
+	"github.com/saffat-in/tracedb/wal"
 )
 
 const (
@@ -33,7 +35,7 @@ type DB struct {
 	mu        sync.RWMutex
 	index     tableManager
 	data      dataTable
-	logWriter *writer
+	logWriter wal.Writer
 	//block cache
 	entryCache map[uint64]*entryHeader
 	dbInfo
@@ -88,34 +90,41 @@ func Open(path string, memSize int64) (*DB, error) {
 			return nil, err
 		}
 	}
-	// else {
-	// 	if err := db.readHeader(); err != nil {
-	// 		if err := index.close(); err != nil {
-	// 			log.Print(err)
-	// 		}
-	// 		if err := mem.remove(index.name()); err != nil {
-	// 			log.Print(err)
-	// 		}
-	// 		if err := data.close(); err != nil {
-	// 			log.Print(err)
-	// 		}
-	// 		if err := mem.remove(data.name()); err != nil {
-	// 			log.Print(err)
-	// 		}
-	// 		// Data file exists, but index is missing.
-	// 		return nil, errors.New("database is corrupted")
-	// 	}
-	// }
 
-	logOpts := options{Dirname: path, TargetSize: memSize}
-	logWriter, err := newWriter(db.lastCommitedBlockIndex, logOpts)
+	var nextSeq int64
+	logOpts := wal.Options{Dirname: path, TargetSize: memSize}
+	logWriter, err := wal.NewWriter(nextSeq, logOpts)
 	if err != nil {
 		errors.New("Error creating WAL writer")
 	}
 	db.logWriter = logWriter
-	if err := db.writeHeader(); err != nil {
-		return nil, err
+
+	if logWriter.Size() == 0 {
+		if _, err = db.logWriter.Extend(headerSize + blockSize); err != nil {
+			return nil, err
+		}
+		if err := db.writeHeader(); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := db.readHeader(); err != nil {
+			if err := index.close(); err != nil {
+				log.Print(err)
+			}
+			if err := mem.remove(index.name()); err != nil {
+				log.Print(err)
+			}
+			if err := data.close(); err != nil {
+				log.Print(err)
+			}
+			if err := mem.remove(data.name()); err != nil {
+				log.Print(err)
+			}
+			// Data file exists, but index is missing.
+			return nil, errors.New("wal is corrupted")
+		}
 	}
+
 	return db, nil
 }
 
@@ -129,13 +138,14 @@ func (db *DB) writeHeader() error {
 	if err != nil {
 		return err
 	}
-	return db.logWriter.writeHeader(buf)
+	_, err = db.logWriter.WriteAt(buf, 0)
+	return err
 }
 
 func (db *DB) readHeader() error {
 	h := &header{}
 	buf := make([]byte, headerSize)
-	if _, err := db.index.readAt(buf, 0); err != nil {
+	if _, err := db.logWriter.ReadAt(buf, 0); err != nil {
 		return err
 	}
 	if err := h.UnmarshalBinary(buf); err != nil {
@@ -172,7 +182,7 @@ func (db *DB) Close() error {
 	if err := mem.remove(db.data.name()); err != nil {
 		return err
 	}
-	if err := db.logWriter.close(); err != nil {
+	if err := db.logWriter.Close(); err != nil {
 		return err
 	}
 	var err error
@@ -205,10 +215,10 @@ func (db *DB) Sync(startSeq, endSeq uint64) error {
 	if err != nil {
 		return errors.New("write failed")
 	}
-	if err := db.logWriter.append(start.blockIndex, data); err != nil {
+	if err := db.logWriter.Append(start.blockIndex, data); err != nil {
 		return errors.New("write failed")
 	}
-	return db.logWriter.sync()
+	return db.logWriter.Sync()
 }
 
 func (db *DB) SignalBatchCommited(mseq uint64) error {
