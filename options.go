@@ -29,6 +29,9 @@ type Options struct {
 	// Size of memory db
 	MemdbSize int64
 
+	// Size of write ahead log
+	LogSize int64
+
 	FileSystem fs.FileSystem
 }
 
@@ -48,6 +51,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.MemdbSize == 0 {
 		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
+	}
+	if opts.LogSize == 0 {
+		opts.LogSize = 1 << 20 // maximum size of memdb (1MB).
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

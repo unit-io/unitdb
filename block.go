@@ -98,10 +98,9 @@ func (h *blockHandle) readRaw() ([]byte, error) {
 }
 
 func (h *blockHandle) read(seq uint64) error {
-	// var cacheKey uint64
 	if h.cache != nil {
-		// cacheKey = h.cacheID ^ seq
-		if data, _ := h.cache.GetBlock(seq); data != nil && len(data) == int(blockSize) {
+		cacheKey := h.cacheID ^ seq
+		if data, _ := h.cache.GetBlock(cacheKey); data != nil && len(data) == int(blockSize) {
 			return h.UnmarshalBinary(data)
 		}
 	}

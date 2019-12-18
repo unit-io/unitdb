@@ -260,8 +260,8 @@ func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byt
 		if b.startSeq == 0 {
 			b.startSeq = index.seq
 		}
-		// mseq := b.db.cacheID ^ index.seq
-		if err := fn(i, index.seq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+		seq := b.db.cacheID ^ index.seq
+		if err := fn(i, seq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
 			return err
 		}
 	}
@@ -317,6 +317,12 @@ func (b *Batch) Write() error {
 		return err
 	}
 
+	startSeq := b.db.cacheID ^ b.startSeq
+	endSeq := b.db.cacheID ^ b.seq
+	if err := b.db.Write(startSeq, endSeq); err != nil {
+		return err
+	}
+
 	if err == nil {
 		b.db.activeBatches[b.seq] = b.Seqs()
 	}
@@ -332,9 +338,7 @@ func (b *Batch) Commit() error {
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}
-	// startSeq := b.db.cacheID ^ b.startSeq
-	// endSeq := b.db.cacheID ^ b.seq
-	b.db.mem.Sync(b.startSeq, b.seq)
+
 	b.db.batchCommitQueue <- b.db.activeBatches[b.seq]
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.seq)

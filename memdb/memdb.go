@@ -2,12 +2,9 @@ package memdb
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"sync"
-
-	"github.com/saffat-in/tracedb/wal"
 )
 
 const (
@@ -22,20 +19,18 @@ const (
 
 type dbInfo struct {
 	// seq             uint64
-	count           uint32
-	nBlocks         uint32
-	blockIndex      uint32
-	lastCommitedSeq uint64
+	count      uint32
+	nBlocks    uint32
+	blockIndex uint32
 }
 
 // DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
-	mu        sync.RWMutex
-	index     tableManager
-	data      dataTable
-	logWriter wal.Writer
+	mu    sync.RWMutex
+	index tableManager
+	data  dataTable
 	//block cache
 	entryCache map[uint64]*entryHeader
 	dbInfo
@@ -89,39 +84,8 @@ func Open(path string, memSize int64) (*DB, error) {
 		if _, err = db.data.extend(headerSize); err != nil {
 			return nil, err
 		}
-	}
-
-	var nextSeq uint64
-	logOpts := wal.Options{Dirname: path, TargetSize: memSize}
-	logWriter, err := wal.NewWriter(nextSeq, logOpts)
-	if err != nil {
-		errors.New("Error creating WAL writer")
-	}
-	db.logWriter = logWriter
-
-	if logWriter.Size() == 0 {
-		if _, err = db.logWriter.Extend(headerSize + blockSize); err != nil {
-			return nil, err
-		}
 		if err := db.writeHeader(); err != nil {
 			return nil, err
-		}
-	} else {
-		if err := db.readHeader(); err != nil {
-			if err := index.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(index.name()); err != nil {
-				log.Print(err)
-			}
-			if err := data.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(data.name()); err != nil {
-				log.Print(err)
-			}
-			// Data file exists, but index is missing.
-			return nil, errors.New("wal is corrupted")
 		}
 	}
 
@@ -138,14 +102,14 @@ func (db *DB) writeHeader() error {
 	if err != nil {
 		return err
 	}
-	_, err = db.logWriter.WriteAt(buf, 0)
+	_, err = db.index.writeAt(buf, 0)
 	return err
 }
 
 func (db *DB) readHeader() error {
 	h := &header{}
 	buf := make([]byte, headerSize)
-	if _, err := db.logWriter.ReadAt(buf, 0); err != nil {
+	if _, err := db.index.readAt(buf, 0); err != nil {
 		return err
 	}
 	if err := h.UnmarshalBinary(buf); err != nil {
@@ -182,9 +146,7 @@ func (db *DB) Close() error {
 	if err := mem.remove(db.data.name()); err != nil {
 		return err
 	}
-	if err := db.logWriter.Close(); err != nil {
-		return err
-	}
+
 	var err error
 	if db.closer != nil {
 		if err1 := db.closer.Close(); err == nil {
@@ -196,36 +158,23 @@ func (db *DB) Close() error {
 	return err
 }
 
-func (db *DB) Sync(startSeq, endSeq uint64) error {
+func (db *DB) ReadRaw(startSeq, endSeq uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	start, ok := db.entryCache[startSeq]
 	if !ok {
-		return errors.New("startSeq not found")
-	}
-	if endSeq < db.lastCommitedSeq {
-		return errors.New(fmt.Sprintf("memdb.Sync: received start blockIndex less than last commited blockIndex: %d < %d", start.blockIndex, db.lastCommitedSeq))
+		return nil, errors.New("startSeq not found")
 	}
 	end, ok := db.entryCache[endSeq]
 	if !ok {
-		return errors.New("endSeq not found")
+		return nil, errors.New("endSeq not found")
 	}
 	data, err := db.data.readRaw(start.offset, (end.offset-start.offset)+int64(end.messageSize))
 	if err != nil {
-		return errors.New("write failed")
+		return nil, errors.New("write failed")
 	}
-	if err := db.logWriter.Append(endSeq, data); err != nil {
-		return errors.New("write failed")
-	}
-	return db.logWriter.Sync()
-}
-
-func (db *DB) SignalBatchCommited(endSeq uint64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.lastCommitedSeq = endSeq
-	return db.writeHeader()
+	return data, nil
 }
 
 // newBlock adds new block to db table and return block offset

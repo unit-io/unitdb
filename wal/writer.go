@@ -46,7 +46,7 @@ const (
 
 	// logStatusWritten indicates that the log has been written, but
 	// not fully committed, meaning it should be ignored upon recovery.
-	txnStatusWritten
+	logStatusWritten
 
 	// logStatusCommitted indicates that the log has been committed,
 	// but not completed. During recovery, logs with this status
@@ -162,8 +162,8 @@ type Writer struct {
 	wg sync.WaitGroup
 
 	fs.FileManager
-	size    int64
-	maxSize int64
+	size int64
+	opts Options
 }
 
 type Options struct {
@@ -172,31 +172,19 @@ type Options struct {
 }
 
 func NewWriter(nextSeq uint64, opts Options) (Writer, error) {
-	fileFlag := os.O_CREATE | os.O_RDWR
-	fileMode := os.FileMode(0666)
-	fs := fs.FileIO
-	fn := logName(nextSeq, opts)
-	ensureDir(fn)
-	fi, err := fs.OpenFile(fn, fileFlag, fileMode)
-	w := Writer{seq: nextSeq, crc: crc32.New(crcTable)}
-	if err != nil {
-		return w, err
+	writer := Writer{
+		seq:  nextSeq,
+		opts: opts,
+		crc:  crc32.New(crcTable),
 	}
-	w.FileManager = fi
-	stat, err := fi.Stat()
-	if err != nil {
-		return w, err
+	if err := writer.rollover(nextSeq); err != nil {
+		return writer, err
 	}
-	w.maxSize = opts.TargetSize
-	if w.size > opts.TargetSize {
-		w.size = blockSize // rollover
-		return w, err
-	}
-	w.size = stat.Size()
-	return w, err
+	return writer, nil
 }
 
 type rawRecord struct {
+	status   uint64
 	seq      uint64
 	data     []byte
 	checkSum uint32
@@ -214,18 +202,22 @@ func (w *Writer) Extend(size uint32) (int64, error) {
 
 // Append appends a log record to the WAL. The log record is modified with the log sequence number.
 // cb is invoked serially, in log sequence number order.
-func (w *Writer) Append(seq uint64, data []byte) error {
+func (w *Writer) Append(seq uint64, data []byte) <-chan error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	done := make(chan error, 1)
+
 	dataLen := len(data)
 	if uint32(dataLen) > MaxRecordBytes {
-		return fmt.Errorf("log record has encoded size %d that exceeds %d", dataLen, MaxRecordBytes)
+		done <- fmt.Errorf("log record has encoded size %d that exceeds %d", dataLen, MaxRecordBytes)
+		return done
 	}
 
 	w.crc.Reset()
 	if _, err := w.crc.Write(data); err != nil {
-		return err
+		done <- err
+		return done
 	}
 	c := w.crc.Sum32()
 
@@ -233,25 +225,29 @@ func (w *Writer) Append(seq uint64, data []byte) error {
 	copy(dataCopy, data)
 
 	r := rawRecord{
+		status:   logStatusWritten,
 		seq:      seq,
 		data:     dataCopy,
 		checkSum: c,
 	}
-	if err := w.writeRawRecord(r); err != nil {
-		return err
-	}
-	return nil
+
+	go func() {
+		done <- w.append(r)
+	}()
+	return done
 }
 
 func logName(nextSeq uint64, o Options) string {
 	return fmt.Sprintf("%s%cwal-%d.log", o.Dirname, os.PathSeparator, nextSeq)
 }
 
-func (w *Writer) writeRawRecord(r rawRecord) error {
+func (w *Writer) append(r rawRecord) error {
 	w.wg.Add(1)
 	defer w.wg.Done()
-	if w.size > w.maxSize {
-		w.size = blockSize
+	if w.size > w.opts.TargetSize {
+		if err := w.rollover(r.seq); err != nil {
+			return err
+		}
 	}
 
 	var scratch [8]byte
@@ -269,6 +265,30 @@ func (w *Writer) writeRawRecord(r rawRecord) error {
 		return err
 	}
 
+	return nil
+}
+
+func (w *Writer) rollover(seq uint64) error {
+	fileFlag := os.O_CREATE | os.O_RDWR
+	fileMode := os.FileMode(0666)
+	fs := fs.FileIO
+	fn := logName(seq, w.opts)
+	ensureDir(fn)
+
+	fi, err := fs.OpenFile(fn, fileFlag, fileMode)
+	if err != nil {
+		return err
+	}
+	w.FileManager = fi
+	if w.size > w.opts.TargetSize {
+		w.size = 0 // rollover
+		return err
+	}
+	stat, err := fi.Stat()
+	if err != nil {
+		return err
+	}
+	w.size = stat.Size()
 	return nil
 }
 

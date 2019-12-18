@@ -3,6 +3,7 @@ package tracedb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math"
@@ -19,6 +20,7 @@ import (
 	"github.com/saffat-in/tracedb/fs"
 	"github.com/saffat-in/tracedb/hash"
 	"github.com/saffat-in/tracedb/message"
+	"github.com/saffat-in/tracedb/wal"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
+	dataPostfix   = ".data"
 	lockPostfix   = ".lock"
 	idSize        = 20
 	filterPostfix = ".filter"
@@ -72,6 +75,7 @@ type DB struct {
 	index        table
 	data         dataTable
 	lock         fs.LockFile
+	logWriter    wal.Writer
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
 	syncWrites   bool
@@ -108,7 +112,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := newTable(fs, path)
+	data, err := newTable(fs, path+dataPostfix)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +208,14 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	var nextSeq uint64
+	logOpts := wal.Options{Dirname: path, TargetSize: opts.LogSize}
+	logWriter, err := wal.NewWriter(nextSeq, logOpts)
+	if err != nil {
+		errors.New("Error creating WAL writer")
+	}
+	db.logWriter = logWriter
 
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
@@ -331,6 +343,9 @@ func (db *DB) Close() error {
 		return err
 	}
 	if err := db.filter.close(); err != nil {
+		return err
+	}
+	if err := db.logWriter.Close(); err != nil {
 		return err
 	}
 
@@ -700,12 +715,25 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
+func (db *DB) Write(startSeq, endSeq uint64) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	data, err := db.mem.ReadRaw(startSeq, endSeq)
+	if err != nil {
+		return err
+	}
+	if err := <-db.logWriter.Append(endSeq, data); err != nil {
+		return err
+	}
+	return err
+}
+
 func (db *DB) commit(batchSeq []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 	for _, seq := range batchSeq {
-		// key := db.cacheID ^ seq
-		mblock, mdata, err := db.mem.Get(seq)
+		key := db.cacheID ^ seq
+		mblock, mdata, err := db.mem.Get(key)
 		if err != nil {
 			return err
 		}
@@ -746,9 +774,6 @@ func (db *DB) commit(batchSeq []uint64) error {
 		}
 		db.filter.Append(uint64(hash))
 	}
-	// endSeq := db.cacheID ^ batchSeq[len(batchSeq)-1]
-	endSeq := batchSeq[len(batchSeq)-1]
-	db.mem.SignalBatchCommited(endSeq)
 	return nil
 }
 
