@@ -30,7 +30,8 @@ func (h header) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint32(buf[25:29], h.nBlocks)
 	binary.LittleEndian.PutUint32(buf[29:33], h.blockIndex)
 	binary.LittleEndian.PutUint64(buf[33:41], uint64(h.freeblockOff))
-	binary.LittleEndian.PutUint32(buf[41:45], h.hashSeed)
+	binary.LittleEndian.PutUint64(buf[41:49], h.cacheID)
+	binary.LittleEndian.PutUint32(buf[49:53], h.hashSeed)
 	return buf, nil
 }
 
@@ -43,6 +44,7 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	h.nBlocks = binary.LittleEndian.Uint32(data[25:29])
 	h.blockIndex = binary.LittleEndian.Uint32(data[29:33])
 	h.freeblockOff = int64(binary.LittleEndian.Uint64(data[33:41]))
-	h.hashSeed = binary.LittleEndian.Uint32(data[41:45])
+	h.cacheID = binary.LittleEndian.Uint64(data[41:49])
+	h.hashSeed = binary.LittleEndian.Uint32(data[49:53])
 	return nil
 }

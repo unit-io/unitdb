@@ -3,6 +3,7 @@ package wal
 import (
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"math"
 	"os"
@@ -19,7 +20,7 @@ const (
 
 const (
 	checksumSize = 16
-	blockSize    = 4096
+	blockSize    = 512
 	blockHeader  = 8 // nextBlock offset
 
 	// MaxPayloadSize is the number of bytes that can fit into a single
@@ -142,10 +143,6 @@ type Writer struct {
 	// disk. See consts.go for an explanation of each status type.
 	status uint64
 
-	// sequenceNumber is a unique identifier for the log that orders
-	// it in relation to other logs. It is marshalled to disk.
-	sequenceNumber uint64
-
 	// firstBlock is the first block of the log. It is marshalled to
 	// disk. Note that because additional log metadata (status,
 	// sequenceNumber, checksum) is marshalled alongside firstBlock, the
@@ -154,8 +151,12 @@ type Writer struct {
 	// firstBlock is never nil for valid logs.
 	firstBlock *block
 
-	blockIndex uint32
-	mu         sync.Mutex
+	// seq is a unique identifier for the log that orders
+	// it in relation to other logs. It is marshalled to disk.
+	seq uint64
+	crc hash.Hash32
+
+	mu sync.Mutex
 	// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 	// ensure a clean shutdown
 	wg sync.WaitGroup
@@ -170,14 +171,14 @@ type Options struct {
 	TargetSize int64
 }
 
-func NewWriter(nextSeq int64, opts Options) (Writer, error) {
+func NewWriter(nextSeq uint64, opts Options) (Writer, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	fs := fs.FileIO
 	fn := logName(nextSeq, opts)
 	ensureDir(fn)
 	fi, err := fs.OpenFile(fn, fileFlag, fileMode)
-	w := Writer{}
+	w := Writer{seq: nextSeq, crc: crc32.New(crcTable)}
 	if err != nil {
 		return w, err
 	}
@@ -186,8 +187,9 @@ func NewWriter(nextSeq int64, opts Options) (Writer, error) {
 	if err != nil {
 		return w, err
 	}
+	w.maxSize = opts.TargetSize
 	if w.size > opts.TargetSize {
-		w.size = 0 // rollover
+		w.size = blockSize // rollover
 		return w, err
 	}
 	w.size = stat.Size()
@@ -195,9 +197,9 @@ func NewWriter(nextSeq int64, opts Options) (Writer, error) {
 }
 
 type rawRecord struct {
-	blockIndex uint32
-	data       []byte
-	checkSum   uint32
+	seq      uint64
+	data     []byte
+	checkSum uint32
 }
 
 func (w *Writer) Extend(size uint32) (int64, error) {
@@ -212,7 +214,7 @@ func (w *Writer) Extend(size uint32) (int64, error) {
 
 // Append appends a log record to the WAL. The log record is modified with the log sequence number.
 // cb is invoked serially, in log sequence number order.
-func (w *Writer) Append(blockIndex uint32, data []byte) error {
+func (w *Writer) Append(seq uint64, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -221,13 +223,19 @@ func (w *Writer) Append(blockIndex uint32, data []byte) error {
 		return fmt.Errorf("log record has encoded size %d that exceeds %d", dataLen, MaxRecordBytes)
 	}
 
+	w.crc.Reset()
+	if _, err := w.crc.Write(data); err != nil {
+		return err
+	}
+	c := w.crc.Sum32()
+
 	dataCopy := make([]byte, dataLen)
 	copy(dataCopy, data)
 
 	r := rawRecord{
-		blockIndex: blockIndex,
-		data:       dataCopy,
-		// checkSum:   c,
+		seq:      seq,
+		data:     dataCopy,
+		checkSum: c,
 	}
 	if err := w.writeRawRecord(r); err != nil {
 		return err
@@ -235,7 +243,7 @@ func (w *Writer) Append(blockIndex uint32, data []byte) error {
 	return nil
 }
 
-func logName(nextSeq int64, o Options) string {
+func logName(nextSeq uint64, o Options) string {
 	return fmt.Sprintf("%s%cwal-%d.log", o.Dirname, os.PathSeparator, nextSeq)
 }
 
@@ -243,7 +251,7 @@ func (w *Writer) writeRawRecord(r rawRecord) error {
 	w.wg.Add(1)
 	defer w.wg.Done()
 	if w.size > w.maxSize {
-		w.size = 0
+		w.size = blockSize
 	}
 
 	var scratch [8]byte

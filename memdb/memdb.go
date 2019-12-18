@@ -21,11 +21,11 @@ const (
 )
 
 type dbInfo struct {
-	seq                    uint64
-	count                  uint32
-	nBlocks                uint32
-	blockIndex             uint32
-	lastCommitedBlockIndex uint32
+	// seq             uint64
+	count           uint32
+	nBlocks         uint32
+	blockIndex      uint32
+	lastCommitedSeq uint64
 }
 
 // DB represents the topic->key-value storage.
@@ -91,7 +91,7 @@ func Open(path string, memSize int64) (*DB, error) {
 		}
 	}
 
-	var nextSeq int64
+	var nextSeq uint64
 	logOpts := wal.Options{Dirname: path, TargetSize: memSize}
 	logWriter, err := wal.NewWriter(nextSeq, logOpts)
 	if err != nil {
@@ -204,8 +204,8 @@ func (db *DB) Sync(startSeq, endSeq uint64) error {
 	if !ok {
 		return errors.New("startSeq not found")
 	}
-	if start.blockIndex < db.lastCommitedBlockIndex {
-		return errors.New(fmt.Sprintf("memdb.Sync: received start blockIndex less than last commited blockIndex: %d < %d", start.blockIndex, db.lastCommitedBlockIndex))
+	if endSeq < db.lastCommitedSeq {
+		return errors.New(fmt.Sprintf("memdb.Sync: received start blockIndex less than last commited blockIndex: %d < %d", start.blockIndex, db.lastCommitedSeq))
 	}
 	end, ok := db.entryCache[endSeq]
 	if !ok {
@@ -215,18 +215,16 @@ func (db *DB) Sync(startSeq, endSeq uint64) error {
 	if err != nil {
 		return errors.New("write failed")
 	}
-	if err := db.logWriter.Append(start.blockIndex, data); err != nil {
+	if err := db.logWriter.Append(endSeq, data); err != nil {
 		return errors.New("write failed")
 	}
 	return db.logWriter.Sync()
 }
 
-func (db *DB) SignalBatchCommited(mseq uint64) error {
-	e, ok := db.entryCache[mseq]
-	if !ok {
-		return errors.New("Seq not found")
-	}
-	db.lastCommitedBlockIndex = e.blockIndex
+func (db *DB) SignalBatchCommited(endSeq uint64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.lastCommitedSeq = endSeq
 	return db.writeHeader()
 }
 

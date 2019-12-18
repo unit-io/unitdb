@@ -56,6 +56,7 @@ type dbInfo struct {
 	nBlocks      uint32
 	blockIndex   uint32
 	freeblockOff int64
+	cacheID      uint64
 	hashSeed     uint32
 }
 
@@ -148,8 +149,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
-	db.data.newCache(db.cacheID, db.mem.DB)
-
 	if index.size == 0 {
 		if data.size != 0 {
 			if err := index.Close(); err != nil {
@@ -164,6 +163,9 @@ func Open(path string, opts *Options) (*DB, error) {
 			// Data file exists, but index is missing.
 			return nil, errCorrupted
 		}
+		// memcache
+		db.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
+
 		seed, err := hash.RandSeed()
 		if err != nil {
 			return nil, err
@@ -192,6 +194,8 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	db.data.newCache(db.cacheID, db.mem.DB)
 
 	// db.consistent = hash.InitConsistent(int(MaxBlocks/blockSize), int(db.nBlocks))
 
@@ -700,8 +704,8 @@ func (db *DB) commit(batchSeq []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 	for _, seq := range batchSeq {
-		key := db.cacheID ^ seq
-		mblock, mdata, err := db.mem.Get(key)
+		// key := db.cacheID ^ seq
+		mblock, mdata, err := db.mem.Get(seq)
 		if err != nil {
 			return err
 		}
@@ -742,8 +746,9 @@ func (db *DB) commit(batchSeq []uint64) error {
 		}
 		db.filter.Append(uint64(hash))
 	}
-	key := db.cacheID ^ batchSeq[len(batchSeq)-1]
-	db.mem.SignalBatchCommited(key)
+	// endSeq := db.cacheID ^ batchSeq[len(batchSeq)-1]
+	endSeq := batchSeq[len(batchSeq)-1]
+	db.mem.SignalBatchCommited(endSeq)
 	return nil
 }
 

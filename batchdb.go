@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"context"
-	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -18,8 +17,6 @@ type batchdb struct {
 	memMu   sync.RWMutex
 	memPool chan *memdb.DB
 	mem     *mem
-	// memcache
-	cacheID uint64
 	// Active batches keeps batches in progress with batch seq as key and array of index hash
 	activeBatches    map[uint64][]uint64
 	batchQueue       chan *Batch
@@ -42,8 +39,6 @@ func (db *DB) initbatchdb() error {
 		batchQueue:       make(chan *Batch, 10),
 		batchCommitQueue: make(chan []uint64, 1),
 	}
-	// memcache
-	bdb.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 
 	db.batchdb = bdb
 	// Create a memdb.
@@ -140,24 +135,24 @@ func (g *BatchGroup) Run() error {
 			b.setManaged()
 			b.setGrouped(g)
 			b.setOrder(int8(order))
-			eg.Go(func() error{
-			return fn(b, stop)
-		})
+			eg.Go(func() error {
+				return fn(b, stop)
+			})
 		}(i, fn)
 	}
 
-	 // Check whether any of the goroutines failed. Since eg is accumulating the
-    // errors, we don't need to send them (or check for them) in the individual
-    // results sent on the channel.
-    if err := eg.Wait(); err != nil {
-        return err
+	// Check whether any of the goroutines failed. Since eg is accumulating the
+	// errors, we don't need to send them (or check for them) in the individual
+	// results sent on the channel.
+	if err := eg.Wait(); err != nil {
+		return err
 	}
 
 	close(g.batchQueue)
 	eg.Go(func() error {
 		return g.writeBatchGroup()
 	})
-	
+
 	defer close(stop)
 
 	return eg.Wait()

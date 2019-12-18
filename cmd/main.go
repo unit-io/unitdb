@@ -136,7 +136,7 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(2)
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)
