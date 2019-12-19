@@ -75,7 +75,7 @@ type DB struct {
 	index        table
 	data         dataTable
 	lock         fs.LockFile
-	logWriter    wal.Writer
+	wal          *wal.WAL
 	metrics      Metrics
 	cancelSyncer context.CancelFunc
 	syncWrites   bool
@@ -209,13 +209,12 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	var nextSeq uint64
 	logOpts := wal.Options{Dirname: path, TargetSize: opts.LogSize}
-	logWriter, err := wal.NewWriter(nextSeq, logOpts)
+	wal, err := wal.New(logOpts)
 	if err != nil {
-		errors.New("Error creating WAL writer")
+		errors.New("Error creating WAL")
 	}
-	db.logWriter = logWriter
+	db.wal = wal
 
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
@@ -345,7 +344,7 @@ func (db *DB) Close() error {
 	if err := db.filter.close(); err != nil {
 		return err
 	}
-	if err := db.logWriter.Close(); err != nil {
+	if err := db.wal.Close(); err != nil {
 		return err
 	}
 
@@ -722,9 +721,11 @@ func (db *DB) Write(startSeq, endSeq uint64) error {
 	if err != nil {
 		return err
 	}
-	if err := <-db.logWriter.Append(endSeq, data); err != nil {
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
 		return err
 	}
+	err = <-logWriter.WriteData(data)
 	return err
 }
 
