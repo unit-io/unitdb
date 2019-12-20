@@ -219,7 +219,6 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	db.startBatchCommit(opts.BackgroundSyncInterval)
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
 	} else if opts.BackgroundSyncInterval == -1 {
@@ -714,68 +713,87 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
-func (db *DB) Write(startSeq, endSeq uint64) error {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+// func (db *DB) Write(startSeq, endSeq uint64) error {
+// 	db.mu.RLock()
+// 	defer db.mu.RUnlock()
+// 	data, err := db.mem.ReadRaw(startSeq, endSeq)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	logWriter, err := db.wal.NewWriter()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = <-logWriter.WriteData(data)
+// 	return err
+// }
+
+func (db *DB) commit(batchSeq []uint64) <-chan error {
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+
+	done := make(chan error, 1)
+	startSeq := db.cacheID ^ batchSeq[0]
+	endSeq := db.cacheID ^ batchSeq[len(batchSeq)-1]
 	data, err := db.mem.ReadRaw(startSeq, endSeq)
 	if err != nil {
-		return err
+		done <- err
+		return done
 	}
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		return err
+		done <- err
+		return done
 	}
-	err = <-logWriter.WriteData(data)
-	return err
-}
 
-func (db *DB) commit(batchSeq []uint64) error {
-	db.closeW.Add(1)
-	defer db.closeW.Done()
-	for _, seq := range batchSeq {
-		key := db.cacheID ^ seq
-		mblock, mdata, err := db.mem.Get(key)
-		if err != nil {
-			return err
-		}
-		mb := &blockHandle{}
-		err = mb.UnmarshalBinary(mblock)
-		if err != nil {
-			return err
-		}
-		entryIdx := -1
-		id := mdata[:idSize]
-		hash := db.hash(id)
-		for i := 0; i < entriesPerBlock; i++ {
-			e := mb.entries[i]
-			if seq == e.seq {
-				entryIdx = i
-				break
+	go func() error {
+		for _, seq := range batchSeq {
+			key := db.cacheID ^ seq
+			mblock, mdata, err := db.mem.Get(key)
+			if err != nil {
+				return err
 			}
+			mb := &blockHandle{}
+			err = mb.UnmarshalBinary(mblock)
+			if err != nil {
+				return err
+			}
+			entryIdx := -1
+			id := mdata[:idSize]
+			hash := db.hash(id)
+			for i := 0; i < entriesPerBlock; i++ {
+				e := mb.entries[i]
+				if seq == e.seq {
+					entryIdx = i
+					break
+				}
+			}
+			if entryIdx == -1 {
+				return errIdEmpty
+			}
+			db.metrics.Puts.Add(1)
+			db.count++
+			db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
+			startBlockIdx := startBlockIndex(seq)
+			off := blockOffset(startBlockIdx)
+			b := &blockHandle{table: db.index, offset: off}
+			if err := b.read(0); err != nil {
+				return err
+			}
+			b.entries[b.entryIdx] = mb.entries[entryIdx]
+			if b.entries[b.entryIdx].expiresAt > 0 {
+				db.timeWindow.add(b.entries[b.entryIdx])
+			}
+			b.entryIdx++
+			if err := b.write(); err != nil {
+				return err
+			}
+			db.filter.Append(uint64(hash))
 		}
-		if entryIdx == -1 {
-			return errIdEmpty
-		}
-		db.metrics.Puts.Add(1)
-		db.count++
-		db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
-		startBlockIdx := startBlockIndex(seq)
-		off := blockOffset(startBlockIdx)
-		b := &blockHandle{table: db.index, offset: off}
-		if err := b.read(0); err != nil {
-			return err
-		}
-		b.entries[b.entryIdx] = mb.entries[entryIdx]
-		if b.entries[b.entryIdx].expiresAt > 0 {
-			db.timeWindow.add(b.entries[b.entryIdx])
-		}
-		b.entryIdx++
-		if err := b.write(); err != nil {
-			return err
-		}
-		db.filter.Append(uint64(hash))
-	}
-	return nil
+		logWriter.SignalBatchCommited()
+		return nil
+	}()
+	return logWriter.WriteData(data)
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

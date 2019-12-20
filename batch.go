@@ -60,17 +60,17 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 
 // Batch is a write batch.
 type Batch struct {
-	opts             *BatchOptions
-	managed          bool
-	grouped          bool
-	order            int8
-	startSeq         uint64
-	seq              uint64
-	db               *DB
-	data             []byte
-	index            []batchIndex
-	pendingWrites    []batchIndex
-	pendingWriteSeqs []uint64
+	opts     *BatchOptions
+	managed  bool
+	grouped  bool
+	order    int8
+	startSeq uint64
+	// seq           uint64
+	db            *DB
+	data          []byte
+	index         []batchIndex
+	pendingWrites []batchIndex
+	batchSeqs     []uint64
 }
 
 func (b *Batch) grow(n int) {
@@ -264,8 +264,9 @@ func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byt
 		if err := fn(i, seq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
 			return err
 		}
+		b.batchSeqs = append(b.batchSeqs, index.seq)
 	}
-	b.seq = b.pendingWriteSeqs[b.Len()-1]
+	// b.seq = b.pendingWriteSeqs[b.Len()-1]
 	return nil
 }
 
@@ -317,14 +318,8 @@ func (b *Batch) Write() error {
 		return err
 	}
 
-	startSeq := b.db.cacheID ^ b.startSeq
-	endSeq := b.db.cacheID ^ b.seq
-	if err := b.db.Write(startSeq, endSeq); err != nil {
-		return err
-	}
-
 	if err == nil {
-		b.db.activeBatches[b.seq] = b.Seqs()
+		b.db.activeBatches[b.startSeq] = b.Seqs()
 	}
 
 	return err
@@ -339,9 +334,11 @@ func (b *Batch) Commit() error {
 		return nil
 	}
 
-	b.db.batchCommitQueue <- b.db.activeBatches[b.seq]
 	// remove batch from activeBatches after commit
-	delete(b.db.activeBatches, b.seq)
+	delete(b.db.activeBatches, b.startSeq)
+	if err := <-b.db.commit(b.Seqs()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -373,7 +370,7 @@ func (b *Batch) uniq() []batchIndex {
 
 	b.pendingWrites = make([]batchIndex, len(unique_set))
 	for _, i := range unique_set {
-		b.pendingWriteSeqs = append(b.pendingWriteSeqs, b.index[i.idx].seq)
+		// b.pendingWriteSeqs = append(b.pendingWriteSeqs, b.index[i.idx].seq)
 		b.pendingWrites[len(unique_set)-i.newidx-1] = b.index[i.idx]
 	}
 	return b.pendingWrites
@@ -397,7 +394,7 @@ func _assert(condition bool, msg string, v ...interface{}) {
 
 // Seqs returns Seqs in active batch.
 func (b *Batch) Seqs() []uint64 {
-	return b.pendingWriteSeqs
+	return b.batchSeqs
 }
 
 // Len returns number of records in the batch.
