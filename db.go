@@ -209,7 +209,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	logOpts := wal.Options{Dirname: path, TargetSize: opts.LogSize}
+	logOpts := wal.Options{Path: path, TargetSize: opts.LogSize}
 	wal, err := wal.New(logOpts)
 	if err != nil {
 		errors.New("Error creating WAL")
@@ -713,29 +713,14 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
-// func (db *DB) Write(startSeq, endSeq uint64) error {
-// 	db.mu.RLock()
-// 	defer db.mu.RUnlock()
-// 	data, err := db.mem.ReadRaw(startSeq, endSeq)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	logWriter, err := db.wal.NewWriter()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	err = <-logWriter.WriteData(data)
-// 	return err
-// }
-
-func (db *DB) commit(batchSeq []uint64) <-chan error {
+func (db *DB) commit(batchSeqs []uint64) <-chan error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
 	done := make(chan error, 1)
-	startSeq := db.cacheID ^ batchSeq[0]
-	endSeq := db.cacheID ^ batchSeq[len(batchSeq)-1]
-	data, err := db.mem.ReadRaw(startSeq, endSeq)
+	startMemseq := db.cacheID ^ batchSeqs[0]
+	endMemseq := db.cacheID ^ batchSeqs[len(batchSeqs)-1]
+	logData, err := db.mem.ReadRaw(startMemseq, endMemseq)
 	if err != nil {
 		done <- err
 		return done
@@ -747,9 +732,9 @@ func (db *DB) commit(batchSeq []uint64) <-chan error {
 	}
 
 	go func() error {
-		for _, seq := range batchSeq {
-			key := db.cacheID ^ seq
-			mblock, mdata, err := db.mem.Get(key)
+		for _, seq := range batchSeqs {
+			memseq := db.cacheID ^ seq
+			mblock, mdata, err := db.mem.Get(memseq)
 			if err != nil {
 				return err
 			}
@@ -793,7 +778,7 @@ func (db *DB) commit(batchSeq []uint64) <-chan error {
 		logWriter.SignalBatchCommited()
 		return nil
 	}()
-	return logWriter.WriteData(data)
+	return logWriter.WriteData(logData)
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

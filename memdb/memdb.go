@@ -3,7 +3,6 @@ package memdb
 import (
 	"errors"
 	"io"
-	"log"
 	"sync"
 )
 
@@ -11,6 +10,7 @@ const (
 	idSize          = 20
 	entriesPerBlock = 19
 	indexPostfix    = ".index"
+	dataPostfix     = ".data"
 	version         = 1 // file format version
 
 	// MaxTableSize value for maximum memroy use for the memdb.
@@ -48,7 +48,7 @@ func Open(path string, memSize int64) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := mem.newTable(path, memSize)
+	data, err := mem.newTable(path+dataPostfix, memSize)
 	if err != nil {
 		return nil, err
 	}
@@ -62,29 +62,7 @@ func Open(path string, memSize int64) (*DB, error) {
 	}
 
 	if index.size() == 0 {
-		if data.size() != 0 {
-			if err := index.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(index.name()); err != nil {
-				log.Print(err)
-			}
-			if err := data.close(); err != nil {
-				log.Print(err)
-			}
-			if err := mem.remove(data.name()); err != nil {
-				log.Print(err)
-			}
-			// Data file exists, but index is missing.
-			return nil, errors.New("database is corrupted")
-		}
-		if _, err = db.index.extend(headerSize + blockSize); err != nil {
-			return nil, err
-		}
-		if _, err = db.data.extend(headerSize); err != nil {
-			return nil, err
-		}
-		if err := db.writeHeader(); err != nil {
+		if _, err = db.index.extend(blockSize); err != nil {
 			return nil, err
 		}
 	}
@@ -92,38 +70,8 @@ func Open(path string, memSize int64) (*DB, error) {
 	return db, nil
 }
 
-func (db *DB) writeHeader() error {
-	h := header{
-		signature: signature,
-		version:   version,
-		dbInfo:    db.dbInfo,
-	}
-	buf, err := h.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	_, err = db.index.writeAt(buf, 0)
-	return err
-}
-
-func (db *DB) readHeader() error {
-	h := &header{}
-	buf := make([]byte, headerSize)
-	if _, err := db.index.readAt(buf, 0); err != nil {
-		return err
-	}
-	if err := h.UnmarshalBinary(buf); err != nil {
-		return err
-	}
-	// if !bytes.Equal(h.signature[:], signature[:]) {
-	// 	return errCorrupted
-	// }
-	db.dbInfo = h.dbInfo
-	return nil
-}
-
 func blockOffset(idx uint32) int64 {
-	return int64(headerSize) + (int64(blockSize) * int64(idx))
+	return int64(blockSize) * int64(idx)
 }
 
 // Close closes the DB.
@@ -131,9 +79,6 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if err := db.writeHeader(); err != nil {
-		return err
-	}
 	if err := db.index.close(); err != nil {
 		return err
 	}

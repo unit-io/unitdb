@@ -3,6 +3,10 @@ package wal
 import "sync"
 
 const (
+	logHeaderSize = 16
+)
+
+const (
 	// logStatusInvalid indicates an incorrectly initialized block.
 	logStatusInvalid = iota
 
@@ -18,10 +22,12 @@ const (
 )
 
 type (
-	WAL struct {
+	walInfo struct {
 		upperSeq uint64
 		nBlocks  uint32
+	}
 
+	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown
 		wg sync.WaitGroup
@@ -34,7 +40,7 @@ type (
 	}
 
 	Options struct {
-		Dirname    string
+		Path       string
 		TargetSize int64
 	}
 )
@@ -44,6 +50,7 @@ func newWal(opts Options) (wal *WAL, err error) {
 	newWal := &WAL{
 		opts: opts,
 	}
+	// newWal.NewWriter()
 
 	return newWal, nil
 }

@@ -18,8 +18,8 @@ func (t *dataTable) allocate(size uint32) (int64, error) {
 	return t.extend(size)
 }
 
-func (t *dataTable) readRaw(off, kvSize int64) ([]byte, error) {
-	return t.slice(off, off+kvSize)
+func (t *dataTable) readRaw(off, mSize int64) ([]byte, error) {
+	return t.slice(off, off+mSize)
 }
 
 func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error) {

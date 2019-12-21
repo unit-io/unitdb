@@ -111,14 +111,14 @@ func main() {
 		}
 	}(5)
 
-	print([]byte("dev18.c.c1?last=30m"), db)
-	print([]byte("dev18.c.c11?last=30m"), db)
+	// print([]byte("dev18.c.c1?last=30m"), db)
+	// print([]byte("dev18.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 500; j++ {
+				for j := 0; j < 1; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -136,7 +136,7 @@ func main() {
 			}
 			i++
 		}
-	}(2)
+	}(0)
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)
@@ -239,18 +239,18 @@ func main() {
 		return
 	}
 
-	// func(retry int) {
-	// 	i := 0
-	// 	for _ = range time.Tick(10000 * time.Millisecond) {
-	// 		print([]byte("dev18.b1?last=10m"), db)
-	// 		print([]byte("dev18.b.b1?last=10m"), db)
-	// 		print([]byte("dev18.b.b11?last=10m"), db)
-	// 		print([]byte("dev18?last=10m"), db)
-	// 		print([]byte("dev19?last=10m"), db)
-	// 		if i >= retry {
-	// 			return
-	// 		}
-	// 		i++
-	// 	}
-	// }(1)
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(10000 * time.Millisecond) {
+			print([]byte("dev18.b1?last=10m"), db)
+			print([]byte("dev18.b.b1?last=10m"), db)
+			print([]byte("dev18.b.b11?last=10m"), db)
+			print([]byte("dev18?last=10m"), db)
+			print([]byte("dev19?last=10m"), db)
+			if i >= retry {
+				return
+			}
+			i++
+		}
+	}(1)
 }

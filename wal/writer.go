@@ -7,9 +7,26 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-
-	"github.com/saffat-in/tracedb/fs"
 )
+
+type logHeader struct {
+	status uint64
+	seq    uint64
+	_      [logHeaderSize]byte
+}
+
+func (h logHeader) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, logHeaderSize)
+	binary.LittleEndian.PutUint64(buf[:8], h.status)
+	binary.LittleEndian.PutUint64(buf[8:16], h.seq)
+	return buf, nil
+}
+
+func (h *logHeader) UnmarshalBinary(data []byte) error {
+	h.status = binary.LittleEndian.Uint64(data[:8])
+	h.seq = binary.LittleEndian.Uint64(data[8:16])
+	return nil
+}
 
 // Writer writes entries to the write ahead log.
 // Thread-safe.
@@ -30,9 +47,6 @@ type Writer struct {
 
 	wal *WAL
 	mu  sync.Mutex
-
-	// // logWritten is used to signal if write opeation is complete
-	// logWritten chan struct{}
 }
 
 func (wal *WAL) NewWriter() (Writer, error) {
@@ -60,48 +74,6 @@ func (wal *WAL) NewWriter() (Writer, error) {
 	return writer, nil
 }
 
-type file struct {
-	fs.FileManager
-	size int64
-}
-
-func openFile(name string) (file, error) {
-	fileFlag := os.O_CREATE | os.O_RDWR
-	fileMode := os.FileMode(0666)
-	fs := fs.FileIO
-	fi, err := fs.OpenFile(name, fileFlag, fileMode)
-	f := file{}
-	if err != nil {
-		return f, err
-	}
-	f.FileManager = fi
-
-	stat, err := fi.Stat()
-	if err != nil {
-		return f, err
-	}
-	f.size = stat.Size()
-	return f, err
-}
-
-func (f *file) allocate(size uint32) (int64, error) {
-	off := f.size
-	if err := f.Truncate(off + int64(size)); err != nil {
-		return 0, err
-	}
-	f.size += int64(size)
-	return off, nil
-}
-
-func (f *file) append(data []byte) error {
-	off := f.size
-	if _, err := f.WriteAt(data, off); err != nil {
-		return err
-	}
-	f.size += int64(len(data))
-	return nil
-}
-
 func (w *Writer) WriteBlock(block []byte) <-chan error {
 	done := make(chan error, 1)
 	go func() {
@@ -123,7 +95,7 @@ func (w *Writer) WriteData(data []byte) <-chan error {
 	binary.LittleEndian.PutUint64(scratch[0:8], w.status)
 	binary.LittleEndian.PutUint64(scratch[8:16], w.seq)
 	copy(buf, scratch)
-	copy(data[16:], data)
+	copy(buf[16:], data)
 	off, err := w.wal.data.allocate(uint32(dataLen))
 	if err != nil {
 		done <- err
@@ -149,18 +121,19 @@ func (w *Writer) SignalBatchCommited() error {
 	// Set the status to applied
 	w.status = logStatusApplied
 
-	scratch := make([]byte, 8)
-	binary.LittleEndian.PutUint64(scratch[0:8], w.status)
-	_, err := w.wal.data.WriteAt(scratch, w.offset)
-	return err
+	scratch := logHeader{
+		status: w.status,
+		seq:    w.seq,
+	}
+	return w.wal.data.writeMarshalableAt(scratch, w.offset)
 }
 
 func indexName(nextSeq uint64, o Options) string {
-	return fmt.Sprintf("%s%cwal-%d.index", o.Dirname, os.PathSeparator, nextSeq)
+	return fmt.Sprintf("%s_log%c%s-%d.index", o.Path, os.PathSeparator, o.Path, nextSeq)
 }
 
 func logName(nextSeq uint64, o Options) string {
-	return fmt.Sprintf("%s%cwal-%d.log", o.Dirname, os.PathSeparator, nextSeq)
+	return fmt.Sprintf("%s_log%c%s-%d.data", o.Path, os.PathSeparator, o.Path, nextSeq)
 }
 
 func (w *Writer) Sync() error {

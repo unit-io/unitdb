@@ -119,7 +119,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	b.index = append(b.index, index)
 }
 
-func (b *Batch) mput(key, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
+func (b *Batch) mput(memseq, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
 	switch {
 	case len(id) == 0:
 		return errIdEmpty
@@ -128,7 +128,7 @@ func (b *Batch) mput(key, seq uint64, id, topic, value []byte, offset int64, exp
 	case len(value) > MaxValueLength:
 		return errValueTooLarge
 	}
-	if err := b.db.mem.Put(key, seq, id, topic, value, offset, expiresAt); err != nil {
+	if err := b.db.mem.Put(memseq, seq, id, topic, value, offset, expiresAt); err != nil {
 		return err
 	}
 	return nil
@@ -241,7 +241,7 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
@@ -260,8 +260,8 @@ func (b *Batch) writeInternal(fn func(i int, key, seq uint64, id, topic, v []byt
 		if b.startSeq == 0 {
 			b.startSeq = index.seq
 		}
-		seq := b.db.cacheID ^ index.seq
-		if err := fn(i, seq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+		memseq := b.db.cacheID ^ index.seq
+		if err := fn(i, memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
 			return err
 		}
 		b.batchSeqs = append(b.batchSeqs, index.seq)
@@ -310,8 +310,8 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	err := b.writeInternal(func(i int, key, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
-		return b.mput(key, seq, id, topic, v, offset, expiresAt)
+	err := b.writeInternal(func(i int, memseq, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
+		return b.mput(memseq, seq, id, topic, v, offset, expiresAt)
 	})
 
 	if err := b.writeTrie(); err != nil {
