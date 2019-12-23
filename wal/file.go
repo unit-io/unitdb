@@ -49,6 +49,10 @@ func (f *file) append(data []byte) error {
 	return nil
 }
 
+func (f *file) readRaw(off, size int64) ([]byte, error) {
+	return f.Slice(off, off+size)
+}
+
 func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	buf, err := m.MarshalBinary()
 	if err != nil {

@@ -248,6 +248,12 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 	if err := b.db.extendBlocks(); err != nil {
 		return err
 	}
+
+	// extend memdb blocks
+	if _, err := b.db.mem.NewBlock(); err != nil {
+		return err
+	}
+
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
@@ -336,10 +342,7 @@ func (b *Batch) Commit() error {
 
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.startSeq)
-	if err := <-b.db.commit(b.Seqs()); err != nil {
-		return err
-	}
-	return nil
+	return b.db.commit(b.Seqs())
 }
 
 func (b *Batch) Abort() {

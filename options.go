@@ -32,6 +32,9 @@ type Options struct {
 	// Size of write ahead log
 	LogSize int64
 
+	// LogSyncInterval sync write ahead log in background
+	LogSyncInterval time.Duration
+
 	FileSystem fs.FileSystem
 }
 
@@ -54,6 +57,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 20 // maximum size of memdb (1MB).
+	}
+	if opts.LogSyncInterval == 0 {
+		opts.LogSyncInterval = 15 * time.Second
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

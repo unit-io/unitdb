@@ -1,22 +1,24 @@
-package tracedb
+package collection
 
 const (
-	DEFAULT_BUFFER_CAP = 3000
+	// Maximum message payload size allowed from client in bytes (262144 = 256KB).
+	DEFAULT_BUFFER_CAP = 700
 )
 
-type byteWriter struct {
+type ByteWriter struct {
 	buf []byte
 	pos int
 }
 
-func newByteWriter() *byteWriter {
-	return &byteWriter{
+func NewByteWriter() *ByteWriter {
+	return &ByteWriter{
 		buf: make([]byte, DEFAULT_BUFFER_CAP),
 		pos: 0,
 	}
 }
 
-func (b *byteWriter) writeUint16(n uint16) int {
+// WriteUint16 is a helper function.
+func (b *ByteWriter) WriteUint16(n uint16) int {
 	currentCap := len(b.buf) - b.pos
 	if currentCap < 1 {
 		b.grow(2)
@@ -29,8 +31,8 @@ func (b *byteWriter) writeUint16(n uint16) int {
 	return 2
 }
 
-// writeUint is a helper function.
-func (b *byteWriter) writeUint(l int, n uint64) (int, bool) {
+// WriteUint is a helper function.
+func (b *ByteWriter) WriteUint(l int, n uint64) (int, bool) {
 	currentCap := len(b.buf) - b.pos
 
 	switch l {
@@ -74,7 +76,7 @@ func (b *byteWriter) writeUint(l int, n uint64) (int, bool) {
 	return l, true
 }
 
-func (b *byteWriter) write(p []byte) int {
+func (b *ByteWriter) Write(p []byte) int {
 	currentCap := len(b.buf) - b.pos
 	if currentCap < len(p) {
 		b.grow(len(p) - currentCap)
@@ -86,7 +88,11 @@ func (b *byteWriter) write(p []byte) int {
 	return len(p)
 }
 
-func (b byteWriter) grow(n int) {
+func (b ByteWriter) Bytes() []byte {
+	return b.buf[:b.pos]
+}
+
+func (b ByteWriter) grow(n int) {
 	nbuffer := make([]byte, len(b.buf), len(b.buf)+n)
 	copy(nbuffer, b.buf)
 	b.buf = nbuffer

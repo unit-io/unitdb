@@ -118,7 +118,7 @@ func main() {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 1; j++ {
+				for j := 0; j < 100; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -137,6 +137,30 @@ func main() {
 			i++
 		}
 	}(0)
+
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(100 * time.Millisecond) {
+			err := db.Batch(func(b *tracedb.Batch) error {
+				for j := 0; j < 10; j++ {
+					t := time.Now().Add(time.Duration(j) * time.Millisecond)
+					p, _ := t.MarshalText()
+					b.Put([]byte("dev18.b.*?ttl=30m"), p)
+				}
+				start = time.Now()
+				err := b.Write()
+				return err
+			})
+			log.Println("batch.write ", time.Since(start).Seconds())
+			if err != nil {
+				log.Printf("Error update1: %s", err)
+			}
+			if i >= retry {
+				break
+			}
+			i++
+		}
+	}(1)
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)

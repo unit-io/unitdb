@@ -123,12 +123,34 @@ func (db *DB) ReadRaw(startSeq, endSeq uint64) ([]byte, error) {
 }
 
 // newBlock adds new block to db table and return block offset
-func (db *DB) newBlock() (int64, error) {
+func (db *DB) NewBlock() (int64, error) {
+	if db.count == 0 {
+		return 0, nil
+	}
 	off, err := db.index.extend(blockSize)
 	db.nBlocks++
 	db.blockIndex++
 	// log.Println("memdb.newBlock: blockIndex, nBlocks ", db.blockIndex, db.nBlocks)
 	return off, err
+}
+
+// extendBlocks adds new blocks to db table for the batch write
+func (db *DB) ExtendBlocks(entryCount uint32) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	// icreament blockIndex to write new batch into new block and enrties from two batches are not mixed in a single block
+	if db.count > 0 {
+		db.NewBlock()
+	}
+	nBlocks := uint32(float64(db.count+entryCount)/float64(entriesPerBlock)) + 1
+	for nBlocks >= db.nBlocks {
+		if _, err := db.index.extend(blockSize); err != nil {
+			return err
+		}
+		db.nBlocks++
+	}
+
+	return nil
 }
 
 func (db *DB) Has(mseq uint64) bool {
@@ -138,21 +160,21 @@ func (db *DB) Has(mseq uint64) bool {
 	return ok
 }
 
-func (db *DB) Get(mseq uint64) ([]byte, []byte, error) {
+func (db *DB) Get(mseq uint64) (uint32, []byte, []byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	e, ok := db.entryCache[mseq]
 	if !ok {
-		return nil, nil, errors.New("cache for entry seq not found")
+		return 0, nil, nil, errors.New("cache for entry seq not found")
 	}
 	off := blockOffset(e.blockIndex)
 	b := blockHandle{table: db.index, offset: off}
 	block, err := b.readRaw()
 	if err != nil {
-		return nil, nil, err
+		return 0, nil, nil, err
 	}
 	data, err := db.data.readRaw(e.offset, int64(e.messageSize))
-	return block, data, err
+	return e.blockIndex, block, data, err
 }
 
 func (db *DB) GetBlock(mseq uint64) ([]byte, error) {
@@ -210,7 +232,7 @@ func (db *DB) Put(mseq uint64, seq uint64, id, topic, value []byte, offset int64
 	}
 	db.entryCache[mseq] = &entryHeader{blockIndex: db.blockIndex, messageSize: ew.entry.mSize(), offset: memoff}
 	if b.entryIdx == entriesPerBlock {
-		if _, err := db.newBlock(); err != nil {
+		if _, err := db.NewBlock(); err != nil {
 			return err
 		}
 	}

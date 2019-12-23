@@ -15,6 +15,7 @@ import (
 
 	"github.com/allegro/bigcache"
 	"github.com/golang/snappy"
+	"github.com/saffat-in/tracedb/collection"
 	"github.com/saffat-in/tracedb/crypto"
 	fltr "github.com/saffat-in/tracedb/filter"
 	"github.com/saffat-in/tracedb/fs"
@@ -29,6 +30,7 @@ const (
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
+	logPostfix    = ".log"
 	lockPostfix   = ".lock"
 	idSize        = 20
 	filterPostfix = ".filter"
@@ -52,47 +54,51 @@ const (
 	maxResults = 1024
 )
 
-type dbInfo struct {
-	encryption   uint8
-	seq          uint64
-	count        uint32
-	nBlocks      uint32
-	blockIndex   uint32
-	freeblockOff int64
-	cacheID      uint64
-	hashSeed     uint32
-}
+var bufPool = collection.NewBufferPool()
 
-// DB represents the message storage for topic->keys-values.
-// All DB methods are safe for concurrent use by multiple goroutines.
-type DB struct {
-	// Need 64-bit alignment.
-	mu         sync.RWMutex
-	mac        *crypto.MAC
-	writeLockC chan struct{}
-	// consistent   *hash.Consistent
-	filter       Filter
-	index        table
-	data         dataTable
-	lock         fs.LockFile
-	wal          *wal.WAL
-	metrics      Metrics
-	cancelSyncer context.CancelFunc
-	syncWrites   bool
-	freeseq      freesequence
-	dbInfo
-	timeWindow timeWindowBucket
+type (
+	dbInfo struct {
+		encryption   uint8
+		seq          uint64
+		count        uint32
+		nBlocks      uint32
+		blockIndex   uint32
+		freeblockOff int64
+		cacheID      uint64
+		hashSeed     uint32
+	}
 
-	//batchdb
-	*batchdb
-	//trie
-	trie *message.Trie
-	// Close.
-	closeW sync.WaitGroup
-	closeC chan struct{}
-	closed uint32
-	closer io.Closer
-}
+	// DB represents the message storage for topic->keys-values.
+	// All DB methods are safe for concurrent use by multiple goroutines.
+	DB struct {
+		// Need 64-bit alignment.
+		mu         sync.RWMutex
+		mac        *crypto.MAC
+		writeLockC chan struct{}
+		// consistent   *hash.Consistent
+		filter       Filter
+		index        table
+		data         dataTable
+		lock         fs.LockFile
+		wal          *wal.WAL
+		metrics      Metrics
+		cancelSyncer context.CancelFunc
+		syncWrites   bool
+		freeseq      freesequence
+		dbInfo
+		timeWindow timeWindowBucket
+
+		//batchdb
+		*batchdb
+		//trie
+		trie *message.Trie
+		// Close.
+		closeW sync.WaitGroup
+		closeC chan struct{}
+		closed uint32
+		closer io.Closer
+	}
+)
 
 // Open opens or creates a new DB.
 func Open(path string, opts *Options) (*DB, error) {
@@ -209,7 +215,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	logOpts := wal.Options{Path: path, TargetSize: opts.LogSize}
+	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
 	wal, err := wal.New(logOpts)
 	if err != nil {
 		errors.New("Error creating WAL")
@@ -218,6 +224,8 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
+
+	db.logSyncer(opts.LogSyncInterval)
 
 	if opts.BackgroundSyncInterval > 0 {
 		db.startSyncer(opts.BackgroundSyncInterval)
@@ -233,6 +241,25 @@ func Open(path string, opts *Options) (*DB, error) {
 
 func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
+}
+
+func (db *DB) logSyncer(interval time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	db.cancelSyncer = cancel
+	logsyncTicker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				logsyncTicker.Stop()
+				return
+			case <-logsyncTicker.C:
+				if err := db.logSync(); err != nil {
+					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead lod to db")
+				}
+			}
+		}
+	}()
 }
 
 func (db *DB) startSyncer(interval time.Duration) {
@@ -593,7 +620,8 @@ func (db *DB) newBlock() (int64, error) {
 
 // extendBlocks adds new blocks to db table for the batch write
 func (db *DB) extendBlocks() error {
-	for uint32(float64(db.seq-1)/float64(entriesPerBlock)) > db.blockIndex {
+	nBlocks := uint32(float64(db.seq-1) / float64(entriesPerBlock))
+	for nBlocks > db.blockIndex {
 		if _, err := db.newBlock(); err != nil {
 			return err
 		}
@@ -713,72 +741,94 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 	return err
 }
 
-func (db *DB) commit(batchSeqs []uint64) <-chan error {
+func (db *DB) commit(batchSeqs []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
-	done := make(chan error, 1)
-	startMemseq := db.cacheID ^ batchSeqs[0]
-	endMemseq := db.cacheID ^ batchSeqs[len(batchSeqs)-1]
-	logData, err := db.mem.ReadRaw(startMemseq, endMemseq)
-	if err != nil {
-		done <- err
-		return done
-	}
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		done <- err
-		return done
+		return err
 	}
 
-	go func() error {
-		for _, seq := range batchSeqs {
-			memseq := db.cacheID ^ seq
-			mblock, mdata, err := db.mem.Get(memseq)
-			if err != nil {
-				return err
-			}
-			mb := &blockHandle{}
-			err = mb.UnmarshalBinary(mblock)
-			if err != nil {
-				return err
-			}
-			entryIdx := -1
-			id := mdata[:idSize]
-			hash := db.hash(id)
-			for i := 0; i < entriesPerBlock; i++ {
-				e := mb.entries[i]
-				if seq == e.seq {
-					entryIdx = i
-					break
-				}
-			}
-			if entryIdx == -1 {
-				return errIdEmpty
-			}
-			db.metrics.Puts.Add(1)
-			db.count++
-			db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
-			startBlockIdx := startBlockIndex(seq)
-			off := blockOffset(startBlockIdx)
-			b := &blockHandle{table: db.index, offset: off}
-			if err := b.read(0); err != nil {
-				return err
-			}
-			b.entries[b.entryIdx] = mb.entries[entryIdx]
-			if b.entries[b.entryIdx].expiresAt > 0 {
-				db.timeWindow.add(b.entries[b.entryIdx])
-			}
-			b.entryIdx++
-			if err := b.write(); err != nil {
-				return err
-			}
-			db.filter.Append(uint64(hash))
+	logData := make(map[uint32][]byte)
+	for _, seq := range batchSeqs {
+		memseq := db.cacheID ^ seq
+		blockIndex, memblock, memdata, err := db.mem.Get(memseq)
+		if err != nil {
+			return err
 		}
-		logWriter.SignalBatchCommited()
-		return nil
-	}()
-	return logWriter.WriteData(logData)
+		if _, ok := logData[blockIndex]; !ok {
+			logData[blockIndex] = append(logData[blockIndex], memblock...)
+			logData[blockIndex] = append(logData[blockIndex], memdata...)
+		} else {
+			logData[blockIndex] = append(logData[blockIndex], memdata...)
+		}
+	}
+
+	for _, log := range logData {
+		if err := <-logWriter.Append(log); err != nil {
+			return err
+		}
+	}
+	// go func() error {
+	// 	for _, seq := range batchSeqs {
+	// 		memseq := db.cacheID ^ seq
+	// 		_, mblock, mdata, err := db.mem.Get(memseq)
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 		mb := &blockHandle{}
+	// 		err = mb.UnmarshalBinary(mblock)
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 		entryIdx := -1
+	// 		id := mdata[:idSize]
+	// 		hash := db.hash(id)
+	// 		for i := 0; i < entriesPerBlock; i++ {
+	// 			e := mb.entries[i]
+	// 			if seq == e.seq {
+	// 				entryIdx = i
+	// 				break
+	// 			}
+	// 		}
+	// 		if entryIdx == -1 {
+	// 			return errIdEmpty
+	// 		}
+	// 		db.metrics.Puts.Add(1)
+	// 		db.count++
+	// 		db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
+	// 		startBlockIdx := startBlockIndex(seq)
+	// 		off := blockOffset(startBlockIdx)
+	// 		b := &blockHandle{table: db.index, offset: off}
+	// 		if err := b.read(0); err != nil {
+	// 			return err
+	// 		}
+	// 		b.entries[b.entryIdx] = mb.entries[entryIdx]
+	// 		if b.entries[b.entryIdx].expiresAt > 0 {
+	// 			db.timeWindow.add(b.entries[b.entryIdx])
+	// 		}
+	// 		b.entryIdx++
+	// 		if err := b.write(); err != nil {
+	// 			return err
+	// 		}
+	// 		db.filter.Append(uint64(hash))
+	// 	}
+	// 	logWriter.SignalLogApplied()
+	// 	return nil
+	// }()
+	return <-logWriter.SignalInitWrite()
+}
+
+func (db *DB) logSync() error {
+	seqs, err := db.wal.Scan()
+	if err != nil {
+		return err
+	}
+	for _, s := range seqs {
+		db.wal.Read(s)
+	}
+	return nil
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

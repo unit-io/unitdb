@@ -1,6 +1,10 @@
 package tracedb
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+
+	"github.com/saffat-in/tracedb/collection"
+)
 
 // Entry represents a entry which has to be forwarded or stored.
 type Entry struct {
@@ -20,11 +24,14 @@ func NewEntry(topic, payload []byte) *Entry {
 }
 
 func (e *Entry) Marshal() ([]byte, error) {
-	b := newByteWriter()
-	b.writeUint16(uint16(len(e.Topic)))
-	b.write(e.Topic)
-	b.write(e.Payload)
-	return b.buf[:b.pos], nil
+	b := collection.NewByteWriter()
+	b.WriteUint16(uint16(len(e.Topic)))
+	b.Write(e.Topic)
+	buf := bufPool.Get()
+	defer bufPool.Put(buf)
+	buf.Write(b.Bytes())
+	buf.Write(e.Payload)
+	return buf.Bytes(), nil
 }
 
 func (e *Entry) Unmarshal(data []byte) error {
