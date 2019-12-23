@@ -16,6 +16,7 @@ func openFile(name string) (file, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	fs := fs.FileIO
+
 	fi, err := fs.OpenFile(name, fileFlag, fileMode)
 	f := file{}
 	if err != nil {

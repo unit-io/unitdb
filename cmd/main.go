@@ -32,6 +32,12 @@ func main() {
 	}
 	defer db.Close()
 
+	print([]byte("dev18.b1?last=10m"), db)
+	print([]byte("dev18.b.b1?last=10m"), db)
+	print([]byte("dev18.b.b11?last=10m"), db)
+	print([]byte("dev18?last=10m"), db)
+	print([]byte("dev19?last=10m"), db)
+
 	db.PutEntry(&tracedb.Entry{
 		Topic:   []byte("ttl.ttl1?ttl=3m"),
 		Payload: []byte("ttl.ttl1.1"),
@@ -136,7 +142,7 @@ func main() {
 			}
 			i++
 		}
-	}(0)
+	}(1)
 
 	func(retry int) {
 		i := 0

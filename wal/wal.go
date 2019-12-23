@@ -2,25 +2,22 @@ package wal
 
 import (
 	"errors"
-	"sort"
 	"sync"
-)
 
-const (
-	logHeaderSize = 26
+	"github.com/saffat-in/tracedb/fs"
 )
 
 const (
 	// logStatusInvalid indicates an incorrectly initialized block.
 	logStatusInvalid = iota
 
-	// logStatusCommitted indicates that the transaction has been committed,
-	// but not completed. During recovery, transactions with this status
+	// logStatusCommitted indicates that the log has been written,
+	// but not completed. During recovery, logs with this status
 	// should be loaded and their updates should be provided to the user.
 	logStatusWritten = iota
 
-	// logStatusApplied indicates that the transaction has been committed and
-	// applied. Transactions with this status can be ignored during recovery,
+	// logStatusApplied indicates that the logs has been written and
+	// applied. Logs with this status can be ignored during recovery,
 	// and their associated blocks can be reclaimed.
 	logStatusApplied
 )
@@ -38,20 +35,16 @@ type (
 
 		startSeq uint64
 
-		opts           Options
-		unreleasedLogs []unreleasedLog
-		logFile        file
+		opts Options
+		logs []logInfo
+
+		logFile file
+		lock    fs.LockFile
 	}
 
 	Options struct {
 		Path       string
 		TargetSize int64
-	}
-
-	unreleasedLog struct {
-		seq    uint64
-		offset int64
-		size   uint32
 	}
 )
 
@@ -64,39 +57,73 @@ func newWal(opts Options) (wal *WAL, err error) {
 	if err != nil {
 		return wal, err
 	}
-
 	return wal, nil
 }
 
-func (wal *WAL) search(seq uint64) int {
-	return sort.Search(len(wal.unreleasedLogs), func(i int) bool {
-		return wal.unreleasedLogs[i].seq == seq
-	})
+func (wal *WAL) put(log logInfo) error {
+	l := len(wal.logs)
+	for i := 0; i < l; i++ {
+		if wal.logs[i].seq == log.seq {
+			wal.logs[i].status = log.status
+			// wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
+			return nil
+		}
+	}
+
+	// wal.logFile.writeMarshalableAt(log, log.offset)
+	wal.logs = append(wal.logs, log)
+	return nil
 }
 
 func (wal *WAL) Scan() (seqs []uint64, err error) {
-	l := len(wal.unreleasedLogs)
-
-	for s := 0; s < l; s++ {
-		seqs[s] = wal.unreleasedLogs[s].seq
+	l := len(wal.logs)
+	// seqs = make([]uint64, l)
+	for i := 0; i < l; i++ {
+		if wal.logs[i].status == logStatusWritten {
+			seqs = append(seqs, wal.logs[i].seq)
+		}
 	}
-	sort.Slice(seqs[:], func(i, j int) bool {
-		return seqs[i] < seqs[j]
-	})
+
 	return seqs, nil
 }
 
 func (wal *WAL) Read(seq uint64) ([]byte, error) {
-	s := wal.search(seq)
-	if s >= len(wal.unreleasedLogs) {
-		return nil, errors.New("wal read error: unreleased log for seq not found")
+	l := len(wal.logs)
+	for i := 0; i < l; i++ {
+		if wal.logs[i].seq == seq {
+			ul := wal.logs[i]
+			data, err := wal.logFile.readRaw(ul.offset+int64(headerSize), int64(ul.size))
+			if err != nil {
+				return nil, err
+			}
+			return data, nil
+		}
 	}
-	ul := wal.unreleasedLogs[s]
-	data, err := wal.logFile.readRaw(ul.offset, ul.offset+int64(ul.size))
-	if err != nil {
-		return nil, err
+
+	return nil, errors.New("wal read error: log for seq not found")
+}
+
+// SignalLogApplied informs the WAL that it is safe to reuse blocks.
+func (wal *WAL) SignalLogApplied(seq uint64) error {
+	wal.wg.Add(1)
+	defer wal.wg.Done()
+
+	l := len(wal.logs)
+	for i := 0; i < l; i++ {
+		if wal.logs[i].seq == seq {
+			h := logInfo{
+				status: logStatusApplied,
+				seq:    seq,
+				size:   wal.logs[i].size,
+				offset: wal.logs[i].offset,
+			}
+			wal.put(h)
+			wal.logFile.writeMarshalableAt(h, wal.logs[i].offset)
+			return nil
+		}
 	}
-	return data, nil
+
+	return errors.New("wal error: log for seq not found")
 }
 
 func (wal *WAL) Sync() error {

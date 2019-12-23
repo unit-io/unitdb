@@ -255,7 +255,7 @@ func (db *DB) logSyncer(interval time.Duration) {
 				return
 			case <-logsyncTicker.C:
 				if err := db.logSync(); err != nil {
-					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead lod to db")
+					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
 			}
 		}
@@ -638,8 +638,7 @@ func (db *DB) allocate(size uint32) (off int64, err error) {
 func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
-	db.mu.Lock()
-	defer db.mu.Unlock()
+
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -698,9 +697,12 @@ func (db *DB) PutEntry(e *Entry) error {
 }
 
 func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if db.count == MaxKeys {
 		return errFull
 	}
+
 	db.metrics.Puts.Add(1)
 	seq := message.ID(id).Seq()
 	startBlockIdx := startBlockIndex(seq)
@@ -770,65 +772,63 @@ func (db *DB) commit(batchSeqs []uint64) error {
 			return err
 		}
 	}
-	// go func() error {
-	// 	for _, seq := range batchSeqs {
-	// 		memseq := db.cacheID ^ seq
-	// 		_, mblock, mdata, err := db.mem.Get(memseq)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		mb := &blockHandle{}
-	// 		err = mb.UnmarshalBinary(mblock)
-	// 		if err != nil {
-	// 			return err
-	// 		}
-	// 		entryIdx := -1
-	// 		id := mdata[:idSize]
-	// 		hash := db.hash(id)
-	// 		for i := 0; i < entriesPerBlock; i++ {
-	// 			e := mb.entries[i]
-	// 			if seq == e.seq {
-	// 				entryIdx = i
-	// 				break
-	// 			}
-	// 		}
-	// 		if entryIdx == -1 {
-	// 			return errIdEmpty
-	// 		}
-	// 		db.metrics.Puts.Add(1)
-	// 		db.count++
-	// 		db.data.writeRaw(mdata, mb.entries[entryIdx].mOffset)
-	// 		startBlockIdx := startBlockIndex(seq)
-	// 		off := blockOffset(startBlockIdx)
-	// 		b := &blockHandle{table: db.index, offset: off}
-	// 		if err := b.read(0); err != nil {
-	// 			return err
-	// 		}
-	// 		b.entries[b.entryIdx] = mb.entries[entryIdx]
-	// 		if b.entries[b.entryIdx].expiresAt > 0 {
-	// 			db.timeWindow.add(b.entries[b.entryIdx])
-	// 		}
-	// 		b.entryIdx++
-	// 		if err := b.write(); err != nil {
-	// 			return err
-	// 		}
-	// 		db.filter.Append(uint64(hash))
-	// 	}
-	// 	logWriter.SignalLogApplied()
-	// 	return nil
-	// }()
+
 	return <-logWriter.SignalInitWrite()
 }
 
 func (db *DB) logSync() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err
 	}
 	for _, s := range seqs {
-		db.wal.Read(s)
+		logData, err := db.wal.Read(s)
+		if err != nil {
+			return err
+		}
+		block, data := logData[:blockSize], logData[blockSize:]
+		b := &blockHandle{}
+		err = b.UnmarshalBinary(block)
+		if err != nil {
+			return err
+		}
+		var moffset uint32
+		for i := 0; i < entriesPerBlock; i++ {
+			e := b.entries[i]
+			if e.mOffset == 0 {
+				continue
+			}
+			db.metrics.Puts.Add(1)
+			db.count++
+			moffset += e.mSize()
+			m := data[:moffset]
+			db.data.writeRaw(m, b.entries[i].mOffset)
+			startBlockIdx := startBlockIndex(e.seq)
+			off := blockOffset(startBlockIdx)
+			b := &blockHandle{table: db.index, offset: off}
+			if err := b.read(0); err != nil {
+				return err
+			}
+			b.entries[b.entryIdx] = b.entries[i]
+			if b.entries[b.entryIdx].expiresAt > 0 {
+				db.timeWindow.add(b.entries[b.entryIdx])
+			}
+			b.entryIdx++
+			if err := b.write(); err != nil {
+				return err
+			}
+			id := m[:idSize]
+			hash := db.hash(id)
+			db.filter.Append(uint64(hash))
+		}
+		if err := db.wal.SignalLogApplied(s); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	return db.sync()
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

@@ -9,28 +9,32 @@ var (
 	headerSize uint32
 )
 
-type header struct {
-	signature [8]byte
-	version   uint32
-	walInfo
-	_ [256]byte
+type logInfo struct {
+	status uint16
+	seq    uint64
+	size   int64
+	offset int64
+
+	_ [26]byte
 }
 
 func init() {
-	headerSize = align512(uint32(binary.Size(header{})))
+	headerSize = uint32(binary.Size(logInfo{}))
 }
 
-func (h header) MarshalBinary() ([]byte, error) {
+func (l logInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
-	copy(buf[:8], h.signature[:])
-	binary.LittleEndian.PutUint32(buf[8:12], h.version)
-	binary.LittleEndian.PutUint32(buf[12:16], h.nBlocks)
+	binary.LittleEndian.PutUint16(buf[:2], l.status)
+	binary.LittleEndian.PutUint64(buf[2:10], l.seq)
+	binary.LittleEndian.PutUint64(buf[10:18], uint64(l.size))
+	binary.LittleEndian.PutUint64(buf[18:26], uint64(l.offset))
 	return buf, nil
 }
 
-func (h *header) UnmarshalBinary(data []byte) error {
-	copy(h.signature[:], data[:8])
-	h.version = binary.LittleEndian.Uint32(data[8:12])
-	h.nBlocks = binary.LittleEndian.Uint32(data[12:16])
+func (l *logInfo) UnmarshalBinary(data []byte) error {
+	l.status = binary.LittleEndian.Uint16(data[:2])
+	l.seq = binary.LittleEndian.Uint64(data[2:10])
+	l.size = int64(binary.LittleEndian.Uint64(data[10:18]))
+	l.offset = int64(binary.LittleEndian.Uint64(data[18:26]))
 	return nil
 }

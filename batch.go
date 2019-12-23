@@ -253,12 +253,17 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 	if _, err := b.db.mem.NewBlock(); err != nil {
 		return err
 	}
-
+	pendingCount := b.Len()
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
 		id, topic, val := index.message(b.data)
+		if pendingCount < entriesPerBlock {
+			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
+				return err
+			}
+		}
 		off, err := b.db.allocate(uint32(len(val)))
 		if err != nil {
 			return err
@@ -271,6 +276,7 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 			return err
 		}
 		b.batchSeqs = append(b.batchSeqs, index.seq)
+		pendingCount--
 	}
 	// b.seq = b.pendingWriteSeqs[b.Len()-1]
 	return nil
@@ -342,7 +348,10 @@ func (b *Batch) Commit() error {
 
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.startSeq)
-	return b.db.commit(b.Seqs())
+	if err := b.db.commit(b.Seqs()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *Batch) Abort() {
