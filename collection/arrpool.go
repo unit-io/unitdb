@@ -45,7 +45,7 @@ func Arr() *Array {
 func (*Array) MarshalZerologArray(*Array) {
 }
 
-func (arr *Array) write(dst []byte) []byte {
+func (arr *Array) Write(dst []byte) []byte {
 	sizebuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(sizebuf[:4], uint32(len(arr.buf)))
 	if len(arr.buf) > 0 {

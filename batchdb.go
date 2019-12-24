@@ -1,7 +1,6 @@
 package tracedb
 
 import (
-	"context"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -22,8 +21,6 @@ type batchdb struct {
 	batchQueue    chan *Batch
 	//once run batchLoop once
 	once Once
-
-	cancelBatchWriter context.CancelFunc
 }
 
 // Batch starts a new batch.

@@ -1,8 +1,9 @@
 package wal
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
-	"sync"
 
 	"github.com/saffat-in/tracedb/collection"
 )
@@ -18,20 +19,15 @@ type Writer struct {
 	// disk.
 	status uint16
 
-	// nextSeq is a unique identifier for the log that orders
+	// startSeq is a unique identifier for the log that orders
 	// it in relation to other logs. It is marshalled to disk.
-	nextSeq uint64
+	startSeq   uint64
+	entryCount uint32
 
-	// offset keeps datafile offset
-	offset int64
-
-	// log data
-	logData []byte
-	// log data size
-	size int64
+	bufPool *bytes.Buffer
+	logSize int64
 
 	wal *WAL
-	mu  sync.Mutex
 
 	// writeCompleted is used to signal if log is fully written
 	writeCompleted chan struct{}
@@ -39,7 +35,8 @@ type Writer struct {
 
 func (wal *WAL) NewWriter() (Writer, error) {
 	writer := Writer{
-		nextSeq:        wal.startSeq,
+		startSeq:       wal.seq,
+		bufPool:        bufPool.Get(),
 		wal:            wal,
 		writeCompleted: make(chan struct{}),
 	}
@@ -54,28 +51,20 @@ func (w *Writer) append(data []byte) error {
 		return nil
 	}
 
-	w.nextSeq++
+	w.entryCount++
 
-	dataLen := align512(uint32(len(data)) + headerSize)
-	off, err := w.wal.logFile.allocate(uint32(dataLen))
-	w.offset = off
-	if err != nil {
+	var scratch [4]byte
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)))
+
+	if _, err := w.bufPool.Write(scratch[:]); err != nil {
 		return err
 	}
-	h := logInfo{
-		status: logStatusWritten,
-		seq:    w.nextSeq,
-		size:   int64(len(data)),
-		offset: int64(off),
-	}
-	w.wal.put(h)
-	header, err := h.MarshalBinary()
-	if _, err := w.wal.logFile.WriteAt(header, w.offset); err != nil {
+	w.logSize += int64(len(data)) + 4
+
+	if _, err := w.bufPool.Write(data); err != nil {
 		return err
 	}
-	if _, err := w.wal.logFile.WriteAt(data, w.offset+int64(headerSize)); err != nil {
-		return err
-	}
+
 	return nil
 }
 
@@ -97,9 +86,31 @@ func (w *Writer) Append(data []byte) <-chan error {
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog() error {
 	defer close(w.writeCompleted)
+	defer bufPool.Put(w.bufPool)
 
 	// Set the transaction status
 	w.status = logStatusWritten
+
+	dataLen := align512(w.logSize + int64(logHeaderSize))
+	off, err := w.wal.logFile.allocate(uint32(dataLen))
+	if err != nil {
+		return err
+	}
+	h := logInfo{
+		status:     logStatusWritten,
+		entryCount: w.entryCount,
+		seq:        w.wal.nextSeq(),
+		size:       int64(w.logSize),
+		offset:     int64(off),
+	}
+	w.wal.put(h)
+	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
+		return err
+	}
+	if _, err := w.wal.logFile.WriteAt(w.bufPool.Bytes(), off+int64(logHeaderSize)); err != nil {
+		return err
+	}
+
 	if err := w.wal.Sync(); err != nil {
 		return err
 	}
@@ -125,6 +136,6 @@ func (w *Writer) SignalInitWrite() <-chan error {
 	return done
 }
 
-func align512(n uint32) uint32 {
+func align512(n int64) int64 {
 	return (n + 511) &^ 511
 }

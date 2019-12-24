@@ -9,6 +9,7 @@ import (
 
 type file struct {
 	fs.FileManager
+	fb   freeBlock
 	size int64
 }
 
@@ -33,11 +34,20 @@ func openFile(name string) (file, error) {
 }
 
 func (f *file) allocate(size uint32) (int64, error) {
-	off := f.size
-	if err := f.Truncate(off + int64(size)); err != nil {
-		return 0, err
+	if size == 0 {
+		panic("unable to allocate zero bytes")
 	}
-	f.size += int64(size)
+	if f.fb.size < int64(size) {
+		off := f.size
+		if err := f.Truncate(off + int64(size)); err != nil {
+			return 0, err
+		}
+		f.size += int64(size)
+		return off, nil
+	}
+	off := f.fb.offset
+	f.fb.size -= int64(size)
+	f.fb.offset += int64(size)
 	return off, nil
 }
 

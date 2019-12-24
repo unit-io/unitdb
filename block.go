@@ -28,6 +28,27 @@ func (e entry) mSize() uint32 {
 	return idSize + uint32(e.topicSize) + e.valueSize
 }
 
+func (e entry) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, entrySize)
+	data := buf
+	binary.LittleEndian.PutUint64(buf[:8], e.seq)
+	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
+	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
+	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[18:26], uint64(e.mOffset))
+
+	return data, nil
+}
+
+func (e *entry) UnmarshalBinary(data []byte) error {
+	e.seq = binary.LittleEndian.Uint64(data[:8])
+	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
+	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
+	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
+	e.mOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
+	return nil
+}
+
 type block struct {
 	entries  [entriesPerBlock]entry
 	next     uint32
@@ -128,30 +149,30 @@ func (h *blockHandle) writeRaw(raw []byte) error {
 	return err
 }
 
-type entryWriter struct {
-	block *blockHandle
-	buf   []byte
-	entry entry
-}
+// type entryWriter struct {
+// 	block *blockHandle
+// 	buf   []byte
+// 	entry entry
+// }
 
-func (ew *entryWriter) MarshalBinary() ([]byte, error) {
-	buf := make([]byte, entrySize)
-	data := buf
-	e := ew.entry
-	binary.LittleEndian.PutUint64(buf[:4], e.seq)
-	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
-	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
-	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
-	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
+// func (ew *entryWriter) MarshalBinary() ([]byte, error) {
+// 	buf := make([]byte, entrySize)
+// 	data := buf
+// 	e := ew.entry
+// 	binary.LittleEndian.PutUint64(buf[:4], e.seq)
+// 	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
+// 	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
+// 	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
+// 	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
 
-	return data, nil
-}
+// 	return data, nil
+// }
 
-func (ew *entryWriter) write() error {
-	buf, err := ew.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	ew.buf = append(ew.buf, buf...)
-	return nil
-}
+// func (ew *entryWriter) write() error {
+// 	buf, err := ew.MarshalBinary()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	ew.buf = append(ew.buf, buf...)
+// 	return nil
+// }

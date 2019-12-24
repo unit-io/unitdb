@@ -244,19 +244,20 @@ func blockOffset(idx uint32) int64 {
 }
 
 func (db *DB) logSyncer(interval time.Duration) {
-	ctx, cancel := context.WithCancel(context.Background())
-	db.cancelSyncer = cancel
 	logsyncTicker := time.NewTicker(interval)
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
-				logsyncTicker.Stop()
-				return
 			case <-logsyncTicker.C:
 				if err := db.logSync(); err != nil {
 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
+			case <-db.closeC:
+				logsyncTicker.Stop()
+				if err := db.wal.Close(); err != nil {
+					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error closing wal")
+				}
+				return
 			}
 		}
 	}()
@@ -265,13 +266,15 @@ func (db *DB) logSyncer(interval time.Duration) {
 func (db *DB) startSyncer(interval time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	db.cancelSyncer = cancel
+	syncTicker := time.NewTicker(interval)
 	go func() {
 		var lastModifications int64
 		for {
 			select {
 			case <-ctx.Done():
+				syncTicker.Stop()
 				return
-			default:
+			case <-syncTicker.C:
 				modifications := db.metrics.Puts.Value() + db.metrics.Dels.Value()
 				if modifications != lastModifications {
 					if err := db.Sync(); err != nil {
@@ -279,23 +282,21 @@ func (db *DB) startSyncer(interval time.Duration) {
 					}
 					lastModifications = modifications
 				}
-				time.Sleep(interval)
 			}
 		}
 	}()
 }
 
 func (db *DB) startExpirer(durType time.Duration, maxDur int) {
-	ctx, cancel := context.WithCancel(context.Background())
-	db.cancelSyncer = cancel
+	expirerTicker := time.NewTicker(durType * time.Duration(maxDur))
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
-				return
-			default:
+			case <-expirerTicker.C:
 				db.expireOldEntries()
-				time.Sleep(durType * time.Duration(maxDur))
+			case <-db.closeC:
+				expirerTicker.Stop()
+				return
 			}
 		}
 	}()
@@ -368,9 +369,6 @@ func (db *DB) Close() error {
 		return err
 	}
 	if err := db.filter.close(); err != nil {
-		return err
-	}
-	if err := db.wal.Close(); err != nil {
 		return err
 	}
 
@@ -752,24 +750,28 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		return err
 	}
 
-	logData := make(map[uint32][]byte)
+	// logData := make(map[uint32][]byte)
 	for _, seq := range batchSeqs {
 		memseq := db.cacheID ^ seq
-		blockIndex, memblock, memdata, err := db.mem.Get(memseq)
+		_, memblock, memdata, err := db.mem.Get(memseq)
 		if err != nil {
 			return err
 		}
-		if _, ok := logData[blockIndex]; !ok {
-			logData[blockIndex] = append(logData[blockIndex], memblock...)
-			logData[blockIndex] = append(logData[blockIndex], memdata...)
-		} else {
-			logData[blockIndex] = append(logData[blockIndex], memdata...)
-		}
-	}
-
-	for _, log := range logData {
-		if err := <-logWriter.Append(log); err != nil {
+		b := &blockHandle{}
+		err = b.UnmarshalBinary(memblock)
+		if err != nil {
 			return err
+		}
+
+		for i := 0; i < entriesPerBlock; i++ {
+			e := b.entries[i]
+			if seq == e.seq {
+				logData, _ := e.MarshalBinary()
+				logData = append(logData, memdata...)
+				if err := <-logWriter.Append(logData); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -779,28 +781,25 @@ func (db *DB) commit(batchSeqs []uint64) error {
 func (db *DB) logSync() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	db.closeW.Add(1)
+	defer db.closeW.Done()
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err
 	}
 	for _, s := range seqs {
-		logData, err := db.wal.Read(s)
+		it, err := db.wal.Read(s)
 		if err != nil {
 			return err
 		}
-		block, data := logData[:blockSize], logData[blockSize:]
-		lb := &blockHandle{}
-		err = lb.UnmarshalBinary(block)
-		if err != nil {
-			return err
-		}
-		var moffset uint32
-
-		for i := 0; i < entriesPerBlock; i++ {
-			le := lb.entries[i]
-			if le.mOffset == 0 {
-				continue
+		for {
+			logData, ok := it.Next()
+			if !ok {
+				break
 			}
+			entryData, data := logData[:entrySize], logData[entrySize:]
+			le := entry{}
+			le.UnmarshalBinary(entryData)
 			startBlockIdx := startBlockIndex(le.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}
@@ -808,9 +807,9 @@ func (db *DB) logSync() error {
 				return err
 			}
 			entryIdx := 0
-			for j := 0; j < entriesPerBlock; j++ {
+			for i := 0; i < entriesPerBlock; i++ {
 				e := b.entries[i]
-				if e.seq == le.seq {
+				if e.seq == le.seq { //record exist in db
 					entryIdx = -1
 					break
 				}
@@ -820,11 +819,11 @@ func (db *DB) logSync() error {
 			}
 			db.metrics.Puts.Add(1)
 			db.count++
-			moffset += le.mSize()
+			moffset := le.mSize()
 			m := data[:moffset]
-			db.data.writeRaw(m, lb.entries[i].mOffset)
+			db.data.writeRaw(m, le.mOffset)
 
-			b.entries[b.entryIdx] = lb.entries[i]
+			b.entries[b.entryIdx] = le
 			if b.entries[b.entryIdx].expiresAt > 0 {
 				db.timeWindow.add(b.entries[b.entryIdx])
 			}

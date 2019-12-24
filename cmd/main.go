@@ -110,7 +110,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry {
+			if i >= retry-1 {
 				break
 			}
 			i++
@@ -137,7 +137,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry {
+			if i >= retry-1 {
 				break
 			}
 			i++
@@ -161,7 +161,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry {
+			if i >= retry-1 {
 				break
 			}
 			i++
@@ -277,7 +277,7 @@ func main() {
 			print([]byte("dev18.b.b11?last=10m"), db)
 			print([]byte("dev18?last=10m"), db)
 			print([]byte("dev19?last=10m"), db)
-			if i >= retry {
+			if i >= retry-1 {
 				return
 			}
 			i++
