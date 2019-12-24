@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/pkg/profile"
 )
@@ -44,7 +45,16 @@ func main() {
 	// 	fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	// }
 
-	if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-	}
+	func(retry int) {
+		i := 0
+		for _ = range time.Tick(1000 * time.Millisecond) {
+			if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
+				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+			}
+			if i >= retry {
+				return
+			}
+			i++
+		}
+	}(1)
 }

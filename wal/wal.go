@@ -2,6 +2,7 @@ package wal
 
 import (
 	"errors"
+	"sort"
 	"sync"
 
 	"github.com/saffat-in/tracedb/fs"
@@ -23,9 +24,9 @@ const (
 )
 
 type (
-	walInfo struct {
-		upperSeq uint64
-		nBlocks  uint32
+	freeBlock struct {
+		offset int64
+		size   int64
 	}
 
 	WAL struct {
@@ -33,10 +34,11 @@ type (
 		// ensure a clean shutdown
 		wg sync.WaitGroup
 
+		// startSeq is recoved sequence
 		startSeq uint64
-
-		opts Options
-		logs []logInfo
+		fb       freeBlock
+		opts     Options
+		logs     []logInfo
 
 		logFile file
 		lock    fs.LockFile
@@ -108,17 +110,46 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	wal.wg.Add(1)
 	defer wal.wg.Done()
 
+	sort.Slice(wal.logs[:], func(i, j int) bool {
+		return wal.logs[i].offset < wal.logs[j].offset
+	})
+	var freePrev, freeNext bool
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
 		if wal.logs[i].seq == seq {
-			h := logInfo{
-				status: logStatusApplied,
-				seq:    seq,
-				size:   wal.logs[i].size,
-				offset: wal.logs[i].offset,
+			wal.logs[i].status = logStatusApplied
+			switch {
+			case i < l-1 && wal.logs[i+1].status == logStatusApplied:
+				wal.logs[i].size += wal.logs[i+1].size
+				freeNext = true
+				fallthrough
+			case i > 0 && wal.logs[i-1].status == logStatusApplied:
+				wal.logs[i-1].size += wal.logs[i].size
+				if freeNext {
+					copy(wal.logs[i:], wal.logs[i+2:])
+					wal.logs = wal.logs[:len(wal.logs)-2]
+				} else {
+					copy(wal.logs[i:], wal.logs[i+1:])
+					wal.logs = wal.logs[:len(wal.logs)-1]
+				}
+				freePrev = true
+				fallthrough
+			default:
+				if freePrev {
+					wal.fb = freeBlock{
+						offset: wal.logs[i-1].offset,
+						size:   wal.logs[i-1].size,
+					}
+					wal.logFile.writeMarshalableAt(wal.logs[i-1], wal.logs[i-1].offset)
+					return nil
+				} else {
+					wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
+				}
 			}
-			wal.put(h)
-			wal.logFile.writeMarshalableAt(h, wal.logs[i].offset)
+			wal.fb = freeBlock{
+				offset: wal.logs[i].offset,
+				size:   wal.logs[i].size,
+			}
 			return nil
 		}
 	}

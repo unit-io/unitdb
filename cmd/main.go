@@ -142,13 +142,13 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(3)
 
 	func(retry int) {
 		i := 0
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
-				for j := 0; j < 10; j++ {
+				for j := 0; j < 100; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -166,7 +166,7 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(0)
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)

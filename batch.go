@@ -263,6 +263,7 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
 				return err
 			}
+			continue
 		}
 		off, err := b.db.allocate(uint32(len(val)))
 		if err != nil {

@@ -789,29 +789,42 @@ func (db *DB) logSync() error {
 			return err
 		}
 		block, data := logData[:blockSize], logData[blockSize:]
-		b := &blockHandle{}
-		err = b.UnmarshalBinary(block)
+		lb := &blockHandle{}
+		err = lb.UnmarshalBinary(block)
 		if err != nil {
 			return err
 		}
 		var moffset uint32
+
 		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.mOffset == 0 {
+			le := lb.entries[i]
+			if le.mOffset == 0 {
 				continue
 			}
-			db.metrics.Puts.Add(1)
-			db.count++
-			moffset += e.mSize()
-			m := data[:moffset]
-			db.data.writeRaw(m, b.entries[i].mOffset)
-			startBlockIdx := startBlockIndex(e.seq)
+			startBlockIdx := startBlockIndex(le.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}
 			if err := b.read(0); err != nil {
 				return err
 			}
-			b.entries[b.entryIdx] = b.entries[i]
+			entryIdx := 0
+			for j := 0; j < entriesPerBlock; j++ {
+				e := b.entries[i]
+				if e.seq == le.seq {
+					entryIdx = -1
+					break
+				}
+			}
+			if entryIdx == -1 {
+				continue
+			}
+			db.metrics.Puts.Add(1)
+			db.count++
+			moffset += le.mSize()
+			m := data[:moffset]
+			db.data.writeRaw(m, lb.entries[i].mOffset)
+
+			b.entries[b.entryIdx] = lb.entries[i]
 			if b.entries[b.entryIdx].expiresAt > 0 {
 				db.timeWindow.add(b.entries[b.entryIdx])
 			}
