@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	entriesPerBlock = 19
+	entriesPerBlock = 15
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
@@ -248,10 +248,11 @@ func (db *DB) logSyncer(interval time.Duration) {
 	go func() {
 		for {
 			select {
-			case <-logsyncTicker.C:
+			default:
 				if err := db.logSync(); err != nil {
 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
+				<-logsyncTicker.C
 			case <-db.closeC:
 				logsyncTicker.Stop()
 				if err := db.wal.Close(); err != nil {
@@ -274,7 +275,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-ctx.Done():
 				syncTicker.Stop()
 				return
-			case <-syncTicker.C:
+			default:
 				modifications := db.metrics.Puts.Value() + db.metrics.Dels.Value()
 				if modifications != lastModifications {
 					if err := db.Sync(); err != nil {
@@ -282,6 +283,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 					}
 					lastModifications = modifications
 				}
+				<-syncTicker.C
 			}
 		}
 	}()
@@ -753,7 +755,7 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	// logData := make(map[uint32][]byte)
 	for _, seq := range batchSeqs {
 		memseq := db.cacheID ^ seq
-		_, memblock, memdata, err := db.mem.Get(memseq)
+		memblock, memdata, err := db.mem.Get(memseq)
 		if err != nil {
 			return err
 		}

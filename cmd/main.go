@@ -86,7 +86,7 @@ func main() {
 					Contract: 3376684800,
 				})
 			}
-			log.Println("db.write ", time.Since(start).Seconds())
+			// log.Println("db.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -106,7 +106,7 @@ func main() {
 				p, _ := t.MarshalText()
 				db.PutEntry(&tracedb.Entry{Topic: []byte("dev18.c.*?ttl=30m"), Payload: p})
 			}
-			log.Println("db.write ", time.Since(start).Seconds())
+			// log.Println("db.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -133,7 +133,7 @@ func main() {
 				err := b.Write()
 				return err
 			})
-			log.Println("batch.write ", time.Since(start).Seconds())
+			// log.Println("batch.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -157,7 +157,7 @@ func main() {
 				err := b.Write()
 				return err
 			})
-			log.Println("batch.write ", time.Since(start).Seconds())
+			// log.Println("batch.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}

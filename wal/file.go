@@ -30,6 +30,7 @@ func openFile(name string) (file, error) {
 		return f, err
 	}
 	f.size = stat.Size()
+
 	return f, err
 }
 

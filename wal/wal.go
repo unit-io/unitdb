@@ -3,6 +3,7 @@ package wal
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -65,6 +66,29 @@ func newWal(opts Options) (wal *WAL, err error) {
 	if err != nil {
 		return wal, err
 	}
+	if wal.logFile.size == 0 {
+		if _, err = wal.logFile.allocate(headerSize); err != nil {
+			return nil, err
+		}
+		wal.logFile.fb = freeBlock{
+			offset: int64(headerSize),
+			size:   0,
+		}
+		if err := wal.writeHeader(); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := wal.readHeader(); err != nil {
+			if err := wal.Close(); err != nil {
+				return nil, errors.New("newWal error: unable to read wal header")
+			}
+			return nil, err
+		}
+		if err := wal.recoverWal(); err != nil {
+			return nil, err
+		}
+	}
+
 	return wal, nil
 }
 
@@ -81,7 +105,7 @@ func (wal *WAL) writeHeader() error {
 	return wal.logFile.writeMarshalableAt(h, 0)
 }
 
-func (wal *WAL) readHeader(readFreeList bool) error {
+func (wal *WAL) readHeader() error {
 	h := &header{}
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
@@ -89,20 +113,50 @@ func (wal *WAL) readHeader(readFreeList bool) error {
 	// if !bytes.Equal(h.signature[:], signature[:]) {
 	// 	return errCorrupted
 	// }
+	wal.seq = h.upperSequence
 	wal.logFile.fb = h.freeBlock
 	return nil
 }
 
-// recoverWal recovers a WAL that was written but not released logs and updates free blocks
-func (wal *WAL) recoverWal() {
+func (wal *WAL) recoverLogHeaders() error {
+	offset := int64(headerSize)
+	l := &logInfo{}
+	for {
+		if err := wal.logFile.readUnmarshalableAt(l, uint32(logHeaderSize), offset); err != nil {
+			if err == io.EOF {
+				// Expected error.
+				return nil
+			}
+			return err
+		}
+		if l.status == logStatusWritten {
+			wal.logs = append(wal.logs, *l)
+		}
+		offset = l.offset + align512(l.size+int64(logHeaderSize))
+	}
+	return nil
+}
 
+// recoverWal recovers a WAL that was written but not released logs and updates free blocks
+func (wal *WAL) recoverWal() error {
+	// Truncate log file.
+	wal.logFile.size = align512(wal.logFile.size)
+	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
+		return err
+	}
+
+	wal.recoverLogHeaders()
+	return nil
 }
 
 func (wal *WAL) put(log logInfo) error {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		if wal.logs[i].seq == log.seq {
+		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
+			wal.logs[i].entryCount = log.entryCount
+			wal.logs[i].seq = log.seq
+			wal.logs[i].size = log.size
 			// wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 			return nil
 		}
@@ -168,27 +222,27 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 		return wal.logs[i].offset < wal.logs[j].offset
 	})
 	l := len(wal.logs)
+	idx := 0
 	for i := 0; i < l; i++ {
 		if wal.logs[i].seq == seq {
+			idx = i
 			wal.logs[i].status = logStatusApplied
-			switch {
-			case i > 0 && wal.logs[i-1].status == logStatusApplied:
-				wal.logs[i-1].size += wal.logs[i].size
-				copy(wal.logs[i:], wal.logs[i+1:])
-				wal.logs = wal.logs[:len(wal.logs)-1]
-				wal.logFile.fb = freeBlock{
-					offset: wal.logs[i-1].offset,
-					size:   wal.logs[i-1].size,
-				}
-				wal.logFile.writeMarshalableAt(wal.logs[i-1], wal.logs[i-1].offset)
-			default:
-				wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
-			}
-			return nil
+			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 		}
 	}
 
-	return errors.New("wal error: log for seq not found")
+	if idx == 0 {
+		wal.logFile.fb.offset = wal.logs[idx].offset
+		wal.logFile.fb.size = align512(wal.logs[idx].size + int64(logHeaderSize))
+	}
+	for i := idx; i < l; i++ {
+		if wal.logs[i].status == logStatusApplied && wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
+			wal.logFile.fb.size += align512(wal.logs[i].size + int64(logHeaderSize))
+		}
+	}
+	wal.writeHeader()
+
+	return nil
 }
 
 func (wal *WAL) nextSeq() uint64 {
@@ -199,7 +253,7 @@ func (wal *WAL) Sync() error {
 	wal.wg.Add(1)
 	defer wal.wg.Done()
 
-	// wal.writeHeader()
+	wal.writeHeader()
 	return wal.logFile.Sync()
 }
 
