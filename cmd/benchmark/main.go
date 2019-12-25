@@ -46,7 +46,7 @@ func main() {
 	// }
 
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(1000 * time.Millisecond) {
 			if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
 				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
@@ -56,5 +56,5 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(2)
 }

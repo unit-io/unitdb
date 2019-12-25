@@ -75,6 +75,7 @@ type (
 		mu         sync.RWMutex
 		mac        *crypto.MAC
 		writeLockC chan struct{}
+		logLockC   chan struct{}
 		// consistent   *hash.Consistent
 		filter       Filter
 		index        table
@@ -138,6 +139,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		filter:     Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:       lock,
 		writeLockC: make(chan struct{}, 1),
+		logLockC:   make(chan struct{}, 1),
 		metrics:    newMetrics(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
@@ -187,7 +189,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		if _, err = db.data.extend(headerSize); err != nil {
 			return nil, err
 		}
-		if err := db.writeHeader(); err != nil {
+		if err := db.writeHeader(false); err != nil {
 			return nil, err
 		}
 	} else {
@@ -313,13 +315,15 @@ func (db *DB) readBlock(seq uint64) (blockHandle, error) {
 	return b, nil
 }
 
-func (db *DB) writeHeader() error {
-	db.data.fb.defrag()
-	freeblockOff, err := db.data.fb.write(db.data.table)
-	if err != nil {
-		return err
+func (db *DB) writeHeader(writeFreeList bool) error {
+	if writeFreeList {
+		db.data.fb.defrag()
+		freeblockOff, err := db.data.fb.write(db.data.table)
+		if err != nil {
+			return err
+		}
+		db.dbInfo.freeblockOff = freeblockOff
 	}
-	db.dbInfo.freeblockOff = freeblockOff
 	h := header{
 		signature: signature,
 		version:   version,
@@ -358,7 +362,7 @@ func (db *DB) Close() error {
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
 
-	if err := db.writeHeader(); err != nil {
+	if err := db.writeHeader(true); err != nil {
 		return err
 	}
 	if err := db.data.Close(); err != nil {
@@ -684,8 +688,17 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
+	memseq := db.cacheID ^ seq
+	itopic := topic.Marshal()
+	off, err := db.allocate(uint32(len(val)))
+	if err != nil {
+		return err
+	}
+	if err := db.mem.Put(memseq, seq, id, itopic, val, off, e.ExpiresAt); err != nil {
+		return err
+	}
 	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
-		if err := db.put(id, topic.Marshal(), val, e.ExpiresAt); err != nil {
+		if err := db.iput(seq, id, itopic, val, off, e.ExpiresAt); err != nil {
 			return err
 		}
 	}
@@ -694,6 +707,42 @@ func (db *DB) PutEntry(e *Entry) error {
 		db.sync()
 	}
 	return nil
+}
+
+func (db *DB) iput(seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) (err error) {
+	db.logLockC <- struct{}{}
+	defer func() {
+		<-db.logLockC
+	}()
+	if db.count == MaxKeys {
+		return errFull
+	}
+
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
+		return err
+	}
+	e := entry{
+		seq:       seq,
+		topicSize: uint16(len(topic)),
+		valueSize: uint32(len(value)),
+		mOffset:   offset,
+		expiresAt: expiresAt,
+	}
+	logData, _ := e.MarshalBinary()
+	dataLen := align512(uint32(idSize + len(topic) + len(value)))
+	data := make([]byte, dataLen)
+	copy(data, id)
+	copy(data[idSize:], topic)
+	copy(data[len(topic)+idSize:], value)
+	logData = append(logData, data...)
+	if err := <-logWriter.Append(logData); err != nil {
+		return err
+	}
+
+	// writeHeader information to persist correct seq informaiton to disk
+	db.writeHeader(false)
+	return <-logWriter.SignalInitWrite()
 }
 
 func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
@@ -744,6 +793,11 @@ func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
 }
 
 func (db *DB) commit(batchSeqs []uint64) error {
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.logLockC <- struct{}{}
+	defer func() {
+		<-db.logLockC
+	}()
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
@@ -777,6 +831,8 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		}
 	}
 
+	// writeHeader information to persist correct seq informaiton to disk
+	db.writeHeader(false)
 	return <-logWriter.SignalInitWrite()
 }
 
