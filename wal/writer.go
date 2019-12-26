@@ -24,7 +24,7 @@ type Writer struct {
 	startSeq   uint64
 	entryCount uint32
 
-	bufPool *bytes.Buffer
+	buffer  *bytes.Buffer
 	logSize int64
 
 	wal *WAL
@@ -36,7 +36,7 @@ type Writer struct {
 func (wal *WAL) NewWriter() (Writer, error) {
 	writer := Writer{
 		startSeq:       wal.seq,
-		bufPool:        bufPool.Get(),
+		buffer:         bufPool.Get(),
 		wal:            wal,
 		writeCompleted: make(chan struct{}),
 	}
@@ -56,12 +56,12 @@ func (w *Writer) append(data []byte) error {
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)))
 
-	if _, err := w.bufPool.Write(scratch[:]); err != nil {
+	if _, err := w.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
 	w.logSize += int64(len(data)) + 4
 
-	if _, err := w.bufPool.Write(data); err != nil {
+	if _, err := w.buffer.Write(data); err != nil {
 		return err
 	}
 
@@ -86,7 +86,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog() error {
 	defer close(w.writeCompleted)
-	defer bufPool.Put(w.bufPool)
+	defer bufPool.Put(w.buffer)
 
 	// Set the transaction status
 	w.status = logStatusWritten
@@ -107,7 +107,7 @@ func (w *Writer) writeLog() error {
 	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
 		return err
 	}
-	if _, err := w.wal.logFile.WriteAt(w.bufPool.Bytes(), off+int64(logHeaderSize)); err != nil {
+	if _, err := w.wal.logFile.WriteAt(w.buffer.Bytes(), off+int64(logHeaderSize)); err != nil {
 		return err
 	}
 

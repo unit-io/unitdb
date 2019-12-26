@@ -3,6 +3,7 @@ package tracedb
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"log"
@@ -531,6 +532,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 }
 
 func (db *DB) sync() error {
+	// writeHeader information to persist correct seq information to disk
+	if err := db.writeHeader(false); err != nil {
+		return err
+	}
 	if err := db.data.Sync(); err != nil {
 		return err
 	}
@@ -697,31 +702,33 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.mem.Put(memseq, seq, id, itopic, val, off, e.ExpiresAt); err != nil {
 		return err
 	}
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
+		return err
+	}
 	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
-		if err := db.iput(seq, id, itopic, val, off, e.ExpiresAt); err != nil {
+		data, err := db.entryData(seq, id, itopic, val, off, e.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		if err := <-logWriter.Append(data); err != nil {
 			return err
 		}
 	}
 
-	if db.syncWrites {
-		db.sync()
-	}
-	return nil
+	return <-logWriter.SignalInitWrite()
 }
 
-func (db *DB) iput(seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) (err error) {
+// entryData marshal entry along with message data
+func (db *DB) entryData(seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) ([]byte, error) {
 	db.logLockC <- struct{}{}
 	defer func() {
 		<-db.logLockC
 	}()
 	if db.count == MaxKeys {
-		return errFull
+		return nil, errFull
 	}
 
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
-		return err
-	}
 	e := entry{
 		seq:       seq,
 		topicSize: uint16(len(topic)),
@@ -729,20 +736,47 @@ func (db *DB) iput(seq uint64, id, topic, value []byte, offset int64, expiresAt 
 		mOffset:   offset,
 		expiresAt: expiresAt,
 	}
-	logData, _ := e.MarshalBinary()
-	dataLen := align512(uint32(idSize + len(topic) + len(value)))
-	data := make([]byte, dataLen)
-	copy(data, id)
-	copy(data[idSize:], topic)
-	copy(data[len(topic)+idSize:], value)
-	logData = append(logData, data...)
-	if err := <-logWriter.Append(logData); err != nil {
+	data, _ := e.MarshalBinary()
+	mLen := align512(uint32(idSize + len(topic) + len(value)))
+	m := make([]byte, mLen)
+	copy(m, id)
+	copy(m[idSize:], topic)
+	copy(m[len(topic)+idSize:], value)
+	data = append(data, m...)
+
+	return data, nil
+}
+
+// tinyCommit commits tinyBatch with size less than entriesPerBlock
+func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.logLockC <- struct{}{}
+	defer func() {
+		<-db.logLockC
+	}()
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
 		return err
 	}
 
-	// writeHeader information to persist correct seq informaiton to disk
-	db.writeHeader(false)
-	return <-logWriter.SignalInitWrite()
+	offset := uint32(0)
+	for i := uint16(0); i < entryCount; i++ {
+		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
+		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
+			return err
+		}
+		offset += dataLen
+	}
+
+	if err := <-logWriter.SignalInitWrite(); err != nil {
+		return err
+	}
+	// writeHeader information to persist correct seq information to disk
+	return db.writeHeader(false)
+
 }
 
 func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
@@ -831,9 +865,11 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		}
 	}
 
-	// writeHeader information to persist correct seq informaiton to disk
-	db.writeHeader(false)
-	return <-logWriter.SignalInitWrite()
+	if err := <-logWriter.SignalInitWrite(); err != nil {
+		return err
+	}
+	// writeHeader information to persist correct seq information to disk
+	return db.writeHeader(false)
 }
 
 func (db *DB) logSync() error {
@@ -893,12 +929,15 @@ func (db *DB) logSync() error {
 			hash := db.hash(id)
 			db.filter.Append(uint64(hash))
 		}
+		if err := db.sync(); err != nil {
+			return err
+		}
 		if err := db.wal.SignalLogApplied(s); err != nil {
 			return err
 		}
 	}
 
-	return db.sync()
+	return nil
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

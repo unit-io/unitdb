@@ -71,7 +71,7 @@ func main() {
 
 	var start time.Time
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
 			start = time.Now()
 			for j := 0; j < 50; j++ {
@@ -95,10 +95,10 @@ func main() {
 			}
 			i++
 		}
-	}(0)
+	}(1)
 
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
 			start = time.Now()
 			for j := 0; j < 10; j++ {
@@ -110,7 +110,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry-1 {
+			if i >= retry {
 				break
 			}
 			i++
@@ -121,7 +121,7 @@ func main() {
 	// print([]byte("dev18.c.c11?last=30m"), db)
 
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
 				for j := 0; j < 100; j++ {
@@ -137,7 +137,7 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry-1 {
+			if i >= retry {
 				break
 			}
 			i++
@@ -145,7 +145,7 @@ func main() {
 	}(3)
 
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch) error {
 				for j := 0; j < 100; j++ {
@@ -161,12 +161,12 @@ func main() {
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
-			if i >= retry-1 {
+			if i >= retry {
 				break
 			}
 			i++
 		}
-	}(0)
+	}(1)
 
 	print([]byte("dev18.b.b1?last=30m"), db)
 	print([]byte("dev18.b.b11?last=30m"), db)
@@ -270,14 +270,14 @@ func main() {
 	}
 
 	func(retry int) {
-		i := 0
+		i := 1
 		for _ = range time.Tick(10000 * time.Millisecond) {
 			print([]byte("dev18.b1?last=10m"), db)
 			print([]byte("dev18.b.b1?last=10m"), db)
 			print([]byte("dev18.b.b11?last=10m"), db)
 			print([]byte("dev18?last=10m"), db)
 			print([]byte("dev19?last=10m"), db)
-			if i >= retry-1 {
+			if i >= retry {
 				return
 			}
 			i++

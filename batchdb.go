@@ -25,7 +25,7 @@ type batchdb struct {
 
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
-	return &Batch{opts: DefaultBatchOptions, db: db}
+	return &Batch{opts: DefaultBatchOptions, tinyBatch: &tinyBatch{buffer: bufPool.Get()}, db: db}
 }
 
 func (db *DB) initbatchdb() error {

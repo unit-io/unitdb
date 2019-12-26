@@ -1,6 +1,8 @@
 package tracedb
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -66,12 +68,24 @@ type Batch struct {
 	order    int8
 	startSeq uint64
 	// seq           uint64
+	tinyBatch     *tinyBatch
 	db            *DB
 	data          []byte
 	index         []batchIndex
 	pendingWrites []batchIndex
 	batchSeqs     []uint64
 }
+
+type (
+	batchInfo struct {
+		entryCount uint16
+	}
+
+	tinyBatch struct {
+		batchInfo
+		buffer *bytes.Buffer
+	}
+)
 
 func (b *Batch) grow(n int) {
 	o := len(b.data)
@@ -259,16 +273,32 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 		// 	return errWriteConflict
 		// }
 		id, topic, val := index.message(b.data)
-		if pendingCount < entriesPerBlock {
-			if err := b.db.put(id, topic, val, index.expiresAt); err != nil {
-				return err
-			}
-			continue
-		}
 		off, err := b.db.allocate(uint32(len(val)))
 		if err != nil {
 			return err
 		}
+		// memseq := b.db.cacheID ^ index.seq
+		if pendingCount < entriesPerBlock {
+			// if err := b.db.mem.Put(memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+			// 	return err
+			// }
+			b.tinyBatch.entryCount++
+			data, err := b.db.entryData(index.seq, id, topic, val, off, index.expiresAt)
+			if err != nil {
+				return err
+			}
+			var scratch [4]byte
+			binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+			if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
+				return err
+			}
+			if _, err := b.tinyBatch.buffer.Write(data); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if b.startSeq == 0 {
 			b.startSeq = index.seq
 		}
@@ -339,6 +369,7 @@ func (b *Batch) Write() error {
 }
 
 func (b *Batch) Commit() error {
+	defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
@@ -351,6 +382,9 @@ func (b *Batch) Commit() error {
 	delete(b.db.activeBatches, b.startSeq)
 	if err := b.db.commit(b.Seqs()); err != nil {
 		return err
+	}
+	if b.tinyBatch.entryCount > 0 {
+		b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
 	}
 	return nil
 }
