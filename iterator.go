@@ -48,63 +48,63 @@ func (it *ItemIterator) Next() {
 	if len(it.queue) == 0 {
 		for _, seq := range it.query.seqs[it.next:] {
 			err := func() error {
-				b, err := it.db.readBlock(seq)
+				e, err := it.db.readEntry(seq)
 				if err != nil {
 					return err
 				}
-				for i := 0; i < entriesPerBlock; i++ {
-					e := b.entries[i]
-					if e.seq == seq {
-						if e.isExpired() {
-							e := b.entries[i]
-							b.del(i)
-							if err := b.write(); err != nil {
-								return err
-							}
-							val, err := it.db.data.readTopic(e)
-							if err != nil {
-								return err
-							}
-							topic := new(message.Topic)
-							topic.Unmarshal(val)
-							it.db.trie.Remove(topic.Parts, seq)
-							// free expired keys
-							it.db.data.free(e.mSize(), e.mOffset)
-							it.db.count--
-							it.invalidKeys++
-							// if id is expired it does not return an error but continue the iteration
-							return nil
-						}
-						id, val, err := it.db.data.readMessage(e)
-						if err != nil {
-							return err
-						}
-						_id := message.ID(id)
-						if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
-							it.invalidKeys++
-							return nil
-						}
+				// for i := 0; i < entriesPerBlock; i++ {
+				// 	e := b.entries[i]
+				// 	if e.seq == seq {
+				if e.isExpired() {
+					// e := b.entries[i]
+					// b.del(i)
+					// if err := b.write(); err != nil {
+					// 	return err
+					// }
+					val, err := it.db.data.readTopic(e)
+					if err != nil {
+						return err
+					}
+					topic := new(message.Topic)
+					topic.Unmarshal(val)
+					it.db.trie.Remove(topic.Parts, seq)
+					// free expired keys
+					it.db.data.free(e.mSize(), e.mOffset)
+					it.db.count--
+					it.invalidKeys++
+					// if id is expired it does not return an error but continue the iteration
+					return nil
+				}
+				id, val, err := it.db.data.readMessage(e)
+				if err != nil {
+					return err
+				}
+				_id := message.ID(id)
+				if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
+					it.invalidKeys++
+					return nil
+				}
 
-						if _id.IsEncrypted() {
-							val, err = it.db.mac.Decrypt(nil, val)
-							if err != nil {
-								return err
-							}
-						}
-						var entry Entry
-						var buffer []byte
-						val, err = snappy.Decode(buffer, val)
-						if err != nil {
-							return err
-						}
-						err = entry.Unmarshal(val)
-						if err != nil {
-							return err
-						}
-						it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
-						return nil
+				if _id.IsEncrypted() {
+					val, err = it.db.mac.Decrypt(nil, val)
+					if err != nil {
+						return err
 					}
 				}
+				var entry Entry
+				var buffer []byte
+				val, err = snappy.Decode(buffer, val)
+				if err != nil {
+					return err
+				}
+				err = entry.Unmarshal(val)
+				if err != nil {
+					return err
+				}
+				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
+				// 		return nil
+				// 	}
+				// }
 				return nil
 			}()
 			if err != nil {

@@ -5,15 +5,11 @@ import (
 	"os"
 
 	"github.com/saffat-in/tracedb/fs"
-	"github.com/saffat-in/tracedb/memdb"
 )
 
 type table struct {
 	fs.FileManager
 	size int64
-
-	cache   *memdb.DB
-	cacheID uint64
 }
 
 func newTable(fs fs.FileSystem, name string) (table, error) {
@@ -31,11 +27,6 @@ func newTable(fs fs.FileSystem, name string) (table, error) {
 	}
 	t.size = stat.Size()
 	return t, err
-}
-
-func (t *table) newCache(cacheID uint64, cache *memdb.DB) {
-	t.cache = cache
-	t.cacheID = cacheID
 }
 
 func (t *table) extend(size uint32) (int64, error) {

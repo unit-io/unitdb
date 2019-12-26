@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/saffat-in/tracedb/fs"
-	"github.com/saffat-in/tracedb/memdb"
 )
 
 type entry struct {
@@ -14,6 +13,8 @@ type entry struct {
 	valueSize uint32
 	expiresAt uint32
 	mOffset   int64
+
+	cacheBlock []byte
 }
 
 func (e entry) timeStamp() uint32 {
@@ -59,10 +60,6 @@ type blockHandle struct {
 	block
 	table  fs.FileManager
 	offset int64
-
-	updated bool
-	cache   *memdb.DB
-	cacheID uint64
 }
 
 const (
@@ -118,16 +115,7 @@ func (h *blockHandle) readRaw() ([]byte, error) {
 	return h.table.Slice(h.offset, h.offset+int64(blockSize))
 }
 
-func (h *blockHandle) read(seq uint64) error {
-	if h.cache != nil {
-		cacheKey := h.cacheID ^ seq
-		if data, _ := h.cache.GetBlock(cacheKey); data != nil && len(data) == int(blockSize) {
-			return h.UnmarshalBinary(data)
-		}
-	}
-	if seq > 0 {
-		h.offset = blockOffset(startBlockIndex(seq))
-	}
+func (h *blockHandle) read() error {
 	buf, err := h.table.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
@@ -148,31 +136,3 @@ func (h *blockHandle) writeRaw(raw []byte) error {
 	_, err := h.table.WriteAt(raw, h.offset)
 	return err
 }
-
-// type entryWriter struct {
-// 	block *blockHandle
-// 	buf   []byte
-// 	entry entry
-// }
-
-// func (ew *entryWriter) MarshalBinary() ([]byte, error) {
-// 	buf := make([]byte, entrySize)
-// 	data := buf
-// 	e := ew.entry
-// 	binary.LittleEndian.PutUint64(buf[:4], e.seq)
-// 	binary.LittleEndian.PutUint16(buf[4:6], e.topicSize)
-// 	binary.LittleEndian.PutUint32(buf[6:10], e.valueSize)
-// 	binary.LittleEndian.PutUint32(buf[10:14], e.expiresAt)
-// 	binary.LittleEndian.PutUint64(buf[14:22], uint64(e.mOffset))
-
-// 	return data, nil
-// }
-
-// func (ew *entryWriter) write() error {
-// 	buf, err := ew.MarshalBinary()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	ew.buf = append(ew.buf, buf...)
-// 	return nil
-// }

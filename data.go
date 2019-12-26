@@ -6,11 +6,8 @@ type dataTable struct {
 }
 
 func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
-	if t.cache != nil {
-		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
-			return data[:idSize], data[e.topicSize+idSize:], err
-		}
+	if e.cacheBlock != nil {
+		return e.cacheBlock[:idSize], e.cacheBlock[e.topicSize+idSize:], nil
 	}
 	message, err := t.Slice(e.mOffset, e.mOffset+int64(e.mSize()))
 	if err != nil {
@@ -20,21 +17,15 @@ func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 }
 
 func (t *dataTable) readId(e entry) ([]byte, error) {
-	if t.cache != nil {
-		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
-			return data[:idSize], err
-		}
+	if e.cacheBlock != nil {
+		return e.cacheBlock[:idSize], nil
 	}
 	return t.Slice(e.mOffset, e.mOffset+int64(idSize))
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
-	if t.cache != nil {
-		cacheKey := t.cacheID ^ e.seq
-		if data, err := t.cache.GetData(cacheKey); data != nil && uint32(len(data)) == e.mSize() {
-			return data[idSize : e.topicSize+idSize], err
-		}
+	if e.cacheBlock != nil {
+		return e.cacheBlock[idSize : e.topicSize+idSize], nil
 	}
 	return t.Slice(e.mOffset+int64(idSize), e.mOffset+int64(e.topicSize)+int64(idSize))
 }
@@ -69,9 +60,22 @@ func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error)
 	return off, err
 }
 
-func (t *dataTable) writeRaw(data []byte, off int64) error {
-	if _, err := t.WriteAt(data, off); err != nil {
-		return err
+func (t *dataTable) writeRaw(data []byte) (off int64, err error) {
+	dataLen := align512(uint32(len(data)))
+	off = t.fb.allocate(dataLen)
+	if off != -1 {
+		if _, err = t.WriteAt(data, off); err != nil {
+			return 0, err
+		}
+	} else {
+		off, err = t.append(data)
 	}
-	return nil
+	return off, err
 }
+
+// func (t *dataTable) writeRaw(data []byte, off int64) error {
+// 	if _, err := t.WriteAt(data, off); err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }

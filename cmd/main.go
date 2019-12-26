@@ -123,7 +123,7 @@ func main() {
 	func(retry int) {
 		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
-			err := db.Batch(func(b *tracedb.Batch) error {
+			err := db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 				for j := 0; j < 100; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
@@ -131,6 +131,10 @@ func main() {
 				}
 				start = time.Now()
 				err := b.Write()
+				go func() {
+					<-stop // it signals batch group completion
+					log.Printf("batch completed")
+				}()
 				return err
 			})
 			// log.Println("batch.write ", time.Since(start).Seconds())
@@ -147,7 +151,7 @@ func main() {
 	func(retry int) {
 		i := 1
 		for _ = range time.Tick(100 * time.Millisecond) {
-			err := db.Batch(func(b *tracedb.Batch) error {
+			err := db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 				for j := 0; j < 100; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
@@ -189,7 +193,7 @@ func main() {
 
 	print([]byte("ttl.ttl1?last=2m"), db)
 
-	err = db.Batch(func(b *tracedb.Batch) error {
+	err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		// opts := tracedb.DefaultBatchOptions
 		// opts.Encryption = true
 		// b.SetOptions(opts)
@@ -200,7 +204,7 @@ func main() {
 		return err
 	})
 
-	err = db.Batch(func(b *tracedb.Batch) error {
+	err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		t, _ := time.Now().MarshalText()
 		b.Put([]byte("ttl.ttl3?ttl=3m"), t)
 		err := b.Write()
@@ -213,7 +217,7 @@ func main() {
 
 	print([]byte("ttl.ttl3?last=2m"), db)
 
-	err = db.Batch(func(b *tracedb.Batch) error {
+	err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 		b.Put([]byte("dev18.*.b11"), []byte("dev18.*.b11.1"))
 		b.Put([]byte("dev18.b.*"), []byte("dev18.b.*.1"))
 		b.Put([]byte("dev18..."), []byte("dev18...1"))

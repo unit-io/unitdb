@@ -7,7 +7,7 @@ import (
 type Topic struct {
 	parts []message.Part
 	depth uint8
-	seq    uint64
+	seq   uint64
 	err   error
 }
 
@@ -27,7 +27,7 @@ func (it *TopicIterator) Next() {
 			err := func() error {
 				off := blockOffset(it.nextBlockIdx)
 				b := blockHandle{table: it.db.index.FileManager, offset: off}
-				if err := b.read(0); err != nil {
+				if err := b.read(); err != nil {
 					return err
 				}
 				for i := 0; i < entriesPerBlock; i++ {

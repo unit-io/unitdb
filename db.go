@@ -43,7 +43,7 @@ const (
 	keyExpirationMaxDur = 1
 
 	// MaxKeyLength is the maximum size of a key in bytes.
-	MaxKeyLength = 1 << 16
+	MaxTopicLength = 1 << 16
 
 	// MaxValueLength is the maximum size of a value in bytes.
 	MaxValueLength = 1 << 30
@@ -208,14 +208,12 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	db.data.newCache(db.cacheID, db.mem.DB)
-
 	// db.consistent = hash.InitConsistent(int(MaxBlocks/blockSize), int(db.nBlocks))
 
 	if needsRecovery {
-		if err := db.recover(); err != nil {
-			return nil, err
-		}
+		// if err := db.recover(); err != nil {
+		// 	return nil, err
+		// }
 	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
@@ -307,13 +305,29 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) readBlock(seq uint64) (blockHandle, error) {
-	// off := blockOffset(startBlockIdx)
-	b := blockHandle{cache: db.mem.DB, cacheID: db.cacheID, table: db.index.FileManager}
-	if err := b.read(seq); err != nil {
-		return b, err
+func (db *DB) readEntry(seq uint64) (entry, error) {
+	cacheKey := db.cacheID ^ seq
+	e := entry{}
+	if data, _ := db.mem.Get(cacheKey); data != nil {
+		e.UnmarshalBinary(data[:entrySize])
+		e.cacheBlock = make([]byte, len(data[entrySize:]))
+		copy(e.cacheBlock, data[entrySize:])
+		return e, nil
 	}
-	return b, nil
+
+	off := blockOffset(startBlockIndex(seq))
+	b := blockHandle{table: db.index.FileManager, offset: off}
+	if err := b.read(); err != nil {
+		return entry{}, err
+	}
+
+	for i := 0; i < entriesPerBlock; i++ {
+		e := b.entries[i]
+		if e.seq == seq {
+			return e, nil
+		}
+	}
+	return entry{}, errIdDoesNotExist
 }
 
 func (db *DB) writeHeader(writeFreeList bool) error {
@@ -406,6 +420,8 @@ func (db *DB) hash(data []byte) uint32 {
 
 // Get returns a new ItemIterator.
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -436,61 +452,60 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	for _, seq := range q.seqs {
 		err = func() error {
-			b, err := db.readBlock(seq)
+			e, err := db.readEntry(seq)
 			if err != nil {
 				return err
 			}
-			for i := 0; i < entriesPerBlock; i++ {
-				e := b.entries[i]
-				if e.seq == seq {
-					if e.isExpired() {
-						e := b.entries[i]
-						b.del(i)
-						if err := b.write(); err != nil {
-							return err
-						}
-						val, err := db.data.readTopic(e)
-						if err != nil {
-							return err
-						}
-						topic := new(message.Topic)
-						topic.Unmarshal(val)
-						db.trie.Remove(topic.Parts, seq)
-						// free expired keys
-						db.data.free(e.mSize(), e.mOffset)
-						db.count--
-						// if id is expired it does not return an error but continue the iteration
-						return nil
-					}
-					id, val, err := db.data.readMessage(e)
-					if err != nil {
-						return err
-					}
-					_id := message.ID(id)
-					if !_id.EvalPrefix(q.parts, q.cutoff) {
-						return nil
-					}
+			// for i := 0; i < entriesPerBlock; i++ {
+			// 	e := b.entries[i]
+			// 	if e.seq == seq {
+			if e.isExpired() {
+				// b.del(i)
+				// if err := b.write(); err != nil {
+				// 	return err
+				// }
+				val, err := db.data.readTopic(e)
+				if err != nil {
+					return err
+				}
+				topic := new(message.Topic)
+				topic.Unmarshal(val)
+				db.trie.Remove(topic.Parts, seq)
+				// free expired keys
+				db.data.free(e.mSize(), e.mOffset)
+				db.count--
+				// if id is expired it does not return an error but continue the iteration
+				return nil
+			}
+			id, val, err := db.data.readMessage(e)
+			if err != nil {
+				return err
+			}
+			_id := message.ID(id)
+			if !_id.EvalPrefix(q.parts, q.cutoff) {
+				return nil
+			}
 
-					if _id.IsEncrypted() {
-						val, err = db.mac.Decrypt(nil, val)
-						if err != nil {
-							return err
-						}
-					}
-					var entry Entry
-					var buffer []byte
-					val, err = snappy.Decode(buffer, val)
-					if err != nil {
-						return err
-					}
-					err = entry.Unmarshal(val)
-					if err != nil {
-						return err
-					}
-					items = append(items, entry.Payload)
-					return nil
+			if _id.IsEncrypted() {
+				val, err = db.mac.Decrypt(nil, val)
+				if err != nil {
+					return err
 				}
 			}
+			var entry Entry
+			var buffer []byte
+			val, err = snappy.Decode(buffer, val)
+			if err != nil {
+				return err
+			}
+			err = entry.Unmarshal(val)
+			if err != nil {
+				return err
+			}
+			items = append(items, entry.Payload)
+			return nil
+			// 	}
+			// }
 			return nil
 		}()
 		if err != nil {
@@ -563,23 +578,23 @@ func (db *DB) expireOldEntries() {
 		db.metrics.Dels.Add(1)
 		db.mu.Lock()
 		defer db.mu.Unlock()
-		b := blockHandle{}
-		entryIdx := -1
-		b, err := db.readBlock(entry.seq)
+		// b := blockHandle{}
+		// entryIdx := -1
+		e, err := db.readEntry(entry.seq)
 		if err != nil {
 			continue
 		}
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if e.seq == entry.seq {
-				entryIdx = i
-				break
-			}
-		}
-		if entryIdx == -1 || err != nil {
-			continue
-		}
-		e := b.entries[entryIdx]
+		// for i := 0; i < entriesPerBlock; i++ {
+		// 	e := b.entries[i]
+		// 	if e.seq == entry.seq {
+		// 		entryIdx = i
+		// 		break
+		// 	}
+		// }
+		// if entryIdx == -1 || err != nil {
+		// 	continue
+		// }
+		// e := b.entries[entryIdx]
 		etopic, err := db.data.readTopic(e)
 		if err != nil {
 			continue
@@ -587,10 +602,10 @@ func (db *DB) expireOldEntries() {
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		if ok := db.trie.Remove(topic.Parts, entry.seq); ok {
-			b.del(entryIdx)
-			if err := b.write(); err != nil {
-				continue
-			}
+			// b.del(entryIdx)
+			// if err := b.write(); err != nil {
+			// 	continue
+			// }
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -638,16 +653,17 @@ func (db *DB) extendBlocks() error {
 	return nil
 }
 
-// allocate adds size to data table for the batch write
-func (db *DB) allocate(size uint32) (off int64, err error) {
-	return db.data.allocate(size)
-}
+// // allocate adds size to data table for the batch write
+// func (db *DB) allocate(size uint32) (off int64, err error) {
+// 	return db.data.allocate(size)
+// }
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
-
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -688,26 +704,31 @@ func (db *DB) PutEntry(e *Entry) error {
 	}
 	val := snappy.Encode(nil, m)
 	switch {
-	case len(id) > MaxKeyLength:
+	case len(topic.Topic) > MaxTopicLength:
 		return errIdTooLarge
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	memseq := db.cacheID ^ seq
-	itopic := topic.Marshal()
-	off, err := db.allocate(uint32(len(val)))
-	if err != nil {
-		return err
-	}
-	if err := db.mem.Put(memseq, seq, id, itopic, val, off, e.ExpiresAt); err != nil {
-		return err
-	}
+	// off, err := db.allocate(uint32(len(val)))
+	// if err != nil {
+	// 	return err
+	// }
+	// if err := db.mem.Put(memseq, seq, id, itopic, val, off, e.ExpiresAt); err != nil {
+	// 	return err
+	// }
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
 	}
+	data, err := db.entryData(seq, id, topic.Marshal(), val, e.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	memseq := db.cacheID ^ seq
+	if err := db.mem.Set(memseq, data); err != nil {
+		return err
+	}
 	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
-		data, err := db.entryData(seq, id, itopic, val, off, e.ExpiresAt)
 		if err != nil {
 			return err
 		}
@@ -720,11 +741,7 @@ func (db *DB) PutEntry(e *Entry) error {
 }
 
 // entryData marshal entry along with message data
-func (db *DB) entryData(seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) ([]byte, error) {
-	db.logLockC <- struct{}{}
-	defer func() {
-		<-db.logLockC
-	}()
+func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) ([]byte, error) {
 	if db.count == MaxKeys {
 		return nil, errFull
 	}
@@ -733,11 +750,11 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, offset int64, expir
 		seq:       seq,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
-		mOffset:   offset,
+		// mOffset:   offset,
 		expiresAt: expiresAt,
 	}
 	data, _ := e.MarshalBinary()
-	mLen := align512(uint32(idSize + len(topic) + len(value)))
+	mLen := idSize + len(topic) + len(value)
 	m := make([]byte, mLen)
 	copy(m, id)
 	copy(m[idSize:], topic)
@@ -748,7 +765,7 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, offset int64, expir
 }
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
-func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
+func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) <-chan error {
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.logLockC <- struct{}{}
 	defer func() {
@@ -757,76 +774,82 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
+	done := make(chan error, 1)
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		return err
+		done <- err
+		return done
 	}
 
 	offset := uint32(0)
 	for i := uint16(0); i < entryCount; i++ {
 		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
 		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
-			return err
+			done <- err
+			return done
 		}
 		offset += dataLen
 	}
 
-	if err := <-logWriter.SignalInitWrite(); err != nil {
-		return err
+	if err := db.writeHeader(false); err != nil {
+		done <- err
+		return done
 	}
-	// writeHeader information to persist correct seq information to disk
-	return db.writeHeader(false)
-
+	return logWriter.SignalInitWrite()
+	// if err := <-logWriter.SignalInitWrite(); err != nil {
+	// 	return err
+	// }
+	// // writeHeader information to persist correct seq information to disk
+	// return db.writeHeader(false)
 }
 
-func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if db.count == MaxKeys {
-		return errFull
-	}
+// func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
+// 	db.mu.Lock()
+// 	defer db.mu.Unlock()
+// 	if db.count == MaxKeys {
+// 		return errFull
+// 	}
 
-	db.metrics.Puts.Add(1)
-	seq := message.ID(id).Seq()
-	startBlockIdx := startBlockIndex(seq)
+// 	db.metrics.Puts.Add(1)
+// 	seq := message.ID(id).Seq()
+// 	startBlockIdx := startBlockIndex(seq)
 
-	off := blockOffset(startBlockIdx)
-	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(0); err != nil {
-		db.freeseq.free(seq)
-		return err
-	}
+// 	off := blockOffset(startBlockIdx)
+// 	b := &blockHandle{table: db.index, offset: off}
+// 	if err := b.read(0); err != nil {
+// 		db.freeseq.free(seq)
+// 		return err
+// 	}
 
-	db.count++
-	hash := db.hash(id)
-	b.entries[b.entryIdx] = entry{
-		seq:       seq,
-		topicSize: uint16(len(topic)),
-		valueSize: uint32(len(value)),
-		expiresAt: expiresAt,
-	}
-	if b.entries[b.entryIdx].mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
-		db.freeseq.free(seq)
-		return err
-	}
-	if expiresAt > 0 {
-		db.timeWindow.add(b.entries[b.entryIdx])
-	}
-	b.entryIdx++
-	if err := b.write(); err != nil {
-		db.freeseq.free(seq)
-		return err
-	}
-	if b.entryIdx == entriesPerBlock {
-		if _, err := db.newBlock(); err != nil {
-			return err
-		}
-	}
-	db.filter.Append(uint64(hash))
-	return err
-}
+// 	db.count++
+// 	b.entries[b.entryIdx] = entry{
+// 		seq:       seq,
+// 		topicSize: uint16(len(topic)),
+// 		valueSize: uint32(len(value)),
+// 		expiresAt: expiresAt,
+// 	}
+// 	if b.entries[b.entryIdx].mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
+// 		db.freeseq.free(seq)
+// 		return err
+// 	}
+// 	if expiresAt > 0 {
+// 		db.timeWindow.add(b.entries[b.entryIdx])
+// 	}
+// 	b.entryIdx++
+// 	if err := b.write(); err != nil {
+// 		db.freeseq.free(seq)
+// 		return err
+// 	}
+// 	if b.entryIdx == entriesPerBlock {
+// 		if _, err := db.newBlock(); err != nil {
+// 			return err
+// 		}
+// 	}
+// 	db.filter.Append(seq)
+// 	return err
+// }
 
-func (db *DB) commit(batchSeqs []uint64) error {
+func (db *DB) commit(batchSeqs []uint64) <-chan error {
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.logLockC <- struct{}{}
 	defer func() {
@@ -835,41 +858,49 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
+	done := make(chan error, 1)
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		return err
+		done <- err
+		return done
 	}
 
 	// logData := make(map[uint32][]byte)
 	for _, seq := range batchSeqs {
-		memseq := db.cacheID ^ seq
-		memblock, memdata, err := db.mem.Get(memseq)
+		// memseq := db.cacheID ^ seq
+		memdata, err := db.mem.Get(seq)
 		if err != nil {
-			return err
+			done <- err
+			return done
 		}
-		b := &blockHandle{}
-		err = b.UnmarshalBinary(memblock)
-		if err != nil {
-			return err
+		// b := &blockHandle{}
+		e := entry{}
+		if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+			done <- err
+			return done
 		}
 
-		for i := 0; i < entriesPerBlock; i++ {
-			e := b.entries[i]
-			if seq == e.seq {
-				logData, _ := e.MarshalBinary()
-				logData = append(logData, memdata...)
-				if err := <-logWriter.Append(logData); err != nil {
-					return err
-				}
-			}
+		// for i := 0; i < entriesPerBlock; i++ {
+		// 	e := b.entries[i]
+		// 	if seq == e.seq {
+		if err := <-logWriter.Append(memdata); err != nil {
+			done <- err
+			return done
 		}
+		// 	}
+		// }
 	}
 
-	if err := <-logWriter.SignalInitWrite(); err != nil {
-		return err
+	if err := db.writeHeader(false); err != nil {
+		done <- err
+		return done
 	}
-	// writeHeader information to persist correct seq information to disk
-	return db.writeHeader(false)
+	return logWriter.SignalInitWrite()
+	// if err := <-logWriter.SignalInitWrite(); err != nil {
+	// 	return err
+	// }
+	// // writeHeader information to persist correct seq information to disk
+	// return db.writeHeader(false)
 }
 
 func (db *DB) logSync() error {
@@ -892,18 +923,18 @@ func (db *DB) logSync() error {
 				break
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
-			le := entry{}
-			le.UnmarshalBinary(entryData)
-			startBlockIdx := startBlockIndex(le.seq)
+			e := entry{}
+			e.UnmarshalBinary(entryData)
+			startBlockIdx := startBlockIndex(e.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}
-			if err := b.read(0); err != nil {
+			if err := b.read(); err != nil {
 				return err
 			}
 			entryIdx := 0
 			for i := 0; i < entriesPerBlock; i++ {
-				e := b.entries[i]
-				if e.seq == le.seq { //record exist in db
+				ie := b.entries[i]
+				if ie.seq == e.seq { //record exist in db
 					entryIdx = -1
 					break
 				}
@@ -913,21 +944,25 @@ func (db *DB) logSync() error {
 			}
 			db.metrics.Puts.Add(1)
 			db.count++
-			moffset := le.mSize()
+			moffset := e.mSize()
 			m := data[:moffset]
-			db.data.writeRaw(m, le.mOffset)
+			if e.mOffset, err = db.data.writeRaw(m); err != nil {
+				db.freeseq.free(e.seq)
+				return err
+			}
 
-			b.entries[b.entryIdx] = le
+			b.entries[b.entryIdx] = e
 			if b.entries[b.entryIdx].expiresAt > 0 {
 				db.timeWindow.add(b.entries[b.entryIdx])
 			}
 			b.entryIdx++
 			if err := b.write(); err != nil {
+				db.freeseq.free(e.seq)
 				return err
 			}
-			id := m[:idSize]
-			hash := db.hash(id)
-			db.filter.Append(uint64(hash))
+			// id := m[:idSize]
+			// hash := db.hash(id)
+			db.filter.Append(e.seq)
 		}
 		if err := db.sync(); err != nil {
 			return err
@@ -978,21 +1013,21 @@ func (db *DB) DeleteEntry(e *Entry) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(id []byte) error {
-	hash := db.hash(id)
+	seq := message.ID(id).Seq()
 	/// Test filter block for the message id presence
-	if !db.filter.Test(uint64(hash)) {
+	if !db.filter.Test(seq) {
 		return nil
 	}
 	db.metrics.Dels.Add(1)
-	entryIdx := -1
-	seq := message.ID(id).Seq()
+	db.freeseq.free(seq)
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
-	if err := b.read(0); err != nil {
+	if err := b.read(); err != nil {
 		db.freeseq.free(seq)
 		return err
 	}
+	entryIdx := -1
 	for i := 0; i < entriesPerBlock; i++ {
 		e := b.entries[i]
 		if seq == e.seq {
@@ -1007,7 +1042,7 @@ func (db *DB) delete(id []byte) error {
 		}
 	}
 	if entryIdx == -1 {
-		return errIdEmpty
+		return nil // no entry in db to delete
 	}
 
 	e := b.entries[entryIdx]
@@ -1017,7 +1052,6 @@ func (db *DB) delete(id []byte) error {
 		return err
 	}
 	db.data.free(e.mSize(), e.mOffset)
-	db.freeseq.free(seq)
 	db.count--
 	if db.syncWrites {
 		return db.sync()

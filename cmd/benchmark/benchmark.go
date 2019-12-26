@@ -82,20 +82,20 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	eg := &errgroup.Group{}
 
 	func(concurrent int) error {
-		i := 0
+		i := 1
 		for {
 			eg.Go(func() error {
-				err = db.Batch(func(b *tracedb.Batch) error {
+				err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 					rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
 					for k := 0; k < batchSize; k++ {
-						b.Put(topics[i], randValue(rnd, valSrc, minVS, maxVS))
+						b.Put(topics[i-1], randValue(rnd, valSrc, minVS, maxVS))
 					}
 					err := b.Write()
 					return err
 				})
 				return err
 			})
-			if i >= concurrent-1 {
+			if i >= concurrent {
 				return nil
 			}
 			i++
@@ -220,7 +220,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	start := time.Now()
 	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
 		rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
-		err = db.Batch(func(b *tracedb.Batch) error {
+		err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
 			for i, k := range batch {
 				if err := b.Put(k, randValue(rnd, valSrc, minVS, maxVS)); err != nil {
 					return err

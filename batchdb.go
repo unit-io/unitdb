@@ -50,22 +50,30 @@ func (db *DB) initbatchdb() error {
 // returned from the Update() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
-func (db *DB) Batch(fn func(*Batch) error) error {
+func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	b := db.batch()
 
 	b.setManaged()
-
+	stop := make(chan struct{})
 	// If an error is returned from the function then rollback and return error.
-	err := fn(b)
+	err := fn(b, stop)
 	if err != nil {
 		return err
 	}
 	b.unsetManaged()
 	// Make sure the transaction rolls back in the event of a panic.
+	// go func() {
+	// 	defer func() {
+	// 		close(stop)
+	// 		b.Abort()
+	// 	}()
+	// 	<-b.Commit()
+	// }()
 	defer func() {
+		close(stop)
 		b.Abort()
 	}()
-	return b.Commit()
+	return <-b.Commit()
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -154,7 +162,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 		return err
 	}
 	defer g.Abort()
-	return b.Commit()
+	return <-b.Commit()
 }
 
 func (g *BatchGroup) Abort() {

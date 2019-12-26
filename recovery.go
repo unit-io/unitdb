@@ -46,7 +46,7 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		off := blockOffset(blockIdx)
 		b := blockHandle{table: db.index.FileManager, offset: off}
-		if err := b.read(0); err != nil {
+		if err := b.read(); err != nil {
 			return 0, nil, err
 		}
 		for i := 0; i < entriesPerBlock; i++ {

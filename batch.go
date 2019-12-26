@@ -2,9 +2,7 @@ package tracedb
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/golang/snappy"
@@ -17,14 +15,17 @@ const (
 	batchGrowRec   = 3000
 )
 
-type batchIndex struct {
-	delFlag   bool
-	seq       uint64
-	key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
-	topicSize uint16
-	valueSize uint32
-	expiresAt uint32
-	mOffset   int64
+// BatchOptions is used to set options when using batch operation
+type BatchOptions struct {
+	// In concurrent batch writes order determines how to handle conflicts
+	Order      int8
+	Encryption bool
+}
+
+// DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
+var DefaultBatchOptions = &BatchOptions{
+	Order:      0,
+	Encryption: false,
 }
 
 func (index batchIndex) id(data []byte) []byte {
@@ -41,42 +42,22 @@ func (index batchIndex) message(data []byte) (id, topic, value []byte) {
 
 }
 
-// BatchOptions is used to set options when using batch operation
-type BatchOptions struct {
-	// In concurrent batch writes order determines how to handle conflicts
-	Order      int8
-	Encryption bool
-}
-
-var wg sync.WaitGroup
-
-// DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
-var DefaultBatchOptions = &BatchOptions{
-	Order:      0,
-	Encryption: false,
-}
-
 func (b *Batch) SetOptions(opts *BatchOptions) {
 	b.opts = opts
 }
 
 // Batch is a write batch.
-type Batch struct {
-	opts     *BatchOptions
-	managed  bool
-	grouped  bool
-	order    int8
-	startSeq uint64
-	// seq           uint64
-	tinyBatch     *tinyBatch
-	db            *DB
-	data          []byte
-	index         []batchIndex
-	pendingWrites []batchIndex
-	batchSeqs     []uint64
-}
-
 type (
+	batchIndex struct {
+		delFlag   bool
+		seq       uint64
+		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
+		topicSize uint16
+		valueSize uint32
+		expiresAt uint32
+		mOffset   int64
+	}
+
 	batchInfo struct {
 		entryCount uint16
 	}
@@ -84,6 +65,21 @@ type (
 	tinyBatch struct {
 		batchInfo
 		buffer *bytes.Buffer
+	}
+
+	Batch struct {
+		opts     *BatchOptions
+		managed  bool
+		grouped  bool
+		order    int8
+		startSeq uint64
+		// seq           uint64
+		tinyBatch     *tinyBatch
+		db            *DB
+		data          []byte
+		index         []batchIndex
+		pendingWrites []batchIndex
+		batchSeqs     []uint64
 	}
 )
 
@@ -131,21 +127,6 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 
 	index.expiresAt = expiresAt
 	b.index = append(b.index, index)
-}
-
-func (b *Batch) mput(memseq, seq uint64, id, topic, value []byte, offset int64, expiresAt uint32) error {
-	switch {
-	case len(id) == 0:
-		return errIdEmpty
-	case len(id) > MaxKeyLength:
-		return errIdTooLarge
-	case len(value) > MaxValueLength:
-		return errValueTooLarge
-	}
-	if err := b.db.mem.Put(memseq, seq, id, topic, value, offset, expiresAt); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Put appends 'put operation' of the given key/value pair to the batch.
@@ -255,7 +236,7 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 	return false
 }
 
-func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error) error {
+func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) error {
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
@@ -263,51 +244,51 @@ func (b *Batch) writeInternal(fn func(i int, memseq, seq uint64, id, topic, v []
 		return err
 	}
 
-	// extend memdb blocks
-	if _, err := b.db.mem.NewBlock(); err != nil {
-		return err
-	}
-	pendingCount := b.Len()
+	// // extend memdb blocks
+	// if _, err := b.db.mem.NewBlock(); err != nil {
+	// 	return err
+	// }
+	// pendingCount := b.Len()
 	for i, index := range b.pendingWrites {
 		// if b.hasWriteConflict(index.seq) {
 		// 	return errWriteConflict
 		// }
 		id, topic, val := index.message(b.data)
-		off, err := b.db.allocate(uint32(len(val)))
+		// off, err := b.db.allocate(uint32(len(val)))
+		// if err != nil {
+		// 	return err
+		// }
+		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
 		if err != nil {
 			return err
 		}
-		// memseq := b.db.cacheID ^ index.seq
-		if pendingCount < entriesPerBlock {
-			// if err := b.db.mem.Put(memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
-			// 	return err
-			// }
-			b.tinyBatch.entryCount++
-			data, err := b.db.entryData(index.seq, id, topic, val, off, index.expiresAt)
-			if err != nil {
-				return err
-			}
-			var scratch [4]byte
-			binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+		// if pendingCount < entriesPerBlock {
+		// 	// if err := b.db.mem.Put(memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+		// 	// 	return err
+		// 	// }
+		// 	b.tinyBatch.entryCount++
 
-			if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
-				return err
-			}
-			if _, err := b.tinyBatch.buffer.Write(data); err != nil {
-				return err
-			}
-			continue
-		}
+		// 	var scratch [4]byte
+		// 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+		// 	if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
+		// 		return err
+		// 	}
+		// 	if _, err := b.tinyBatch.buffer.Write(data); err != nil {
+		// 		return err
+		// 	}
+		// 	continue
+		// }
 
 		if b.startSeq == 0 {
-			b.startSeq = index.seq
+			b.startSeq = b.db.cacheID ^ index.seq
 		}
 		memseq := b.db.cacheID ^ index.seq
-		if err := fn(i, memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
+		if err := fn(i, memseq, data); err != nil {
 			return err
 		}
-		b.batchSeqs = append(b.batchSeqs, index.seq)
-		pendingCount--
+		b.batchSeqs = append(b.batchSeqs, memseq)
+		// pendingCount--
 	}
 	// b.seq = b.pendingWriteSeqs[b.Len()-1]
 	return nil
@@ -317,11 +298,10 @@ func (b *Batch) writeTrie() error {
 	l := b.Len()
 	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
 		index := b.pendingWrites[i]
-		id, topic, _ := index.message(b.data)
+		_, topic, _ := index.message(b.data)
 		if index.delFlag {
-			hash := b.db.hash(id)
 			/// Test filter block for presence
-			if !b.db.filter.Test(uint64(hash)) {
+			if !b.db.filter.Test(index.seq) {
 				return nil
 			}
 			itopic := new(message.Topic)
@@ -353,8 +333,8 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	err := b.writeInternal(func(i int, memseq, seq uint64, id, topic, v []byte, offset int64, expiresAt uint32) error {
-		return b.mput(memseq, seq, id, topic, v, offset, expiresAt)
+	err := b.writeInternal(func(i int, memseq uint64, data []byte) error {
+		return b.db.mem.Set(memseq, data)
 	})
 
 	if err := b.writeTrie(); err != nil {
@@ -368,25 +348,34 @@ func (b *Batch) Write() error {
 	return err
 }
 
-func (b *Batch) Commit() error {
+func (b *Batch) Commit() <-chan error {
 	defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
+	done := make(chan error, 1)
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
-		return nil
+		done <- nil
+		return done
 	}
 	if len(b.pendingWrites) == 0 {
-		return nil
+		done <- nil
+		return done
 	}
 
 	// remove batch from activeBatches after commit
 	delete(b.db.activeBatches, b.startSeq)
-	if err := b.db.commit(b.Seqs()); err != nil {
-		return err
-	}
 	if b.tinyBatch.entryCount > 0 {
 		b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
 	}
-	return nil
+	return b.db.commit(b.Seqs())
+
+	// if err := b.db.commit(b.Seqs()); err != nil {
+	// 	done <-err
+	// 	return done
+	// }
+	// if b.tinyBatch.entryCount > 0 {
+	// 	b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
+	// }
+	// return nil
 }
 
 func (b *Batch) Abort() {
