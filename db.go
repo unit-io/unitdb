@@ -456,14 +456,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			if err != nil {
 				return err
 			}
-			// for i := 0; i < entriesPerBlock; i++ {
-			// 	e := b.entries[i]
-			// 	if e.seq == seq {
 			if e.isExpired() {
-				// b.del(i)
-				// if err := b.write(); err != nil {
-				// 	return err
-				// }
 				val, err := db.data.readTopic(e)
 				if err != nil {
 					return err
@@ -578,23 +571,10 @@ func (db *DB) expireOldEntries() {
 		db.metrics.Dels.Add(1)
 		db.mu.Lock()
 		defer db.mu.Unlock()
-		// b := blockHandle{}
-		// entryIdx := -1
 		e, err := db.readEntry(entry.seq)
 		if err != nil {
 			continue
 		}
-		// for i := 0; i < entriesPerBlock; i++ {
-		// 	e := b.entries[i]
-		// 	if e.seq == entry.seq {
-		// 		entryIdx = i
-		// 		break
-		// 	}
-		// }
-		// if entryIdx == -1 || err != nil {
-		// 	continue
-		// }
-		// e := b.entries[entryIdx]
 		etopic, err := db.data.readTopic(e)
 		if err != nil {
 			continue
@@ -602,10 +582,6 @@ func (db *DB) expireOldEntries() {
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		if ok := db.trie.Remove(topic.Parts, entry.seq); ok {
-			// b.del(entryIdx)
-			// if err := b.write(); err != nil {
-			// 	continue
-			// }
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -652,11 +628,6 @@ func (db *DB) extendBlocks() error {
 	}
 	return nil
 }
-
-// // allocate adds size to data table for the batch write
-// func (db *DB) allocate(size uint32) (off int64, err error) {
-// 	return db.data.allocate(size)
-// }
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
@@ -709,13 +680,6 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	// off, err := db.allocate(uint32(len(val)))
-	// if err != nil {
-	// 	return err
-	// }
-	// if err := db.mem.Put(memseq, seq, id, itopic, val, off, e.ExpiresAt); err != nil {
-	// 	return err
-	// }
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
@@ -796,58 +760,7 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) <-chan error {
 		return done
 	}
 	return logWriter.SignalInitWrite()
-	// if err := <-logWriter.SignalInitWrite(); err != nil {
-	// 	return err
-	// }
-	// // writeHeader information to persist correct seq information to disk
-	// return db.writeHeader(false)
 }
-
-// func (db *DB) put(id, topic, value []byte, expiresAt uint32) (err error) {
-// 	db.mu.Lock()
-// 	defer db.mu.Unlock()
-// 	if db.count == MaxKeys {
-// 		return errFull
-// 	}
-
-// 	db.metrics.Puts.Add(1)
-// 	seq := message.ID(id).Seq()
-// 	startBlockIdx := startBlockIndex(seq)
-
-// 	off := blockOffset(startBlockIdx)
-// 	b := &blockHandle{table: db.index, offset: off}
-// 	if err := b.read(0); err != nil {
-// 		db.freeseq.free(seq)
-// 		return err
-// 	}
-
-// 	db.count++
-// 	b.entries[b.entryIdx] = entry{
-// 		seq:       seq,
-// 		topicSize: uint16(len(topic)),
-// 		valueSize: uint32(len(value)),
-// 		expiresAt: expiresAt,
-// 	}
-// 	if b.entries[b.entryIdx].mOffset, err = db.data.writeMessage(id, topic, value); err != nil {
-// 		db.freeseq.free(seq)
-// 		return err
-// 	}
-// 	if expiresAt > 0 {
-// 		db.timeWindow.add(b.entries[b.entryIdx])
-// 	}
-// 	b.entryIdx++
-// 	if err := b.write(); err != nil {
-// 		db.freeseq.free(seq)
-// 		return err
-// 	}
-// 	if b.entryIdx == entriesPerBlock {
-// 		if _, err := db.newBlock(); err != nil {
-// 			return err
-// 		}
-// 	}
-// 	db.filter.Append(seq)
-// 	return err
-// }
 
 func (db *DB) commit(batchSeqs []uint64) <-chan error {
 	// commit writes batches into write ahead log. The write happen synchronously.
@@ -873,22 +786,16 @@ func (db *DB) commit(batchSeqs []uint64) <-chan error {
 			done <- err
 			return done
 		}
-		// b := &blockHandle{}
 		e := entry{}
 		if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
 			done <- err
 			return done
 		}
 
-		// for i := 0; i < entriesPerBlock; i++ {
-		// 	e := b.entries[i]
-		// 	if seq == e.seq {
 		if err := <-logWriter.Append(memdata); err != nil {
 			done <- err
 			return done
 		}
-		// 	}
-		// }
 	}
 
 	if err := db.writeHeader(false); err != nil {
@@ -896,11 +803,6 @@ func (db *DB) commit(batchSeqs []uint64) <-chan error {
 		return done
 	}
 	return logWriter.SignalInitWrite()
-	// if err := <-logWriter.SignalInitWrite(); err != nil {
-	// 	return err
-	// }
-	// // writeHeader information to persist correct seq information to disk
-	// return db.writeHeader(false)
 }
 
 func (db *DB) logSync() error {
@@ -960,8 +862,6 @@ func (db *DB) logSync() error {
 				db.freeseq.free(e.seq)
 				return err
 			}
-			// id := m[:idSize]
-			// hash := db.hash(id)
 			db.filter.Append(e.seq)
 		}
 		if err := db.sync(); err != nil {

@@ -52,15 +52,7 @@ func (it *ItemIterator) Next() {
 				if err != nil {
 					return err
 				}
-				// for i := 0; i < entriesPerBlock; i++ {
-				// 	e := b.entries[i]
-				// 	if e.seq == seq {
 				if e.isExpired() {
-					// e := b.entries[i]
-					// b.del(i)
-					// if err := b.write(); err != nil {
-					// 	return err
-					// }
 					val, err := it.db.data.readTopic(e)
 					if err != nil {
 						return err
@@ -102,9 +94,6 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
-				// 		return nil
-				// 	}
-				// }
 				return nil
 			}()
 			if err != nil {

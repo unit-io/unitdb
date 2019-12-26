@@ -62,13 +62,6 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	}
 	b.unsetManaged()
 	// Make sure the transaction rolls back in the event of a panic.
-	// go func() {
-	// 	defer func() {
-	// 		close(stop)
-	// 		b.Abort()
-	// 	}()
-	// 	<-b.Commit()
-	// }()
 	defer func() {
 		close(stop)
 		b.Abort()

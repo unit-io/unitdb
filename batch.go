@@ -243,42 +243,12 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	if err := b.db.extendBlocks(); err != nil {
 		return err
 	}
-
-	// // extend memdb blocks
-	// if _, err := b.db.mem.NewBlock(); err != nil {
-	// 	return err
-	// }
-	// pendingCount := b.Len()
 	for i, index := range b.pendingWrites {
-		// if b.hasWriteConflict(index.seq) {
-		// 	return errWriteConflict
-		// }
 		id, topic, val := index.message(b.data)
-		// off, err := b.db.allocate(uint32(len(val)))
-		// if err != nil {
-		// 	return err
-		// }
 		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
 		if err != nil {
 			return err
 		}
-		// if pendingCount < entriesPerBlock {
-		// 	// if err := b.db.mem.Put(memseq, index.seq, id, topic, val, off, index.expiresAt); err != nil {
-		// 	// 	return err
-		// 	// }
-		// 	b.tinyBatch.entryCount++
-
-		// 	var scratch [4]byte
-		// 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
-		// 	if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
-		// 		return err
-		// 	}
-		// 	if _, err := b.tinyBatch.buffer.Write(data); err != nil {
-		// 		return err
-		// 	}
-		// 	continue
-		// }
 
 		if b.startSeq == 0 {
 			b.startSeq = b.db.cacheID ^ index.seq
@@ -288,9 +258,7 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 			return err
 		}
 		b.batchSeqs = append(b.batchSeqs, memseq)
-		// pendingCount--
 	}
-	// b.seq = b.pendingWriteSeqs[b.Len()-1]
 	return nil
 }
 
@@ -367,15 +335,6 @@ func (b *Batch) Commit() <-chan error {
 		b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
 	}
 	return b.db.commit(b.Seqs())
-
-	// if err := b.db.commit(b.Seqs()); err != nil {
-	// 	done <-err
-	// 	return done
-	// }
-	// if b.tinyBatch.entryCount > 0 {
-	// 	b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
-	// }
-	// return nil
 }
 
 func (b *Batch) Abort() {

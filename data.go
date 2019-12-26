@@ -72,10 +72,3 @@ func (t *dataTable) writeRaw(data []byte) (off int64, err error) {
 	}
 	return off, err
 }
-
-// func (t *dataTable) writeRaw(data []byte, off int64) error {
-// 	if _, err := t.WriteAt(data, off); err != nil {
-// 		return err
-// 	}
-// 	return nil
-// }
