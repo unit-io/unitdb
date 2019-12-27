@@ -24,6 +24,7 @@ func print(topic []byte, db *tracedb.DB) {
 }
 
 func main() {
+	// fmt.Println("pagesize: ", os.Getpagesize())
 	// Opening a database.
 	db, err := tracedb.Open("example", nil)
 	if err != nil {
@@ -39,25 +40,14 @@ func main() {
 	print([]byte("dev18?last=10m"), db)
 	print([]byte("dev19?last=10m"), db)
 
-	db.PutEntry(&tracedb.Entry{
-		Topic:   []byte("ttl.ttl1?ttl=3m"),
-		Payload: []byte("ttl.ttl1.1"),
-	})
-
-	vals, err := db.Get(&tracedb.Query{Topic: []byte("ttl.ttl1?ttl=3m")})
-	if err != nil {
-		log.Println("db.Get: error ", err)
-	}
-	for _, val := range vals {
-		log.Println("db.Get: val ", val)
-	}
+	contract, err := db.NewContract()
 
 	messageId := db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
 		Topic:    []byte("ttl.ttl1?ttl=3m"),
 		Payload:  []byte("ttl.ttl1.2"),
-		Contract: 3376684800,
+		Contract: contract,
 	})
 
 	print([]byte("ttl.ttl1?last=2m"), db)
@@ -65,7 +55,7 @@ func main() {
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
 		Topic:    []byte("ttl.ttl1"),
-		Contract: 3376684800,
+		Contract: contract,
 	})
 
 	print([]byte("ttl.ttl1?last=2m"), db)
@@ -79,12 +69,12 @@ func main() {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("dev18.b.*?ttl=30m"), Payload: p, Contract: 3376684800})
+				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("dev18.b.*?ttl=30m"), Payload: p, Contract: contract})
 
 				db.DeleteEntry(&tracedb.Entry{
 					ID:       messageId,
 					Topic:    []byte("dev18.b.*"),
-					Contract: 3376684800,
+					Contract: contract,
 				})
 			}
 			// log.Println("db.write ", time.Since(start).Seconds())
@@ -142,7 +132,7 @@ func main() {
 				}
 				return err
 			})
-			// log.Println("batch.write ", time.Since(start).Seconds())
+			log.Println("batch.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -193,7 +183,7 @@ func main() {
 		ID:       messageId,
 		Topic:    []byte("ttl.ttl1?ttl=3m"),
 		Payload:  []byte("ttl.ttl1.3"),
-		Contract: 3376684800,
+		Contract: contract,
 	})
 
 	print([]byte("ttl.ttl1?last=2m"), db)
@@ -201,7 +191,7 @@ func main() {
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
 		Topic:    []byte("ttl.ttl1"),
-		Contract: 3376684800,
+		Contract: contract,
 	})
 
 	print([]byte("ttl.ttl1?last=2m"), db)

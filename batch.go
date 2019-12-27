@@ -240,6 +240,8 @@ func (b *Batch) hasWriteConflict(seq uint64) bool {
 }
 
 func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) error {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
@@ -266,6 +268,10 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 }
 
 func (b *Batch) writeTrie() error {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
+	// start := time.Now()
+	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 	l := b.Len()
 	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
 		index := b.pendingWrites[i]

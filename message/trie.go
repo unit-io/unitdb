@@ -129,11 +129,12 @@ func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 		}
 		curr = child
 	}
-	if ok := curr.sid.addUnique(seq); ok {
-		added = true
-		curr.depth = depth
-		t.count++
-	}
+	// if ok := curr.sid.addUnique(seq); ok {
+	curr.sid = append(curr.sid, seq)
+	added = true
+	curr.depth = depth
+	t.count++
+	// }
 
 	return
 }
@@ -181,7 +182,8 @@ func (t *Trie) ilookup(parts []Part, depth uint8, sid *SID, part *part) {
 	// Add message ids from the current branch
 	for _, s := range part.sid {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
-			sid.addUnique(s)
+			// sid.addUnique(s)
+			*sid = append(*sid, s)
 		}
 	}
 

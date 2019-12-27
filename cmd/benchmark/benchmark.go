@@ -20,21 +20,9 @@ func randKey(minL int, maxL int) string {
 	return string(buf)
 }
 
-func randValue(rnd *rand.Rand, src []byte, minS int, maxS int) []byte {
-	n := rnd.Intn(maxS-minS+1) + minS
-	return src[:n]
-}
-
 func forceGC() {
 	runtime.GC()
 	time.Sleep(time.Millisecond * 500)
-}
-
-func shuffle(a [][]byte) {
-	for i := len(a) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
-		a[i], a[j] = a[j], a[i]
-	}
 }
 
 func generateTopics(count int, minL int, maxL int) [][]byte {
@@ -52,6 +40,23 @@ func generateTopics(count int, minL int, maxL int) [][]byte {
 		topics = append(topics, topic)
 	}
 	return topics
+}
+
+func generateVals(count int, minL int, maxL int) [][]byte {
+	vals := make([][]byte, 0, count)
+	seen := make(map[string]struct{}, count)
+	for len(vals) < count {
+		v := randKey(minL, maxL)
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		val := make([]byte, len(v)+5)
+		val = append(val, []byte("msg.")...)
+		val = append(val, []byte(v)...)
+		vals = append(vals, val)
+	}
+	return vals
 }
 
 func printStats(db *tracedb.DB) {
@@ -72,10 +77,7 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	fmt.Printf("Running tracedb benchmark...\n")
 
 	topics := generateTopics(concurrency, minKS, maxKS)
-	valSrc := make([]byte, maxVS)
-	if _, err := rand.Read(valSrc); err != nil {
-		return err
-	}
+	vals := generateVals(numKeys, minVS, maxVS)
 	forceGC()
 
 	start := time.Now()
@@ -85,10 +87,9 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 		i := 1
 		for {
 			eg.Go(func() error {
-				err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
-					rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
+				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 					for k := 0; k < batchSize; k++ {
-						b.Put(topics[i-1], randValue(rnd, valSrc, minVS, maxVS))
+						b.PutEntry(&tracedb.Entry{Topic: topics[i-1], Payload: vals[k]})
 					}
 					err := b.Write()
 					return err
@@ -129,14 +130,14 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 
 	start = time.Now()
 	func(concurrent int) error {
-		i := 0
+		i := 1
 		for {
-			topic := append(topics[i], []byte("?last=1m")...)
+			topic := append(topics[i-1], []byte("?last=1m")...)
 			_, err := db.Get(&tracedb.Query{Topic: topic})
 			if err != nil {
 				return err
 			}
-			if i >= concurrent-1 {
+			if i >= concurrent {
 				return nil
 			}
 			i++
@@ -156,39 +157,27 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	return db.Close()
 }
 
-func generateKeys(count int, minL int, maxL int) [][]byte {
-	keys := make([][]byte, 0, count)
+func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]byte {
+	keys := make(map[uint32][][]byte, count/1000)
 	seen := make(map[string]struct{}, count)
+	contract, _ := db.NewContract()
+	keyCount := 0
 	for len(keys) < count {
 		k := randKey(minL, maxL)
 		if _, ok := seen[k]; ok {
 			continue
 		}
+		if keyCount%1000 == 0 {
+			contract, _ = db.NewContract()
+		}
 		seen[k] = struct{}{}
 		topic := make([]byte, len(k)+5)
 		topic = append(topic, []byte("dev18.")...)
 		topic = append(topic, []byte(k)...)
-		keys = append(keys, topic)
+		keys[contract] = append(keys[contract], topic)
+		keyCount++
 	}
 	return keys
-}
-
-func concurrentBatch(keys [][]byte, concurrency int, cb func(gid int, batch [][]byte) error) error {
-	eg := &errgroup.Group{}
-	batchSize := len(keys) / concurrency
-	for i := 0; i < concurrency; i++ {
-		batchStart := i * batchSize
-		batchEnd := (i + 1) * batchSize
-		if batchEnd > len(keys) {
-			batchEnd = len(keys)
-		}
-		gid := i
-		batch := keys[batchStart:batchEnd]
-		eg.Go(func() error {
-			return cb(gid, batch)
-		})
-	}
-	return eg.Wait()
 }
 
 // func showProgress(gid int, i int, total int) {
@@ -202,6 +191,7 @@ func showProgress(gid int, total int) {
 }
 
 func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int, progress bool) error {
+	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)
 	if err != nil {
@@ -214,68 +204,67 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Concurrency: %d\n", concurrency)
 	fmt.Printf("Running tracedb benchmark...\n")
 
-	keys := generateKeys(numKeys, minKS, maxKS)
-	valSrc := make([]byte, maxVS)
-	if _, err := rand.Read(valSrc); err != nil {
-		return err
-	}
+	keys := generateKeys(numKeys, minKS, maxKS, db)
+	vals := generateVals(numKeys, minVS, maxVS)
 	forceGC()
 
 	start := time.Now()
-	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
-		rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
-		err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
-			for _, k := range batch {
-				if err := b.Put(k, randValue(rnd, valSrc, minVS, maxVS)); err != nil {
+	eg := &errgroup.Group{}
+
+	func(concurrent int) error {
+		i := 1
+		for {
+			eg.Go(func() error {
+				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+					for contract := range keys {
+						for k := 0; k < batchSize; k++ {
+							b.PutEntry(&tracedb.Entry{Topic: keys[contract][i-1], Payload: vals[k], Contract: contract})
+						}
+					}
+					err := b.Write()
 					return err
-				}
-				// if progress {
-				// 	showProgress(gid, i, len(batch))
-				// }
+				})
+				return err
+			})
+			if i >= concurrent {
+				return nil
 			}
-			err := b.Write()
-			if progress {
-				go func() {
-					<-stop // it signals batch group completion
-					showProgress(gid, len(batch))
-				}()
-			}
-			return err
-		})
-		return err
-	})
+			i++
+		}
+	}(concurrency)
+
+	err = eg.Wait()
 	if err != nil {
 		return err
 	}
-	// if err := db.Close(); err != nil {
-	// 	return err
-	// }
+
+	if err := db.Close(); err != nil {
+		return err
+	}
 	endsecs := time.Since(start).Seconds()
 	totalalsecs := endsecs
 	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
 	printStats(db)
-	shuffle(keys)
 	forceGC()
 
 	start = time.Now()
-	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
-		for _, k := range batch {
-			_, err := db.Get(&tracedb.Query{Topic: k})
-			if err != nil {
-				return err
+	func(concurrent int) error {
+		i := 1
+		for {
+			for contract := range keys {
+				topic := append(keys[contract][i-1], []byte("?last=1m")...)
+				_, err := db.Get(&tracedb.Query{Topic: topic, Contract: contract})
+				if err != nil {
+					return err
+				}
 			}
-			// if v == nil {
-			// 	return errors.New("key doesn't exist")
-			// }
-			// if progress {
-			// 	showProgress(gid, i, len(batch))
-			// }
+			if i >= concurrent {
+				return nil
+			}
+			i++
 		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+	}(concurrency)
+
 	endsecs = time.Since(start).Seconds()
 	totalalsecs += endsecs
 	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))

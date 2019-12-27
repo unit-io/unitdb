@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	entriesPerBlock = 15
+	entriesPerBlock = 155
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
@@ -52,7 +52,7 @@ const (
 	MaxKeys = math.MaxUint32
 
 	// Maximum number of records to return
-	maxResults = 1024
+	maxResults = 100000
 )
 
 var bufPool = collection.NewBufferPool()
@@ -418,8 +418,10 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
-// Get returns a new ItemIterator.
+// Get return items matching the query paramater
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	topic := new(message.Topic)
@@ -449,6 +451,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	q.seqs = db.trie.Lookup(q.parts)
 	if len(q.seqs) == 0 {
 		return
+	}
+	if len(q.seqs) > int(q.Limit) {
+		q.seqs = q.seqs[:q.Limit]
 	}
 	for _, seq := range q.seqs {
 		err = func() error {
@@ -604,6 +609,15 @@ func (db *DB) loadTrie() error {
 		db.trie.Add(it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
 	}
 	return nil
+}
+
+// NewContract generates a new Contract.
+func (db *DB) NewContract() (uint32, error) {
+	raw := make([]byte, 4)
+	rand.Read(raw)
+
+	contract := uint32(binary.BigEndian.Uint32(raw[:4]))
+	return contract, nil
 }
 
 func (db *DB) NewID() []byte {
@@ -763,6 +777,8 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) <-chan error {
 }
 
 func (db *DB) commit(batchSeqs []uint64) <-chan error {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.logLockC <- struct{}{}
 	defer func() {

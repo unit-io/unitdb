@@ -64,7 +64,7 @@ type blockHandle struct {
 
 const (
 	entrySize        = 26
-	blockSize uint32 = 512
+	blockSize uint32 = 4096
 )
 
 func align512(n uint32) uint32 {

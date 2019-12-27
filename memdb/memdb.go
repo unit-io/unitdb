@@ -15,8 +15,8 @@ const (
 // DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
-	mu         sync.RWMutex
-	blockCache blockCache
+	mu   sync.RWMutex
+	data dataTable
 	//block cache
 	cache map[uint64]int64
 	// Close.
@@ -29,13 +29,13 @@ func Open(path string, memSize int64) (*DB, error) {
 	if memSize < 1<<30 {
 		memSize = MaxTableSize
 	}
-	blockData, err := mem.newTable(path, memSize)
+	data, err := mem.newTable(path, memSize)
 	if err != nil {
 		return nil, err
 	}
 	db := &DB{
-		blockCache: blockCache{tableManager: blockData},
-		cache:      make(map[uint64]int64, 100),
+		data:  dataTable{tableManager: data},
+		cache: make(map[uint64]int64, 100),
 	}
 
 	return db, nil
@@ -46,10 +46,10 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if err := db.blockCache.close(); err != nil {
+	if err := db.data.close(); err != nil {
 		return err
 	}
-	if err := mem.remove(db.blockCache.name()); err != nil {
+	if err := mem.remove(db.data.name()); err != nil {
 		return err
 	}
 
@@ -71,12 +71,12 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
-	scratch, err := db.blockCache.readRaw(off, 4) // read dataLength
+	scratch, err := db.data.readRaw(off, 4) // read dataLength
 	if err != nil {
 		return nil, err
 	}
 	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := db.blockCache.readRaw(off, dataLen)
+	data, err := db.data.readRaw(off, dataLen)
 	if err != nil {
 		return nil, err
 	}
@@ -87,17 +87,17 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 func (db *DB) Set(key uint64, data []byte) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	off, err := db.blockCache.allocate(uint32(len(data) + 4))
+	off, err := db.data.allocate(uint32(len(data) + 4))
 	if err != nil {
 		return err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := db.blockCache.writeAt(scratch[:], off); err != nil {
+	if _, err := db.data.writeAt(scratch[:], off); err != nil {
 		return err
 	}
-	if _, err := db.blockCache.writeAt(data, off+4); err != nil {
+	if _, err := db.data.writeAt(data, off+4); err != nil {
 		return err
 	}
 	db.cache[key] = off
@@ -115,5 +115,5 @@ func (db *DB) Count() uint32 {
 func (db *DB) FileSize() (int64, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	return db.blockCache.size, nil
+	return db.data.size, nil
 }
