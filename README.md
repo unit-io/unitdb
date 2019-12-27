@@ -49,15 +49,23 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation speeds up bulk inserting records into tracedb. Reading data is blazing fast if batch operation is used for inserting records into tracedb and then reading records within short span of time while db is still open:
+Use the DB.Batch() function to store messages to topic or delete a message from topic. Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk insertion of records into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion of records into tracedb and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently. 
 
 ```
-    err = db.Batch(func(b *tracedb.Batch) error {
-		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.1"))
-		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.2"))
-		b.Put([]byte("dev18.b.b1"), []byte("dev18.b.b1.1"))
-		b.Put([]byte("dev18.c.c11"), []byte("dev18.c.c11.1"))
+    err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.Put([]byte("dev18.b.b1"), []byte("msg.b.b11.1"))
+		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.2"))
+		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.1"))
+		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.2"))
 		err = b.Write()
+		if !nonblocking {
+			go func() {
+				<-completed // it signals batch has completed and fully committed to log
+				log.Printf("batch completed")
+				print([]byte("dev18.b.b1?last=30m"), db)
+				print([]byte("dev18.b.b11?last=30m"), db)
+			}()
+		}
 		return err
     })
 
@@ -72,7 +80,7 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 	err := db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
 		Topic:    []byte("dev18.b.b1"),
-		Payload:  []byte("dev18.b.b1.2"),
+		Payload:  []byte("msg.b.b1.2"),
 		Contract: 3376684800,
 	})
 	
@@ -88,12 +96,12 @@ Writing to wildcard topics.
 Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
 
 ```
-	err = db.Batch(func(b *tracedb.Batch) error {
-		b.Put([]byte("dev18.*.b11"), []byte("dev18.*.b11.1"))
-		b.Put([]byte("dev18.b.*"), []byte("dev18.b.*.1"))
-		b.Put([]byte("dev18..."), []byte("dev18...1"))
-		b.Put([]byte("*"), []byte("*.1"))
-		b.Put([]byte("..."), []byte("...1"))
+	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.Put([]byte("dev18.*.b11"), []byte("msg.*.b11.1"))
+		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.1"))
+		b.Put([]byte("dev18..."), []byte("msg...1"))
+		b.Put([]byte("*"), []byte("msg.*.1"))
+		b.Put([]byte("..."), []byte("msg...1"))
 		err = b.Write()
 		return err
     })
@@ -104,13 +112,13 @@ Specify ttl to expires keys.
 To encrypt messages use batch options and set message encryption. Note, encryption can also be set on entire database using DB.Open() and provide encryption in the option parameter.
 
 ```
-err = db.Batch(func(b *tracedb.Batch) error {
+err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Encryption = true
 		b.SetOptions(opts)
-		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("dev18.b.b1.1"))
-		b.Put([]byte("dev18.b.b11?ttl=3m"), []byte("dev18.b.b11.1"))
-		b.Put([]byte("dev18.b.b111?ttl=3m"), []byte("dev18.b.b111.1"))
+		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("msg.b.b1.1"))
+		b.Put([]byte("dev18.b.b11?ttl=3m"), []byte("msg.b.b11.1"))
+		b.Put([]byte("dev18.b.b111?ttl=3m"), []byte("msg.b.b111.1"))
 		err = b.Write()
 		return err
 	})
@@ -120,39 +128,39 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 
 ```
     g := db.NewBatchGroup()
-	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b1?ttl=2m"), []byte("dev18.b.b1.1"))
-		b.Put([]byte("dev18.c.c1?ttl=1m"), []byte("dev18.c.c1.1"))
-		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("dev18.b.b1.2"))
+	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.Put([]byte("dev18.b.b1?ttl=2m"), []byte("msg.b.b1.1"))
+		b.Put([]byte("dev18.c.c1?ttl=1m"), []byte("msg.c.c1.1"))
+		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("msg.b.b1.2"))
 		b.Write()
 		go func() {
-			<-stop // it signals batch group completion
+			<-completed // it signals batch group completion
 			log.Printf("batch group completed")
 		}()
 		return nil
 	})
 
-	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.1"))
-		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.2"))
-		b.Put([]byte("dev18.b.b1"), []byte("dev18.b.b1.3"))
-		b.Put([]byte("dev18.c.c11"), []byte("dev18.c.c11.1"))
+	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.1"))
+		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.2"))
+		b.Put([]byte("dev18.b.b1"), []byte("msg.b.b1.3"))
+		b.Put([]byte("dev18.c.c11"), []byte("msg.c.c11.1"))
 		b.Write()
 		go func() {
-			<-stop // it signals batch group completion
+			<-completed // it signals batch group completion
 			log.Printf("batch group completed")
 		}()
 		return nil
 	})
 
-	g.Add(func(b *tracedb.Batch, stop <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b111"), []byte("dev18.b.b111.1"))
-		b.Put([]byte("dev18.b.b111"), []byte("dev18.b.b111.2"))
-		b.Put([]byte("dev18.b.b11"), []byte("dev18.b.b11.3"))
-		b.Put([]byte("dev18.c.c111"), []byte("dev18.c.c111"))
+	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.Put([]byte("dev18.b.b111"), []byte("msg.b.b111.1"))
+		b.Put([]byte("dev18.b.b111"), []byte("msg.b.b111.2"))
+		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.3"))
+		b.Put([]byte("dev18.c.c111"), []byte("msg.c.c111"))
 		b.Write()
 		go func() {
-			<-stop // it signals batch group completion
+			<-completed // it signals batch group completion
 			log.Printf("batch group completed")
 		}()
 		return nil

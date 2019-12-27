@@ -211,9 +211,9 @@ func Open(path string, opts *Options) (*DB, error) {
 	// db.consistent = hash.InitConsistent(int(MaxBlocks/blockSize), int(db.nBlocks))
 
 	if needsRecovery {
-		// if err := db.recover(); err != nil {
-		// 	return nil, err
-		// }
+		if err := db.recover(); err != nil {
+			return nil, err
+		}
 	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
@@ -778,9 +778,8 @@ func (db *DB) commit(batchSeqs []uint64) <-chan error {
 		return done
 	}
 
-	// logData := make(map[uint32][]byte)
 	for _, seq := range batchSeqs {
-		// memseq := db.cacheID ^ seq
+		db.metrics.Puts.Add(1)
 		memdata, err := db.mem.Get(seq)
 		if err != nil {
 			done <- err
@@ -844,7 +843,6 @@ func (db *DB) logSync() error {
 			if entryIdx == -1 {
 				continue
 			}
-			db.metrics.Puts.Add(1)
 			db.count++
 			moffset := e.mSize()
 			m := data[:moffset]

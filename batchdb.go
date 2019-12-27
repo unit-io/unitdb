@@ -54,19 +54,22 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	b := db.batch()
 
 	b.setManaged()
-	stop := make(chan struct{})
+	b.commitComplete = make(chan struct{})
 	// If an error is returned from the function then rollback and return error.
-	err := fn(b, stop)
+	err := fn(b, b.commitComplete)
 	if err != nil {
 		return err
 	}
 	b.unsetManaged()
 	// Make sure the transaction rolls back in the event of a panic.
-	defer func() {
-		close(stop)
-		b.Abort()
+	go func() {
+		<-b.Commit()
+		defer func() {
+			b.Abort()
+			close(b.commitComplete)
+		}()
 	}()
-	return <-b.Commit()
+	return nil
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -126,10 +129,12 @@ func (g *BatchGroup) Run() error {
 
 	close(g.batchQueue)
 	eg.Go(func() error {
+		defer func() {
+			g.Abort()
+			close(stop)
+		}()
 		return g.writeBatchGroup()
 	})
-
-	defer close(stop)
 
 	return eg.Wait()
 }
@@ -154,7 +159,6 @@ func (g *BatchGroup) writeBatchGroup() error {
 	if err != nil {
 		return err
 	}
-	defer g.Abort()
 	return <-b.Commit()
 }
 

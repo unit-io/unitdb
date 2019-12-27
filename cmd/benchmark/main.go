@@ -15,7 +15,7 @@ var (
 	maxKeySize   = flag.Int("maxk", 64, "maximum key size")
 	minValueSize = flag.Int("minv", 128, "minimum value size")
 	maxValueSize = flag.Int("maxv", 512, "maximum value size")
-	concurrency  = flag.Int("c", 271, "number of concurrent goroutines")
+	concurrency  = flag.Int("c", 10, "number of concurrent goroutines")
 	dir          = flag.String("d", ".", "database directory")
 	profileMode  = flag.String("profile", "", "enable profile. cpu, mem, block or mutex")
 	progress     = flag.Bool("p", false, "show progress")

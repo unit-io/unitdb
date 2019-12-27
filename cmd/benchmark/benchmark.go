@@ -191,10 +191,14 @@ func concurrentBatch(keys [][]byte, concurrency int, cb func(gid int, batch [][]
 	return eg.Wait()
 }
 
-func showProgress(gid int, i int, total int) {
-	if i%50000 == 0 {
-		fmt.Printf("Goroutine %d. Processed %d of %d items...\n", gid, i, total)
-	}
+// func showProgress(gid int, i int, total int) {
+// 	if i%50000 == 0 {
+// 		fmt.Printf("Goroutine %d. Processed %d of %d items...\n", gid, i, total)
+// 	}
+// }
+
+func showProgress(gid int, total int) {
+	fmt.Printf("Goroutine %d. Processed %d items...\n", gid, total)
 }
 
 func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int, progress bool) error {
@@ -221,15 +225,21 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
 		rnd := rand.New(rand.NewSource(int64(rand.Uint64())))
 		err = db.Batch(func(b *tracedb.Batch, stop <-chan struct{}) error {
-			for i, k := range batch {
+			for _, k := range batch {
 				if err := b.Put(k, randValue(rnd, valSrc, minVS, maxVS)); err != nil {
 					return err
 				}
-				if progress {
-					showProgress(gid, i, len(batch))
-				}
+				// if progress {
+				// 	showProgress(gid, i, len(batch))
+				// }
 			}
 			err := b.Write()
+			if progress {
+				go func() {
+					<-stop // it signals batch group completion
+					showProgress(gid, len(batch))
+				}()
+			}
 			return err
 		})
 		return err
@@ -249,7 +259,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	start = time.Now()
 	err = concurrentBatch(keys, concurrency, func(gid int, batch [][]byte) error {
-		for i, k := range batch {
+		for _, k := range batch {
 			_, err := db.Get(&tracedb.Query{Topic: k})
 			if err != nil {
 				return err
@@ -257,9 +267,9 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			// if v == nil {
 			// 	return errors.New("key doesn't exist")
 			// }
-			if progress {
-				showProgress(gid, i, len(batch))
-			}
+			// if progress {
+			// 	showProgress(gid, i, len(batch))
+			// }
 		}
 		return nil
 	})

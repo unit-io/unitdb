@@ -129,6 +129,9 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
+		if l.offset == 0 {
+			return nil
+		}
 		if l.status == logStatusWritten {
 			wal.logs = append(wal.logs, *l)
 		}

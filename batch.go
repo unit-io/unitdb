@@ -80,6 +80,9 @@ type (
 		index         []batchIndex
 		pendingWrites []batchIndex
 		batchSeqs     []uint64
+
+		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
+		commitComplete chan struct{}
 	}
 )
 
