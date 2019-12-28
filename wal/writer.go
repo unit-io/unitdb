@@ -54,12 +54,13 @@ func (w *Writer) append(data []byte) error {
 	w.entryCount++
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)))
+	dataLen := uint32(len(data) + 4)
+	binary.LittleEndian.PutUint32(scratch[0:4], dataLen)
 
 	if _, err := w.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	w.logSize += int64(len(data)) + 4
+	w.logSize += int64(dataLen)
 
 	if _, err := w.buffer.Write(data); err != nil {
 		return err
@@ -90,7 +91,9 @@ func (w *Writer) writeLog() error {
 
 	// Set the transaction status
 	w.status = logStatusWritten
-
+	if w.logSize == 0 {
+		return nil
+	}
 	dataLen := align512(w.logSize + int64(logHeaderSize))
 	off, err := w.wal.logFile.allocate(uint32(dataLen))
 	if err != nil {

@@ -73,10 +73,13 @@ type (
 	// All DB methods are safe for concurrent use by multiple goroutines.
 	DB struct {
 		// Need 64-bit alignment.
-		mu         sync.RWMutex
-		mac        *crypto.MAC
-		writeLockC chan struct{}
-		logLockC   chan struct{}
+		mu             sync.RWMutex
+		mac            *crypto.MAC
+		writeLockC     chan struct{}
+		logCommitLockC chan struct{}
+		// logSyncCompleted is used to signal if log is fully written
+		logSyncLockC chan struct{}
+		logSyncW     sync.WaitGroup
 		// consistent   *hash.Consistent
 		filter       Filter
 		index        table
@@ -134,14 +137,15 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		index:      index,
-		data:       dataTable{table: data},
-		timeWindow: newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:     Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
-		lock:       lock,
-		writeLockC: make(chan struct{}, 1),
-		logLockC:   make(chan struct{}, 1),
-		metrics:    newMetrics(),
+		index:          index,
+		data:           dataTable{table: data},
+		timeWindow:     newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		filter:         Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		lock:           lock,
+		writeLockC:     make(chan struct{}, 1),
+		logCommitLockC: make(chan struct{}, 1),
+		logSyncLockC:   make(chan struct{}, 1),
+		metrics:        newMetrics(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -217,11 +221,15 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
-	wal, err := wal.New(logOpts)
-	if err != nil {
+	wal, needLogRecovery, err := wal.New(logOpts)
+	if wal == nil || err != nil {
 		errors.New("Error creating WAL")
 	}
 	db.wal = wal
+
+	if needLogRecovery {
+		db.logSync()
+	}
 
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
@@ -249,11 +257,10 @@ func (db *DB) logSyncer(interval time.Duration) {
 	go func() {
 		for {
 			select {
-			default:
+			case <-logsyncTicker.C:
 				if err := db.logSync(); err != nil {
 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
-				<-logsyncTicker.C
 			case <-db.closeC:
 				logsyncTicker.Stop()
 				if err := db.wal.Close(); err != nil {
@@ -375,6 +382,7 @@ func (db *DB) Close() error {
 	}
 
 	// Wait for all gorotines to exit.
+	db.logSyncW.Wait()
 	db.closeW.Wait()
 
 	if err := db.writeHeader(true); err != nil {
@@ -710,9 +718,9 @@ func (db *DB) PutEntry(e *Entry) error {
 		if err != nil {
 			return err
 		}
-		if err := <-logWriter.Append(data); err != nil {
-			return err
-		}
+		// if err := <-logWriter.Append(data); err != nil {
+		// 	return err
+		// }
 	}
 
 	return <-logWriter.SignalInitWrite()
@@ -743,88 +751,81 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 }
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
-func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) <-chan error {
+func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.logLockC <- struct{}{}
-	defer func() {
-		<-db.logLockC
-	}()
+	db.logCommitLockC <- struct{}{}
 	db.closeW.Add(1)
-	defer db.closeW.Done()
+	defer func() {
+		<-db.logCommitLockC
+		db.closeW.Done()
+	}()
 
-	done := make(chan error, 1)
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		done <- err
-		return done
+		return err
 	}
 
 	offset := uint32(0)
 	for i := uint16(0); i < entryCount; i++ {
 		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
 		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
-			done <- err
-			return done
+			return err
 		}
 		offset += dataLen
 	}
 
-	if err := db.writeHeader(false); err != nil {
-		done <- err
-		return done
+	if err := <-logWriter.SignalInitWrite(); err != nil {
+		return err
 	}
-	return logWriter.SignalInitWrite()
+	return db.writeHeader(false)
 }
 
-func (db *DB) commit(batchSeqs []uint64) <-chan error {
+func (db *DB) commit(batchSeqs []uint64) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.logLockC <- struct{}{}
-	defer func() {
-		<-db.logLockC
-	}()
+	db.logCommitLockC <- struct{}{}
 	db.closeW.Add(1)
-	defer db.closeW.Done()
+	defer func() {
+		<-db.logCommitLockC
+		db.closeW.Done()
+	}()
 
-	done := make(chan error, 1)
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		done <- err
-		return done
+		return err
 	}
 
 	for _, seq := range batchSeqs {
 		db.metrics.Puts.Add(1)
 		memdata, err := db.mem.Get(seq)
 		if err != nil {
-			done <- err
-			return done
+			return err
 		}
 		e := entry{}
 		if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
-			done <- err
-			return done
+			return err
 		}
 
 		if err := <-logWriter.Append(memdata); err != nil {
-			done <- err
-			return done
+			return err
 		}
 	}
 
-	if err := db.writeHeader(false); err != nil {
-		done <- err
-		return done
+	if err := <-logWriter.SignalInitWrite(); err != nil {
+		return err
 	}
-	return logWriter.SignalInitWrite()
+	return db.writeHeader(false)
 }
 
 func (db *DB) logSync() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.closeW.Add(1)
-	defer db.closeW.Done()
+	db.logSyncLockC <- struct{}{}
+	db.logSyncW.Add(1)
+	defer func() {
+		<-db.logSyncLockC
+		db.logSyncW.Done()
+	}()
+
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err

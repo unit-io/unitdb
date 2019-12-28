@@ -26,7 +26,7 @@ type DB struct {
 
 // Open opens or creates a new DB. Minimum memroy size is 1GB
 func Open(path string, memSize int64) (*DB, error) {
-	if memSize < 1<<30 {
+	if memSize > MaxTableSize {
 		memSize = MaxTableSize
 	}
 	data, err := mem.newTable(path, memSize)

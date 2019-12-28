@@ -62,13 +62,15 @@ func (t *dataTable) writeMessage(id, topic, value []byte) (off int64, err error)
 
 func (t *dataTable) writeRaw(data []byte) (off int64, err error) {
 	dataLen := align512(uint32(len(data)))
+	buf := make([]byte, dataLen)
+	copy(buf, data)
 	off = t.fb.allocate(dataLen)
 	if off != -1 {
-		if _, err = t.WriteAt(data, off); err != nil {
+		if _, err = t.WriteAt(buf, off); err != nil {
 			return 0, err
 		}
 	} else {
-		off, err = t.append(data)
+		off, err = t.append(buf)
 	}
 	return off, err
 }

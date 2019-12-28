@@ -13,12 +13,10 @@ import (
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	memMu   sync.RWMutex
-	memPool chan *memdb.DB
-	mem     *mem
-	// Active batches keeps batches in progress with batch seq as key and array of index hash
-	activeBatches map[uint64][]uint64
-	batchQueue    chan *Batch
+	memMu      sync.RWMutex
+	memPool    chan *memdb.DB
+	mem        *mem
+	batchQueue chan *Batch
 	//once run batchLoop once
 	once Once
 }
@@ -31,8 +29,7 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb() error {
 	bdb := &batchdb{
 		// batchDB
-		activeBatches: make(map[uint64][]uint64, 100),
-		batchQueue:    make(chan *Batch, 10),
+		batchQueue: make(chan *Batch, 10),
 	}
 
 	db.batchdb = bdb
@@ -63,11 +60,11 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	b.unsetManaged()
 	// Make sure the transaction rolls back in the event of a panic.
 	go func() {
-		<-b.Commit()
 		defer func() {
 			b.Abort()
 			close(b.commitComplete)
 		}()
+		b.Commit()
 	}()
 	return nil
 }
@@ -159,7 +156,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 	if err != nil {
 		return err
 	}
-	return <-b.Commit()
+	return b.Commit()
 }
 
 func (g *BatchGroup) Abort() {

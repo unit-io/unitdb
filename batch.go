@@ -228,17 +228,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	return nil
 }
 
-func (b *Batch) hasWriteConflict(seq uint64) bool {
-	for _, batch := range b.db.activeBatches {
-		for _, s := range batch {
-			if s == seq {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
@@ -318,28 +307,19 @@ func (b *Batch) Write() error {
 		return err
 	}
 
-	if err == nil {
-		b.db.activeBatches[b.startSeq] = b.Seqs()
-	}
-
 	return err
 }
 
-func (b *Batch) Commit() <-chan error {
+func (b *Batch) Commit() error {
 	defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
-	done := make(chan error, 1)
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
-		done <- nil
-		return done
+		return nil
 	}
 	if len(b.pendingWrites) == 0 {
-		done <- nil
-		return done
+		return nil
 	}
 
-	// remove batch from activeBatches after commit
-	delete(b.db.activeBatches, b.startSeq)
 	if b.tinyBatch.entryCount > 0 {
 		b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
 	}
@@ -374,7 +354,6 @@ func (b *Batch) uniq() []batchIndex {
 
 	b.pendingWrites = make([]batchIndex, len(unique_set))
 	for _, i := range unique_set {
-		// b.pendingWriteSeqs = append(b.pendingWriteSeqs, b.index[i.idx].seq)
 		b.pendingWrites[len(unique_set)-i.newidx-1] = b.index[i.idx]
 	}
 	return b.pendingWrites

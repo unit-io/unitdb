@@ -56,7 +56,7 @@ type (
 	}
 )
 
-func newWal(opts Options) (wal *WAL, err error) {
+func newWal(opts Options) (wal *WAL, needRecover bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
 		writeLockC: make(chan struct{}, 1),
@@ -64,32 +64,33 @@ func newWal(opts Options) (wal *WAL, err error) {
 	}
 	wal.logFile, err = openFile(opts.Path)
 	if err != nil {
-		return wal, err
+		return wal, false, err
 	}
 	if wal.logFile.size == 0 {
 		if _, err = wal.logFile.allocate(headerSize); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		wal.logFile.fb = freeBlock{
 			offset: int64(headerSize),
 			size:   0,
 		}
 		if err := wal.writeHeader(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	} else {
 		if err := wal.readHeader(); err != nil {
 			if err := wal.Close(); err != nil {
-				return nil, errors.New("newWal error: unable to read wal header")
+				return nil, false, errors.New("newWal error: unable to read wal header")
 			}
-			return nil, err
+			return nil, false, err
 		}
 		if err := wal.recoverWal(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		return wal, true, nil
 	}
 
-	return wal, nil
+	return wal, false, nil
 }
 
 func (wal *WAL) writeHeader() error {
@@ -121,7 +122,8 @@ func (wal *WAL) readHeader() error {
 func (wal *WAL) recoverLogHeaders() error {
 	offset := int64(headerSize)
 	l := &logInfo{}
-	for {
+	seqCount := wal.seq
+	for seqCount > 0 {
 		if err := wal.logFile.readUnmarshalableAt(l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
@@ -129,13 +131,11 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
-		if l.offset == 0 {
-			return nil
-		}
 		if l.status == logStatusWritten {
 			wal.logs = append(wal.logs, *l)
 		}
 		offset = l.offset + align512(l.size+int64(logHeaderSize))
+		seqCount--
 	}
 	return nil
 }
@@ -148,8 +148,7 @@ func (wal *WAL) recoverWal() error {
 		return err
 	}
 
-	wal.recoverLogHeaders()
-	return nil
+	return wal.recoverLogHeaders()
 }
 
 func (wal *WAL) put(log logInfo) error {
@@ -172,7 +171,6 @@ func (wal *WAL) put(log logInfo) error {
 
 func (wal *WAL) Scan() (seqs []uint64, err error) {
 	l := len(wal.logs)
-	// seqs = make([]uint64, l)
 	for i := 0; i < l; i++ {
 		if wal.logs[i].status == logStatusWritten {
 			seqs = append(seqs, wal.logs[i].seq)
@@ -191,7 +189,7 @@ type Reader struct {
 func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		if wal.logs[i].seq == seq {
+		if wal.logs[i].seq == seq && wal.logs[i].entryCount > 0 {
 			ul := wal.logs[i]
 			data, err := wal.logFile.readRaw(ul.offset+int64(logHeaderSize), int64(ul.size))
 			if err != nil {
@@ -212,6 +210,7 @@ func (r *Reader) Next() ([]byte, bool) {
 	r.entryCount--
 	logData := r.logData[r.blockOffset:]
 	dataLen := binary.LittleEndian.Uint32(logData[0:4])
+	r.blockOffset += int64(dataLen)
 	return logData[4:dataLen], true
 }
 
@@ -279,7 +278,7 @@ func (wal *WAL) Close() error {
 //
 // If no WAL exists, a new one will be created.
 //
-func New(opts Options) (*WAL, error) {
+func New(opts Options) (*WAL, bool, error) {
 	// Create a wal
 	return newWal(opts)
 }
