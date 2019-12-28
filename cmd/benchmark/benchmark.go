@@ -162,7 +162,7 @@ func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]
 	seen := make(map[string]struct{}, count)
 	contract, _ := db.NewContract()
 	keyCount := 0
-	for len(keys) < count {
+	for len(keys)*1000 < count {
 		k := randKey(minL, maxL)
 		if _, ok := seen[k]; ok {
 			continue
@@ -204,8 +204,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Concurrency: %d\n", concurrency)
 	fmt.Printf("Running tracedb benchmark...\n")
 
-	keys := generateKeys(numKeys, minKS, maxKS, db)
-	vals := generateVals(numKeys, minVS, maxVS)
+	keys := generateKeys(batchSize, minKS, maxKS, db)
+	vals := generateVals(batchSize, minVS, maxVS)
 	forceGC()
 
 	start := time.Now()
@@ -217,8 +217,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			eg.Go(func() error {
 				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 					for contract := range keys {
-						for k := 0; k < batchSize; k++ {
-							b.PutEntry(&tracedb.Entry{Topic: keys[contract][i-1], Payload: vals[k], Contract: contract})
+						for i, k := range keys[contract] {
+							b.PutEntry(&tracedb.Entry{Topic: k, Payload: vals[i], Contract: contract})
 						}
 					}
 					err := b.Write()
@@ -238,9 +238,9 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	if err := db.Close(); err != nil {
-		return err
-	}
+	// if err := db.Close(); err != nil {
+	// 	return err
+	// }
 	endsecs := time.Since(start).Seconds()
 	totalalsecs := endsecs
 	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
@@ -251,13 +251,18 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	func(concurrent int) error {
 		i := 1
 		for {
-			for contract := range keys {
-				topic := append(keys[contract][i-1], []byte("?last=1m")...)
-				_, err := db.Get(&tracedb.Query{Topic: topic, Contract: contract})
-				if err != nil {
-					return err
+			eg.Go(func() error {
+				for contract := range keys {
+					for _, k := range keys[contract] {
+						topic := append(k, []byte("?last=1m")...)
+						_, err := db.Get(&tracedb.Query{Topic: topic, Contract: contract})
+						if err != nil {
+							return err
+						}
+					}
 				}
-			}
+				return nil
+			})
 			if i >= concurrent {
 				return nil
 			}
@@ -265,6 +270,10 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		}
 	}(concurrency)
 
+	err = eg.Wait()
+	if err != nil {
+		return err
+	}
 	endsecs = time.Since(start).Seconds()
 	totalalsecs += endsecs
 	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
