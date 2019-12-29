@@ -53,17 +53,17 @@ Use the DB.Batch() function to store messages to topic or delete a message from 
 
 ```
     err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b1"), []byte("msg.b.b11.1"))
-		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.2"))
-		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.1"))
-		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.2"))
+		b.Put([]byte("unit8.b.b1"), []byte("msg.b.b11.1"))
+		b.Put([]byte("unit8.b.b11"), []byte("msg.b.b11.2"))
+		b.Put([]byte("unit8.b.*"), []byte("msg.b.*.1"))
+		b.Put([]byte("unit8.b.*"), []byte("msg.b.*.2"))
 		err = b.Write()
 		if !nonblocking {
 			go func() {
 				<-completed // it signals batch has completed and fully committed to log
 				log.Printf("batch completed")
-				print([]byte("dev18.b.b1?last=30m"), db)
-				print([]byte("dev18.b.b11?last=30m"), db)
+				print([]byte("unit8.b.b1?last=30m"), db)
+				print([]byte("unit8.b.b11?last=30m"), db)
 			}()
 		}
 		return err
@@ -79,14 +79,14 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 	messageId := db.NewID()
 	err := db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("dev18.b.b1"),
+		Topic:    []byte("unit8.b.b1"),
 		Payload:  []byte("msg.b.b1.2"),
 		Contract: 3376684800,
 	})
 	
 	err := db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("dev18.b.b1"),
+		Topic:    []byte("unit8.b.b1"),
 		Contract: 3376684800,
 	})
 
@@ -97,9 +97,9 @@ Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to w
 
 ```
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("dev18.*.b11"), []byte("msg.*.b11.1"))
-		b.Put([]byte("dev18.b.*"), []byte("msg.b.*.1"))
-		b.Put([]byte("dev18..."), []byte("msg...1"))
+		b.Put([]byte("unit8.*.b11"), []byte("msg.*.b11.1"))
+		b.Put([]byte("unit8.b.*"), []byte("msg.b.*.1"))
+		b.Put([]byte("unit8..."), []byte("msg...1"))
 		b.Put([]byte("*"), []byte("msg.*.1"))
 		b.Put([]byte("..."), []byte("msg...1"))
 		err = b.Write()
@@ -116,9 +116,9 @@ err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Encryption = true
 		b.SetOptions(opts)
-		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("msg.b.b1.1"))
-		b.Put([]byte("dev18.b.b11?ttl=3m"), []byte("msg.b.b11.1"))
-		b.Put([]byte("dev18.b.b111?ttl=3m"), []byte("msg.b.b111.1"))
+		b.Put([]byte("unit8.b.b1?ttl=3m"), []byte("msg.b.b1.1"))
+		b.Put([]byte("unit8.b.b11?ttl=3m"), []byte("msg.b.b11.1"))
+		b.Put([]byte("unit8.b.b111?ttl=3m"), []byte("msg.b.b111.1"))
 		err = b.Write()
 		return err
 	})
@@ -129,9 +129,9 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 ```
     g := db.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b1?ttl=2m"), []byte("msg.b.b1.1"))
-		b.Put([]byte("dev18.c.c1?ttl=1m"), []byte("msg.c.c1.1"))
-		b.Put([]byte("dev18.b.b1?ttl=3m"), []byte("msg.b.b1.2"))
+		b.Put([]byte("unit8.b.b1?ttl=2m"), []byte("msg.b.b1.1"))
+		b.Put([]byte("unit8.c.c1?ttl=1m"), []byte("msg.c.c1.1"))
+		b.Put([]byte("unit8.b.b1?ttl=3m"), []byte("msg.b.b1.2"))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -141,10 +141,10 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 	})
 
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.1"))
-		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.2"))
-		b.Put([]byte("dev18.b.b1"), []byte("msg.b.b1.3"))
-		b.Put([]byte("dev18.c.c11"), []byte("msg.c.c11.1"))
+		b.Put([]byte("unit8.b.b11"), []byte("msg.b.b11.1"))
+		b.Put([]byte("unit8.b.b11"), []byte("msg.b.b11.2"))
+		b.Put([]byte("unit8.b.b1"), []byte("msg.b.b1.3"))
+		b.Put([]byte("unit8.c.c11"), []byte("msg.c.c11.1"))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -154,10 +154,10 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 	})
 
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("dev18.b.b111"), []byte("msg.b.b111.1"))
-		b.Put([]byte("dev18.b.b111"), []byte("msg.b.b111.2"))
-		b.Put([]byte("dev18.b.b11"), []byte("msg.b.b11.3"))
-		b.Put([]byte("dev18.c.c111"), []byte("msg.c.c111"))
+		b.Put([]byte("unit8.b.b111"), []byte("msg.b.b111.1"))
+		b.Put([]byte("unit8.b.b111"), []byte("msg.b.b111.2"))
+		b.Put([]byte("unit8.b.b11"), []byte("msg.b.b11.3"))
+		b.Put([]byte("unit8.c.c111"), []byte("msg.c.c111"))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -174,10 +174,10 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
     func(retry int) {
 		i := 0
 		for j := range time.Tick(60 * time.Second) {
-			print([]byte("dev18.b.b1?last=2m"), db)
-			print([]byte("dev18.b.b11?last=2m"), db)
-			print([]byte("dev18?last=2m"), db)
-			print([]byte("dev19?last=2m"), db)
+			print([]byte("unit8.b.b1?last=2m"), db)
+			print([]byte("unit8.b.b11?last=2m"), db)
+			print([]byte("unit8?last=2m"), db)
+			print([]byte("unit9?last=2m"), db)
 			if i >= retry {
 				return
 			}

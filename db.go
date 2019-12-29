@@ -78,9 +78,6 @@ type (
 		logCommitLockC chan struct{}
 		// logSyncCompleted is used to signal if log is fully written
 		logSyncLockC chan struct{}
-		logSyncW     sync.WaitGroup
-		commitW      sync.WaitGroup
-		tinyCommitW  sync.WaitGroup
 		// consistent   *hash.Consistent
 		filter     Filter
 		index      table
@@ -250,8 +247,8 @@ func blockOffset(idx uint32) int64 {
 
 func (db *DB) logSyncer(interval time.Duration) {
 	logsyncTicker := time.NewTicker(interval)
-	defer logsyncTicker.Stop()
 	go func() {
+		defer logsyncTicker.Stop()
 		for {
 			select {
 			case <-logsyncTicker.C:
@@ -259,10 +256,6 @@ func (db *DB) logSyncer(interval time.Duration) {
 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
 			case <-db.closeC:
-				// logsyncTicker.Stop()
-				// if err := db.wal.Close(); err != nil {
-				// 	logger.Error().Err(err).Str("context", "logSyncer").Msg("Error closing wal")
-				// }
 				return
 			}
 		}
@@ -353,10 +346,6 @@ func (db *DB) Close() error {
 	close(db.closeC)
 
 	// Wait for all gorotines to exit.
-	db.tinyCommitW.Wait()
-	db.commitW.Wait()
-	db.logSyncW.Wait()
-	db.logSyncW.Wait()
 	db.closeW.Wait()
 
 	if err := db.writeHeader(true); err != nil {
@@ -730,10 +719,10 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
 func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.tinyCommitW.Add(1)
+	db.closeW.Add(1)
 	db.logCommitLockC <- struct{}{}
 	defer func() {
-		db.tinyCommitW.Done()
+		db.closeW.Done()
 		<-db.logCommitLockC
 	}()
 
@@ -762,10 +751,10 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.commitW.Add(1)
+	db.closeW.Add(1)
 	db.logCommitLockC <- struct{}{}
 	defer func() {
-		db.commitW.Done()
+		db.closeW.Done()
 		<-db.logCommitLockC
 	}()
 
@@ -798,10 +787,10 @@ func (db *DB) commit(batchSeqs []uint64) error {
 
 func (db *DB) logSync() error {
 	db.logSyncLockC <- struct{}{}
-	db.logSyncW.Add(1)
+	db.closeW.Add(1)
 	defer func() {
 		<-db.logSyncLockC
-		db.logSyncW.Done()
+		db.closeW.Done()
 	}()
 
 	seqs, err := db.wal.Scan()

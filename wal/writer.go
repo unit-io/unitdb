@@ -34,6 +34,9 @@ type Writer struct {
 }
 
 func (wal *WAL) NewWriter() (Writer, error) {
+	if wal == nil {
+		return Writer{}, errors.New("NewWriter error wal is closed")
+	}
 	writer := Writer{
 		startSeq:       wal.seq,
 		buffer:         bufPool.Get(),

@@ -180,16 +180,17 @@ func (g *BatchGroup) writeBatchGroup() error {
 // tinyBatchLoop handles tiny bacthes write
 func (db *DB) tinyBatchLoop(interval time.Duration) {
 	tinyBatchWriterTicker := time.NewTicker(interval)
-	defer tinyBatchWriterTicker.Stop()
 	go func() {
+		defer tinyBatchWriterTicker.Stop()
 		for {
 			select {
 			case <-db.closeC:
 				return
-			case <-tinyBatchWriterTicker.C:
+			default:
 				if db.tinyBatch.entryCount > 0 {
 					db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.buffer.Bytes())
 				}
+				<-tinyBatchWriterTicker.C
 			}
 		}
 	}()
