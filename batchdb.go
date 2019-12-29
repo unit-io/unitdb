@@ -1,6 +1,7 @@
 package tracedb
 
 import (
+	"bytes"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,17 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type (
+	batchInfo struct {
+		entryCount uint16
+	}
+
+	tinyBatch struct {
+		batchInfo
+		buffer *bytes.Buffer
+	}
+)
+
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
@@ -17,18 +29,24 @@ type batchdb struct {
 	memPool    chan *memdb.DB
 	mem        *mem
 	batchQueue chan *Batch
+
+	opts *Options
+	//tiny Batch
+	tinyBatch *tinyBatch
 	//once run batchLoop once
 	once Once
 }
 
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
-	return &Batch{opts: DefaultBatchOptions, tinyBatch: &tinyBatch{buffer: bufPool.Get()}, db: db}
+	return &Batch{opts: DefaultBatchOptions, db: db}
 }
 
-func (db *DB) initbatchdb() error {
+func (db *DB) initbatchdb(opts *Options) error {
 	bdb := &batchdb{
 		// batchDB
+		opts:       opts,
+		tinyBatch:  &tinyBatch{buffer: bufPool.Get()},
 		batchQueue: make(chan *Batch, 10),
 	}
 
@@ -157,6 +175,24 @@ func (g *BatchGroup) writeBatchGroup() error {
 		return err
 	}
 	return b.Commit()
+}
+
+// tinyBatchLoop handles tiny bacthes write
+func (db *DB) tinyBatchLoop(interval time.Duration) {
+	tinyBatchWriterTicker := time.NewTicker(interval)
+	defer tinyBatchWriterTicker.Stop()
+	go func() {
+		for {
+			select {
+			case <-db.closeC:
+				return
+			case <-tinyBatchWriterTicker.C:
+				if db.tinyBatch.entryCount > 0 {
+					db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.buffer.Bytes())
+				}
+			}
+		}
+	}()
 }
 
 func (g *BatchGroup) Abort() {

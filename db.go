@@ -2,7 +2,6 @@ package tracedb
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -80,16 +79,17 @@ type (
 		// logSyncCompleted is used to signal if log is fully written
 		logSyncLockC chan struct{}
 		logSyncW     sync.WaitGroup
+		commitW      sync.WaitGroup
+		tinyCommitW  sync.WaitGroup
 		// consistent   *hash.Consistent
-		filter       Filter
-		index        table
-		data         dataTable
-		lock         fs.LockFile
-		wal          *wal.WAL
-		metrics      Metrics
-		cancelSyncer context.CancelFunc
-		syncWrites   bool
-		freeseq      freesequence
+		filter     Filter
+		index      table
+		data       dataTable
+		lock       fs.LockFile
+		wal        *wal.WAL
+		metrics    Metrics
+		syncWrites bool
+		freeseq    freesequence
 		dbInfo
 		timeWindow timeWindowBucket
 
@@ -162,7 +162,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 
 	//initbatchdb
-	if err = db.initbatchdb(); err != nil {
+	if err = db.initbatchdb(opts); err != nil {
 		return nil, err
 	}
 
@@ -236,11 +236,7 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	db.logSyncer(opts.LogSyncInterval)
 
-	if opts.BackgroundSyncInterval > 0 {
-		db.startSyncer(opts.BackgroundSyncInterval)
-	} else if opts.BackgroundSyncInterval == -1 {
-		db.syncWrites = true
-	}
+	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
 
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
@@ -254,6 +250,7 @@ func blockOffset(idx uint32) int64 {
 
 func (db *DB) logSyncer(interval time.Duration) {
 	logsyncTicker := time.NewTicker(interval)
+	defer logsyncTicker.Stop()
 	go func() {
 		for {
 			select {
@@ -262,36 +259,11 @@ func (db *DB) logSyncer(interval time.Duration) {
 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
 				}
 			case <-db.closeC:
-				logsyncTicker.Stop()
-				if err := db.wal.Close(); err != nil {
-					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error closing wal")
-				}
+				// logsyncTicker.Stop()
+				// if err := db.wal.Close(); err != nil {
+				// 	logger.Error().Err(err).Str("context", "logSyncer").Msg("Error closing wal")
+				// }
 				return
-			}
-		}
-	}()
-}
-
-func (db *DB) startSyncer(interval time.Duration) {
-	ctx, cancel := context.WithCancel(context.Background())
-	db.cancelSyncer = cancel
-	syncTicker := time.NewTicker(interval)
-	go func() {
-		var lastModifications int64
-		for {
-			select {
-			case <-ctx.Done():
-				syncTicker.Stop()
-				return
-			default:
-				modifications := db.metrics.Puts.Value() + db.metrics.Dels.Value()
-				if modifications != lastModifications {
-					if err := db.Sync(); err != nil {
-						logger.Error().Err(err).Str("context", "startSyncer").Msg("Error synchronizing database")
-					}
-					lastModifications = modifications
-				}
-				<-syncTicker.C
 			}
 		}
 	}()
@@ -377,11 +349,13 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if db.cancelSyncer != nil {
-		db.cancelSyncer()
-	}
+	// Signal all goroutines.
+	close(db.closeC)
 
 	// Wait for all gorotines to exit.
+	db.tinyCommitW.Wait()
+	db.commitW.Wait()
+	db.logSyncW.Wait()
 	db.logSyncW.Wait()
 	db.closeW.Wait()
 
@@ -400,22 +374,14 @@ func (db *DB) Close() error {
 	if err := db.filter.close(); err != nil {
 		return err
 	}
-
-	var err error
-	// Signal all goroutines.
-	close(db.closeC)
-
-	if db.closer != nil {
-		if err1 := db.closer.Close(); err == nil {
-			err = err1
-		}
-		db.closer = nil
+	if err := db.wal.Close(); err != nil {
+		return err
 	}
 
 	// Clear memdbs.
 	db.clearMems()
 
-	return err
+	return nil
 }
 
 func startBlockIndex(seq uint64) uint32 {
@@ -702,10 +668,10 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
-		return err
-	}
+	// logWriter, err := db.wal.NewWriter()
+	// if err != nil {
+	// 	return err
+	// }
 	data, err := db.entryData(seq, id, topic.Marshal(), val, e.ExpiresAt)
 	if err != nil {
 		return err
@@ -718,12 +684,23 @@ func (db *DB) PutEntry(e *Entry) error {
 		if err != nil {
 			return err
 		}
+		var scratch [4]byte
+		binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+		if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
+			return err
+		}
+		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
+			return err
+		}
+		db.tinyBatch.entryCount++
 		// if err := <-logWriter.Append(data); err != nil {
 		// 	return err
 		// }
 	}
 
-	return <-logWriter.SignalInitWrite()
+	return nil
+	// return <-logWriter.SignalInitWrite()
 }
 
 // entryData marshal entry along with message data
@@ -753,11 +730,11 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
 func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 	// commit writes batches into write ahead log. The write happen synchronously.
+	db.tinyCommitW.Add(1)
 	db.logCommitLockC <- struct{}{}
-	db.closeW.Add(1)
 	defer func() {
+		db.tinyCommitW.Done()
 		<-db.logCommitLockC
-		db.closeW.Done()
 	}()
 
 	logWriter, err := db.wal.NewWriter()
@@ -767,6 +744,7 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 
 	offset := uint32(0)
 	for i := uint16(0); i < entryCount; i++ {
+		db.metrics.Puts.Add(1)
 		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
 		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
 			return err
@@ -784,11 +762,11 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// commit writes batches into write ahead log. The write happen synchronously.
+	db.commitW.Add(1)
 	db.logCommitLockC <- struct{}{}
-	db.closeW.Add(1)
 	defer func() {
+		db.commitW.Done()
 		<-db.logCommitLockC
-		db.closeW.Done()
 	}()
 
 	logWriter, err := db.wal.NewWriter()

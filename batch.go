@@ -1,7 +1,7 @@
 package tracedb
 
 import (
-	"bytes"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -58,15 +58,6 @@ type (
 		mOffset   int64
 	}
 
-	batchInfo struct {
-		entryCount uint16
-	}
-
-	tinyBatch struct {
-		batchInfo
-		buffer *bytes.Buffer
-	}
-
 	Batch struct {
 		opts     *BatchOptions
 		managed  bool
@@ -74,7 +65,7 @@ type (
 		order    int8
 		startSeq uint64
 		// seq           uint64
-		tinyBatch     *tinyBatch
+		tinyBatch     bool
 		db            *DB
 		data          []byte
 		index         []batchIndex
@@ -237,6 +228,10 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	if err := b.db.extendBlocks(); err != nil {
 		return err
 	}
+	if b.Len() <= b.db.opts.TinyBatchSize {
+		b.tinyBatch = true
+	}
+
 	for i, index := range b.pendingWrites {
 		id, topic, val := index.message(b.data)
 		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
@@ -250,6 +245,18 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 		memseq := b.db.cacheID ^ index.seq
 		if err := fn(i, memseq, data); err != nil {
 			return err
+		}
+		if b.tinyBatch {
+			var scratch [4]byte
+			binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+			if _, err := b.db.tinyBatch.buffer.Write(scratch[:]); err != nil {
+				return err
+			}
+			if _, err := b.db.tinyBatch.buffer.Write(data); err != nil {
+				return err
+			}
+			b.db.tinyBatch.entryCount++
 		}
 		b.batchSeqs = append(b.batchSeqs, memseq)
 	}
@@ -311,18 +318,15 @@ func (b *Batch) Write() error {
 }
 
 func (b *Batch) Commit() error {
-	defer bufPool.Put(b.tinyBatch.buffer)
+	// defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
 	}
-	if len(b.pendingWrites) == 0 {
+	if b.tinyBatch || len(b.pendingWrites) == 0 {
 		return nil
 	}
 
-	if b.tinyBatch.entryCount > 0 {
-		b.db.tinyCommit(b.tinyBatch.entryCount, b.tinyBatch.buffer.Bytes())
-	}
 	return b.db.commit(b.Seqs())
 }
 

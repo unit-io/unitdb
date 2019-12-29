@@ -108,8 +108,8 @@ func main() {
 		}
 	}(5)
 
-	// print([]byte("dev18.c.c1?last=30m"), db)
-	// print([]byte("dev18.c.c11?last=30m"), db)
+	print([]byte("dev18.c.c1?last=30m"), db)
+	print([]byte("dev18.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 1

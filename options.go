@@ -8,12 +8,6 @@ import (
 
 // Options holds the optional DB parameters.
 type Options struct {
-	// BackgroundSyncInterval sets the amount of time between background fsync() calls.
-	//
-	// Setting the value to 0 disables the automatic background synchronization.
-	// Setting the value to -1 makes the DB call fsync() after every write operation.
-	BackgroundSyncInterval time.Duration
-
 	// BackgroundKeyExpiry sets flag to run key expirer
 	BackgroundKeyExpiry bool
 
@@ -25,6 +19,13 @@ type Options struct {
 
 	// Block cache size
 	BlockCacheSize int64
+
+	//Tiny Batch Size to group tiny batches and write into db on tiny batch interval
+	TinyBatchSize int
+
+	//Tiny Batch interval to group tiny batches and write into db on tiny batch interval
+	// Setting the value to 0 immediately writes entries into db.
+	TinyBatchWriteInterval time.Duration
 
 	// Size of memory db
 	MemdbSize int64
@@ -47,11 +48,14 @@ func (src *Options) copyWithDefaults() *Options {
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
 	}
-	if opts.BackgroundSyncInterval == 0 {
-		opts.BackgroundSyncInterval = 15 * time.Second
-	}
 	if opts.BlockCacheSize == 0 {
 		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
+	}
+	if opts.TinyBatchSize == 0 {
+		opts.TinyBatchSize = 100
+	}
+	if opts.TinyBatchWriteInterval == 0 {
+		opts.TinyBatchWriteInterval = 5 * time.Millisecond
 	}
 	if opts.MemdbSize == 0 {
 		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
