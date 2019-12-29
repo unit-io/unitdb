@@ -1,7 +1,7 @@
 package tracedb
 
 import (
-	"github.com/saffat-in/tracedb/message"
+	"github.com/unit-io/tracedb/message"
 )
 
 type Topic struct {

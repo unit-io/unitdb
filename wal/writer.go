@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/saffat-in/tracedb/collection"
+	"github.com/unit-io/tracedb/collection"
 )
 
 // Writer writes entries to the write ahead log.

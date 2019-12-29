@@ -6,7 +6,7 @@
 
 # tracedb: Blazing fast timeseries database for IoT and real-time gaming applications
 
-tracedb is blazing fast timeseries database for IoT, realtime gaming, messaging or chat applications. Use trace application under, github.com/saffat-in/trace to interact with tracedb using pubsub over tcp or websocket.
+tracedb is blazing fast timeseries database for IoT, realtime gaming, messaging or chat applications. Use trace application under, github.com/unit-io/trace to interact with tracedb using pubsub over tcp or websocket.
 
 # Key characteristics
 - 100% Go.
@@ -20,7 +20,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 ## Quick Start
 To build tracedb from source code use go get command.
 
-> go get -u github.com/saffat-in/tracedb
+> go get -u github.com/unit-io/tracedb
 
 ## Usage
 
@@ -35,7 +35,7 @@ package main
 import (
 	"log"
 
-	"github.com/saffat-in/tracedb"
+	"github.com/unit-io/tracedb"
 )
 
 func main() {
@@ -212,4 +212,4 @@ func print(topic []byte, db *tracedb.DB) {
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
 
 ## Licensing
-Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/saffat-in/tracedb/blob/master/LICENSE).
+Copyright (c) 2016-2019 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/unit-io/tracedb/blob/master/LICENSE).

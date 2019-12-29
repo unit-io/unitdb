@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/saffat-in/tracedb/hash"
-	"github.com/saffat-in/tracedb/message"
+	"github.com/unit-io/tracedb/hash"
+	"github.com/unit-io/tracedb/message"
 )
 
 const (

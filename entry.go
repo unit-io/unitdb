@@ -3,7 +3,7 @@ package tracedb
 import (
 	"encoding/binary"
 
-	"github.com/saffat-in/tracedb/collection"
+	"github.com/unit-io/tracedb/collection"
 )
 
 // Entry represents a entry which has to be forwarded or stored.

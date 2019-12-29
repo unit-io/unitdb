@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/saffat-in/tracedb/memdb"
+	"github.com/unit-io/tracedb/memdb"
 )
 
 type mem struct {

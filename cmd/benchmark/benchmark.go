@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/saffat-in/tracedb"
+	"github.com/unit-io/tracedb"
 	"golang.org/x/sync/errgroup"
 )
 

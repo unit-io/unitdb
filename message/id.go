@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/kelindar/binary"
-	"github.com/saffat-in/tracedb/uid"
+	"github.com/unit-io/tracedb/uid"
 )
 
 // Various constant parts of the ID.

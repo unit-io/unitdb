@@ -5,7 +5,7 @@ import (
 
 	"github.com/golang/snappy"
 
-	"github.com/saffat-in/tracedb/message"
+	"github.com/unit-io/tracedb/message"
 )
 
 type Item struct {

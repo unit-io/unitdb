@@ -3,7 +3,7 @@ package tracedb
 import (
 	"time"
 
-	"github.com/saffat-in/tracedb/fs"
+	"github.com/unit-io/tracedb/fs"
 )
 
 // Options holds the optional DB parameters.

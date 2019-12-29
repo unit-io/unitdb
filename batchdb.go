@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/saffat-in/tracedb/memdb"
+	"github.com/unit-io/tracedb/memdb"
 	"golang.org/x/sync/errgroup"
 )
 
