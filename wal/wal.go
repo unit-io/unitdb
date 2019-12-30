@@ -48,6 +48,8 @@ type (
 
 		logFile file
 		lock    fs.LockFile
+
+		closed uint32
 	}
 
 	Options struct {
@@ -252,8 +254,8 @@ func (wal *WAL) nextSeq() uint64 {
 }
 
 func (wal *WAL) Sync() error {
-	wal.wg.Add(1)
-	defer wal.wg.Done()
+	// wal.wg.Add(1)
+	// defer wal.wg.Done()
 
 	wal.writeHeader()
 	return wal.logFile.Sync()
@@ -262,14 +264,36 @@ func (wal *WAL) Sync() error {
 // Close closes the wal, frees used resources and checks for active
 // logs.
 func (wal *WAL) Close() error {
+	if !wal.setClosed() {
+		return errors.New("wal is closed")
+	}
+	defer wal.logFile.Close()
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
 
-	// Close the logFile
-	if err := wal.logFile.Sync(); err != nil {
-		return err
+	return wal.logFile.Sync()
+}
+
+// Set closed flag; return true if not already closed.
+func (wal *WAL) setClosed() bool {
+	// TODO fixe issue with newWal code
+	if wal == nil {
+		return false
 	}
-	return wal.logFile.Close()
+	return atomic.CompareAndSwapUint32(&wal.closed, 0, 1)
+}
+
+// Check whether WAL was closed.
+func (wal *WAL) isClosed() bool {
+	return atomic.LoadUint32(&wal.closed) != 0
+}
+
+// Check read ok status.
+func (wal *WAL) ok() error {
+	if wal.isClosed() {
+		return errors.New("wal is closed.")
+	}
+	return nil
 }
 
 // New will open a WAL. If the previous run did not shut down cleanly, a set of

@@ -61,10 +61,10 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
 	}
 	if opts.LogSize == 0 {
-		opts.LogSize = 1 << 20 // maximum size of memdb (1MB).
+		opts.LogSize = 1 << 33 // maximum size of memdb (1GB).
 	}
 	if opts.LogSyncInterval == 0 {
-		opts.LogSyncInterval = 15 * time.Second
+		opts.LogSyncInterval = 5 * time.Second
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

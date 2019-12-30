@@ -1,6 +1,7 @@
 package tracedb
 
 import (
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -127,7 +128,20 @@ func (db *DB) clearMems() {
 	db.memMu.Unlock()
 }
 
+// Set closed flag; return true if not already closed.
+func (db *DB) setClosed() bool {
+	return atomic.CompareAndSwapUint32(&db.closed, 0, 1)
+}
+
 // Check whether DB was closed.
 func (db *DB) isClosed() bool {
 	return atomic.LoadUint32(&db.closed) != 0
+}
+
+// Check read ok status.
+func (db *DB) ok() error {
+	if db.isClosed() {
+		return errors.New("wal is closed.")
+	}
+	return nil
 }

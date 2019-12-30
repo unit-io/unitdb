@@ -327,7 +327,8 @@ func (b *Batch) Commit() error {
 		return nil
 	}
 
-	return b.db.commit(b.Seqs())
+	b.db.commitQueue <- b
+	return nil
 }
 
 func (b *Batch) Abort() {

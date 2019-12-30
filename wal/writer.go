@@ -33,11 +33,11 @@ type Writer struct {
 	writeCompleted chan struct{}
 }
 
-func (wal *WAL) NewWriter() (Writer, error) {
-	if wal == nil {
-		return Writer{}, errors.New("NewWriter error wal is closed")
+func (wal *WAL) NewWriter() (writer Writer, err error) {
+	if err := wal.ok(); err != nil {
+		return writer, err
 	}
-	writer := Writer{
+	writer = Writer{
 		startSeq:       wal.seq,
 		buffer:         bufPool.Get(),
 		wal:            wal,
@@ -74,8 +74,8 @@ func (w *Writer) append(data []byte) error {
 
 func (w *Writer) Append(data []byte) <-chan error {
 	done := make(chan error, 1)
-	w.wal.wg.Add(1)
-	defer w.wal.wg.Done()
+	// w.wal.wg.Add(1)
+	// defer w.wal.wg.Done()
 
 	if w.writeComplete || w.releaseComplete {
 		done <- errors.New("logWriter error - can't append to log once it is written/released")

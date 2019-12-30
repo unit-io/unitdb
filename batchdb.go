@@ -25,10 +25,11 @@ type (
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	memMu      sync.RWMutex
-	memPool    chan *memdb.DB
-	mem        *mem
-	batchQueue chan *Batch
+	memMu       sync.RWMutex
+	memPool     chan *memdb.DB
+	mem         *mem
+	batchQueue  chan *Batch
+	commitQueue chan *Batch
 
 	opts *Options
 	//tiny Batch
@@ -45,9 +46,10 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb(opts *Options) error {
 	bdb := &batchdb{
 		// batchDB
-		opts:       opts,
-		tinyBatch:  &tinyBatch{buffer: bufPool.Get()},
-		batchQueue: make(chan *Batch, 10),
+		opts:        opts,
+		tinyBatch:   &tinyBatch{buffer: bufPool.Get()},
+		batchQueue:  make(chan *Batch, 100),
+		commitQueue: make(chan *Batch, 1),
 	}
 
 	db.batchdb = bdb
@@ -55,6 +57,9 @@ func (db *DB) initbatchdb(opts *Options) error {
 	if _, err := db.newMem(0); err != nil {
 		return err
 	}
+
+	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
+	db.startBatchCommit()
 	return nil
 }
 
@@ -76,15 +81,32 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	// Make sure the transaction rolls back in the event of a panic.
+	return b.Commit()
+}
+
+func (db *DB) startBatchCommit() {
+	// ctx, cancel := context.WithCancel(context.Background())
+	// db.cancelCommit = cancel
 	go func() {
+		// Make sure the transaction rolls back in the event of a panic.
 		defer func() {
+			b := <-db.commitQueue
 			b.Abort()
 			close(b.commitComplete)
 		}()
-		b.Commit()
+		for {
+			select {
+			case b := <-db.commitQueue:
+				if err := db.commit(b.Seqs()); err != nil {
+					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error commiting batch with startSeq, size ", b.startSeq, b.Len())
+				}
+				b.Abort()
+				close(b.commitComplete)
+			case <-db.closeC:
+				return
+			}
+		}
 	}()
-	return nil
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -179,18 +201,21 @@ func (g *BatchGroup) writeBatchGroup() error {
 
 // tinyBatchLoop handles tiny bacthes write
 func (db *DB) tinyBatchLoop(interval time.Duration) {
+	// ctx, cancel := context.WithCancel(context.Background())
+	// db.cancelCommit = cancel
 	tinyBatchWriterTicker := time.NewTicker(interval)
 	go func() {
-		defer tinyBatchWriterTicker.Stop()
+		defer func() {
+			tinyBatchWriterTicker.Stop()
+		}()
 		for {
 			select {
-			case <-db.closeC:
-				return
-			default:
+			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
 					db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.buffer.Bytes())
 				}
-				<-tinyBatchWriterTicker.C
+			case <-db.closeC:
+				return
 			}
 		}
 	}()

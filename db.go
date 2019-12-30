@@ -3,7 +3,7 @@ package tracedb
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -72,12 +72,10 @@ type (
 	// All DB methods are safe for concurrent use by multiple goroutines.
 	DB struct {
 		// Need 64-bit alignment.
-		mu             sync.RWMutex
-		mac            *crypto.MAC
-		writeLockC     chan struct{}
-		logCommitLockC chan struct{}
-		// logSyncCompleted is used to signal if log is fully written
-		logSyncLockC chan struct{}
+		mu          sync.RWMutex
+		mac         *crypto.MAC
+		writeLockC  chan struct{}
+		commitLockC chan struct{}
 		// consistent   *hash.Consistent
 		filter     Filter
 		index      table
@@ -134,15 +132,14 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		index:          index,
-		data:           dataTable{table: data},
-		timeWindow:     newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:         Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
-		lock:           lock,
-		writeLockC:     make(chan struct{}, 1),
-		logCommitLockC: make(chan struct{}, 1),
-		logSyncLockC:   make(chan struct{}, 1),
-		metrics:        newMetrics(),
+		index:       index,
+		data:        dataTable{table: data},
+		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		lock:        lock,
+		writeLockC:  make(chan struct{}, 1),
+		commitLockC: make(chan struct{}, 1),
+		metrics:     newMetrics(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -151,16 +148,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		trie:    message.NewTrie(),
 		// Close
 		closeC: make(chan struct{}),
-	}
-
-	// Create a new MAC from the key.
-	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
-		return nil, err
-	}
-
-	//initbatchdb
-	if err = db.initbatchdb(opts); err != nil {
-		return nil, err
 	}
 
 	if index.size == 0 {
@@ -219,21 +206,33 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
-	if wal == nil || err != nil {
-		errors.New("Error creating WAL")
+	if err != nil {
+		fmt.Println("db.newWal: ", err)
+		wal.Close()
+		return nil, err
+	} else {
+		db.closer = wal
 	}
 	db.wal = wal
 
 	if needLogRecovery {
-		db.logSync()
+		db.recoverLog()
+	}
+
+	// Create a new MAC from the key.
+	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+		return nil, err
+	}
+
+	//initbatchdb
+	if err = db.initbatchdb(opts); err != nil {
+		return nil, err
 	}
 
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	db.logSyncer(opts.LogSyncInterval)
-
-	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
+	// db.logSyncer(opts.LogSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
@@ -245,22 +244,24 @@ func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
-func (db *DB) logSyncer(interval time.Duration) {
-	logsyncTicker := time.NewTicker(interval)
-	go func() {
-		defer logsyncTicker.Stop()
-		for {
-			select {
-			case <-logsyncTicker.C:
-				if err := db.logSync(); err != nil {
-					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
-				}
-			case <-db.closeC:
-				return
-			}
-		}
-	}()
-}
+// func (db *DB) logSyncer(interval time.Duration) {
+// 	logsyncTicker := time.NewTicker(interval)
+// 	go func() {
+// 		defer func() {
+// 			logsyncTicker.Stop()
+// 		}()
+// 		for {
+// 			select {
+// 			case <-db.closeC:
+// 				return
+// 			case <-logsyncTicker.C:
+// 				if err := db.logSync(); err != nil {
+// 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
+// 				}
+// 			}
+// 		}
+// 	}()
+// }
 
 func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	expirerTicker := time.NewTicker(durType * time.Duration(maxDur))
@@ -339,11 +340,16 @@ func (db *DB) readHeader(readFreeList bool) error {
 
 // Close closes the DB.
 func (db *DB) Close() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	if !db.setClosed() {
+		return errClosed
+	}
 
 	// Signal all goroutines.
 	close(db.closeC)
+
+	// Acquire writer lock.
+	db.writeLockC <- struct{}{}
+	db.commitLockC <- struct{}{}
 
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
@@ -363,14 +369,19 @@ func (db *DB) Close() error {
 	if err := db.filter.close(); err != nil {
 		return err
 	}
-	if err := db.wal.Close(); err != nil {
-		return err
-	}
 
 	// Clear memdbs.
 	db.clearMems()
 
-	return nil
+	var err error
+	if db.closer != nil {
+		if err1 := db.closer.Close(); err == nil {
+			err = err1
+		}
+		db.closer = nil
+	}
+
+	return err
 }
 
 func startBlockIndex(seq uint64) uint32 {
@@ -383,6 +394,9 @@ func (db *DB) hash(data []byte) uint32 {
 
 // Get return items matching the query paramater
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
+	if err := db.ok(); err != nil {
+		return nil, err
+	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	db.mu.RLock()
@@ -479,6 +493,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 
 // Items returns a new ItemIterator.
 func (db *DB) Items(q *Query) (*ItemIterator, error) {
+	if err := db.ok(); err != nil {
+		return nil, err
+	}
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -608,6 +625,9 @@ func (db *DB) extendBlocks() error {
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
 	db.mu.Lock()
@@ -718,12 +738,15 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
 func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
 	// commit writes batches into write ahead log. The write happen synchronously.
+	db.commitLockC <- struct{}{}
 	db.closeW.Add(1)
-	db.logCommitLockC <- struct{}{}
 	defer func() {
 		db.closeW.Done()
-		<-db.logCommitLockC
+		<-db.commitLockC
 	}()
 
 	logWriter, err := db.wal.NewWriter()
@@ -748,14 +771,19 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 }
 
 func (db *DB) commit(batchSeqs []uint64) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// commit writes batches into write ahead log. The write happen synchronously.
+
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.commitLockC <- struct{}{}
 	db.closeW.Add(1)
-	db.logCommitLockC <- struct{}{}
 	defer func() {
 		db.closeW.Done()
-		<-db.logCommitLockC
+		<-db.commitLockC
 	}()
 
 	logWriter, err := db.wal.NewWriter()
@@ -785,13 +813,9 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	return db.writeHeader(false)
 }
 
-func (db *DB) logSync() error {
-	db.logSyncLockC <- struct{}{}
+func (db *DB) recoverLog() error {
 	db.closeW.Add(1)
-	defer func() {
-		<-db.logSyncLockC
-		db.closeW.Done()
-	}()
+	defer db.closeW.Done()
 
 	seqs, err := db.wal.Scan()
 	if err != nil {
@@ -800,6 +824,7 @@ func (db *DB) logSync() error {
 	for _, s := range seqs {
 		it, err := db.wal.Read(s)
 		if err != nil {
+			fmt.Println("db.reoverLog: ", err)
 			return err
 		}
 		for {
@@ -850,6 +875,7 @@ func (db *DB) logSync() error {
 			return err
 		}
 		if err := db.wal.SignalLogApplied(s); err != nil {
+			fmt.Println("db.reoverLog: ", err)
 			return err
 		}
 	}
