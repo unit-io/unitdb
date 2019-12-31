@@ -76,6 +76,7 @@ type (
 		mac            *crypto.MAC
 		writeLockC     chan struct{}
 		commitLockC    chan struct{}
+		syncLockC      chan struct{}
 		commitLogQueue map[uint64][]uint64
 		// consistent   *hash.Consistent
 		filter     Filter
@@ -140,6 +141,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		lock:           lock,
 		writeLockC:     make(chan struct{}, 1),
 		commitLockC:    make(chan struct{}, 1),
+		syncLockC:      make(chan struct{}, 1),
 		commitLogQueue: make(map[uint64][]uint64),
 		metrics:        newMetrics(),
 		dbInfo: dbInfo{
@@ -542,8 +544,13 @@ func (db *DB) sync() error {
 
 // Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-memory database. It must only be called while the database is opened.
 func (db *DB) Sync() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// write to db happens synchronously
+	db.syncLockC <- struct{}{}
+	db.closeW.Add(1)
+	defer func() {
+		<-db.syncLockC
+		db.closeW.Done()
+	}()
 
 	seqs, err := db.wal.Scan()
 	if err != nil {
@@ -705,17 +712,17 @@ func (db *DB) extendBlocks() error {
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
 	// The write happen synchronously.
-	// db.writeLockC <- struct{}{}
-	// defer func() {
-	// 	<-db.writeLockC
-	// }()
+	db.writeLockC <- struct{}{}
+	defer func() {
+		<-db.writeLockC
+	}()
 	if err := db.ok(); err != nil {
 		return err
 	}
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// db.mu.Lock()
+	// defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -736,17 +743,17 @@ func (db *DB) PutEntry(e *Entry) error {
 	topic.AddContract(e.Contract)
 	//message ID is the database key
 	var id message.ID
-	// var ok bool
+	var ok bool
 	var seq uint64
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		id.AddContract(topic.Parts)
 		seq = id.Seq()
 	} else {
-		// ok, seq = db.freeseq.get()
-		// if !ok {
-		seq = db.nextSeq()
-		// }
+		ok, seq = db.freeseq.get()
+		if !ok {
+			seq = db.nextSeq()
+		}
 		id = message.NewID(seq, false)
 		id.AddContract(topic.Parts)
 	}
@@ -823,11 +830,11 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 		return err
 	}
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.commitLockC <- struct{}{}
+	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {
 		db.closeW.Done()
-		<-db.commitLockC
+		<-db.writeLockC
 	}()
 
 	logWriter, err := db.wal.NewWriter()

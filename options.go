@@ -52,7 +52,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.FileSystem = fs.FileIO
 	}
 	if opts.BackgroundSyncInterval == 0 {
-		opts.BackgroundSyncInterval = 15 * time.Second
+		opts.BackgroundSyncInterval = 1 * time.Second
 	}
 	if opts.BlockCacheSize == 0 {
 		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
