@@ -354,6 +354,7 @@ func (db *DB) Close() error {
 	// Acquire writer lock.
 	db.writeLockC <- struct{}{}
 	db.commitLockC <- struct{}{}
+	db.syncLockC <- struct{}{}
 
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()

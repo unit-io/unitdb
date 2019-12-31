@@ -45,9 +45,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
 
-	if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-	}
+	// if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
+	// 	fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	// }
 
 	func(retry int) {
 		i := 1
