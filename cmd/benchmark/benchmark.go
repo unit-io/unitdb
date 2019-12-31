@@ -120,7 +120,7 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Fie sie: %s\n", byteSize(sz))
+	fmt.Printf("Fie size: %s\n", byteSize(sz))
 	printStats(db)
 
 	// if err := db.Close(); err != nil {
@@ -212,7 +212,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	if err != nil {
 		return err
 	}
-	fmt.Printf("File sie: %s\n", byteSize(sz))
+	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
 
 	// if err := db.Close(); err != nil {
