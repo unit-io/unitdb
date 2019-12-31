@@ -1,6 +1,7 @@
 package tracedb
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/unit-io/tracedb/fs"
@@ -113,5 +114,75 @@ func (db *DB) recover() error {
 		return err
 	}
 	logger.Info().Str("context", "recovery.recover").Msg("Recovery complete.")
+	return nil
+}
+
+func (db *DB) recoverLog() error {
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+
+	seqs, err := db.wal.Scan()
+	if err != nil {
+		return err
+	}
+	for _, s := range seqs {
+		it, err := db.wal.Read(s)
+		if err != nil {
+			fmt.Println("db.reoverLog: ", err)
+			return err
+		}
+		for {
+			logData, ok := it.Next()
+			if !ok {
+				break
+			}
+			entryData, data := logData[:entrySize], logData[entrySize:]
+			e := entry{}
+			e.UnmarshalBinary(entryData)
+			startBlockIdx := startBlockIndex(e.seq)
+			off := blockOffset(startBlockIdx)
+			b := &blockHandle{table: db.index, offset: off}
+			if err := b.read(); err != nil {
+				return err
+			}
+			entryIdx := 0
+			for i := 0; i < entriesPerBlock; i++ {
+				ie := b.entries[i]
+				if ie.seq == e.seq { //record exist in db
+					entryIdx = -1
+					break
+				}
+			}
+			if entryIdx == -1 {
+				continue
+			}
+			db.count++
+			moffset := e.mSize()
+			m := data[:moffset]
+			if e.mOffset, err = db.data.writeRaw(m); err != nil {
+				db.freeseq.free(e.seq)
+				return err
+			}
+
+			b.entries[b.entryIdx] = e
+			if b.entries[b.entryIdx].expiresAt > 0 {
+				db.timeWindow.add(b.entries[b.entryIdx])
+			}
+			b.entryIdx++
+			if err := b.write(); err != nil {
+				db.freeseq.free(e.seq)
+				return err
+			}
+			db.filter.Append(e.seq)
+		}
+		if err := db.sync(); err != nil {
+			return err
+		}
+		if err := db.wal.SignalLogApplied(s); err != nil {
+			fmt.Println("db.reoverLog: ", err)
+			return err
+		}
+	}
+
 	return nil
 }

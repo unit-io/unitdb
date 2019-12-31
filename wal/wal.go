@@ -12,10 +12,7 @@ import (
 )
 
 const (
-	// logStatusInvalid indicates an incorrectly initialized block.
-	logStatusInvalid = iota
-
-	// logStatusCommitted indicates that the log has been written,
+	// logStatusWritten indicates that the log has been written,
 	// but not completed. During recovery, logs with this status
 	// should be loaded and their updates should be provided to the user.
 	logStatusWritten = iota
@@ -26,6 +23,12 @@ const (
 	logStatusApplied
 
 	version = 1 // file format version
+)
+
+const (
+	stateInvalid = iota
+	stateClean
+	stateDirty
 )
 
 type (
@@ -89,10 +92,9 @@ func newWal(opts Options) (wal *WAL, needRecover bool, err error) {
 		if err := wal.recoverWal(); err != nil {
 			return nil, false, err
 		}
-		return wal, true, nil
 	}
 
-	return wal, false, nil
+	return wal, len(wal.logs) != 0, nil
 }
 
 func (wal *WAL) writeHeader() error {
@@ -124,8 +126,7 @@ func (wal *WAL) readHeader() error {
 func (wal *WAL) recoverLogHeaders() error {
 	offset := int64(headerSize)
 	l := &logInfo{}
-	seqCount := wal.seq
-	for seqCount > 0 {
+	for {
 		if err := wal.logFile.readUnmarshalableAt(l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
@@ -136,8 +137,13 @@ func (wal *WAL) recoverLogHeaders() error {
 		if l.status == logStatusWritten {
 			wal.logs = append(wal.logs, *l)
 		}
+		if l.seq >= wal.seq {
+			break
+		}
 		offset = l.offset + align512(l.size+int64(logHeaderSize))
-		seqCount--
+		if offset == wal.logFile.fb.offset {
+			offset += wal.logFile.fb.size
+		}
 	}
 	return nil
 }
@@ -234,7 +240,6 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 		}
 	}
-
 	if idx == 0 {
 		wal.logFile.fb.offset = wal.logs[idx].offset
 		wal.logFile.fb.size = align512(wal.logs[idx].size + int64(logHeaderSize))

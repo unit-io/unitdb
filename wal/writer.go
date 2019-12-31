@@ -99,7 +99,7 @@ func (w *Writer) writeLog() error {
 	}
 	dataLen := align512(w.logSize + int64(logHeaderSize))
 	off, err := w.wal.logFile.allocate(uint32(dataLen))
-	if err != nil {
+	if off < int64(headerSize) || err != nil {
 		return err
 	}
 	h := logInfo{

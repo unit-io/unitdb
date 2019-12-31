@@ -244,24 +244,24 @@ func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
-// func (db *DB) logSyncer(interval time.Duration) {
-// 	logsyncTicker := time.NewTicker(interval)
-// 	go func() {
-// 		defer func() {
-// 			logsyncTicker.Stop()
-// 		}()
-// 		for {
-// 			select {
-// 			case <-db.closeC:
-// 				return
-// 			case <-logsyncTicker.C:
-// 				if err := db.logSync(); err != nil {
-// 					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
-// 				}
-// 			}
-// 		}
-// 	}()
-// }
+func (db *DB) logSyncer(interval time.Duration) {
+	logsyncTicker := time.NewTicker(interval)
+	go func() {
+		defer func() {
+			logsyncTicker.Stop()
+		}()
+		for {
+			select {
+			case <-db.closeC:
+				return
+			case <-logsyncTicker.C:
+				if err := db.Sync(); err != nil {
+					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
+				}
+			}
+		}
+	}()
+}
 
 func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	expirerTicker := time.NewTicker(durType * time.Duration(maxDur))
@@ -540,9 +540,73 @@ func (db *DB) sync() error {
 
 // Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-memory database. It must only be called while the database is opened.
 func (db *DB) Sync() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	return db.sync()
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+
+	seqs, err := db.wal.Scan()
+	if err != nil {
+		return err
+	}
+	for _, s := range seqs {
+		it, err := db.wal.Read(s)
+		if err != nil {
+			fmt.Println("db.reoverLog: ", err)
+			return err
+		}
+		for {
+			logData, ok := it.Next()
+			if !ok {
+				break
+			}
+			entryData, data := logData[:entrySize], logData[entrySize:]
+			e := entry{}
+			e.UnmarshalBinary(entryData)
+			startBlockIdx := startBlockIndex(e.seq)
+			off := blockOffset(startBlockIdx)
+			b := &blockHandle{table: db.index, offset: off}
+			if err := b.read(); err != nil {
+				return err
+			}
+			entryIdx := 0
+			for i := 0; i < entriesPerBlock; i++ {
+				ie := b.entries[i]
+				if ie.seq == e.seq { //record exist in db
+					entryIdx = -1
+					break
+				}
+			}
+			if entryIdx == -1 {
+				continue
+			}
+			db.count++
+			moffset := e.mSize()
+			m := data[:moffset]
+			if e.mOffset, err = db.data.writeRaw(m); err != nil {
+				db.freeseq.free(e.seq)
+				return err
+			}
+
+			b.entries[b.entryIdx] = e
+			if b.entries[b.entryIdx].expiresAt > 0 {
+				db.timeWindow.add(b.entries[b.entryIdx])
+			}
+			b.entryIdx++
+			if err := b.write(); err != nil {
+				db.freeseq.free(e.seq)
+				return err
+			}
+			db.filter.Append(e.seq)
+		}
+		if err := db.sync(); err != nil {
+			return err
+		}
+		if err := db.wal.SignalLogApplied(s); err != nil {
+			fmt.Println("db.reoverLog: ", err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) expireOldEntries() {
@@ -811,76 +875,6 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		return err
 	}
 	return db.writeHeader(false)
-}
-
-func (db *DB) recoverLog() error {
-	db.closeW.Add(1)
-	defer db.closeW.Done()
-
-	seqs, err := db.wal.Scan()
-	if err != nil {
-		return err
-	}
-	for _, s := range seqs {
-		it, err := db.wal.Read(s)
-		if err != nil {
-			fmt.Println("db.reoverLog: ", err)
-			return err
-		}
-		for {
-			logData, ok := it.Next()
-			if !ok {
-				break
-			}
-			entryData, data := logData[:entrySize], logData[entrySize:]
-			e := entry{}
-			e.UnmarshalBinary(entryData)
-			startBlockIdx := startBlockIndex(e.seq)
-			off := blockOffset(startBlockIdx)
-			b := &blockHandle{table: db.index, offset: off}
-			if err := b.read(); err != nil {
-				return err
-			}
-			entryIdx := 0
-			for i := 0; i < entriesPerBlock; i++ {
-				ie := b.entries[i]
-				if ie.seq == e.seq { //record exist in db
-					entryIdx = -1
-					break
-				}
-			}
-			if entryIdx == -1 {
-				continue
-			}
-			db.count++
-			moffset := e.mSize()
-			m := data[:moffset]
-			if e.mOffset, err = db.data.writeRaw(m); err != nil {
-				db.freeseq.free(e.seq)
-				return err
-			}
-
-			b.entries[b.entryIdx] = e
-			if b.entries[b.entryIdx].expiresAt > 0 {
-				db.timeWindow.add(b.entries[b.entryIdx])
-			}
-			b.entryIdx++
-			if err := b.write(); err != nil {
-				db.freeseq.free(e.seq)
-				return err
-			}
-			db.filter.Append(e.seq)
-		}
-		if err := db.sync(); err != nil {
-			return err
-		}
-		if err := db.wal.SignalLogApplied(s); err != nil {
-			fmt.Println("db.reoverLog: ", err)
-			return err
-		}
-	}
-
-	return nil
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.
