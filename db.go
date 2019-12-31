@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	entriesPerBlock = 155
+	entriesPerBlock = 150
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
 	indexPostfix  = ".index"
@@ -72,10 +72,11 @@ type (
 	// All DB methods are safe for concurrent use by multiple goroutines.
 	DB struct {
 		// Need 64-bit alignment.
-		mu          sync.RWMutex
-		mac         *crypto.MAC
-		writeLockC  chan struct{}
-		commitLockC chan struct{}
+		mu             sync.RWMutex
+		mac            *crypto.MAC
+		writeLockC     chan struct{}
+		commitLockC    chan struct{}
+		commitLogQueue map[uint64][]uint64
 		// consistent   *hash.Consistent
 		filter     Filter
 		index      table
@@ -132,14 +133,15 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		index:       index,
-		data:        dataTable{table: data},
-		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
-		lock:        lock,
-		writeLockC:  make(chan struct{}, 1),
-		commitLockC: make(chan struct{}, 1),
-		metrics:     newMetrics(),
+		index:          index,
+		data:           dataTable{table: data},
+		timeWindow:     newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		filter:         Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		lock:           lock,
+		writeLockC:     make(chan struct{}, 1),
+		commitLockC:    make(chan struct{}, 1),
+		commitLogQueue: make(map[uint64][]uint64),
+		metrics:        newMetrics(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -232,7 +234,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	// db.logSyncer(opts.LogSyncInterval)
+	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
@@ -244,7 +246,7 @@ func blockOffset(idx uint32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
-func (db *DB) logSyncer(interval time.Duration) {
+func (db *DB) startSyncer(interval time.Duration) {
 	logsyncTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {
@@ -256,7 +258,7 @@ func (db *DB) logSyncer(interval time.Duration) {
 				return
 			case <-logsyncTicker.C:
 				if err := db.Sync(); err != nil {
-					logger.Error().Err(err).Str("context", "logSyncer").Msg("Error committing write ahead log to db")
+					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
 				}
 			}
 		}
@@ -540,27 +542,34 @@ func (db *DB) sync() error {
 
 // Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-memory database. It must only be called while the database is opened.
 func (db *DB) Sync() error {
-	db.closeW.Add(1)
-	defer db.closeW.Done()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err
 	}
+	if len(seqs) == 0 {
+		return nil
+	}
+	if err := db.extendBlocks(); err != nil {
+		return err
+	}
 	for _, s := range seqs {
-		it, err := db.wal.Read(s)
-		if err != nil {
-			fmt.Println("db.reoverLog: ", err)
-			return err
+		batchSeqs, ok := db.commitLogQueue[s]
+		if !ok {
+			continue
 		}
-		for {
-			logData, ok := it.Next()
-			if !ok {
-				break
+		for _, memseq := range batchSeqs {
+			db.metrics.Puts.Add(1)
+			memdata, err := db.mem.Get(memseq)
+			if err != nil {
+				return err
 			}
-			entryData, data := logData[:entrySize], logData[entrySize:]
 			e := entry{}
-			e.UnmarshalBinary(entryData)
+			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				return err
+			}
 			startBlockIdx := startBlockIndex(e.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}
@@ -579,9 +588,9 @@ func (db *DB) Sync() error {
 				continue
 			}
 			db.count++
-			moffset := e.mSize()
-			m := data[:moffset]
-			if e.mOffset, err = db.data.writeRaw(m); err != nil {
+			// moffset := e.mSize()
+			// m := data[:moffset]
+			if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
 				db.freeseq.free(e.seq)
 				return err
 			}
@@ -597,6 +606,8 @@ func (db *DB) Sync() error {
 			}
 			db.filter.Append(e.seq)
 		}
+		delete(db.commitLogQueue, s)
+
 		if err := db.sync(); err != nil {
 			return err
 		}
@@ -684,11 +695,20 @@ func (db *DB) extendBlocks() error {
 			return err
 		}
 	}
+	// n := nBlocks - db.blockIndex
+	// _, err := db.index.extend(n * blockSize)
+	// db.nBlocks += n
+	// db.blockIndex += n
 	return nil
 }
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
+	// The write happen synchronously.
+	// db.writeLockC <- struct{}{}
+	// defer func() {
+	// 	<-db.writeLockC
+	// }()
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -716,17 +736,17 @@ func (db *DB) PutEntry(e *Entry) error {
 	topic.AddContract(e.Contract)
 	//message ID is the database key
 	var id message.ID
-	var ok bool
+	// var ok bool
 	var seq uint64
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		id.AddContract(topic.Parts)
 		seq = id.Seq()
 	} else {
-		ok, seq = db.freeseq.get()
-		if !ok {
-			seq = db.nextSeq()
-		}
+		// ok, seq = db.freeseq.get()
+		// if !ok {
+		seq = db.nextSeq()
+		// }
 		id = message.NewID(seq, false)
 		id.AddContract(topic.Parts)
 	}
@@ -766,14 +786,11 @@ func (db *DB) PutEntry(e *Entry) error {
 		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 			return err
 		}
+		db.tinyBatch.batchSeqs = append(db.tinyBatch.batchSeqs, memseq)
 		db.tinyBatch.entryCount++
-		// if err := <-logWriter.Append(data); err != nil {
-		// 	return err
-		// }
 	}
 
 	return nil
-	// return <-logWriter.SignalInitWrite()
 }
 
 // entryData marshal entry along with message data
@@ -801,7 +818,7 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 }
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
-func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
+func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []byte) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -828,10 +845,15 @@ func (db *DB) tinyCommit(entryCount uint16, tinyBatchData []byte) error {
 		offset += dataLen
 	}
 
-	if err := <-logWriter.SignalInitWrite(); err != nil {
+	logSeq := db.wal.NextSeq()
+	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	return db.writeHeader(false)
+	if err := db.writeHeader(false); err != nil {
+		return err
+	}
+	db.commitLogQueue[logSeq] = batchSeqs
+	return db.tinyBatch.reset()
 }
 
 func (db *DB) commit(batchSeqs []uint64) error {
@@ -871,10 +893,15 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(); err != nil {
+	logSeq := db.wal.NextSeq()
+	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	return db.writeHeader(false)
+	if err := db.writeHeader(false); err != nil {
+		return err
+	}
+	db.commitLogQueue[logSeq] = batchSeqs
+	return nil
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

@@ -14,13 +14,24 @@ import (
 type (
 	batchInfo struct {
 		entryCount uint16
+		batchSeqs  []uint64
 	}
 
 	tinyBatch struct {
 		batchInfo
 		buffer *bytes.Buffer
+
+		mu sync.Mutex
 	}
 )
+
+func (b *tinyBatch) reset() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.entryCount = 0
+	b.buffer.Reset()
+	return nil
+}
 
 // batchdb manages the batch execution
 type batchdb struct {
@@ -212,7 +223,9 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			select {
 			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
-					db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.buffer.Bytes())
+					if err := db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.batchSeqs, db.tinyBatch.buffer.Bytes()); err != nil {
+						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error commiting tincy batch")
+					}
 				}
 			case <-db.closeC:
 				return

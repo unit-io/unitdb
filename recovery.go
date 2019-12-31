@@ -65,7 +65,7 @@ func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
 	return itemCount, usedBlocks, nil
 }
 
-func recoverFreeList(db *DB, usedBlocks []userdblock) error {
+func recoverFreeBlocks(db *DB, usedBlocks []userdblock) error {
 	if len(usedBlocks) == 0 {
 		return nil
 	}
@@ -84,9 +84,9 @@ func recoverFreeList(db *DB, usedBlocks []userdblock) error {
 	lastOffset := int64(lastBlock.size) + lastBlock.offset
 	if db.data.size > lastOffset {
 		fb.free(lastOffset, uint32(db.data.size-lastOffset))
-		logger.Info().Str("context", "recovery.recoverFreeList").Msgf("%v %d", lastBlock, db.data.size)
+		logger.Info().Str("context", "recovery.recoverFreeBlocks").Msgf("%v %d", lastBlock, db.data.size)
 	}
-	logger.Info().Str("context", "recovery.recoverFreeList").Int("Old len", len(db.data.fb.blocks)).Int("new len", len(fb.blocks)).Msg("Recovered freelist")
+	logger.Info().Str("context", "recovery.recoverFreeBlocks").Int("Old len", len(db.data.fb.blocks)).Int("new len", len(fb.blocks)).Msg("Recovered freeblocks")
 	db.data.fb = fb
 	return nil
 }
@@ -110,7 +110,7 @@ func (db *DB) recover() error {
 	db.count = itemCount
 
 	// Recover free list.
-	if err := recoverFreeList(db, usedBlocks); err != nil {
+	if err := recoverFreeBlocks(db, usedBlocks); err != nil {
 		return err
 	}
 	logger.Info().Str("context", "recovery.recover").Msg("Recovery complete.")
@@ -123,6 +123,9 @@ func (db *DB) recoverLog() error {
 
 	seqs, err := db.wal.Scan()
 	if err != nil {
+		return err
+	}
+	if err := db.extendBlocks(); err != nil {
 		return err
 	}
 	for _, s := range seqs {

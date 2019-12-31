@@ -254,7 +254,7 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	return nil
 }
 
-func (wal *WAL) nextSeq() uint64 {
+func (wal *WAL) NextSeq() uint64 {
 	return atomic.AddUint64(&wal.seq, 1)
 }
 

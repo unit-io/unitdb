@@ -8,6 +8,12 @@ import (
 
 // Options holds the optional DB parameters.
 type Options struct {
+	// BackgroundSyncInterval sets the amount of time between background fsync() calls.
+	//
+	// Setting the value to 0 disables the automatic background synchronization.
+	// Setting the value to -1 makes the DB call fsync() after every write operation.
+	BackgroundSyncInterval time.Duration
+
 	// BackgroundKeyExpiry sets flag to run key expirer
 	BackgroundKeyExpiry bool
 
@@ -33,9 +39,6 @@ type Options struct {
 	// Size of write ahead log
 	LogSize int64
 
-	// LogSyncInterval sync write ahead log in background
-	LogSyncInterval time.Duration
-
 	FileSystem fs.FileSystem
 }
 
@@ -47,6 +50,9 @@ func (src *Options) copyWithDefaults() *Options {
 	// opts.BackgroundKeyExpiry = true
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
+	}
+	if opts.BackgroundSyncInterval == 0 {
+		opts.BackgroundSyncInterval = 15 * time.Second
 	}
 	if opts.BlockCacheSize == 0 {
 		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
@@ -62,9 +68,6 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 33 // maximum size of memdb (1GB).
-	}
-	if opts.LogSyncInterval == 0 {
-		opts.LogSyncInterval = 5 * time.Second
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

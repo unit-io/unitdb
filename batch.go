@@ -225,9 +225,9 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	if err := b.db.extendBlocks(); err != nil {
-		return err
-	}
+	// if err := b.db.extendBlocks(); err != nil {
+	// 	return err
+	// }
 	if b.Len() <= b.db.opts.TinyBatchSize {
 		b.tinyBatch = true
 	}
@@ -256,7 +256,9 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 			if _, err := b.db.tinyBatch.buffer.Write(data); err != nil {
 				return err
 			}
+			b.db.tinyBatch.batchSeqs = append(b.db.tinyBatch.batchSeqs, memseq)
 			b.db.tinyBatch.entryCount++
+			continue
 		}
 		b.batchSeqs = append(b.batchSeqs, memseq)
 	}
@@ -323,7 +325,12 @@ func (b *Batch) Commit() error {
 	if b.db.mem == nil || b.db.mem.getref() == 0 {
 		return nil
 	}
-	if b.tinyBatch || len(b.pendingWrites) == 0 {
+	if len(b.pendingWrites) == 0 {
+		return nil
+	}
+	if b.tinyBatch {
+		b.Abort()
+		close(b.commitComplete)
 		return nil
 	}
 
