@@ -123,15 +123,6 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	fmt.Printf("Fie size: %s\n", byteSize(sz))
 	printStats(db)
 
-	// if err := db.Close(); err != nil {
-	// 	return err
-	// }
-	// db, err = tracedb.Open(dbpath, nil)
-	// if err != nil {
-	// 	return err
-	// }
-	// forceGC()
-
 	start = time.Now()
 	func(concurrent int) error {
 		i := 1
@@ -214,15 +205,6 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-
-	// if err := db.Close(); err != nil {
-	// 	return err
-	// }
-	// db, err = tracedb.Open(dbpath, nil)
-	// if err != nil {
-	// 	return err
-	// }
-	// forceGC()
 
 	start = time.Now()
 	func(concurrent int) error {
@@ -324,9 +306,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	// if err := db.Close(); err != nil {
-	// 	return err
-	// }
 	endsecs := time.Since(start).Seconds()
 	totalalsecs := endsecs
 	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))

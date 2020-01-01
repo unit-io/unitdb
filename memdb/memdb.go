@@ -64,6 +64,7 @@ func (db *DB) Close() error {
 	return err
 }
 
+// Get gets data for the provided key
 func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()

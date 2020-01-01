@@ -87,6 +87,7 @@ func NewpartTrie() *partTrie {
 	}
 }
 
+// Trie trie data structure to store topic parts
 type Trie struct {
 	sync.RWMutex
 	partTrie *partTrie

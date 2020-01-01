@@ -46,7 +46,6 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 	b.opts = opts
 }
 
-// Batch is a write batch.
 type (
 	batchIndex struct {
 		delFlag   bool
@@ -58,6 +57,7 @@ type (
 		mOffset   int64
 	}
 
+	// Batch is a write batch.
 	Batch struct {
 		opts     *BatchOptions
 		managed  bool
@@ -191,7 +191,7 @@ func (b *Batch) Delete(key []byte) error {
 	return b.DeleteEntry(NewEntry(key, nil))
 }
 
-// Delete appends 'delete operation' of the given key to the batch.
+// DeleteEntry appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
@@ -225,9 +225,6 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	// if err := b.db.extendBlocks(); err != nil {
-	// 	return err
-	// }
 	if b.Len() <= b.db.opts.TinyBatchSize {
 		b.tinyBatch = true
 	}
@@ -295,6 +292,7 @@ func (b *Batch) writeTrie() error {
 	return nil
 }
 
+// Write starts writing entries into db. it returns an error to the batch if any
 func (b *Batch) Write() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
@@ -319,6 +317,8 @@ func (b *Batch) Write() error {
 	return err
 }
 
+// Commit commits changes to the db. In batch operation commit is manages and client progress is not allowed to call commit.
+// On Commit complete batch operation signal to the cliend program if the batch is fully commmited to db.
 func (b *Batch) Commit() error {
 	// defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
@@ -338,6 +338,7 @@ func (b *Batch) Commit() error {
 	return nil
 }
 
+//Abort abort is a batch cleanup operation on batch complete
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
 	b.Reset()
@@ -355,18 +356,18 @@ func (b *Batch) uniq() []batchIndex {
 		idx    int
 		newidx int
 	}
-	unique_set := make(map[uint32]indices, len(b.index))
+	uniqueSet := make(map[uint32]indices, len(b.index))
 	i := 0
 	for idx := len(b.index) - 1; idx >= 0; idx-- {
-		if _, ok := unique_set[b.index[idx].key]; !ok {
-			unique_set[b.index[idx].key] = indices{idx, i}
+		if _, ok := uniqueSet[b.index[idx].key]; !ok {
+			uniqueSet[b.index[idx].key] = indices{idx, i}
 			i++
 		}
 	}
 
-	b.pendingWrites = make([]batchIndex, len(unique_set))
-	for _, i := range unique_set {
-		b.pendingWrites[len(unique_set)-i.newidx-1] = b.index[i.idx]
+	b.pendingWrites = make([]batchIndex, len(uniqueSet))
+	for _, i := range uniqueSet {
+		b.pendingWrites[len(uniqueSet)-i.newidx-1] = b.index[i.idx]
 	}
 	return b.pendingWrites
 }

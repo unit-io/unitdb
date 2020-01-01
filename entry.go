@@ -23,6 +23,7 @@ func NewEntry(topic, payload []byte) *Entry {
 	}
 }
 
+// Marshal serializes message topic and payload into binary data
 func (e *Entry) Marshal() ([]byte, error) {
 	b := collection.NewByteWriter()
 	b.WriteUint16(uint16(len(e.Topic)))
@@ -34,6 +35,7 @@ func (e *Entry) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Unmarshal dserializes message topic and payload from binary data
 func (e *Entry) Unmarshal(data []byte) error {
 	l := binary.LittleEndian.Uint16(data[:2])
 	e.Topic = data[2 : l+2]

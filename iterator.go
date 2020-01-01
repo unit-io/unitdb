@@ -8,6 +8,7 @@ import (
 	"github.com/unit-io/tracedb/message"
 )
 
+// Item items returned by the iterator
 type Item struct {
 	topic     []byte
 	value     []byte

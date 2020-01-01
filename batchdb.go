@@ -109,7 +109,7 @@ func (db *DB) startBatchCommit() {
 			select {
 			case b := <-db.commitQueue:
 				if err := db.commit(b.Seqs()); err != nil {
-					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error commiting batch with startSeq, size ", b.startSeq, b.Len())
+					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error commiting batch with startSeq %d, size %d", b.startSeq, b.Len())
 				}
 				b.Abort()
 				close(b.commitComplete)

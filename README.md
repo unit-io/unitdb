@@ -6,7 +6,7 @@
 
 # tracedb: Blazing fast timeseries database for IoT and real-time gaming applications
 
-tracedb is blazing fast timeseries database for IoT, realtime gaming, messaging or chat applications. Use trace application under, github.com/unit-io/trace to interact with tracedb using pubsub over tcp or websocket.
+tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 
 # Key characteristics
 - 100% Go.

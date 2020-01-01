@@ -4,6 +4,7 @@ import (
 	"github.com/unit-io/tracedb/message"
 )
 
+// Topic topic returned by iterator
 type Topic struct {
 	parts []message.Part
 	depth uint8

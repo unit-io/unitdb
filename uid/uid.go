@@ -18,11 +18,13 @@ var (
 	)
 )
 
+// NewAppoch creats an appoch to generate uniue id
 func NewApoch() uint32 {
 	now := uint32(time.Now().Unix() - Offset)
 	return math.MaxUint32 - now
 }
 
+// NewUnique return unique value to use generating unique id
 func NewUnique() uint32 {
 	b := make([]byte, 4)
 	random := rand.New(rand.NewSource(int64(NewApoch())))

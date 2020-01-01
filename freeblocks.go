@@ -113,6 +113,7 @@ func (fb *freeblocks) defrag() {
 	fb.blocks = merged
 }
 
+// MarshalBinary serializes freeblocks into binary data
 func (fb *freeblocks) MarshalBinary() ([]byte, error) {
 	size := fb.binarySize()
 	buf := make([]byte, size)

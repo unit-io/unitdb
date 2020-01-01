@@ -73,6 +73,7 @@ func nextPart(buf *bytes.Buffer) (Part, bool) {
 	return part, true
 }
 
+// Marshal seriliazes topic to binay
 func (t *Topic) Marshal() []byte {
 	// preallocate buffer of appropriate size
 	var size int
@@ -95,6 +96,7 @@ func (t *Topic) Marshal() []byte {
 	return buf
 }
 
+// Unmarshal deseriliazes topic from binary data
 func (t *Topic) Unmarshal(data []byte) error {
 	buf := bytes.NewBuffer(data)
 

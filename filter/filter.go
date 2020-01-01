@@ -5,37 +5,39 @@ const (
 	bloomBits   uint64 = 160000
 )
 
-type FilterGenerator struct {
+// Generator bloom filter generator
+type Generator struct {
 	filter *Filter
 }
 
 // NewFilterGenerator returns a new filter generator.
-func NewFilterGenerator() *FilterGenerator {
-	return &FilterGenerator{filter: newFilter(bloomBits, bloomHashes)}
+func NewFilterGenerator() *Generator {
+	return &Generator{filter: newFilter(bloomBits, bloomHashes)}
 }
 
 // Append adds a key to the filter block.
-func (b *FilterGenerator) Append(h uint64) {
+func (b *Generator) Append(h uint64) {
 	b.filter.Add(h)
 }
 
 // Finish finishes building the filter block and returns a slice to its contents.
-func (b *FilterGenerator) Finish() []byte {
+func (b *Generator) Finish() []byte {
 	return b.filter.Bytes()
 }
 
-type FilterBlock struct {
+// Block filter blocks is a blook filter block
+type Block struct {
 	filter *Filter
 }
 
-// NewFilterBlock returns new filter block, it is used to test key presense in the filter.
-func NewFilterBlock(b []byte) *FilterBlock {
-	return &FilterBlock{
+// NewFilterBlock returns new filter block, it is used to test key presence in the filter.
+func NewFilterBlock(b []byte) *Block {
+	return &Block{
 		filter: newFilterFromBytes(b, bloomBits, bloomHashes),
 	}
 }
 
-// Test is used to test for key presense in the filter
-func (b *FilterBlock) Test(h uint64) bool {
+// Test is used to test for key presence in the filter
+func (b *Block) Test(h uint64) bool {
 	return b.filter.Test(h)
 }

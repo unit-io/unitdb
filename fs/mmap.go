@@ -28,6 +28,7 @@ type osfs struct{}
 // OS is a file system backed by the os package.
 var MemoryMap = &osfs{}
 
+// Open opens file is exist or create new file
 func (fs *osfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f, err := os.OpenFile(name, flag, perm)
 	if err != nil {
@@ -46,14 +47,17 @@ func (fs *osfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, 
 	return mf, err
 }
 
+// CreateLockFile to create lock file for db
 func (fs *osfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
 	return createLockFile(name, perm)
 }
 
+// State provides db state and size of file
 func (fs *osfs) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
+// Remove removes the file
 func (fs *osfs) Remove(name string) error {
 	return os.Remove(name)
 }
@@ -63,6 +67,7 @@ type oslockfile struct {
 	path string
 }
 
+// Unlock unlocks db lock file while closing db
 func (f *oslockfile) Unlock() error {
 	if err := os.Remove(f.path); err != nil {
 		return err
@@ -70,10 +75,12 @@ func (f *oslockfile) Unlock() error {
 	return f.Close()
 }
 
+// Type indicate type of filesystem
 func (f *OSFile) Type() string {
 	return "MemoryMap"
 }
 
+// Slice provide the data for start and end offset
 func (f *OSFile) Slice(start int64, end int64) ([]byte, error) {
 	if f.data == nil {
 		return nil, os.ErrClosed
@@ -92,6 +99,7 @@ func (f *OSFile) Close() error {
 	return f.File.Close()
 }
 
+// Mmap memory maps file
 func (f *OSFile) Mmap(fileSize int64) error {
 	mmapSize := f.mmapSize
 

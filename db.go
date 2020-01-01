@@ -484,9 +484,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 			items = append(items, entry.Payload)
 			return nil
-			// 	}
-			// }
-			return nil
 		}()
 		if err != nil {
 			return items, err
@@ -712,6 +709,8 @@ func (db *DB) extendBlocks() error {
 
 // PutEntry sets the entry for the given message. It updates the value for the existing message id.
 func (db *DB) PutEntry(e *Entry) error {
+	// start := time.Now()
+	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
 	// The write happen synchronously.
 	db.writeLockC <- struct{}{}
 	defer func() {
@@ -720,10 +719,6 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
-	// start := time.Now()
-	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
-	// db.mu.Lock()
-	// defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -769,10 +764,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
-	// logWriter, err := db.wal.NewWriter()
-	// if err != nil {
-	// 	return err
-	// }
+
 	data, err := db.entryData(seq, id, topic.Marshal(), val, e.ExpiresAt)
 	if err != nil {
 		return err
@@ -865,12 +857,11 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 }
 
 func (db *DB) commit(batchSeqs []uint64) error {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
 	if err := db.ok(); err != nil {
 		return err
 	}
-	// // CPU profiling by default
-	// defer profile.Start().Stop()
-	// commit writes batches into write ahead log. The write happen synchronously.
 
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.commitLockC <- struct{}{}

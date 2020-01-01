@@ -12,7 +12,7 @@ const (
 	Init = offset32
 )
 
-// Of returns the hash of bytes. it uses salt to shuffle the slice before calculating hash
+// WithSalt returns the hash of bytes. it uses salt to shuffle the slice before calculating hash
 func WithSalt(text []byte, salt uint32) uint32 {
 	b := shuffleInPlace(text, salt)
 	return New(b)

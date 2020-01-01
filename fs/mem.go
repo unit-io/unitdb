@@ -13,6 +13,7 @@ type memfs struct {
 // Mem is a file system backed by memory.
 var Mem = &memfs{files: map[string]*MemFile{}}
 
+// Open opens table if it is exist or create new memtable
 func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f := fs.files[name]
 	if f == nil {
@@ -26,6 +27,7 @@ func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager,
 	return f, nil
 }
 
+// CreateLockFile to create lock file for db
 func (fs *memfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
 	f, err := fs.OpenFile(name, 0, perm)
 	if err != nil {
@@ -34,6 +36,7 @@ func (fs *memfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, 
 	return &memlockfile{f, name}, false, nil
 }
 
+// State provides db state and size of file
 func (fs *memfs) Stat(name string) (os.FileInfo, error) {
 	if f, ok := fs.files[name]; ok {
 		return f, nil
@@ -41,6 +44,7 @@ func (fs *memfs) Stat(name string) (os.FileInfo, error) {
 	return nil, os.ErrNotExist
 }
 
+// Remove removes the file
 func (fs *memfs) Remove(name string) error {
 	if _, ok := fs.files[name]; ok {
 		delete(fs.files, name)
@@ -54,6 +58,7 @@ type memlockfile struct {
 	name string
 }
 
+// Unlock unlocks db lock file while closing db
 func (f *memlockfile) Unlock() error {
 	if err := f.Close(); err != nil {
 		return err
@@ -68,10 +73,12 @@ type MemFile struct {
 	closed bool
 }
 
+// Type indicate type of filesystem
 func (m *MemFile) Type() string {
 	return "Mem"
 }
 
+// Closes closes memtable on db close
 func (m *MemFile) Close() error {
 	if m.closed {
 		return os.ErrClosed
@@ -80,6 +87,7 @@ func (m *MemFile) Close() error {
 	return nil
 }
 
+// ReatAt reads data from memtable at offset
 func (m *MemFile) ReadAt(p []byte, off int64) (int, error) {
 	if m.closed {
 		return 0, os.ErrClosed
@@ -92,6 +100,7 @@ func (m *MemFile) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
+// WriteAt writes data to memtable at the given offset
 func (m *MemFile) WriteAt(p []byte, off int64) (int, error) {
 	if m.closed {
 		return 0, os.ErrClosed
@@ -108,6 +117,7 @@ func (m *MemFile) WriteAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
+// State provides db state and size of memtable
 func (m *MemFile) Stat() (os.FileInfo, error) {
 	if m.closed {
 		return m, os.ErrClosed
@@ -115,6 +125,7 @@ func (m *MemFile) Stat() (os.FileInfo, error) {
 	return m, nil
 }
 
+// Sync flush the changes to memtable
 func (m *MemFile) Sync() error {
 	if m.closed {
 		return os.ErrClosed
@@ -122,6 +133,7 @@ func (m *MemFile) Sync() error {
 	return nil
 }
 
+// Truncate resize the memtable and shrink or extend the memtable
 func (m *MemFile) Truncate(size int64) error {
 	if m.closed {
 		return os.ErrClosed
@@ -136,30 +148,37 @@ func (m *MemFile) Truncate(size int64) error {
 	return nil
 }
 
+// Name name of the FileSystem
 func (m *MemFile) Name() string {
 	return ""
 }
 
+// Size provides size of the memtable in bytes
 func (m *MemFile) Size() int64 {
 	return m.size
 }
 
+// Mode mode of FileSystem
 func (m *MemFile) Mode() os.FileMode {
 	return os.FileMode(0)
 }
 
+// ModTime modtime for memtable
 func (m *MemFile) ModTime() time.Time {
 	return time.Now()
 }
 
+// IsDir indicates if the path is directory
 func (m *MemFile) IsDir() bool {
 	return false
 }
 
+// Sys empty interface
 func (m *MemFile) Sys() interface{} {
 	return nil
 }
 
+// Slice provide the data for start and end offset
 func (m *MemFile) Slice(start int64, end int64) ([]byte, error) {
 	if m.closed {
 		return nil, os.ErrClosed

@@ -33,6 +33,7 @@ type Writer struct {
 	writeCompleted chan struct{}
 }
 
+// NewWriter returns new writer to write to log ahead log file
 func (wal *WAL) NewWriter() (writer Writer, err error) {
 	if err := wal.ok(); err != nil {
 		return writer, err
@@ -72,6 +73,7 @@ func (w *Writer) append(data []byte) error {
 	return nil
 }
 
+// Append appends records into write ahead log
 func (w *Writer) Append(data []byte) <-chan error {
 	done := make(chan error, 1)
 	// w.wal.wg.Add(1)

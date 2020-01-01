@@ -20,6 +20,7 @@ func init() {
 	headerSize = align512(uint32(binary.Size(header{})))
 }
 
+// MarshalBinary serializes header into binary data
 func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:8], h.signature[:])
@@ -35,6 +36,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
+// UnmarshalBinary deserializes header from binary data
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:8])
 	h.version = binary.LittleEndian.Uint32(data[8:12])

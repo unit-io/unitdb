@@ -46,17 +46,20 @@ var config = bigcache.Config{
 	OnRemoveWithReason: nil,
 }
 
+// Filter filter is bloom filter generator
 type Filter struct {
 	table
-	filterBlock *filter.FilterGenerator
+	filterBlock *filter.Generator
 	cache       *bigcache.BigCache
 	cacheID     uint64
 }
 
+// Append appends an entry to bloom filter
 func (f *Filter) Append(h uint64) {
 	f.filterBlock.Append(h)
 }
 
+// Test tests entry in bloom filter. it return if entry difinately does not exist or entry maybe existing in db
 func (f *Filter) Test(h uint64) bool {
 	/// Test filter block for presence
 	fltr, _ := f.getFilterBlock(true)
@@ -85,7 +88,7 @@ func (f *Filter) writeFilterBlock() error {
 	return nil
 }
 
-func (f *Filter) getFilterBlock(fillCache bool) (*filter.FilterBlock, error) {
+func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 	if f.size <= 0 {
 		return nil, nil
 	}
