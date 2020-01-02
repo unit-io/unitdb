@@ -10,26 +10,14 @@ os:
 
 env:
   - GO111MODULE=on
-
-addons:
-  apt:
-    update: true
-    packages:
-      - "python3"
-      - "python3-pip"
-      - "python3-setuptools"
+  global:
+  - secure: "g+NGdAVjEErSns9KKMY3oSNRCg9YUdi/9aSbmqgbJWtDtcTR68vzu6En7JuaxQCd8Dx6a5TpRrAK9DIKBqvOr70uHJb/5nY9zK+EaSCuboLzoKE5HxHa+GypGSdAOLgI+AmFb3gkPMN4nM3pZ1iHJ8EnOxSnNZSBjfF6cVR08F/zTMewnF5N4GM4P81rsP7kMrk417csM1uMMmTi54douxFdEGxEr09T/l7zb2kBcnb4tysTYcT1NAZzzTmP0UnUwHncOQJcoP0KnKB6juRp33NiRn5CMbDw3DO1snhg4bQKN0Mi4WpZH6MsNLFbwkh245qmqdA6GH/vUufQYIWTHC4TwORKL7qMxhW1s0mm1CGZMwkxvJZd7RB6rzLBO5SUC+9LaH+pAqLxIEl9igsUwsYtJUIroY4mstK89aEAMWO/zzJs4p2kO0JLV4UIkhC1M6fdzQMELV3ynHydH7z7ldQY1Wbm5OFxj/W+bdjgDPE8cGImdgXhjkRFGoeEAvkj5CM7EojjYl727ksrcfp4oSYVCAmf7cC3+aMd7mnZWmH43dZm5RROS+T9UWBwgBtxHckaTOS/T4kHCLWFJjeZ5amIqOWb2EeWx/2kDjGkcGJqhz+w7i6RYKWb3YyE6bxlJY2lWqm4yeMmOUeROFB7LOR67SgRrIuGv1b4M+DII9o="
 
 git:
   depth: 1
 
-stages:
-  - name: test
-  - name: push
-    if: fork = false
-  - name: manifest
-    if: fork = false AND tag IS present
-
 before_install:
+  - go get golang.org/x/tools/cmd/cover
   - go get github.com/mattn/goveralls
 
 jobs:
@@ -38,5 +26,5 @@ jobs:
       script:
         - go get github.com/mattn/goveralls
         - go get -u github.com/rakyll/gotest
-        - gotest -v -covermode=count -coverprofile=coverage.out ./ ./memdb/... ./message/... ./wal/...
-        - $GOPATH/bin/goveralls -coverprofile=coverage.out -service=travis-ci -repotoken=$COVERALLS_TOKEN
+        - gotest -v -covermode=count -coverprofile=coverage.out ./ ./memdb/...
+        - $GOPATH/bin/goveralls -coverprofile=coverage.out -service=travis-ci
