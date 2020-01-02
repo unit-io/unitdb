@@ -1,13 +1,9 @@
 language: go
 go:
-- '1.11'
-- '1.12'
-- '1.13'
+- 1.12.x
 - tip
 os:
-- linux
 - osx
-- windows
 env:
   global:
     secure: FoMdWujWKZ8ylUHwEk/hLs1aSapFVkg8QvL4kz5GdRDT6o9oGsm3b1FKYyp57GKvsjMPrwRSTvNFYgYAtlaULs9Lo0kYMyXMOT/IiFso6nKbsy/+e1/HS8yYAU3P/aWI7sySsYkwTe4HvrMD79n9xo4Z/+szbllPFaSND6pveWlIFtDhp+nKaQBlbVEMmEOfmoHsj/FNIxIJvtIDhTujzf0K3JCW94IvRBHeQqGJ/3hrG24kYmdprGUn98x3yhb0XJ2xbRXGcB45voL3ICkx2v/0wXi+jy8DFFufAahUfx4JK30YcipE3IPRHJyGX49IesqNneZqe9fSavMR+ndKfDYZh/w+dpYna08mgNcomibDGRwe9OHJlZsUnCzTZvde0r0/1QYETsU6zGyDtOr6V7NYPA6uqnLc4Xc5kHw02h/58ZY979rhNuNJ/gPw4pUiDAJ1bMz7MS48Iy+/lcgNWzaROpQZiVhZOSOUHAcKUIwi9vdeseZDKMjnHV77eeMSbWxaY4KYueUTPlEFcYqxYZrdbHTABJMglG0eOgORR/p5igGwlBuHlrpkQcMC0ksTzkMy92A+oqEpzMdHGyhO3JguV5hYUmvE/Z+JeW1MsBbR9jJyN6V7wXed+7BOwgz3fcbhcHT8hE6pYv7fHWM4AVP5lU5AkoG6wR2Ip0dkmx0=
