@@ -18,10 +18,10 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Memory buffer optimization to scale hyper scale writes & reads. Memory dump to archive files to offload buffers and free memory
-- End to end lifecycle management of db entry, to better inform client about entry state such entry is entry is in commited state, error state or expired state etc..
+- Memory buffer optimization to achive hyper scale writes & reads. Memory dump to archive files to offload buffers and free memory
+- End to end lifecycle management of message entry, to better inform client about entry state (using systems topic) such entry is in commited state, error state or expired state etc..
 - Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify if error has recoverd
-- Documentation - document the technical atchitecture, design principals and details advanced usage guides such as optimum configuration guidelines to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
+- Documentation - document the technical atchitecture, design principals and details advanced usage guides such as optimum configuration guideline to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
 ## Quick Start
 To build tracedb from source code use go get command.
