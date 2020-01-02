@@ -60,7 +60,9 @@ func generateVals(count int, minL int, maxL int) [][]byte {
 }
 
 func printStats(db *tracedb.DB) {
-	fmt.Printf("%+v\n", db.Metrics())
+	if varz, err := db.Varz(); err == nil {
+		fmt.Printf("%+v\n", varz)
+	}
 }
 
 func showProgress(gid int, total int) {

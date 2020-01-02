@@ -5,18 +5,18 @@ import (
 	"sort"
 )
 
-type freesequence struct {
-	seqs   []uint64 // seq holds free sequence
+type freeslot struct {
+	seqs []uint64 // seq holds free sequence
 }
 
-func (fs *freesequence) search(seq uint64) int {
+func (fs *freeslot) search(seq uint64) int {
 	return sort.Search(len(fs.seqs), func(i int) bool {
 		return fs.seqs[i] == seq
 	})
 }
 
 // get first free seq
-func (fs *freesequence) get() (ok bool, seq uint64) {
+func (fs *freeslot) get() (ok bool, seq uint64) {
 	if len(fs.seqs) == 0 {
 		return ok, seq
 	}
@@ -25,7 +25,7 @@ func (fs *freesequence) get() (ok bool, seq uint64) {
 	return true, seq
 }
 
-func (fs *freesequence) free(seq uint64) (ok bool) {
+func (fs *freeslot) free(seq uint64) (ok bool) {
 	i := fs.search(seq)
 	if i < len(fs.seqs) && seq == fs.seqs[i] {
 		return false
@@ -34,7 +34,7 @@ func (fs *freesequence) free(seq uint64) (ok bool) {
 	return true
 }
 
-func (fs *freesequence) len() int {
+func (fs *freeslot) len() int {
 	return len(fs.seqs)
 }
 

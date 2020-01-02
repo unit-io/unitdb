@@ -203,7 +203,7 @@ func main() {
 		b.Put([]byte("ttl.ttl1?ttl=3m"), []byte("ttl.ttl1.1"))
 		b.Put([]byte("ttl.ttl2?ttl=3m"), []byte("ttl.ttl2.1"))
 		b.Put([]byte("ttl.ttl3?ttl=3m"), []byte("ttl.ttl3.1"))
-		err = b.Write()
+		err := b.Write()
 		return err
 	})
 
@@ -226,7 +226,7 @@ func main() {
 		b.Put([]byte("dev18..."), []byte("dev18...1"))
 		b.Put([]byte("*"), []byte("*.1"))
 		b.Put([]byte("..."), []byte("...1"))
-		err = b.Write()
+		err := b.Write()
 		return err
 	})
 

@@ -84,9 +84,8 @@ type (
 		data       dataTable
 		lock       fs.LockFile
 		wal        *wal.WAL
-		metrics    Metrics
 		syncWrites bool
-		freeseq    freesequence
+		freeslot   freeslot
 		dbInfo
 		timeWindow timeWindowBucket
 
@@ -94,6 +93,10 @@ type (
 		*batchdb
 		//trie
 		trie *message.Trie
+		// The db start time
+		start time.Time
+		// The metircs to measure timeseries on message events
+		meter *Meter
 		// Close.
 		closeW sync.WaitGroup
 		closeC chan struct{}
@@ -143,13 +146,14 @@ func Open(path string, opts *Options) (*DB, error) {
 		commitLockC:    make(chan struct{}, 1),
 		syncLockC:      make(chan struct{}, 1),
 		commitLogQueue: make(map[uint64][]uint64),
-		metrics:        newMetrics(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
 		trie:    message.NewTrie(),
+		start:   time.Now(),
+		meter:   NewMeter(),
 		// Close
 		closeC: make(chan struct{}),
 	}
@@ -386,6 +390,8 @@ func (db *DB) Close() error {
 		db.closer = nil
 	}
 
+	db.meter.UnregisterAll()
+
 	return err
 }
 
@@ -483,13 +489,15 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				return err
 			}
 			items = append(items, entry.Payload)
+			db.meter.OutBytes.Inc(int64(e.valueSize))
 			return nil
 		}()
 		if err != nil {
 			return items, err
 		}
-		db.metrics.Gets.Add(1)
 	}
+	db.meter.Gets.Inc(int64(len(items)))
+	db.meter.OutMsgs.Inc(int64(len(items)))
 	return items, nil
 }
 
@@ -566,7 +574,6 @@ func (db *DB) Sync() error {
 			continue
 		}
 		for _, memseq := range batchSeqs {
-			db.metrics.Puts.Add(1)
 			memdata, err := db.mem.Get(memseq)
 			if err != nil {
 				return err
@@ -596,21 +603,22 @@ func (db *DB) Sync() error {
 			// moffset := e.mSize()
 			// m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
-				db.freeseq.free(e.seq)
+				db.freeslot.free(e.seq)
 				return err
 			}
-
+			db.meter.InBytes.Inc(int64(e.valueSize))
 			b.entries[b.entryIdx] = e
 			if b.entries[b.entryIdx].expiresAt > 0 {
 				db.timeWindow.add(b.entries[b.entryIdx])
 			}
 			b.entryIdx++
 			if err := b.write(); err != nil {
-				db.freeseq.free(e.seq)
+				db.freeslot.free(e.seq)
 				return err
 			}
 			db.filter.Append(e.seq)
 		}
+		db.meter.Puts.Inc(int64(len(batchSeqs)))
 		delete(db.commitLogQueue, s)
 
 		if err := db.sync(); err != nil {
@@ -633,7 +641,7 @@ func (db *DB) expireOldEntries() {
 		if !db.filter.Test(entry.seq) {
 			continue
 		}
-		db.metrics.Dels.Add(1)
+		db.meter.Dels.Inc(1)
 		db.mu.Lock()
 		defer db.mu.Unlock()
 		e, err := db.readEntry(entry.seq)
@@ -746,7 +754,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		id.AddContract(topic.Parts)
 		seq = id.Seq()
 	} else {
-		ok, seq = db.freeseq.get()
+		ok, seq = db.freeslot.get()
 		if !ok {
 			seq = db.nextSeq()
 		}
@@ -837,7 +845,6 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 
 	offset := uint32(0)
 	for i := uint16(0); i < entryCount; i++ {
-		db.metrics.Puts.Add(1)
 		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
 		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
 			return err
@@ -845,6 +852,7 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 		offset += dataLen
 	}
 
+	db.meter.InMsgs.Inc(int64(entryCount))
 	logSeq := db.wal.NextSeq()
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
@@ -877,7 +885,6 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	}
 
 	for _, seq := range batchSeqs {
-		db.metrics.Puts.Add(1)
 		memdata, err := db.mem.Get(seq)
 		if err != nil {
 			return err
@@ -892,6 +899,7 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		}
 	}
 
+	db.meter.InMsgs.Inc(int64(len(batchSeqs)))
 	logSeq := db.wal.NextSeq()
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
@@ -946,13 +954,13 @@ func (db *DB) delete(id []byte) error {
 	if !db.filter.Test(seq) {
 		return nil
 	}
-	db.metrics.Dels.Add(1)
-	db.freeseq.free(seq)
+	db.meter.Dels.Inc(1)
+	db.freeslot.free(seq)
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
 	if err := b.read(); err != nil {
-		db.freeseq.free(seq)
+		db.freeslot.free(seq)
 		return err
 	}
 	entryIdx := -1
@@ -992,11 +1000,6 @@ func (db *DB) Count() uint32 {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return db.count
-}
-
-// Metrics returns the DB metrics.
-func (db *DB) Metrics() Metrics {
-	return db.metrics
 }
 
 // FileSize returns the total size of the disk storage used by the DB.

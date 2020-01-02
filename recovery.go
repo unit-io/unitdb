@@ -163,7 +163,7 @@ func (db *DB) recoverLog() error {
 			moffset := e.mSize()
 			m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(m); err != nil {
-				db.freeseq.free(e.seq)
+				db.freeslot.free(e.seq)
 				return err
 			}
 
@@ -173,7 +173,7 @@ func (db *DB) recoverLog() error {
 			}
 			b.entryIdx++
 			if err := b.write(); err != nil {
-				db.freeseq.free(e.seq)
+				db.freeslot.free(e.seq)
 				return err
 			}
 			db.filter.Append(e.seq)

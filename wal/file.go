@@ -9,11 +9,12 @@ import (
 
 type file struct {
 	fs.FileManager
-	fb   freeBlock
-	size int64
+	fb         freeBlock
+	size       int64
+	targetSize int64
 }
 
-func openFile(name string) (file, error) {
+func openFile(name string, targetSize int64) (file, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	fs := fs.FileIO
@@ -30,6 +31,7 @@ func openFile(name string) (file, error) {
 		return f, err
 	}
 	f.size = stat.Size()
+	f.targetSize = targetSize
 
 	return f, err
 }
@@ -38,7 +40,8 @@ func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	if f.fb.size < int64(size) || f.size < (f.fb.offset+int64(size)) {
+	// do not allocate freeblocks until target size has reached for the log to avoid fragmentation
+	if f.targetSize > (f.size+int64(size)) || (f.targetSize < (f.size+int64(size)) && f.fb.size < int64(size)) {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {
 			return 0, err

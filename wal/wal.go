@@ -67,7 +67,7 @@ func newWal(opts Options) (wal *WAL, needRecover bool, err error) {
 		writeLockC: make(chan struct{}, 1),
 		opts:       opts,
 	}
-	wal.logFile, err = openFile(opts.Path)
+	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
 		return wal, false, err
 	}
