@@ -8,6 +8,8 @@
 
 tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 
+Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
+
 # Key characteristics
 - 100% Go.
 - Optimized for fast lookups and bulk inserts.
@@ -15,7 +17,11 @@ tracedb is blazing fast timeseries database for IoT, realtime messaging  applica
 - Low memory usage.
 - All DB methods are safe for concurrent use by multiple goroutines.
 
-Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
+# Planned
+- Memory buffer optimization to scale hyper scale writes & reads. Memory dump to archive files to offload buffers and free memory
+- End to end lifecycle management of db entry, to better inform client about entry state such entry is entry is in commited state, error state or expired state etc..
+- Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify if error has recoverd
+- Documentation - document the technical atchitecture, design principals and details advanced usage guides such as optimum configuration guidelines to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
 ## Quick Start
 To build tracedb from source code use go get command.
