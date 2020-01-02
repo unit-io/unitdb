@@ -51,18 +51,18 @@ func (m *Meter) UnregisterAll() {
 	m.Metrics.UnregisterAll()
 }
 
-// Stats will output server information on the monitoring port at /varz.
+// Stats will output tracedb information on the monitoring port at /varz.
 type Varz struct {
 	Start    time.Time `json:"start"`
 	Now      time.Time `json:"now"`
 	Uptime   string    `json:"uptime"`
 	Gets     int64     `json:"Gets"`
+	Puts     int64     `json:"Puts"`
+	Dels     int64     `json:"Dels"`
 	InMsgs   int64     `json:"in_msgs"`
 	OutMsgs  int64     `json:"out_msgs"`
 	InBytes  int64     `json:"in_bytes"`
 	OutBytes int64     `json:"out_bytes"`
-	Puts     int64     `json:"Puts"`
-	Dels     int64     `json:"Dels"`
 	HMean    float64   `json:"hmean"` // Event duration harmonic mean.
 	P50      float64   `json:"p50"`   // Event duration nth percentiles ..
 	P75      float64   `json:"p75"`
@@ -132,7 +132,7 @@ func (db *DB) Varz() (*Varz, error) {
 	return v, nil
 }
 
-// HandleVarz will process HTTP requests for conn stats information.
+// HandleVarz will process HTTP requests for tracedb stats information.
 func (db *DB) HandleVarz(w http.ResponseWriter, r *http.Request) {
 	// As of now, no error is ever returned
 	v, _ := db.Varz()

@@ -3,7 +3,6 @@ package tracedb
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log"
 	"math"
@@ -41,7 +40,7 @@ const (
 	// all expired keys are deleted from db in 5 minutes
 	keyExpirationMaxDur = 1
 
-	// MaxKeyLength is the maximum size of a key in bytes.
+	// MaxTopicLength is the maximum size of a topic in bytes.
 	MaxTopicLength = 1 << 16
 
 	// MaxValueLength is the maximum size of a value in bytes.
@@ -215,7 +214,6 @@ func Open(path string, opts *Options) (*DB, error) {
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
-		fmt.Println("db.newWal: ", err)
 		wal.Close()
 		return nil, err
 	} else {
@@ -308,7 +306,7 @@ func (db *DB) readEntry(seq uint64) (entry, error) {
 			return e, nil
 		}
 	}
-	return entry{}, errIdDoesNotExist
+	return entry{}, errMsgIdDoesNotExist
 }
 
 func (db *DB) writeHeader(writeFreeList bool) error {
@@ -408,6 +406,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
 		return nil, err
 	}
+	if q.Topic == nil {
+		return nil, errTopicEmpty
+	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	db.mu.RLock()
@@ -505,6 +506,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
+	}
+	if q.Topic == nil {
+		return nil, errTopicEmpty
 	}
 	topic := new(message.Topic)
 	if q.Contract == 0 {
@@ -625,7 +629,6 @@ func (db *DB) Sync() error {
 			return err
 		}
 		if err := db.wal.SignalLogApplied(s); err != nil {
-			fmt.Println("db.reoverLog: ", err)
 			return err
 		}
 	}
@@ -768,7 +771,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	val := snappy.Encode(nil, m)
 	switch {
 	case len(topic.Topic) > MaxTopicLength:
-		return errIdTooLarge
+		return errTopicTooLarge
 	case len(val) > MaxValueLength:
 		return errValueTooLarge
 	}
@@ -916,7 +919,7 @@ func (db *DB) commit(batchSeqs []uint64) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	if e.ID == nil {
-		return errIdEmpty
+		return errMsgIdEmpty
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()

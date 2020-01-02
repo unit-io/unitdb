@@ -145,8 +145,6 @@ func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
 // The return value from the first function to exit will be returned to
 // the caller of Run.
 func (g *BatchGroup) Run() error {
-	start := time.Now()
-	defer logger.Debug().Str("context", "batchdb.Run").Dur("duration", time.Since(start)).Msg("")
 	// if there are no registered functions, return immediately.
 	if len(g.fn) < 1 {
 		return nil

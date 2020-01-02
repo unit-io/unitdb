@@ -278,7 +278,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(1000 * time.Millisecond) {
+		for _ = range time.Tick(10000 * time.Millisecond) {
 			print([]byte("dev18.b1?last=10m"), db)
 			print([]byte("dev18.b.b1?last=10m"), db)
 			print([]byte("dev18.b.b11?last=10m"), db)

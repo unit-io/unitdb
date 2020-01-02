@@ -1,7 +1,6 @@
 package tracedb
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/unit-io/tracedb/fs"
@@ -131,7 +130,6 @@ func (db *DB) recoverLog() error {
 	for _, s := range seqs {
 		it, err := db.wal.Read(s)
 		if err != nil {
-			fmt.Println("db.reoverLog: ", err)
 			return err
 		}
 		for {
@@ -182,7 +180,6 @@ func (db *DB) recoverLog() error {
 			return err
 		}
 		if err := db.wal.SignalLogApplied(s); err != nil {
-			fmt.Println("db.reoverLog: ", err)
 			return err
 		}
 	}

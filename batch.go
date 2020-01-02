@@ -196,7 +196,7 @@ func (b *Batch) Delete(key []byte) error {
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
 	if e.ID == nil {
-		return errIdEmpty
+		return errMsgIdEmpty
 	}
 	topic := new(message.Topic)
 	if e.Contract == 0 {

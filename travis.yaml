@@ -1,9 +1,42 @@
 language: go
 
 go:
-  - 1.x
+  1.12.x
 
 os:
   - linux
   - osx
   - windows
+
+env:
+  - GO111MODULE=on
+
+addons:
+  apt:
+    update: true
+    packages:
+      - "python3"
+      - "python3-pip"
+      - "python3-setuptools"
+
+git:
+  depth: 1
+
+stages:
+  - name: test
+  - name: push
+    if: fork = false
+  - name: manifest
+    if: fork = false AND tag IS present
+
+before_install:
+  - go get github.com/mattn/goveralls
+
+jobs:
+  include:
+    - stage: test
+      script:
+        - go get github.com/mattn/goveralls
+        - go get -u github.com/rakyll/gotest
+        - gotest -v -covermode=count -coverprofile=coverage.out ./ ./memdb/... ./message/... ./wal/...
+        - $GOPATH/bin/goveralls -coverprofile=coverage.out -service=travis-ci -repotoken=$COVERALLS_TOKEN

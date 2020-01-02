@@ -95,6 +95,9 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
+				it.db.meter.Gets.Inc(1)
+				it.db.meter.OutMsgs.Inc(1)
+				it.db.meter.OutBytes.Inc(int64(e.valueSize))
 				return nil
 			}()
 			if err != nil {
