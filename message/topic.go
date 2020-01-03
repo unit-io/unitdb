@@ -54,7 +54,7 @@ type Topic struct {
 	TopicType    uint8
 }
 
-// Parts represents a parsed topic parts broken based on topic separator.
+// Part represents a parsed topic parts broken based on topic separator.
 type Part struct {
 	Query     uint32
 	Wildchars uint8
@@ -79,7 +79,7 @@ func (t *Topic) Marshal() []byte {
 	var size int
 	//Depth size
 	size++
-	for _ = range t.Parts {
+	for range t.Parts {
 		size += 5
 	}
 	buf := make([]byte, size)
@@ -146,11 +146,10 @@ func (t *Topic) TTL() (int64, bool) {
 	ttl, sec, ok := t.getOption("ttl")
 	if sec > 0 {
 		return int64(time.Duration(sec) * time.Second), ok
-	} else {
-		var duration time.Duration
-		duration, _ = time.ParseDuration(ttl)
-		return int64(duration), ok
 	}
+	var duration time.Duration
+	duration, _ = time.ParseDuration(ttl)
+	return int64(duration), ok
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.
@@ -160,13 +159,12 @@ func (t *Topic) Last() (time.Time, time.Time, uint32, bool) {
 		if last > 0 {
 			u1 := time.Now().Unix() + 3600 // Lookup a bit further
 			return zeroTime, toUnix(u1), last, ok
-		} else {
-			base := time.Now() // Lookup a bit further
-			var duration time.Duration
-			duration, _ = time.ParseDuration(dur)
-			start := base.Add(-duration)
-			return start, base, 0, ok
 		}
+		base := time.Now() // Lookup a bit further
+		var duration time.Duration
+		duration, _ = time.ParseDuration(dur)
+		start := base.Add(-duration)
+		return start, base, 0, ok
 	}
 
 	return zeroTime, zeroTime, 0, ok
@@ -240,14 +238,13 @@ func (t *Topic) ParseKey(text []byte) {
 	t.Topic = parts[0]
 }
 
-// ParseKey attempts to parse the static vs wildcard topic
-func (topic *Topic) Parse(contract uint32, wildcard bool) {
+// Parse attempts to parse the static vs wildcard topic
+func (t *Topic) Parse(contract uint32, wildcard bool) {
 	if wildcard {
-		parseWildcardTopic(contract, topic)
+		parseWildcardTopic(contract, t)
 		return
-	} else {
-		parseStaticTopic(contract, topic)
 	}
+	parseStaticTopic(contract, t)
 
 	return
 }

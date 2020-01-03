@@ -38,10 +38,8 @@ func (t *table) extend(size uint32) (int64, error) {
 
 	if t.FileManager.Type() == "MemoryMap" {
 		return off, t.FileManager.(*fs.OSFile).Mmap(t.size)
-	} else {
-		return off, nil
 	}
-
+	return off, nil
 }
 
 func (t *table) append(data []byte) (int64, error) {
@@ -52,9 +50,8 @@ func (t *table) append(data []byte) (int64, error) {
 	t.size += int64(len(data))
 	if t.FileManager.Type() == "MemoryMap" {
 		return off, t.FileManager.(*fs.OSFile).Mmap(t.size)
-	} else {
-		return off, nil
 	}
+	return off, nil
 }
 
 func (t *table) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {

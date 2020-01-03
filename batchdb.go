@@ -127,6 +127,7 @@ type BatchGroup struct {
 	// batches []Batch
 }
 
+// NewBatchGroup create new group to runs multiple batches concurrently without causing conflicts
 func (db *DB) NewBatchGroup() *BatchGroup {
 	return &BatchGroup{DB: db}
 }
@@ -232,6 +233,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 	}()
 }
 
+//Abort abort is a batch cleanup operation on batch group complete
 func (g *BatchGroup) Abort() {
 	for b := range g.batchQueue {
 		b.unsetManaged()

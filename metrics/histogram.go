@@ -2,7 +2,7 @@ package metrics
 
 import "time"
 
-// Histograms calculate distribution statistics from a series of int64 values.
+// Histogram calculate distribution statistics from a series of int64 values.
 type Histogram interface {
 	Reset()
 	Cumulative() time.Duration // Cumulative time of all sampled events.

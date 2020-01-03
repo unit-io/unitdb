@@ -1,9 +1,9 @@
-// package anchor provides a minimal-memory AnchorHash consistent-hash implementation for Go.
+// Package hash provides a minimal-memory AnchorHash consistent-hash implementation for Go.
 //
 // [AnchorHash: A Scalable Consistent Hash]: https://arxiv.org/abs/1812.09674
 package hash
 
-// Minimal-memory AnchorHash implementation.
+// Consistent a minimal-memory AnchorHash implementation.
 type Consistent struct {
 	// We use an integer array A of size a to represent the Anchor.
 	//
@@ -23,7 +23,7 @@ type Consistent struct {
 	N uint32
 }
 
-// Create a new anchor with a given capacity and initial size.
+// InitConsistent a new anchor with a given capacity and initial size.
 //
 // 	INITANCHOR(a, w)
 // 	A[b] ← 0 for b = 0, 1, ..., a−1    ◃ |Wb| ← 0 for b ∈ A
@@ -50,7 +50,7 @@ func InitConsistent(blocks, used int) *Consistent {
 	return c
 }
 
-// Find the blocks which a hash-key is assigned to.
+// FindBlock find the blocks which a hash-key is assigned to.
 //
 // If the path for a given key contains any non-working blocks, the path (and in turn,
 // the assigned bucket for the key) will be determined by the order in which the non-working
@@ -81,26 +81,26 @@ func (c *Consistent) FindBlock(key uint32) uint32 {
 	return b
 }
 
-func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
-	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
-	cb := R[len(R)-1]
-	A[cb] = N
-	K[cb] = W[N]
+// func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
+// 	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
+// 	cb := R[len(R)-1]
+// 	A[cb] = N
+// 	K[cb] = W[N]
 
-	ha, hb, hc, hd := fleaInit(uint64(key))
-	b := FastMod(uint64(hd), uint64(len(A)))
-	for A[b] > 0 {
-		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := FastMod(uint64(hd), uint64(A[b]))
-		for A[h] >= A[b] {
-			h = K[h]
-		}
-		b = h
-	}
-	return b
-}
+// 	ha, hb, hc, hd := fleaInit(uint64(key))
+// 	b := FastMod(uint64(hd), uint64(len(A)))
+// 	for A[b] > 0 {
+// 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
+// 		h := FastMod(uint64(hd), uint64(A[b]))
+// 		for A[h] >= A[b] {
+// 			h = K[h]
+// 		}
+// 		b = h
+// 	}
+// 	return b
+// }
 
-// Get the path to the bucket which a hash-key is assigned to.
+// GetPath get the path to the bucket which a hash-key is assigned to.
 //
 // The returned path will contain all blocks traversed while searching for a
 // working bucket. The final bucket in the path will be the assigned bucket for
@@ -144,7 +144,7 @@ func (c *Consistent) GetPath(key uint32, pathBuffer []uint32) []uint32 {
 	return pathBuffer
 }
 
-// Add a block to the anchor.
+// AddBlock add a block to the anchor.
 //
 // 	ADDBLOCK()
 // 	b ← R.pop()
@@ -164,7 +164,7 @@ func (c *Consistent) AddBlock() uint32 {
 	return b
 }
 
-// Remove a block from the anchor.
+// RemoveBlock remove a block from the anchor.
 //
 // 	REMOVEBLOCK(b)
 // 	R.push(b)

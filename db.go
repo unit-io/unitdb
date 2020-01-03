@@ -406,8 +406,11 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
 		return nil, err
 	}
-	if q.Topic == nil {
+	switch {
+	case len(q.Topic) == 0:
 		return nil, errTopicEmpty
+	case len(q.Topic) > MaxTopicLength:
+		return nil, errTopicTooLarge
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
@@ -507,8 +510,11 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
 	}
-	if q.Topic == nil {
+	switch {
+	case len(q.Topic) == 0:
 		return nil, errTopicEmpty
+	case len(q.Topic) > MaxTopicLength:
+		return nil, errTopicTooLarge
 	}
 	topic := new(message.Topic)
 	if q.Contract == 0 {
@@ -730,6 +736,14 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
+	switch {
+	case len(e.Topic) == 0:
+		return errTopicEmpty
+	case len(e.Topic) > MaxTopicLength:
+		return errTopicTooLarge
+	case len(e.Payload) > MaxValueLength:
+		return errValueTooLarge
+	}
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -918,8 +932,13 @@ func (db *DB) commit(batchSeqs []uint64) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
-	if e.ID == nil {
+	switch {
+	case len(e.ID) == 0:
 		return errMsgIdEmpty
+	case len(e.Topic) == 0:
+		return errTopicEmpty
+	case len(e.Topic) > MaxTopicLength:
+		return errTopicTooLarge
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()

@@ -1,4 +1,4 @@
-// Package ringhash implementats a consistent ring hash:
+// Package hash implements a consistent ring hash:
 // https://en.wikipedia.org/wiki/Consistent_hashing
 package hash
 
@@ -41,7 +41,7 @@ type Ring struct {
 	hashfunc  Hash
 }
 
-// New initializes an empty ringhash with the given number of replicas and a hash function.
+// NewRing New ring initializes an empty ringhash with the given number of replicas and a hash function.
 // If the hash function is nil, fnv.New32a() is used.
 func NewRing(replicas int, fn Hash) *Ring {
 	ring := &Ring{

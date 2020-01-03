@@ -9,7 +9,7 @@ func init() {
 	}
 }
 
-// encode by unrolling the stdlib base32 algorithm + removing all safe checks
+// Encode32 encode by unrolling the stdlib base32 algorithm + removing all safe checks
 func Encode32(dst, id []byte) {
 	dst[0] = encoding[id[0]>>3]
 	dst[1] = encoding[(id[1]>>6)&0x1F|(id[0]<<2)&0x1F]
@@ -65,7 +65,7 @@ func Encode32(dst, id []byte) {
 	dst[51] = encoding[(id[31]<<4)&0x1F]
 }
 
-// decode by unrolling the stdlib base32 algorithm + removing all safe checks
+// Decode32 decode by unrolling the stdlib base32 algorithm + removing all safe checks
 func Decode32(id []byte, src []byte) {
 	id[0] = dec[src[0]]<<3 | dec[src[1]]>>2
 	id[1] = dec[src[1]]<<6 | dec[src[2]]<<1 | dec[src[3]]>>4

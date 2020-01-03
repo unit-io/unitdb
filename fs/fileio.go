@@ -4,6 +4,7 @@ import (
 	"os"
 )
 
+// IOFile is file system based stor for db
 type IOFile struct {
 	*os.File
 }
@@ -52,7 +53,7 @@ func (f *fslockfile) Unlock() error {
 }
 
 // Type indicate type of filesystem
-func (fs *IOFile) Type() string {
+func (f *IOFile) Type() string {
 	return "FileIO"
 }
 
@@ -63,7 +64,7 @@ func (f *IOFile) Slice(start int64, end int64) ([]byte, error) {
 	return buf, err
 }
 
-// Closes closes file on db close
+// Close closes file on db close
 func (f *IOFile) Close() error {
 	return f.File.Close()
 }

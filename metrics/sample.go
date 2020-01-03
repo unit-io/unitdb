@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// a stream.
+// Sample a stream.
 type Sample interface {
 	Reset()
 	// Count() uint64
@@ -35,10 +35,11 @@ type Sample interface {
 type timeSlice []time.Duration
 
 // Satisfy sort for timeSlice.
-func (p timeSlice) Len() int           { return len(p) }
-func (p timeSlice) Less(i, j int) bool { return int64(p[i]) < int64(p[j]) }
-func (p timeSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+func (ts timeSlice) Len() int           { return len(ts) }
+func (ts timeSlice) Less(i, j int) bool { return int64(ts[i]) < int64(ts[j]) }
+func (ts timeSlice) Swap(i, j int)      { ts[i], ts[j] = ts[j], ts[i] }
 
+// Config sample config
 type Config struct {
 	Size int
 }
@@ -52,7 +53,7 @@ type sample struct {
 	WallTime time.Duration
 }
 
-// New initializes a new metric sample.
+// NewSample initializes a new metric sample.
 func NewSample(c *Config) *sample {
 	return &sample{
 		Size:  uint64(c.Size),
@@ -146,6 +147,7 @@ type SampleSnapshot struct {
 	timeSlice timeSlice
 }
 
+// NewSampleSnapshot returns a read-only copy of the sample.
 func NewSampleSnapshot(count uint64, samples int) *SampleSnapshot {
 	return &SampleSnapshot{
 		count:     count,

@@ -17,6 +17,7 @@ var (
 	ErrIndexOutOfBound = errors.New("offset out of mapped region")
 )
 
+// OSFile memmoty map fs
 type OSFile struct {
 	*os.File
 	data     []byte

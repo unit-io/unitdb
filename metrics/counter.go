@@ -2,7 +2,7 @@ package metrics
 
 import "sync/atomic"
 
-// Counters hold an int64 value that can be incremented and decremented.
+// Counter hold an int64 value that can be incremented and decremented.
 type Counter interface {
 	Reset()
 	Count() int64

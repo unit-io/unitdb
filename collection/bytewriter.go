@@ -1,15 +1,17 @@
 package collection
 
 const (
-	// Maximum message payload size allowed from client in bytes (262144 = 256KB).
+	// DEFAULT_BUFFER_CAP maximum message payload size allowed from client in bytes (262144 = 256KB).
 	DEFAULT_BUFFER_CAP = 700
 )
 
+// ByteWriter to reuse buffer
 type ByteWriter struct {
 	buf []byte
 	pos int
 }
 
+// NewByteWriter provide byte writer to write to buffer
 func NewByteWriter() *ByteWriter {
 	return &ByteWriter{
 		buf: make([]byte, DEFAULT_BUFFER_CAP),
@@ -76,6 +78,7 @@ func (b *ByteWriter) WriteUint(l int, n uint64) (int, bool) {
 	return l, true
 }
 
+// Write it writes bytes to byte writer buffer
 func (b *ByteWriter) Write(p []byte) int {
 	currentCap := len(b.buf) - b.pos
 	if currentCap < len(p) {
@@ -88,6 +91,7 @@ func (b *ByteWriter) Write(p []byte) int {
 	return len(p)
 }
 
+// Byte it returns bytes from buffer till the position
 func (b ByteWriter) Bytes() []byte {
 	return b.buf[:b.pos]
 }

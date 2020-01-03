@@ -42,6 +42,7 @@ func (index batchIndex) message(data []byte) (id, topic, value []byte) {
 
 }
 
+// SetOptions sets batch options to defer default option and use options specified by client program
 func (b *Batch) SetOptions(opts *BatchOptions) {
 	b.opts = opts
 }
@@ -134,6 +135,14 @@ func (b *Batch) Put(key, value []byte) error {
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) PutEntry(e *Entry) error {
+	switch {
+	case len(e.Topic) == 0:
+		return errTopicEmpty
+	case len(e.Topic) > MaxTopicLength:
+		return errTopicTooLarge
+	case len(e.Payload) > MaxValueLength:
+		return errValueTooLarge
+	}
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -195,9 +204,17 @@ func (b *Batch) Delete(key []byte) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
-	if e.ID == nil {
+	switch {
+	case len(e.ID) == 0:
 		return errMsgIdEmpty
+	case len(e.Topic) == 0:
+		return errTopicEmpty
+	case len(e.Topic) > MaxTopicLength:
+		return errTopicTooLarge
+	case len(e.Payload) > MaxValueLength:
+		return errValueTooLarge
 	}
+
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract

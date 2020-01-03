@@ -6,10 +6,12 @@ import (
 )
 
 func TestIteratorEmpty(t *testing.T) {
+	time.Sleep(1 * time.Second)
 	db, err := open("test.db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	_, err = db.Items(&Query{})
 	if err == nil {
 		t.Fatal(err)
@@ -20,11 +22,12 @@ func TestIteratorEmpty(t *testing.T) {
 }
 
 func TestIterator(t *testing.T) {
+	time.Sleep(1 * time.Second)
 	db, err := open("test.db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	defer db.Close()
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)

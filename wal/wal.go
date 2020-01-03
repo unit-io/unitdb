@@ -37,6 +37,7 @@ type (
 		size   int64
 	}
 
+	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown
@@ -55,13 +56,15 @@ type (
 		closed uint32
 	}
 
+	// Options wal options to create new WAL. WAL logs uses cyclic rotation to avoid fragmentation.
+	// It allocates free blocks only when log reaches target size
 	Options struct {
 		Path       string
 		TargetSize int64
 	}
 )
 
-func newWal(opts Options) (wal *WAL, needRecover bool, err error) {
+func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
 		writeLockC: make(chan struct{}, 1),
@@ -188,6 +191,7 @@ func (wal *WAL) Scan() (seqs []uint64, err error) {
 	return seqs, nil
 }
 
+// Reader reader is a simple iterator over log data
 type Reader struct {
 	entryCount  uint32
 	logData     []byte
@@ -211,6 +215,7 @@ func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	return nil, errors.New("wal read error: log for seq not found")
 }
 
+// Next it returns netx record from the log data iterator of false if iteration is done
 func (r *Reader) Next() ([]byte, bool) {
 	if r.entryCount == 0 {
 		return nil, false
@@ -254,10 +259,12 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	return nil
 }
 
+// NextSeq next sequence to use in log write function
 func (wal *WAL) NextSeq() uint64 {
 	return atomic.AddUint64(&wal.seq, 1)
 }
 
+//Sync syncs log entries to disk
 func (wal *WAL) Sync() error {
 	// wal.wg.Add(1)
 	// defer wal.wg.Done()

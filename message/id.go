@@ -10,7 +10,9 @@ import (
 
 // Various constant parts of the ID.
 const (
+	// Contract contract is default contract used for topics if client program does not specify Contract in the request
 	Contract = uint32(3376684800)
+	// Wildcard wildcard is hash for wildcard topic such as '*'
 	Wildcard = uint32(857445537)
 
 	fixed = 16
@@ -78,7 +80,6 @@ func (id ID) Seq() uint64 {
 func (id ID) EvalPrefix(parts []Part, cutoff int64) bool {
 	if cutoff > 0 {
 		return (binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard) && id.Time() >= cutoff
-	} else {
-		return binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard
 	}
+	return binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^parts[1].Query || binary.BigEndian.Uint32(id[0:4]) == parts[0].Query^Wildcard
 }

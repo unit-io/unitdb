@@ -66,6 +66,7 @@ func (f *memlockfile) Unlock() error {
 	return Mem.Remove(f.name)
 }
 
+// MemFile mem file is used to write buffer to memory store
 type MemFile struct {
 	buf    []byte
 	size   int64

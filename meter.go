@@ -9,6 +9,7 @@ import (
 	"github.com/unit-io/tracedb/metrics"
 )
 
+// Meter meter provides various db statistics
 type Meter struct {
 	Metrics    metrics.Metrics
 	TimeSeries metrics.TimeSeries
@@ -21,6 +22,7 @@ type Meter struct {
 	OutBytes   metrics.Counter
 }
 
+// NewMeter provide meter to capture statistics
 func NewMeter() *Meter {
 	Metrics := metrics.NewMetrics()
 	c := &Meter{
@@ -47,6 +49,7 @@ func NewMeter() *Meter {
 	return c
 }
 
+// UnregisterAll unregister all metrics from meter
 func (m *Meter) UnregisterAll() {
 	m.Metrics.UnregisterAll()
 }

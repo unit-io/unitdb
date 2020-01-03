@@ -78,7 +78,7 @@ type partTrie struct {
 }
 
 // NewPartTrie creates a new matcher for the Trie.
-func NewpartTrie() *partTrie {
+func NewPartTrie() *partTrie {
 	return &partTrie{
 		root: &part{
 			sid:      SID{},
@@ -94,10 +94,10 @@ type Trie struct {
 	count    int // Number of Trie in the Trie.
 }
 
-// Creates a Trie with an initialized Trie.
+// NewTrie new trie creates a Trie with an initialized Trie.
 func NewTrie() *Trie {
 	return &Trie{
-		partTrie: NewpartTrie(),
+		partTrie: NewPartTrie(),
 	}
 }
 
@@ -108,7 +108,7 @@ func (t *Trie) Count() int {
 	return t.count
 }
 
-// add the message seq to the topic.
+// Add adds the message seq to the topic trie.
 func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 	t.Lock()
 	defer t.Unlock()
@@ -140,7 +140,7 @@ func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 	return
 }
 
-// remove the message seq of the topic.
+// Remove remove the message seq of the topic trie
 func (t *Trie) Remove(parts []Part, seq uint64) (removed bool) {
 	t.Lock()
 	defer t.Unlock()

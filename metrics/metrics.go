@@ -17,7 +17,7 @@ func (err DuplicateMetric) Error() string {
 	return fmt.Sprintf("duplicate metric: %s", string(err))
 }
 
-// A Metrics holds registry references to a set of metrics by name and can iterate
+// Metrics A Metrics holds registry references to a set of metrics by name and can iterate
 // over them, calling callback functions provided by the user.
 //
 // This is an interface so as to encourage other structs to implement
@@ -36,19 +36,19 @@ type Metrics interface {
 	UnregisterAll()
 }
 
-// The standard implementation of a Registry is a mutex-protected map
+// StandardMetrics the standard implementation of a Registry is a mutex-protected map
 // of names to metrics.
 type StandardMetrics struct {
 	metrics map[string]interface{}
 	mutex   sync.RWMutex
 }
 
-// Create a new registry.
+// NewMetrics new metrics create a new registry.
 func NewMetrics() Metrics {
 	return &StandardMetrics{metrics: make(map[string]interface{})}
 }
 
-// Gets an existing metric or creates and registers a new one. Threadsafe
+// GetOrRegister gets an existing metric or creates and registers a new one. Threadsafe
 // alternative to calling Get and Register on failure.
 // The interface can be the metric to register if not found in registry,
 // or a function returning the metric for lazy instantiation.
@@ -82,11 +82,11 @@ func (m *StandardMetrics) Unregister(name string) {
 	delete(m.metrics, name)
 }
 
-// Unregister all metrics.  (Mostly for testing.)
+// UnregisterAll unregisters all metrics.  (Mostly for testing.)
 func (m *StandardMetrics) UnregisterAll() {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	for name, _ := range m.metrics {
+	for name := range m.metrics {
 		m.stop(name)
 		delete(m.metrics, name)
 	}

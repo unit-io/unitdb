@@ -21,7 +21,7 @@ func TestSimple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	defer db.Close()
 	var i byte
 	var n uint8 = 255
 
@@ -103,6 +103,7 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
@@ -179,6 +180,7 @@ func TestBatchGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
