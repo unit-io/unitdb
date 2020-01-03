@@ -57,7 +57,7 @@ func newFilterFromBytes(b []byte, m, k uint64) *Filter {
 	}
 }
 
-// Bytes() returns the bytes backing the Filter filter.
+// Bytes returns the bytes backing the Filter filter.
 func (b *Filter) Bytes() []byte {
 	b.lock.RLock()
 	defer b.lock.RUnlock()

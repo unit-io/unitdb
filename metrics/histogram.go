@@ -82,7 +82,7 @@ func (h *HistogramSnapshot) Min() time.Duration { return h.sample.Min() }
 // Max returns highest event duration.
 func (h *HistogramSnapshot) Max() time.Duration { return h.sample.Max() }
 
-//  Range returns event duration range (Max-Min).
+// Range range returns event duration range (Max-Min).
 func (h *HistogramSnapshot) Range() time.Duration { return h.sample.Range() }
 
 // AddTime panics

@@ -81,24 +81,25 @@ func (c *Consistent) FindBlock(key uint32) uint32 {
 	return b
 }
 
-// func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
-// 	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
-// 	cb := R[len(R)-1]
-// 	A[cb] = N
-// 	K[cb] = W[N]
+// FindPreviousBlock find the block recently removed.
+func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
+	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
+	cb := R[len(R)-1]
+	A[cb] = N
+	K[cb] = W[N]
 
-// 	ha, hb, hc, hd := fleaInit(uint64(key))
-// 	b := FastMod(uint64(hd), uint64(len(A)))
-// 	for A[b] > 0 {
-// 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-// 		h := FastMod(uint64(hd), uint64(A[b]))
-// 		for A[h] >= A[b] {
-// 			h = K[h]
-// 		}
-// 		b = h
-// 	}
-// 	return b
-// }
+	ha, hb, hc, hd := fleaInit(uint64(key))
+	b := FastMod(uint64(hd), uint64(len(A)))
+	for A[b] > 0 {
+		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
+		h := FastMod(uint64(hd), uint64(A[b]))
+		for A[h] >= A[b] {
+			h = K[h]
+		}
+		b = h
+	}
+	return b
+}
 
 // GetPath get the path to the bucket which a hash-key is assigned to.
 //

@@ -55,9 +55,9 @@ func main() {
 ```
 
 ### Writing to a database
-Use the DB.PutEntry or DB.Batch() function to store messages to topic or delete a message from topic with DB.DeleteEntry function. Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk record insertion into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
+Use DB.PutEntry or DB.Batch() function to store messages to topic or delete a message from topic using DB.DeleteEntry function. Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk record insertion into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
 
-Batch operations are optimized to high scale writes so if your client application perform few hundred writes per 5 milliseconds then choose some other DBs as tracedb may not be right solutions.
+Batch operations are optimized for high valume writes so if your client application perform few hundred writes per 5 milliseconds then choose some other DB as tracedb may not be right solution.
 
 ```
     err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {

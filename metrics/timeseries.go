@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Timers capture the duration and rate of events.
+// TimeSeries capture the duration and rate of events.
 type TimeSeries interface {
 	Cumulative() time.Duration // Cumulative time of all sampled events.
 	HMean() time.Duration      // Event duration harmonic mean.
@@ -27,15 +27,15 @@ type TimeSeries interface {
 	Snapshot() TimeSeries
 }
 
-// GetOrRegisterTimer returns an existing Timer or constructs and registers a
-// new StandardTimer.
+// GetOrRegisterTimeSeries returns an existing timeseries or constructs and registers a
+// new StandardTimeSeries.
 // Be sure to unregister the meter from the registry once it is of no use to
 // allow for garbage collection.
 func GetOrRegisterTimeSeries(name string, r Metrics) TimeSeries {
 	return r.GetOrRegister(name, NewTimeSeries).(TimeSeries)
 }
 
-// NewTimer constructs a new StandardTimer using an exponentially-decaying
+// NewTimeSeries constructs a new StandardTimeSeries using an exponentially-decaying
 // sample with the same reservoir size and alpha as UNIX load averages.
 // Be sure to call Stop() once the timer is of no use to allow for garbage collection.
 func NewTimeSeries() TimeSeries {
@@ -44,7 +44,7 @@ func NewTimeSeries() TimeSeries {
 	}
 }
 
-// StandardTimer is the standard implementation of a Timer and uses a Histogram
+// timeseries is the standard implementation of a timeseries and uses a Histogram
 // and Meter.
 type timeseries struct {
 	histogram Histogram
@@ -220,7 +220,7 @@ func (t *TimeSeriesSnapshot) Max() time.Duration {
 	return t.histogram.Max()
 }
 
-//  Range returns event duration range (Max-Min).
+// Range returns event duration range (Max-Min).
 func (t *TimeSeriesSnapshot) Range() time.Duration {
 	return t.histogram.Range()
 }

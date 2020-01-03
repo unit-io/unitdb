@@ -216,9 +216,9 @@ func Open(path string, opts *Options) (*DB, error) {
 	if err != nil {
 		wal.Close()
 		return nil, err
-	} else {
-		db.closer = wal
 	}
+
+	db.closer = wal
 	db.wal = wal
 
 	if needLogRecovery {
@@ -697,6 +697,7 @@ func (db *DB) NewContract() (uint32, error) {
 	return contract, nil
 }
 
+// NewID generates new ID that is later used client program to EntryPut or EntryDelete.
 func (db *DB) NewID() []byte {
 	return message.NewID(db.nextSeq(), false)
 }

@@ -26,10 +26,10 @@ type OSFile struct {
 
 type osfs struct{}
 
-// OS is a file system backed by the os package.
+// MemoryMap mmap is a file system backed by the memory map.
 var MemoryMap = &osfs{}
 
-// Open opens file is exist or create new file
+// OpenFile opens file is exist or create new file
 func (fs *osfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f, err := os.OpenFile(name, flag, perm)
 	if err != nil {
@@ -53,7 +53,7 @@ func (fs *osfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, e
 	return createLockFile(name, perm)
 }
 
-// State provides db state and size of file
+// Stat provides db state and size of file
 func (fs *osfs) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }

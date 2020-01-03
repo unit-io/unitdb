@@ -91,7 +91,7 @@ func (b *ByteWriter) Write(p []byte) int {
 	return len(p)
 }
 
-// Byte it returns bytes from buffer till the position
+// Bytes it returns bytes from buffer till the position
 func (b ByteWriter) Bytes() []byte {
 	return b.buf[:b.pos]
 }

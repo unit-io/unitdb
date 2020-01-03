@@ -54,7 +54,7 @@ func (m *Meter) UnregisterAll() {
 	m.Metrics.UnregisterAll()
 }
 
-// Stats will output tracedb information on the monitoring port at /varz.
+// Varz outputs tracedb stats on the monitoring port at /varz.
 type Varz struct {
 	Start    time.Time `json:"start"`
 	Now      time.Time `json:"now"`

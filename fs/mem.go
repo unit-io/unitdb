@@ -79,7 +79,7 @@ func (m *MemFile) Type() string {
 	return "Mem"
 }
 
-// Closes closes memtable on db close
+// Close closes memtable on db close
 func (m *MemFile) Close() error {
 	if m.closed {
 		return os.ErrClosed
@@ -88,7 +88,7 @@ func (m *MemFile) Close() error {
 	return nil
 }
 
-// ReatAt reads data from memtable at offset
+// ReadAt reads data from memtable at offset
 func (m *MemFile) ReadAt(p []byte, off int64) (int, error) {
 	if m.closed {
 		return 0, os.ErrClosed
@@ -118,7 +118,7 @@ func (m *MemFile) WriteAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// State provides db state and size of memtable
+// Stat provides db state and size of memtable
 func (m *MemFile) Stat() (os.FileInfo, error) {
 	if m.closed {
 		return m, os.ErrClosed

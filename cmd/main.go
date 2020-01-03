@@ -63,7 +63,7 @@ func main() {
 	var start time.Time
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(100 * time.Millisecond) {
 			start = time.Now()
 			for j := 0; j < 50; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
@@ -90,7 +90,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(100 * time.Millisecond) {
 			start = time.Now()
 			for j := 0; j < 10; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
@@ -113,7 +113,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				for j := 0; j < 100; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
@@ -145,7 +145,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				for j := 0; j < 1000; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
@@ -278,7 +278,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for _ = range time.Tick(10000 * time.Millisecond) {
+		for range time.Tick(10000 * time.Millisecond) {
 			print([]byte("dev18.b1?last=10m"), db)
 			print([]byte("dev18.b.b1?last=10m"), db)
 			print([]byte("dev18.b.b11?last=10m"), db)

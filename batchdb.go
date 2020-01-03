@@ -109,7 +109,7 @@ func (db *DB) startBatchCommit() {
 			select {
 			case b := <-db.commitQueue:
 				if err := db.commit(b.Seqs()); err != nil {
-					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error commiting batch with startSeq %d, size %d", b.startSeq, b.Len())
+					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error committing batch with startSeq %d, size %d", b.startSeq, b.Len())
 				}
 				b.Abort()
 				close(b.commitComplete)
@@ -223,7 +223,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
 					if err := db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.batchSeqs, db.tinyBatch.buffer.Bytes()); err != nil {
-						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error commiting tincy batch")
+						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 					}
 				}
 			case <-db.closeC:

@@ -7,18 +7,19 @@ import (
 )
 
 const (
+	// Offset is used to create new apoch from current time
 	Offset = 1555770000
 )
 
 var (
-	// next is the next identifier. It is time in seconds
+	// Next is the next identifier. It is time in seconds
 	// to avoid collisions of ids between process restarts.
 	Next = uint32(
 		time.Date(2070, 1, 1, 0, 0, 0, 0, time.UTC).Sub(time.Now()).Seconds(),
 	)
 )
 
-// NewAppoch creats an appoch to generate uniue id
+// NewApoch creats an appoch to generate uniue id
 func NewApoch() uint32 {
 	now := uint32(time.Now().Unix() - Offset)
 	return math.MaxUint32 - now

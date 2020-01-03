@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	EpochSize     = 4
+	// EpochSize length of epoch
+	EpochSize = 4
+	// MessageOffset offset for the message without overhead
 	MessageOffset = EpochSize + 4
 )
 
@@ -45,10 +47,13 @@ func New(key []byte) (*MAC, error) {
 // plaintext and its ciphertext.
 func (m *MAC) Overhead() int { return m.parent.Overhead() + EpochSize }
 
+// SignatureToUint32 returns uint32 for signature
 func SignatureToUint32(sig []byte) uint32 {
 	return uint32(sig[0])<<24 | uint32(sig[1])<<16 | uint32(sig[2])<<8 | uint32(sig[3])
 }
 
+// Signature signature is used in the message encryption to validate signature of the message
+// signature is added to the destination slice
 func Signature(value uint32) []byte {
 	sig := make([]byte, 4)
 	sig[0] = byte(value >> 24)
@@ -83,7 +88,7 @@ func (m *MAC) Decrypt(dst, src []byte) ([]byte, error) {
 	if err != nil {
 		return dst, errors.New("Authentication failed.")
 	}
-	// Append epoch to dst at the begining
+	// Append epoch to dst at the beginning
 	dst = append(src[:EpochSize], dst...)
 	return dst, nil
 }

@@ -33,7 +33,7 @@ func (id *ID) AddContract(parts []Part) {
 	*id = newid
 }
 
-// IsEncrypted return if the encyrption is set on ID
+// IsEncrypted return if the encyption is set on ID
 func (id ID) IsEncrypted() bool {
 	num := binary.BigEndian.Uint64(id[12:20])
 	return num&0xff != 0

@@ -71,7 +71,7 @@ func TestRecovery(t *testing.T) {
 }
 
 func TestLogApplied(t *testing.T) {
-	wal, needRecovery, err := newTestWal("test.db", true)
+	wal, _, err := newTestWal("test.db", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wal, needRecovery, err = newTestWal("test.db", false)
+	wal, needRecovery, err := newTestWal("test.db", false)
 	if !needRecovery || err != nil {
 		t.Fatal(err)
 	}

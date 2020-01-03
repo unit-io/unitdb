@@ -69,7 +69,7 @@ func (f *IOFile) Close() error {
 	return f.File.Close()
 }
 
-// ReatAt reads data from file at offset
+// ReadAt reads data from file at offset
 func (f *IOFile) ReadAt(p []byte, off int64) (int, error) {
 	return f.File.ReadAt(p, off)
 }

@@ -107,7 +107,7 @@ func (s *sample) Min() time.Duration { return s.Times.min() }
 // Max returns highest event duration.
 func (s *sample) Max() time.Duration { return s.Times.max() }
 
-//  Range returns event duration range (Max-Min).
+// Range returns event duration range (Max-Min).
 func (s *sample) Range() time.Duration { return s.Times.srange() }
 
 // AddTime adds a time.Duration to metrics.

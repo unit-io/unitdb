@@ -25,7 +25,7 @@ func NewCounter() Counter {
 // CounterSnapshot is a read-only copy of another Counter.
 type CounterSnapshot int64
 
-// Clear panics.
+// Reset reset clear panics.
 func (CounterSnapshot) Reset() {
 	panic("Clear called on a CounterSnapshot")
 }
