@@ -275,7 +275,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 		for {
 			select {
 			case <-expirerTicker.C:
-				db.expireOldEntries()
+				db.ExpireOldEntries()
 			case <-db.closeC:
 				expirerTicker.Stop()
 				return
@@ -642,7 +642,7 @@ func (db *DB) Sync() error {
 	return nil
 }
 
-func (db *DB) expireOldEntries() {
+func (db *DB) ExpireOldEntries() {
 	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)

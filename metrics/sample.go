@@ -199,7 +199,7 @@ func (s *SampleSnapshot) Min() time.Duration { return s.timeSlice.min() }
 // Max returns highest event duration.
 func (s *SampleSnapshot) Max() time.Duration { return s.timeSlice.max() }
 
-//  Range returns event duration range (Max-Min).
+// Range returns event duration range (Max-Min).
 func (s *SampleSnapshot) Range() time.Duration { return s.timeSlice.srange() }
 
 // AddTime panics.

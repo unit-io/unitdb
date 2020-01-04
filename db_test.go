@@ -66,7 +66,6 @@ func TestSimple(t *testing.T) {
 
 	verifyMsgsAndClose := func() {
 		if db.Count() != 255 {
-			db.Close()
 			t.Fatal()
 		}
 		qtopic := topic
@@ -119,7 +118,6 @@ func TestBatch(t *testing.T) {
 
 	verifyMsgsAndClose := func() {
 		if count := db.Count(); count != 255 {
-			db.Close()
 			t.Fatalf("expected 255 records; got %d", count)
 		}
 		qtopic := topic
@@ -169,7 +167,6 @@ func TestBatch(t *testing.T) {
 	// wg.Wait()
 	time.Sleep(1 * time.Second)
 	if err := db.Sync(); err != nil {
-		db.Close()
 		t.Fatal(err)
 	}
 	verifyMsgsAndClose()
@@ -238,5 +235,51 @@ func TestBatchGroup(t *testing.T) {
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExpiry(t *testing.T) {
+	db, err := open("test.db", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	contract, err := db.NewContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	topic := []byte("unit8.test")
+
+	if db.count != 0 {
+		t.Fatal()
+	}
+
+	var i byte
+	var n uint8 = 255
+
+	// var wg sync.WaitGroup
+	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
+		// wg.Add(1)
+		for i = 0; i < n; i++ {
+			itopic := append(topic, []byte("?ttl=1s")...)
+			val := []byte("msg.")
+			val = append(val, i)
+			if err := db.PutEntry(&Entry{Topic: itopic, Payload: val, Contract: contract}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := b.Write()
+		return err
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wg.Wait()
+	time.Sleep(3 * time.Second)
+	db.ExpireOldEntries()
+
+	if data, err := db.Get(&Query{Topic: topic, Contract: contract}); len(data) != 0 || err != nil {
+		t.Fatal()
 	}
 }

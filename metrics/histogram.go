@@ -144,7 +144,7 @@ func (h *histogram) Min() time.Duration { return h.sample.Min() }
 // Max returns highest event duration.
 func (h *histogram) Max() time.Duration { return h.sample.Max() }
 
-//  Range returns event duration range (Max-Min).
+// Range returns event duration range (Max-Min).
 func (h *histogram) Range() time.Duration { return h.sample.Range() }
 
 // AddTime adds a time.Duration to metrics

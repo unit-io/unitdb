@@ -180,7 +180,7 @@ func (wal *WAL) put(log logInfo) error {
 	return nil
 }
 
-// Scan provides list of sequeces writen to log but not yet fully applied
+// Scan provides list of sequeces written to log but not yet fully applied
 func (wal *WAL) Scan() (seqs []uint64, err error) {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {

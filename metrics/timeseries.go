@@ -116,7 +116,7 @@ func (t *timeseries) Max() time.Duration {
 	return t.histogram.Max()
 }
 
-//  Range returns event duration range (Max-Min).
+// Range returns event duration range (Max-Min).
 func (t *timeseries) Range() time.Duration {
 	return t.histogram.Range()
 }
