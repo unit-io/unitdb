@@ -77,6 +77,8 @@ type (
 		commitLockC    chan struct{}
 		syncLockC      chan struct{}
 		commitLogQueue map[uint64][]uint64
+		expiryLockC    chan struct{}
+		expiryW        sync.WaitGroup
 		// consistent   *hash.Consistent
 		filter     Filter
 		index      table
@@ -145,6 +147,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		commitLockC:    make(chan struct{}, 1),
 		syncLockC:      make(chan struct{}, 1),
 		commitLogQueue: make(map[uint64][]uint64),
+		expiryLockC:    make(chan struct{}, 1),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -357,6 +360,7 @@ func (db *DB) Close() error {
 	db.writeLockC <- struct{}{}
 	db.commitLockC <- struct{}{}
 	db.syncLockC <- struct{}{}
+	db.expiryLockC <- struct{}{}
 
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
@@ -440,6 +444,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
+	// Wait expiry if read is inprogress
+	db.expiryW.Add(1)
+	defer db.expiryW.Done()
 	q.seqs = db.trie.Lookup(q.parts)
 	if len(q.seqs) == 0 {
 		return
@@ -460,10 +467,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				}
 				topic := new(message.Topic)
 				topic.Unmarshal(val)
-				db.trie.Remove(topic.Parts, seq)
-				// free expired keys
-				db.data.free(e.mSize(), e.mOffset)
-				db.count--
+				if ok := db.trie.Remove(topic.Parts, seq); ok {
+					db.timeWindow.add(e)
+				}
 				// if id is expired it does not return an error but continue the iteration
 				return nil
 			}
@@ -642,7 +648,17 @@ func (db *DB) Sync() error {
 	return nil
 }
 
+// ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
 func (db *DB) ExpireOldEntries() {
+	// write to db happens synchronously
+	db.expiryLockC <- struct{}{}
+	db.closeW.Add(1)
+	defer func() {
+		<-db.expiryLockC
+		db.closeW.Done()
+	}()
+	// wait expiry if read operation is inprogress
+	db.expiryW.Wait()
 	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
@@ -667,7 +683,6 @@ func (db *DB) ExpireOldEntries() {
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
-
 	}
 	if db.syncWrites {
 		db.sync()

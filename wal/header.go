@@ -61,6 +61,8 @@ func (h header) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[12:20], h.upperSequence)
 	binary.LittleEndian.PutUint64(buf[20:28], uint64(h.freeBlock.size))
 	binary.LittleEndian.PutUint64(buf[28:36], uint64(h.freeBlock.offset))
+	binary.LittleEndian.PutUint64(buf[36:44], uint64(h.freeBlock.currSize))
+	binary.LittleEndian.PutUint64(buf[44:52], uint64(h.freeBlock.currOffset))
 	return buf, nil
 }
 
@@ -71,5 +73,7 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	h.upperSequence = binary.LittleEndian.Uint64(data[12:20])
 	h.freeBlock.size = int64(binary.LittleEndian.Uint64(data[20:28]))
 	h.freeBlock.offset = int64(binary.LittleEndian.Uint64(data[28:36]))
+	h.freeBlock.currSize = int64(binary.LittleEndian.Uint64(data[36:44]))
+	h.freeBlock.currOffset = int64(binary.LittleEndian.Uint64(data[44:52]))
 	return nil
 }

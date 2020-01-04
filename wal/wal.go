@@ -33,8 +33,10 @@ const (
 
 type (
 	freeBlock struct {
-		offset int64
-		size   int64
+		offset     int64
+		size       int64
+		currOffset int64
+		currSize   int64
 	}
 
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
@@ -79,8 +81,10 @@ func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 			return nil, false, err
 		}
 		wal.logFile.fb = freeBlock{
-			offset: int64(headerSize),
-			size:   0,
+			offset:     int64(headerSize),
+			size:       0,
+			currOffset: int64(headerSize),
+			currSize:   0,
 		}
 		if err := wal.writeHeader(); err != nil {
 			return nil, false, err
@@ -106,8 +110,10 @@ func (wal *WAL) writeHeader() error {
 		version:       version,
 		upperSequence: wal.seq,
 		freeBlock: freeBlock{
-			size:   wal.logFile.fb.size,
-			offset: wal.logFile.fb.offset,
+			offset:     wal.logFile.fb.offset,
+			size:       wal.logFile.fb.size,
+			currOffset: wal.logFile.fb.currOffset,
+			currSize:   wal.logFile.fb.currSize,
 		},
 	}
 	return wal.logFile.writeMarshalableAt(h, 0)
@@ -144,8 +150,8 @@ func (wal *WAL) recoverLogHeaders() error {
 			break
 		}
 		offset = l.offset + align512(l.size+int64(logHeaderSize))
-		if offset == wal.logFile.fb.offset {
-			offset += wal.logFile.fb.size
+		if offset == wal.logFile.fb.currOffset {
+			offset += wal.logFile.fb.currSize
 		}
 	}
 	return nil
@@ -246,15 +252,25 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 		}
 	}
-	if idx == 0 {
-		wal.logFile.fb.offset = wal.logs[idx].offset
-		wal.logFile.fb.size = align512(wal.logs[idx].size + int64(logHeaderSize))
-	}
 	for i := idx; i < l; i++ {
-		if wal.logs[i].status == logStatusApplied && wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
-			wal.logFile.fb.size += align512(wal.logs[i].size + int64(logHeaderSize))
+		if wal.logs[i].status != logStatusApplied {
+			continue
+		}
+		if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == wal.logs[i].offset {
+			wal.logFile.fb.currSize += align512(wal.logs[i].size + int64(logHeaderSize))
+		} else {
+			if wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
+				wal.logFile.fb.size += align512(wal.logs[i].size + int64(logHeaderSize))
+			}
+			// reset current free block
+			if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size == wal.logFile.fb.currOffset {
+				wal.logFile.fb.currOffset = wal.logFile.fb.offset
+				wal.logFile.fb.currSize += align512(wal.logFile.fb.size)
+				wal.logFile.fb.size = 0
+			}
 		}
 	}
+
 	wal.writeHeader()
 
 	return nil

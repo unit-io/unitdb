@@ -93,9 +93,10 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 		i := 1
 		for {
 			eg.Go(func() error {
+				topic := append(topics[i-1], []byte("?ttl=1m")...)
 				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 					for k := 0; k < batchSize; k++ {
-						b.PutEntry(&tracedb.Entry{Topic: topics[i-1], Payload: vals[k]})
+						b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]})
 					}
 					err := b.Write()
 					return err
@@ -178,8 +179,9 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		i := 1
 		for {
 			eg.Go(func() error {
+				topic := append(topics[i-1], []byte("?ttl=1m")...)
 				for k := 0; k < batchSize; k++ {
-					if err := db.PutEntry(&tracedb.Entry{Topic: topics[i-1], Payload: vals[k]}); err != nil {
+					if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
 						return err
 					}
 				}
@@ -288,7 +290,8 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 					for contract := range keys {
 						for i, k := range keys[contract] {
-							b.PutEntry(&tracedb.Entry{Topic: k, Payload: vals[i], Contract: contract})
+							topic := append(k, []byte("?ttl=1m")...)
+							b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
 						}
 					}
 					err := b.Write()

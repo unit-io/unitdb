@@ -60,10 +60,9 @@ func (it *ItemIterator) Next() {
 					}
 					topic := new(message.Topic)
 					topic.Unmarshal(val)
-					it.db.trie.Remove(topic.Parts, seq)
-					// free expired keys
-					it.db.data.free(e.mSize(), e.mOffset)
-					it.db.count--
+					if ok := it.db.trie.Remove(topic.Parts, seq); ok {
+						it.db.timeWindow.add(e)
+					}
 					it.invalidKeys++
 					// if id is expired it does not return an error but continue the iteration
 					return nil

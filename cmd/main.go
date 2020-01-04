@@ -115,7 +115,7 @@ func main() {
 		i := 1
 		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-				for j := 0; j < 100; j++ {
+				for j := 0; j < 10000; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)
@@ -147,7 +147,7 @@ func main() {
 		i := 1
 		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-				for j := 0; j < 1000; j++ {
+				for j := 0; j < 10000; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put([]byte("dev18.b.*?ttl=30m"), p)

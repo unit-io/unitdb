@@ -1,10 +1,10 @@
 # tracedb [![GoDoc](https://godoc.org/github.com/unit-io/tracedb?status.svg)](https://godoc.org/github.com/unit-io/tracedb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/tracedb)](https://goreportcard.com/report/github.com/unit-io/tracedb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/tracedb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/tracedb?branch=master)
 
 <p align="left">
-  <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time gaming application"> 
+  <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
-# tracedb: Blazing fast timeseries database for IoT and real-time gaming applications
+# tracedb: Blazing fast timeseries database for IoT and real-time messaging applications
 
 tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 

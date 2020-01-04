@@ -40,8 +40,8 @@ func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	// do not allocate freeblocks until target size has reached for the log to avoid fragmentation
-	if f.targetSize > (f.size+int64(size)) || (f.targetSize < (f.size+int64(size)) && f.fb.size < int64(size)) {
+	// do not allocate freeblocks until target size has reached of the log to avoid fragmentation
+	if f.targetSize > (f.size+int64(size)) || (f.targetSize < (f.size+int64(size)) && f.fb.currSize < int64(size)) {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {
 			return 0, err
@@ -49,9 +49,9 @@ func (f *file) allocate(size uint32) (int64, error) {
 		f.size += int64(size)
 		return off, nil
 	}
-	off := f.fb.offset
-	f.fb.size -= int64(size)
-	f.fb.offset += int64(size)
+	off := f.fb.currOffset
+	f.fb.currSize -= int64(size)
+	f.fb.currOffset += int64(size)
 	return off, nil
 }
 
