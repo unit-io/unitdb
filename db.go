@@ -76,7 +76,7 @@ type (
 		writeLockC     chan struct{}
 		commitLockC    chan struct{}
 		syncLockC      chan struct{}
-		commitLogQueue map[uint64][]uint64
+		commitLogQueue sync.Map
 		expiryLockC    chan struct{}
 		expiryW        sync.WaitGroup
 		// consistent   *hash.Consistent
@@ -138,16 +138,16 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		index:          index,
-		data:           dataTable{table: data},
-		timeWindow:     newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
-		filter:         Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
-		lock:           lock,
-		writeLockC:     make(chan struct{}, 1),
-		commitLockC:    make(chan struct{}, 1),
-		syncLockC:      make(chan struct{}, 1),
-		commitLogQueue: make(map[uint64][]uint64),
-		expiryLockC:    make(chan struct{}, 1),
+		index:       index,
+		data:        dataTable{table: data},
+		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		lock:        lock,
+		writeLockC:  make(chan struct{}, 1),
+		commitLockC: make(chan struct{}, 1),
+		syncLockC:   make(chan struct{}, 1),
+		// commitLogQueue: make(map[uint64][]uint64),
+		expiryLockC: make(chan struct{}, 1),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -287,31 +287,6 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 	}()
 }
 
-func (db *DB) readEntry(seq uint64) (entry, error) {
-	cacheKey := db.cacheID ^ seq
-	e := entry{}
-	if data, _ := db.mem.Get(cacheKey); data != nil {
-		e.UnmarshalBinary(data[:entrySize])
-		e.cacheBlock = make([]byte, len(data[entrySize:]))
-		copy(e.cacheBlock, data[entrySize:])
-		return e, nil
-	}
-
-	off := blockOffset(startBlockIndex(seq))
-	b := blockHandle{table: db.index.FileManager, offset: off}
-	if err := b.read(); err != nil {
-		return entry{}, err
-	}
-
-	for i := 0; i < entriesPerBlock; i++ {
-		e := b.entries[i]
-		if e.seq == seq {
-			return e, nil
-		}
-	}
-	return entry{}, errMsgIdDoesNotExist
-}
-
 func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
 		db.data.fb.defrag()
@@ -405,6 +380,31 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
+func (db *DB) readEntry(seq uint64) (entry, error) {
+	cacheKey := db.cacheID ^ seq
+	e := entry{}
+	if data, _ := db.mem.Get(cacheKey); data != nil {
+		e.UnmarshalBinary(data[:entrySize])
+		e.cacheBlock = make([]byte, len(data[entrySize:]))
+		copy(e.cacheBlock, data[entrySize:])
+		return e, nil
+	}
+
+	off := blockOffset(startBlockIndex(seq))
+	b := blockHandle{table: db.index.FileManager, offset: off}
+	if err := b.read(); err != nil {
+		return entry{}, err
+	}
+
+	for i := 0; i < entriesPerBlock; i++ {
+		e := b.entries[i]
+		if e.seq == seq {
+			return e, nil
+		}
+	}
+	return entry{}, errMsgIdDoesNotExist
+}
+
 // Get return items matching the query paramater
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
@@ -435,7 +435,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 
-	// In case of ttl, include it to the query
+	// In case of last, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
 		q.prefix = message.GenPrefix(q.parts, until.Unix())
 		q.cutoff = from.Unix()
@@ -444,7 +444,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
-	// Wait expiry if read is inprogress
+	// Wait entry expiry if read is inprogress
 	db.expiryW.Add(1)
 	defer db.expiryW.Done()
 	q.seqs = db.trie.Lookup(q.parts)
@@ -585,10 +585,11 @@ func (db *DB) Sync() error {
 		return err
 	}
 	for _, s := range seqs {
-		batchSeqs, ok := db.commitLogQueue[s]
+		seqM, ok := db.commitLogQueue.Load(s)
 		if !ok {
 			continue
 		}
+		batchSeqs := seqM.([]uint64)
 		for _, memseq := range batchSeqs {
 			memdata, err := db.mem.Get(memseq)
 			if err != nil {
@@ -635,7 +636,7 @@ func (db *DB) Sync() error {
 			db.filter.Append(e.seq)
 		}
 		db.meter.Puts.Inc(int64(len(batchSeqs)))
-		delete(db.commitLogQueue, s)
+		db.commitLogQueue.Delete(s)
 
 		if err := db.sync(); err != nil {
 			return err
@@ -893,7 +894,7 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
-	db.commitLogQueue[logSeq] = batchSeqs
+	db.commitLogQueue.Store(logSeq, batchSeqs)
 	return db.tinyBatch.reset()
 }
 
@@ -940,7 +941,7 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
-	db.commitLogQueue[logSeq] = batchSeqs
+	db.commitLogQueue.Store(logSeq, batchSeqs)
 	return nil
 }
 

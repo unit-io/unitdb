@@ -57,8 +57,6 @@ func main() {
 ### Writing to a database
 Use DB.PutEntry() or DB.Batch() function to store messages to topic or delete a message from topic using DB.DeleteEntry() function. Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk record insertion into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
 
-Batch operations are optimized for high valume writes so if your client application perform few hundred writes per 5 milliseconds then choose some other DB as tracedb may not be right solution.
-
 ```
     err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		b.Put([]byte("unit8.b.b1"), []byte("msg.b.b11.1"))
@@ -66,16 +64,80 @@ Batch operations are optimized for high valume writes so if your client applicat
 		b.Put([]byte("unit8.b.*"), []byte("msg.b.*.1"))
 		b.Put([]byte("unit8.b.*"), []byte("msg.b.*.2"))
 		err := b.Write()
-		if !nonblocking {
 			go func() {
-				<-completed // it signals batch has completed and fully committed to log
+				<-completed // it signals batch has completed and fully committed to db
 				log.Printf("batch completed")
 				print([]byte("unit8.b.b1?last=30m"), db)
 				print([]byte("unit8.b.b11?last=30m"), db)
 			}()
-		}
 		return err
     })
+
+```
+
+Topic Isolation.
+Topic isolation can be achieved using Contract while putting message entries to db and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() or Batch.PutEntry() function. Use Contract in the query to get messages from a topic.
+
+```
+	contract, err := db.NewContract()
+
+	func printWithContract(topic []byte, contract uint32, db *tracedb.DB) {
+	it, err := db.Items(&tracedb.Query{Topic: topic, Contract: contract, Limit: 100})
+		if err != nil {
+			log.Printf("print: %v", err)
+			return
+		}
+		for it.First(); it.Valid(); it.Next() {
+			err := it.Error()
+			if err != nil {
+				log.Fatal(err)
+				return
+			}
+			log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
+		}
+	}
+
+    err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(&tracedb.Entry{Topic: []byte("unit8.*.b11"), Payload: []byte("unit8.*.b11.1"), Contract: contract})
+		b.PutEntry(&tracedb.Entry{Topic: []byte("unit8.b.*"), Payload: []byte("unit8.b.*.1"), Contract: contract})
+		b.PutEntry(&tracedb.Entry{Topic: []byte("unit8..."), Payload: []byte("unit8..."), Contract: contract})
+		b.PutEntry(&tracedb.Entry{Topic: []byte("*"), Payload: []byte("*.1"), Contract: contract})
+		b.PutEntry(&tracedb.Entry{Topic: []byte("..."), Payload: []byte("...1"), Contract: contract})
+		err := b.Write()
+		go func() {
+			<-completed // it signals batch has completed and fully committed to db
+			printWithContract([]byte("unit8.b.b11?last=30m"), contract, db)
+		}()
+		return err
+	})
+
+```
+
+Batch Writing Chunk
+Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation.
+
+```
+	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+		for j := 0; j < 250; j++ {
+			t := time.Now().Add(time.Duration(j) * time.Millisecond)
+			p, _ := t.MarshalText()
+			b.Put([]byte("unit8.b.*?ttl=30m"), p)
+			if j%100 == 0 {
+				if err := b.Write(); err != nil {
+					return err
+				}
+			}
+		}
+		if err := b.Write(); err != nil {
+			return err
+		}
+		go func() {
+			<-completed // it signals batch has completed and fully committed to db
+			print([]byte("unit8.b.b1?last=30m"), db)
+			print([]byte("unit8.b.b11?last=30m"), db)
+		}()
+		return nil
+	})
 
 ```
 
@@ -154,7 +216,6 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
-			log.Printf("batch group completed")
 		}()
 		return nil
 	})
@@ -167,7 +228,6 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
-			log.Printf("batch group completed")
 		}()
 		return nil
 	})
@@ -180,7 +240,6 @@ Use the BatchGroup.Add() function to group batches and run concurrently without 
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
-			log.Printf("batch group completed")
 		}()
 		return nil
 	})

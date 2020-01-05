@@ -247,6 +247,9 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	}
 
 	for i, index := range b.pendingWrites {
+		if index.delFlag {
+			continue
+		}
 		id, topic, val := index.message(b.data)
 		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
 		if err != nil {
@@ -331,6 +334,7 @@ func (b *Batch) Write() error {
 		return err
 	}
 
+	b.Reset()
 	return err
 }
 

@@ -157,10 +157,10 @@ func (t *Topic) Last() (time.Time, time.Time, uint32, bool) {
 	dur, last, ok := t.getOption("last")
 	if ok {
 		if last > 0 {
-			u1 := time.Now().Unix() + 3600 // Lookup a bit further
+			u1 := time.Now().Unix()
 			return zeroTime, toUnix(u1), last, ok
 		}
-		base := time.Now() // Lookup a bit further
+		base := time.Now()
 		var duration time.Duration
 		duration, _ = time.ParseDuration(dur)
 		start := base.Add(-duration)

@@ -61,7 +61,7 @@ func NewID(seq uint64, encrypted bool) ID {
 	id := make(ID, fixed)
 	binary.BigEndian.PutUint32(id[0:4], uid.NewApoch())
 	binary.BigEndian.PutUint32(id[4:8], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
-	binary.BigEndian.PutUint64(id[8:16], (seq<<8)|uint64(eBit))                        //clear encryption flag on id
+	binary.BigEndian.PutUint64(id[8:16], (seq<<8)|uint64(eBit))                        //set encryption flag on id
 	return id
 }
 
