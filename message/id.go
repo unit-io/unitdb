@@ -39,6 +39,14 @@ func (id ID) IsEncrypted() bool {
 	return num&0xff != 0
 }
 
+// Prefix generates prefix from parts and concatenate contract and first part of the topic
+func Prefix(parts []Part) uint64 {
+	if len(parts) == 1 {
+		return uint64(parts[0].Query)<<32 + uint64(Wildcard)
+	}
+	return uint64(parts[0].Query)<<32 + uint64(parts[1].Query)
+}
+
 // GenPrefix generates a new message identifier only containing the prefix.
 func GenPrefix(parts []Part, from int64) ID {
 	id := make(ID, 8)

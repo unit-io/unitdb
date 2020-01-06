@@ -66,9 +66,9 @@ func InitConsistent(blocks, used int) *Consistent {
 // 	    h ← K[h]               ◃ search for Wb[h]
 // 	  b ← h
 // 	return b
-func (c *Consistent) FindBlock(key uint32) uint32 {
+func (c *Consistent) FindBlock(key uint64) uint32 {
 	A, K := c.A, c.K
-	ha, hb, hc, hd := fleaInit(uint64(key))
+	ha, hb, hc, hd := fleaInit(key)
 	b := FastMod(uint64(hd), uint64(len(A)))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
@@ -82,13 +82,13 @@ func (c *Consistent) FindBlock(key uint32) uint32 {
 }
 
 // FindPreviousBlock find the block recently removed.
-func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
+func (c *Consistent) FindPreviousBlock(key uint64) uint32 {
 	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
 	cb := R[len(R)-1]
 	A[cb] = N
 	K[cb] = W[N]
 
-	ha, hb, hc, hd := fleaInit(uint64(key))
+	ha, hb, hc, hd := fleaInit(key)
 	b := FastMod(uint64(hd), uint64(len(A)))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
@@ -127,9 +127,9 @@ func (c *Consistent) FindPreviousBlock(key uint32) uint32 {
 // 	    P.push(h)
 // 	  b ← h
 // 	return P
-func (c *Consistent) GetPath(key uint32, pathBuffer []uint32) []uint32 {
+func (c *Consistent) GetPath(key uint64, pathBuffer []uint32) []uint32 {
 	A, K := c.A, c.K
-	ha, hb, hc, hd := fleaInit(uint64(key))
+	ha, hb, hc, hd := fleaInit(key)
 	b := FastMod(uint64(hd), uint64(len(A)))
 	pathBuffer = append(pathBuffer, b)
 	for A[b] > 0 {

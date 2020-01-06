@@ -46,21 +46,22 @@ func (it *ItemIterator) Next() {
 	it.db.mu.RLock()
 	defer it.db.mu.RUnlock()
 	it.item = nil
+	prefix := message.Prefix(it.query.parts)
 	if len(it.queue) == 0 {
 		for _, seq := range it.query.seqs[it.next:] {
 			err := func() error {
-				e, err := it.db.readEntry(it.query.Contract, seq)
+				e, err := it.db.readEntry(prefix, seq)
 				if err != nil {
 					return err
 				}
 				if e.isExpired() {
-					val, err := it.db.data.readTopic(e)
-					if err != nil {
-						return err
-					}
-					topic := new(message.Topic)
-					topic.Unmarshal(val)
-					if ok := it.db.trie.Remove(topic.Parts, seq); ok {
+					// val, err := it.db.data.readTopic(e)
+					// if err != nil {
+					// 	return err
+					// }
+					// topic := new(message.Topic)
+					// topic.Unmarshal(val)
+					if ok := it.db.trie.Remove(it.query.parts, seq); ok {
 						it.db.timeWindow.add(e)
 					}
 					it.invalidKeys++

@@ -67,8 +67,8 @@ type (
 	}
 
 	log struct {
-		contract uint32
-		seq      uint64
+		prefix uint64
+		seq    uint64
 	}
 
 	// DB represents the message storage for topic->keys-values.
@@ -384,10 +384,10 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
-func (db *DB) readEntry(contract uint32, seq uint64) (entry, error) {
+func (db *DB) readEntry(prefix uint64, seq uint64) (entry, error) {
 	cacheKey := db.cacheID ^ seq
 	e := entry{}
-	if data, _ := db.mem.Get(contract, cacheKey); data != nil {
+	if data, _ := db.mem.Get(prefix, cacheKey); data != nil {
 		e.UnmarshalBinary(data[:entrySize])
 		e.cacheBlock = make([]byte, len(data[entrySize:]))
 		copy(e.cacheBlock, data[entrySize:])
@@ -435,7 +435,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
-
+	// // Get should only have static topic strings
+	// if topic.TopicType != message.TopicStatic {
+	// 	return errForbidden
+	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 
@@ -458,9 +461,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if len(q.seqs) > int(q.Limit) {
 		q.seqs = q.seqs[:q.Limit]
 	}
+	prefix := message.Prefix(q.parts)
 	for _, seq := range q.seqs {
 		err = func() error {
-			e, err := db.readEntry(q.Contract, seq)
+			e, err := db.readEntry(prefix, seq)
 			if err != nil {
 				return err
 			}
@@ -537,7 +541,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
-
+	// // Iterator should only have static topic strings
+	// if topic.TopicType != message.TopicStatic {
+	// 	return errForbidden
+	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 
@@ -595,7 +602,7 @@ func (db *DB) Sync() error {
 		}
 		logs := qlogs.([]log)
 		for _, log := range logs {
-			memdata, err := db.mem.Get(log.contract, log.seq)
+			memdata, err := db.mem.Get(log.prefix, log.seq)
 			if err != nil {
 				return err
 			}
@@ -675,8 +682,8 @@ func (db *DB) ExpireOldEntries() {
 		db.mu.Lock()
 		defer db.mu.Unlock()
 		// TODO fix contract
-		contract, _ := db.NewContract()
-		e, err := db.readEntry(contract, entry.seq)
+		var prefix uint64
+		e, err := db.readEntry(prefix, entry.seq)
 		if err != nil {
 			continue
 		}
@@ -824,8 +831,9 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err != nil {
 		return err
 	}
+	prefix := message.Prefix(topic.Parts)
 	memseq := db.cacheID ^ seq
-	if err := db.mem.Set(e.Contract, memseq, data); err != nil {
+	if err := db.mem.Set(prefix, memseq, data); err != nil {
 		return err
 	}
 	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
@@ -841,7 +849,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 			return err
 		}
-		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: e.Contract, seq: memseq})
+		db.tinyBatch.logs = append(db.tinyBatch.logs, log{prefix: prefix, seq: memseq})
 		db.tinyBatch.entryCount++
 	}
 
@@ -932,7 +940,7 @@ func (db *DB) commit(logs []log) error {
 	}
 
 	for _, log := range logs {
-		memdata, err := db.mem.Get(log.contract, log.seq)
+		memdata, err := db.mem.Get(log.prefix, log.seq)
 		if err != nil {
 			return err
 		}

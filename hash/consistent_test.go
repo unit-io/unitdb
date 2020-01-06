@@ -62,7 +62,7 @@ func TestPaths(t *testing.T) {
 
 	const count = 1e6
 	sum := 0
-	for i := uint32(0); i < count; i++ {
+	for i := uint64(0); i < count; i++ {
 		path = a.GetPath(i, path)
 		sum += len(path)
 		path = path[:0]
@@ -79,7 +79,7 @@ func TestOrdering(t *testing.T) {
 	a := InitConsistent(blocks, used)
 
 	counts := make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -90,7 +90,7 @@ func TestOrdering(t *testing.T) {
 	t.Logf("removed b=4,3,2\n")
 
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -101,7 +101,7 @@ func TestOrdering(t *testing.T) {
 	t.Logf("added b=2,3,4\n")
 
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -112,7 +112,7 @@ func TestOrdering(t *testing.T) {
 	t.Logf("removed b=2,3,4\n")
 
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -123,7 +123,7 @@ func TestOrdering(t *testing.T) {
 	t.Logf("added b=4,3,2\n")
 
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -135,24 +135,24 @@ func TestPreviousBlock(t *testing.T) {
 		used   = 1
 	)
 	a := InitConsistent(blocks, used)
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		t.Logf("key:%d block:%d\n", i, a.FindBlock(i))
 	}
 	counts := make([]int, blocks)
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 
 	a.AddBlock()
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		cb := a.FindBlock(i)
 		pb := a.FindPreviousBlock(i)
 		t.Logf("key:%d block:%d\n", i, cb)
 		t.Logf("key:%d previousblock:%d\n", i, pb)
 	}
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -161,14 +161,14 @@ func TestPreviousBlock(t *testing.T) {
 	a.AddBlock()
 	a.AddBlock()
 	a.AddBlock()
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		cb := a.FindBlock(i)
 		pb := a.FindPreviousBlock(i)
 		t.Logf("key:%d block:%d\n", i, cb)
 		t.Logf("key:%d previousblock:%d\n", i, pb)
 	}
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e1; i++ {
+	for i := uint64(0); i < 1e1; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -183,38 +183,38 @@ func TestDistributionSimple(t *testing.T) {
 	a := InitConsistent(blocks, used)
 
 	counts := make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 
 	a.AddBlock()
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 	a.AddBlock()
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 	a.AddBlock()
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 	a.AddBlock()
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
 	a.AddBlock()
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -226,7 +226,7 @@ func TestDistributionSimple(t *testing.T) {
 	a.RemoveBlock(2)
 
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -240,7 +240,7 @@ func TestDistributionExtended(t *testing.T) {
 	a := InitConsistent(blocks, used)
 
 	counts := make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -248,7 +248,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.RemoveBlock(9)
 	t.Logf("removed b=9\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -256,7 +256,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.RemoveBlock(5)
 	t.Logf("removed b=5\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -264,7 +264,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.RemoveBlock(3)
 	t.Logf("removed b=3\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -272,7 +272,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.AddBlock()
 	t.Logf("re-added b=3\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -280,7 +280,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.AddBlock()
 	t.Logf("re-added b=5\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)
@@ -288,7 +288,7 @@ func TestDistributionExtended(t *testing.T) {
 	a.AddBlock()
 	t.Logf("re-added b=9\n")
 	counts = make([]int, blocks)
-	for i := uint32(0); i < 1e6; i++ {
+	for i := uint64(0); i < 1e6; i++ {
 		counts[a.FindBlock(i)]++
 	}
 	t.Logf("%#+v\n", counts)

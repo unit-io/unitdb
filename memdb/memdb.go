@@ -3,6 +3,7 @@ package memdb
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 
@@ -23,15 +24,21 @@ const (
 type blockCache []*concurrentCache
 
 type concurrentCache struct {
+	data         dataTable
 	cache        map[uint64]int64 // seq and offset map
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
 
 // newCache creates a new concurrent block cache.
-func newCache() blockCache {
+func newCache(path string, memSize int64) blockCache {
 	m := make(blockCache, nContracts)
 	for i := 0; i < nContracts; i++ {
-		m[i] = &concurrentCache{cache: make(map[uint64]int64)}
+		path := fmt.Sprintf("%s-%d.data", path, i)
+		data, err := mem.newTable(path, memSize)
+		if err != nil {
+			return nil
+		}
+		m[i] = &concurrentCache{data: dataTable{tableManager: data}, cache: make(map[uint64]int64)}
 	}
 	return m
 }
@@ -39,14 +46,9 @@ func newCache() blockCache {
 // DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
-	mu   sync.RWMutex
-	data dataTable
 	//block cache
 	consistent *hash.Consistent
 	blockCache blockCache // seq and offset map
-	// Close.
-	// closed uint32
-	// closer io.Closer
 }
 
 // Open opens or creates a new DB. Minimum memroy size is 1GB
@@ -54,13 +56,8 @@ func Open(path string, memSize int64) (*DB, error) {
 	if memSize > MaxTableSize {
 		memSize = MaxTableSize
 	}
-	data, err := mem.newTable(path, memSize)
-	if err != nil {
-		return nil, err
-	}
 	db := &DB{
-		data:       dataTable{tableManager: data},
-		blockCache: newCache(),
+		blockCache: newCache(path, memSize),
 	}
 
 	db.consistent = hash.InitConsistent(int(MaxBlocks), int(nContracts))
@@ -70,52 +67,43 @@ func Open(path string, memSize int64) (*DB, error) {
 
 // Close closes the DB.
 func (db *DB) Close() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	if err := db.data.close(); err != nil {
-		return err
+	for i := 0; i < nContracts; i++ {
+		shard := db.blockCache[i]
+		shard.RLock()
+		if err := shard.data.close(); err != nil {
+			return err
+		}
+		if err := mem.remove(shard.data.name()); err != nil {
+			return err
+		}
+		shard.RUnlock()
 	}
-	if err := mem.remove(db.data.name()); err != nil {
-		return err
-	}
-
-	// var err error
-	// if db.closer != nil {
-	// 	if err1 := db.closer.Close(); err == nil {
-	// 		err = err1
-	// 	}
-	// 	db.closer = nil
-	// }
 
 	return nil
 }
 
 // GetShard returns shard under given contract
-func (db *DB) GetShard(contract uint32) *concurrentCache {
-	return db.blockCache[db.consistent.FindBlock(contract)]
+func (db *DB) GetShard(prefix uint64) *concurrentCache {
+	return db.blockCache[db.consistent.FindBlock(prefix)]
 }
 
 // Get gets data for the provided key
-func (db *DB) Get(contract uint32, key uint64) ([]byte, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
 	// Get shard
-	shard := db.GetShard(contract)
+	shard := db.GetShard(prefix)
 	shard.RLock()
 	// Get item from shard.
 	off, ok := shard.cache[key]
 	shard.RUnlock()
-	// off, ok := db.cache[key]
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
-	scratch, err := db.data.readRaw(off, 4) // read dataLength
+	scratch, err := shard.data.readRaw(off, 4) // read dataLength
 	if err != nil {
 		return nil, err
 	}
 	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := db.data.readRaw(off, dataLen)
+	data, err := shard.data.readRaw(off, dataLen)
 	if err != nil {
 		return nil, err
 	}
@@ -123,28 +111,25 @@ func (db *DB) Get(contract uint32, key uint64) ([]byte, error) {
 }
 
 // Set sets the value for the given key->value. It updates the value for the existing key.
-func (db *DB) Set(contract uint32, key uint64, data []byte) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	off, err := db.data.allocate(uint32(len(data) + 4))
+func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
+	// Get cache shard.
+	shard := db.GetShard(prefix)
+	shard.Lock()
+	off, err := shard.data.allocate(uint32(len(data) + 4))
 	if err != nil {
 		return err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := db.data.writeAt(scratch[:], off); err != nil {
+	if _, err := shard.data.writeAt(scratch[:], off); err != nil {
 		return err
 	}
-	if _, err := db.data.writeAt(data, off+4); err != nil {
+	if _, err := shard.data.writeAt(data, off+4); err != nil {
 		return err
 	}
-	// Get cache shard.
-	shard := db.GetShard(contract)
-	shard.Lock()
 	shard.cache[key] = off
 	shard.Unlock()
-	// db.cache[key] = off
 	return nil
 }
 
@@ -162,7 +147,12 @@ func (db *DB) Count() uint32 {
 
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.data.size, nil
+	size := int64(0)
+	for i := 0; i < nContracts; i++ {
+		shard := db.blockCache[i]
+		shard.RLock()
+		size += int64(shard.data.size)
+		shard.RUnlock()
+	}
+	return size, nil
 }

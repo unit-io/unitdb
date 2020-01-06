@@ -48,11 +48,11 @@ func main() {
 	}
 	defer db.Close()
 
-	print([]byte("unit8.b1?last=10m"), db)
-	print([]byte("unit8.b.b1?last=10m"), db)
-	print([]byte("unit8.b.b11?last=10m"), db)
-	print([]byte("unit8?last=10m"), db)
-	print([]byte("unit9?last=10m"), db)
+	print([]byte("unit8.b1?last=1m"), db)
+	print([]byte("unit8.b.b1?last=1m"), db)
+	print([]byte("unit8.b.b11?last=1m"), db)
+	print([]byte("unit8?last=1m"), db)
+	print([]byte("unit9?last=1m"), db)
 
 	contract, err := db.NewContract()
 
@@ -81,7 +81,7 @@ func main() {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=30m"), Payload: p, Contract: contract})
+				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1m"), Payload: p, Contract: contract})
 
 				db.DeleteEntry(&tracedb.Entry{
 					ID:       messageId,
@@ -106,10 +106,13 @@ func main() {
 		i := 1
 		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+				opts := tracedb.DefaultBatchOptions
+				opts.Topic = []byte("unit8.b.*?ttl=1m")
+				b.SetOptions(opts)
 				for j := 0; j < 250; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
-					b.Put([]byte("unit8.b.*?ttl=30m"), p)
+					b.Put(p)
 					if j%100 == 0 {
 						if err := b.Write(); err != nil {
 							return err
@@ -122,8 +125,8 @@ func main() {
 				go func() {
 					<-completed // it signals batch has completed and fully committed to db
 					log.Printf("batch completed")
-					print([]byte("unit8.b.b1?last=30m"), db)
-					print([]byte("unit8.b.b11?last=30m"), db)
+					print([]byte("unit8.b.b1?last=3m"), db)
+					print([]byte("unit8.b.b11?last=3m"), db)
 				}()
 				return nil
 			})
@@ -160,18 +163,18 @@ func main() {
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		// opts := tracedb.DefaultBatchOptions
-		// opts.Encryption = true
+		// opts.Encryption= true
 		// b.SetOptions(opts)
-		b.Put([]byte("ttl.ttl1?ttl=3m"), []byte("ttl.ttl1.1"))
-		b.Put([]byte("ttl.ttl2?ttl=3m"), []byte("ttl.ttl2.1"))
-		b.Put([]byte("ttl.ttl3?ttl=3m"), []byte("ttl.ttl3.1"))
+		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl1?ttl=3m"), []byte("ttl.ttl1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl2?ttl=3m"), []byte("ttl.ttl2.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl3?ttl=3m"), []byte("ttl.ttl3.1")))
 		err := b.Write()
 		return err
 	})
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		t, _ := time.Now().MarshalText()
-		b.Put([]byte("ttl.ttl3?ttl=3m"), t)
+		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl3?ttl=3m"), t))
 		err := b.Write()
 
 		return err
@@ -191,16 +194,16 @@ func main() {
 		err := b.Write()
 		go func() {
 			<-completed // it signals batch has completed and fully committed to log
-			printWithContract([]byte("unit8.b.b11?last=30m"), contract, db)
+			printWithContract([]byte("unit8.b.b11?last=3m"), contract, db)
 		}()
 		return err
 	})
 
 	g := db.NewBatchGroup()
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("unit8.b1?ttl=2m"), []byte("unit8.b1.1"))
-		b.Put([]byte("unit8.c1?ttl=1m"), []byte("unit8.c1.1"))
-		b.Put([]byte("unit8.b1?ttl=3m"), []byte("unit8.b1.1"))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b1?ttl=2m"), []byte("unit8.b1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.c1?ttl=1m"), []byte("unit8.c1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b1?ttl=3m"), []byte("unit8.b1.1")))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -210,10 +213,10 @@ func main() {
 	})
 
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("unit8.b.b11"), []byte("unit8.b.b11.1"))
-		b.Put([]byte("unit8.b.b11"), []byte("unit8.b.b11.2"))
-		b.Put([]byte("unit8.b.b1"), []byte("unit8.b.b1.1"))
-		b.Put([]byte("unit8.c.c11"), []byte("unit8.c.c11.1"))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("unit8.b.b11.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("unit8.b.b11.2")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("unit8.b.b1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.c.c11"), []byte("unit8.c.c11.1")))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -223,10 +226,10 @@ func main() {
 	})
 
 	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.Put([]byte("unit8.b.b111"), []byte("unit8.b.b111.1"))
-		b.Put([]byte("unit8.b.b1"), []byte("unit8.b.b1.2"))
-		b.Put([]byte("unit8.b.b11"), []byte("unit8.b.b11.2"))
-		b.Put([]byte("unit8.c.c111"), []byte("unit8.c.c111.1"))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b111"), []byte("unit8.b.b111.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("unit8.b.b1.2")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("unit8.b.b11.2")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.c.c111"), []byte("unit8.c.c111.1")))
 		b.Write()
 		go func() {
 			<-completed // it signals batch group completion
@@ -244,7 +247,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for range time.Tick(1000 * time.Millisecond) {
+		for range time.Tick(1 * time.Second) {
 			print([]byte("unit8.b1?last=20"), db)
 			print([]byte("unit8.b.b1?last=20"), db)
 			print([]byte("unit8.b.b11?last=20"), db)
@@ -255,5 +258,5 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(4)
 }

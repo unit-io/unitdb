@@ -19,12 +19,16 @@ const (
 type BatchOptions struct {
 	// In concurrent batch writes order determines how to handle conflicts
 	Order      int8
+	Topic      []byte
+	Contract   uint32
 	Encryption bool
 }
 
 // DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
 var DefaultBatchOptions = &BatchOptions{
 	Order:      0,
+	Topic:      nil,
+	Contract:   message.Contract,
 	Encryption: false,
 }
 
@@ -50,6 +54,7 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 type (
 	batchIndex struct {
 		delFlag   bool
+		prefix    uint64
 		seq       uint64
 		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
 		topicSize uint16
@@ -91,7 +96,7 @@ func (b *Batch) grow(n int) {
 	}
 }
 
-func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value []byte, expiresAt uint32) {
+func (b *Batch) appendRec(dFlag bool, prefix, seq uint64, key uint32, id, topic, value []byte, expiresAt uint32) {
 	n := 1 + len(id)
 	n += len(topic)
 	if !dFlag {
@@ -108,6 +113,7 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	}
 	o++
 	index.mOffset = int64(o)
+	index.prefix = prefix
 	index.seq = seq
 	index.key = key
 	// index.idSize = uint16(len(id))
@@ -124,11 +130,18 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 	b.index = append(b.index, index)
 }
 
-// Put appends 'put operation' of the given key/value pair to the batch.
+// Put appends 'put operation' of the given topic->key/value pair to the batch.
+// Client must provide Topic to the BatchOptions.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) Put(topic, value []byte) error {
-	return b.PutEntry(NewEntry(topic, value))
+func (b *Batch) Put(value []byte) error {
+	switch {
+	case len(b.opts.Topic) == 0:
+		return errTopicEmpty
+	case len(b.opts.Topic) > MaxTopicLength:
+		return errTopicTooLarge
+	}
+	return b.PutEntry(&Entry{Topic: b.opts.Topic, Payload: value, Contract: b.opts.Contract})
 }
 
 // PutEntry appends 'put operation' of the given key/value pair to the batch.
@@ -145,7 +158,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 	topic := new(message.Topic)
 	if e.Contract == 0 {
-		e.Contract = message.Contract
+		e.Contract = b.opts.Contract
 	}
 	//Parse the Key
 	topic.ParseKey(e.Topic)
@@ -155,10 +168,6 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if topic.TopicType == message.TopicInvalid {
 		return errBadRequest
 	}
-	// // Put should only have static topic strings
-	// if topic.TopicType != message.TopicStatic {
-	// 	return errForbidden
-	// }
 
 	// In case of ttl, add ttl to the msg and store to the db
 	if ttl, ok := topic.TTL(); ok {
@@ -166,6 +175,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
+	prefix := message.Prefix(topic.Parts)
 	var id message.ID
 	var seq uint64
 	if e.ID != nil {
@@ -188,7 +198,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 		val = b.db.mac.Encrypt(nil, val)
 	}
 
-	b.appendRec(false, seq, key, id, topic.Marshal(), val, e.ExpiresAt)
+	b.appendRec(false, prefix, seq, key, id, topic.Marshal(), val, e.ExpiresAt)
 
 	return nil
 }
@@ -229,14 +239,15 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	}
 
 	topic.AddContract(e.Contract)
+	prefix := message.Prefix(topic.Parts)
 	id := message.ID(e.ID)
 	id.AddContract(topic.Parts)
 	key := topic.GetHashCode()
-	b.appendRec(true, id.Seq(), key, id, topic.Marshal(), nil, 0)
+	b.appendRec(true, prefix, id.Seq(), key, id, topic.Marshal(), nil, 0)
 	return nil
 }
 
-func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, data []byte) error) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// start := time.Now()
@@ -246,6 +257,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, dat
 		b.tinyBatch = true
 	}
 
+	topics := make(map[uint64]*message.Topic)
 	for i, index := range b.pendingWrites {
 		id, topic, val := index.message(b.data)
 		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
@@ -256,15 +268,19 @@ func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, dat
 		if b.startSeq == 0 {
 			b.startSeq = b.db.cacheID ^ index.seq
 		}
-		itopic := new(message.Topic)
-		itopic.Unmarshal(topic)
+		if _, ok := topics[index.prefix]; !ok {
+			t := new(message.Topic)
+			t.Unmarshal(topic)
+			topics[index.prefix] = t
+		}
+		itopic := topics[index.prefix]
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(index.seq) {
 				return nil
 			}
-			itopic := new(message.Topic)
-			itopic.Unmarshal(topic)
+			// itopic := new(message.Topic)
+			// itopic.Unmarshal(topic)
 			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
 				return errBadRequest
 			}
@@ -273,9 +289,9 @@ func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, dat
 		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
 			return errBadRequest
 		}
-		contract := itopic.Parts[0].Query
+		// prefix := message.Prefix(itopic.Parts)
 		memseq := b.db.cacheID ^ index.seq
-		if err := fn(i, contract, memseq, data); err != nil {
+		if err := fn(i, index.prefix, memseq, data); err != nil {
 			return err
 		}
 		if b.tinyBatch {
@@ -288,44 +304,14 @@ func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, dat
 			if _, err := b.db.tinyBatch.buffer.Write(data); err != nil {
 				return err
 			}
-			b.db.tinyBatch.logs = append(b.db.tinyBatch.logs, log{contract: contract, seq: memseq})
+			b.db.tinyBatch.logs = append(b.db.tinyBatch.logs, log{prefix: index.prefix, seq: memseq})
 			b.db.tinyBatch.entryCount++
 			continue
 		}
-		b.logs = append(b.logs, log{contract: contract, seq: memseq})
+		b.logs = append(b.logs, log{prefix: index.prefix, seq: memseq})
 	}
 	return nil
 }
-
-// func (b *Batch) writeTrie() error {
-// 	// // CPU profiling by default
-// 	// defer profile.Start().Stop()
-// 	// start := time.Now()
-// 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
-// 	l := b.Len()
-// 	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
-// 		index := b.pendingWrites[i]
-// 		_, topic, _ := index.message(b.data)
-// 		if index.delFlag {
-// 			/// Test filter block for presence
-// 			if !b.db.filter.Test(index.seq) {
-// 				return nil
-// 			}
-// 			itopic := new(message.Topic)
-// 			itopic.Unmarshal(topic)
-// 			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
-// 				return errBadRequest
-// 			}
-// 		} else {
-// 			itopic := new(message.Topic)
-// 			itopic.Unmarshal(topic)
-// 			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
-// 				return errBadRequest
-// 			}
-// 		}
-// 	}
-// 	return nil
-// }
 
 // Write starts writing entries into db. it returns an error to the batch if any
 func (b *Batch) Write() error {
@@ -341,8 +327,8 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	err := b.writeInternal(func(i int, contract uint32, memseq uint64, data []byte) error {
-		return b.db.mem.Set(contract, memseq, data)
+	err := b.writeInternal(func(i int, prefix uint64, memseq uint64, data []byte) error {
+		return b.db.mem.Set(prefix, memseq, data)
 	})
 
 	// if err := b.writeTrie(); err != nil {

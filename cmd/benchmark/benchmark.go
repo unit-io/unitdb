@@ -93,10 +93,12 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 		i := 1
 		for {
 			eg.Go(func() error {
-				topic := append(topics[i-1], []byte("?ttl=1m")...)
 				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+					opts := tracedb.DefaultBatchOptions
+					opts.Topic = append(topics[i-1], []byte("?ttl=1m")...)
+					b.SetOptions(opts)
 					for k := 0; k < batchSize; k++ {
-						b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]})
+						b.Put(vals[k])
 					}
 					err := b.Write()
 					return err
