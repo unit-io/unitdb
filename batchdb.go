@@ -14,14 +14,13 @@ import (
 type (
 	batchInfo struct {
 		entryCount uint16
-		batchSeqs  []uint64
 	}
 
 	tinyBatch struct {
 		batchInfo
 		buffer *bytes.Buffer
-
-		mu sync.Mutex
+		logs   []log
+		mu     sync.Mutex
 	}
 )
 
@@ -108,7 +107,7 @@ func (db *DB) startBatchCommit() {
 		for {
 			select {
 			case b := <-db.commitQueue:
-				if err := db.commit(b.Seqs()); err != nil {
+				if err := db.commit(b.Logs()); err != nil {
 					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error committing batch with startSeq %d, size %d", b.startSeq, b.Len())
 				}
 				b.Abort()
@@ -197,6 +196,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 		return batches[i].order < batches[j].order
 	})
 	b := g.batch()
+	b.commitComplete = make(chan struct{})
 	for _, batch := range batches {
 		logger.Debug().Str("Context", "batchdb.writeBatchGroup").Int8("oder", batch.order).Int("length", len(g.batchQueue))
 		batch.index = append(batch.index, batch.pendingWrites...)
@@ -222,7 +222,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			select {
 			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
-					if err := db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.batchSeqs, db.tinyBatch.buffer.Bytes()); err != nil {
+					if err := db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
 						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 					}
 				}

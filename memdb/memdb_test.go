@@ -19,11 +19,12 @@ func TestSimple(t *testing.T) {
 
 	var i byte
 	var n uint8 = 255
+	contract := uint32(3376684800)
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 
 	for i = 0; i < n; i++ {
 		k := cacheID ^ uint64(i)
-		if data, err := mdb.Get(k); data != nil || err == nil {
+		if data, err := mdb.Get(contract, k); data != nil || err == nil {
 			t.Fatal(err)
 		}
 	}
@@ -32,7 +33,7 @@ func TestSimple(t *testing.T) {
 		k := cacheID ^ uint64(i)
 		val := []byte("msg.")
 		val = append(val, i)
-		if err = mdb.Set(k, val); err != nil {
+		if err = mdb.Set(contract, k, val); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -47,7 +48,7 @@ func TestSimple(t *testing.T) {
 			k := cacheID ^ uint64(i)
 			val := []byte("msg.")
 			val = append(val, i)
-			v, err = mdb.Get(k)
+			v, err = mdb.Get(contract, k)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -49,7 +49,7 @@ func (it *ItemIterator) Next() {
 	if len(it.queue) == 0 {
 		for _, seq := range it.query.seqs[it.next:] {
 			err := func() error {
-				e, err := it.db.readEntry(seq)
+				e, err := it.db.readEntry(it.query.Contract, seq)
 				if err != nil {
 					return err
 				}

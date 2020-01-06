@@ -40,7 +40,6 @@ func printWithContract(topic []byte, contract uint32, db *tracedb.DB) {
 }
 
 func main() {
-	// fmt.Println("pagesize: ", os.Getpagesize())
 	// Opening a database.
 	db, err := tracedb.Open("example", nil)
 	if err != nil {
@@ -75,16 +74,14 @@ func main() {
 
 	print([]byte("ttl.ttl1?last=2m"), db)
 
-	var start time.Time
 	func(retry int) {
 		i := 1
 		for range time.Tick(100 * time.Millisecond) {
-			start = time.Now()
 			for j := 0; j < 50; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.b.*?ttl=30m"), Payload: p, Contract: contract})
+				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=30m"), Payload: p, Contract: contract})
 
 				db.DeleteEntry(&tracedb.Entry{
 					ID:       messageId,
@@ -92,7 +89,6 @@ func main() {
 					Contract: contract,
 				})
 			}
-			// log.Println("db.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -103,58 +99,8 @@ func main() {
 		}
 	}(1)
 
-	func(retry int) {
-		i := 1
-		for range time.Tick(100 * time.Millisecond) {
-			start = time.Now()
-			for j := 0; j < 10; j++ {
-				t := time.Now().Add(time.Duration(j) * time.Millisecond)
-				p, _ := t.MarshalText()
-				db.PutEntry(&tracedb.Entry{Topic: []byte("unit8.c.*?ttl=30m"), Payload: p})
-			}
-			// log.Println("db.write ", time.Since(start).Seconds())
-			if err != nil {
-				log.Printf("Error update1: %s", err)
-			}
-			if i >= retry {
-				break
-			}
-			i++
-		}
-	}(5)
-
 	// print([]byte("unit8.c.c1?last=30m"), db)
 	// print([]byte("unit8.c.c11?last=30m"), db)
-
-	// func(retry int) {
-	// 	i := 1
-	// 	for range time.Tick(100 * time.Millisecond) {
-	// 		err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-	// 			for j := 0; j < 100; j++ {
-	// 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
-	// 				p, _ := t.MarshalText()
-	// 				b.Put([]byte("unit8.b.*?ttl=30m"), p)
-	// 			}
-	// 			start = time.Now()
-	// 			err := b.Write()
-	// 			go func() {
-	// 				<-completed // it signals batch has completed and fully committed to log
-	// 				log.Printf("batch completed")
-	// 				print([]byte("unit8.b.b1?last=30m"), db)
-	// 				print([]byte("unit8.b.b11?last=30m"), db)
-	// 			}()
-	// 			return err
-	// 		})
-	// 		log.Println("batch.write ", time.Since(start).Seconds())
-	// 		if err != nil {
-	// 			log.Printf("Error update1: %s", err)
-	// 		}
-	// 		if i >= retry {
-	// 			break
-	// 		}
-	// 		i++
-	// 	}
-	// }(1)
 
 	func(retry int) {
 		i := 1
@@ -170,19 +116,17 @@ func main() {
 						}
 					}
 				}
-				start = time.Now()
 				if err := b.Write(); err != nil {
 					return err
 				}
 				go func() {
-					<-completed // it signals batch has completed and fully committed to log
+					<-completed // it signals batch has completed and fully committed to db
 					log.Printf("batch completed")
 					print([]byte("unit8.b.b1?last=30m"), db)
 					print([]byte("unit8.b.b11?last=30m"), db)
 				}()
 				return nil
 			})
-			// log.Println("batch.write ", time.Since(start).Seconds())
 			if err != nil {
 				log.Printf("Error update1: %s", err)
 			}
@@ -291,7 +235,7 @@ func main() {
 		return nil
 	})
 
-	// err = g.Run()
+	err = g.Run()
 
 	if err != nil {
 		log.Fatal(err)

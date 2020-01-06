@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -65,6 +64,11 @@ type (
 		freeblockOff int64
 		cacheID      uint64
 		hashSeed     uint32
+	}
+
+	log struct {
+		contract uint32
+		seq      uint64
 	}
 
 	// DB represents the message storage for topic->keys-values.
@@ -134,7 +138,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cache, err := bigcache.NewBigCache(config)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
@@ -380,10 +384,10 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
-func (db *DB) readEntry(seq uint64) (entry, error) {
+func (db *DB) readEntry(contract uint32, seq uint64) (entry, error) {
 	cacheKey := db.cacheID ^ seq
 	e := entry{}
-	if data, _ := db.mem.Get(cacheKey); data != nil {
+	if data, _ := db.mem.Get(contract, cacheKey); data != nil {
 		e.UnmarshalBinary(data[:entrySize])
 		e.cacheBlock = make([]byte, len(data[entrySize:]))
 		copy(e.cacheBlock, data[entrySize:])
@@ -456,7 +460,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	for _, seq := range q.seqs {
 		err = func() error {
-			e, err := db.readEntry(seq)
+			e, err := db.readEntry(q.Contract, seq)
 			if err != nil {
 				return err
 			}
@@ -585,13 +589,13 @@ func (db *DB) Sync() error {
 		return err
 	}
 	for _, s := range seqs {
-		seqM, ok := db.commitLogQueue.Load(s)
+		qlogs, ok := db.commitLogQueue.Load(s)
 		if !ok {
 			continue
 		}
-		batchSeqs := seqM.([]uint64)
-		for _, memseq := range batchSeqs {
-			memdata, err := db.mem.Get(memseq)
+		logs := qlogs.([]log)
+		for _, log := range logs {
+			memdata, err := db.mem.Get(log.contract, log.seq)
 			if err != nil {
 				return err
 			}
@@ -635,7 +639,7 @@ func (db *DB) Sync() error {
 			}
 			db.filter.Append(e.seq)
 		}
-		db.meter.Puts.Inc(int64(len(batchSeqs)))
+		db.meter.Puts.Inc(int64(len(logs)))
 		db.commitLogQueue.Delete(s)
 
 		if err := db.sync(); err != nil {
@@ -670,7 +674,9 @@ func (db *DB) ExpireOldEntries() {
 		db.meter.Dels.Inc(1)
 		db.mu.Lock()
 		defer db.mu.Unlock()
-		e, err := db.readEntry(entry.seq)
+		// TODO fix contract
+		contract, _ := db.NewContract()
+		e, err := db.readEntry(contract, entry.seq)
 		if err != nil {
 			continue
 		}
@@ -706,6 +712,8 @@ func (db *DB) loadTrie() error {
 
 // NewContract generates a new Contract.
 func (db *DB) NewContract() (uint32, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	raw := make([]byte, 4)
 	rand.Read(raw)
 
@@ -734,14 +742,19 @@ func (db *DB) extendBlocks() error {
 			return err
 		}
 	}
-	// n := nBlocks - db.blockIndex
-	// _, err := db.index.extend(n * blockSize)
-	// db.nBlocks += n
-	// db.blockIndex += n
 	return nil
 }
 
-// PutEntry sets the entry for the given message. It updates the value for the existing message id.
+// Put sets the entry for the given message. It uses default Contract to put entry into db.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (db *DB) Put(topic, value []byte) error {
+	return db.PutEntry(NewEntry(topic, value))
+}
+
+// PutEntry sets the entry for the given message.
+// It is safe to modify the contents of the argument after PutEntry returns but not
+// before.
 func (db *DB) PutEntry(e *Entry) error {
 	// start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
@@ -812,7 +825,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 	memseq := db.cacheID ^ seq
-	if err := db.mem.Set(memseq, data); err != nil {
+	if err := db.mem.Set(e.Contract, memseq, data); err != nil {
 		return err
 	}
 	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
@@ -828,7 +841,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 			return err
 		}
-		db.tinyBatch.batchSeqs = append(db.tinyBatch.batchSeqs, memseq)
+		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: e.Contract, seq: memseq})
 		db.tinyBatch.entryCount++
 	}
 
@@ -860,7 +873,7 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 }
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
-func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []byte) error {
+func (db *DB) tinyCommit(entryCount uint16, logs []log, tinyBatchData []byte) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -894,11 +907,11 @@ func (db *DB) tinyCommit(entryCount uint16, batchSeqs []uint64, tinyBatchData []
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
-	db.commitLogQueue.Store(logSeq, batchSeqs)
+	db.commitLogQueue.Store(logSeq, logs)
 	return db.tinyBatch.reset()
 }
 
-func (db *DB) commit(batchSeqs []uint64) error {
+func (db *DB) commit(logs []log) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	if err := db.ok(); err != nil {
@@ -918,8 +931,8 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		return err
 	}
 
-	for _, seq := range batchSeqs {
-		memdata, err := db.mem.Get(seq)
+	for _, log := range logs {
+		memdata, err := db.mem.Get(log.contract, log.seq)
 		if err != nil {
 			return err
 		}
@@ -933,7 +946,7 @@ func (db *DB) commit(batchSeqs []uint64) error {
 		}
 	}
 
-	db.meter.InMsgs.Inc(int64(len(batchSeqs)))
+	db.meter.InMsgs.Inc(int64(len(logs)))
 	logSeq := db.wal.NextSeq()
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
@@ -941,8 +954,15 @@ func (db *DB) commit(batchSeqs []uint64) error {
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
-	db.commitLogQueue.Store(logSeq, batchSeqs)
+	db.commitLogQueue.Store(logSeq, logs)
 	return nil
+}
+
+// Put sets the entry for the given message. It uses default Contract to put entry into db.
+// It is safe to modify the contents of the argument after Put returns but not
+// before.
+func (db *DB) Delete(id, topic []byte) error {
+	return db.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
 // DeleteEntry delets an entry from database. you must provide an ID to delete message.

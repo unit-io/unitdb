@@ -113,7 +113,7 @@ Topic isolation can be achieved using Contract while putting message entries to 
 
 ```
 
-Batch Writing Chunk
+Batch Writing Chunk.
 Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation.
 
 ```

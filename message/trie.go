@@ -6,28 +6,28 @@ import (
 
 const nul = 0x0
 
-// MID represents a message id set which can contain only unique values.
-type MID []uint64
+// ssid represents a sequence set which can contain only unique values.
+type ssid []uint64
 
 // addUnique adds a message id to the set.
-func (mid *MID) addUnique(value uint64) (added bool) {
-	if mid.contains(value) == false {
-		*mid = append(*mid, value)
+func (ss *ssid) addUnique(value uint64) (added bool) {
+	if ss.contains(value) == false {
+		*ss = append(*ss, value)
 		added = true
 	}
 	return
 }
 
-// remove a message id from the set.
-func (mid *MID) remove(value uint64) (removed bool) {
-	for i, v := range *mid {
+// remove a seq from the set.
+func (ss *ssid) remove(value uint64) (removed bool) {
+	for i, v := range *ss {
 		// if bytes.Equal(v, value) {
 		if v == value {
-			a := *mid
+			a := *ss
 			a[i] = a[len(a)-1]
 			//a[len(a)-1] = nil
 			a = a[:len(a)-1]
-			*mid = a
+			*ss = a
 			removed = true
 			return
 		}
@@ -36,8 +36,8 @@ func (mid *MID) remove(value uint64) (removed bool) {
 }
 
 // contains checks whether a message id is in the set.
-func (mid *MID) contains(value uint64) bool {
-	for _, v := range *mid {
+func (ss *ssid) contains(value uint64) bool {
+	for _, v := range *ss {
 		// if bytes.Equal(v, value) {
 		// 	return true
 		// }
@@ -56,7 +56,7 @@ type key struct {
 type part struct {
 	k        key
 	depth    uint8
-	mid      MID
+	ss       ssid
 	parent   *part
 	children map[key]*part
 }
@@ -67,7 +67,7 @@ func (p *part) orphan() {
 	}
 
 	delete(p.parent.children, p.k)
-	if len(p.parent.mid) == 0 && len(p.parent.children) == 0 {
+	if len(p.parent.ss) == 0 && len(p.parent.children) == 0 {
 		p.parent.orphan()
 	}
 }
@@ -81,7 +81,7 @@ type partTrie struct {
 func NewPartTrie() *partTrie {
 	return &partTrie{
 		root: &part{
-			mid:      MID{},
+			ss:       ssid{},
 			children: make(map[key]*part),
 		},
 	}
@@ -108,7 +108,7 @@ func (t *Trie) Count() int {
 	return t.count
 }
 
-// Add adds the message seq to the topic trie.
+// Add adds the message ssid to the topic trie.
 func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 	t.Lock()
 	defer t.Unlock()
@@ -122,7 +122,7 @@ func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 		if !ok {
 			child = &part{
 				k:        k,
-				mid:      MID{},
+				ss:       ssid{},
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -130,8 +130,8 @@ func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 		}
 		curr = child
 	}
-	// if ok := curr.mid.addUnique(seq); ok {
-	curr.mid = append(curr.mid, seq)
+	// if ok := curr.ss.addUnique(ssid); ok {
+	curr.ss = append(curr.ss, seq)
 	added = true
 	curr.depth = depth
 	t.count++
@@ -160,31 +160,31 @@ func (t *Trie) Remove(parts []Part, seq uint64) (removed bool) {
 		curr = child
 	}
 	// Remove the message id and decrement the counter
-	if ok := curr.mid.remove(seq); ok {
+	if ok := curr.ss.remove(seq); ok {
 		removed = true
 		t.count--
 	}
 	// Remove orphans
-	if len(curr.mid) == 0 && len(curr.children) == 0 {
+	if len(curr.ss) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
 	return
 }
 
 // Lookup returns the message Ids for the given topic.
-func (t *Trie) Lookup(parts []Part) (mid MID) {
+func (t *Trie) Lookup(parts []Part) (ss ssid) {
 	t.RLock()
 	defer t.RUnlock()
-	t.ilookup(parts, uint8(len(parts)-1), &mid, t.partTrie.root)
+	t.ilookup(parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }
 
-func (t *Trie) ilookup(parts []Part, depth uint8, mid *MID, part *part) {
+func (t *Trie) ilookup(parts []Part, depth uint8, ss *ssid, part *part) {
 	// Add message ids from the current branch
-	for _, s := range part.mid {
+	for _, s := range part.ss {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
-			// mid.addUnique(s)
-			*mid = append(*mid, s)
+			// ss.addUnique(s)
+			*ss = append(*ss, s)
 		}
 	}
 
@@ -193,7 +193,7 @@ func (t *Trie) ilookup(parts []Part, depth uint8, mid *MID, part *part) {
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(parts[k.wildchars+1:], depth, mid, p)
+				t.ilookup(parts[k.wildchars+1:], depth, ss, p)
 			}
 		}
 	}

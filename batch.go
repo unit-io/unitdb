@@ -71,7 +71,7 @@ type (
 		data          []byte
 		index         []batchIndex
 		pendingWrites []batchIndex
-		batchSeqs     []uint64
+		logs          []log
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
 		commitComplete chan struct{}
@@ -127,8 +127,8 @@ func (b *Batch) appendRec(dFlag bool, seq uint64, key uint32, id, topic, value [
 // Put appends 'put operation' of the given key/value pair to the batch.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) Put(key, value []byte) error {
-	return b.PutEntry(NewEntry(key, value))
+func (b *Batch) Put(topic, value []byte) error {
+	return b.PutEntry(NewEntry(topic, value))
 }
 
 // PutEntry appends 'put operation' of the given key/value pair to the batch.
@@ -196,8 +196,8 @@ func (b *Batch) PutEntry(e *Entry) error {
 // Delete appends 'delete operation' of the given key to the batch.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
-func (b *Batch) Delete(key []byte) error {
-	return b.DeleteEntry(NewEntry(key, nil))
+func (b *Batch) Delete(id, topic []byte) error {
+	return b.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
 // DeleteEntry appends 'delete operation' of the given key to the batch.
@@ -236,7 +236,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	return nil
 }
 
-func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, contract uint32, memseq uint64, data []byte) error) error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// start := time.Now()
@@ -247,9 +247,6 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 	}
 
 	for i, index := range b.pendingWrites {
-		if index.delFlag {
-			continue
-		}
 		id, topic, val := index.message(b.data)
 		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
 		if err != nil {
@@ -259,8 +256,26 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 		if b.startSeq == 0 {
 			b.startSeq = b.db.cacheID ^ index.seq
 		}
+		itopic := new(message.Topic)
+		itopic.Unmarshal(topic)
+		if index.delFlag {
+			/// Test filter block for presence
+			if !b.db.filter.Test(index.seq) {
+				return nil
+			}
+			itopic := new(message.Topic)
+			itopic.Unmarshal(topic)
+			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
+				return errBadRequest
+			}
+			continue
+		}
+		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
+			return errBadRequest
+		}
+		contract := itopic.Parts[0].Query
 		memseq := b.db.cacheID ^ index.seq
-		if err := fn(i, memseq, data); err != nil {
+		if err := fn(i, contract, memseq, data); err != nil {
 			return err
 		}
 		if b.tinyBatch {
@@ -273,44 +288,44 @@ func (b *Batch) writeInternal(fn func(i int, memseq uint64, data []byte) error) 
 			if _, err := b.db.tinyBatch.buffer.Write(data); err != nil {
 				return err
 			}
-			b.db.tinyBatch.batchSeqs = append(b.db.tinyBatch.batchSeqs, memseq)
+			b.db.tinyBatch.logs = append(b.db.tinyBatch.logs, log{contract: contract, seq: memseq})
 			b.db.tinyBatch.entryCount++
 			continue
 		}
-		b.batchSeqs = append(b.batchSeqs, memseq)
+		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
 	return nil
 }
 
-func (b *Batch) writeTrie() error {
-	// // CPU profiling by default
-	// defer profile.Start().Stop()
-	// start := time.Now()
-	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
-	l := b.Len()
-	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
-		index := b.pendingWrites[i]
-		_, topic, _ := index.message(b.data)
-		if index.delFlag {
-			/// Test filter block for presence
-			if !b.db.filter.Test(index.seq) {
-				return nil
-			}
-			itopic := new(message.Topic)
-			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
-				return errBadRequest
-			}
-		} else {
-			itopic := new(message.Topic)
-			itopic.Unmarshal(topic)
-			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
-				return errBadRequest
-			}
-		}
-	}
-	return nil
-}
+// func (b *Batch) writeTrie() error {
+// 	// // CPU profiling by default
+// 	// defer profile.Start().Stop()
+// 	// start := time.Now()
+// 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
+// 	l := b.Len()
+// 	for i, r := l-1, 0; i >= 0; i, r = i-1, r+1 {
+// 		index := b.pendingWrites[i]
+// 		_, topic, _ := index.message(b.data)
+// 		if index.delFlag {
+// 			/// Test filter block for presence
+// 			if !b.db.filter.Test(index.seq) {
+// 				return nil
+// 			}
+// 			itopic := new(message.Topic)
+// 			itopic.Unmarshal(topic)
+// 			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
+// 				return errBadRequest
+// 			}
+// 		} else {
+// 			itopic := new(message.Topic)
+// 			itopic.Unmarshal(topic)
+// 			if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
+// 				return errBadRequest
+// 			}
+// 		}
+// 	}
+// 	return nil
+// }
 
 // Write starts writing entries into db. it returns an error to the batch if any
 func (b *Batch) Write() error {
@@ -326,13 +341,13 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	err := b.writeInternal(func(i int, memseq uint64, data []byte) error {
-		return b.db.mem.Set(memseq, data)
+	err := b.writeInternal(func(i int, contract uint32, memseq uint64, data []byte) error {
+		return b.db.mem.Set(contract, memseq, data)
 	})
 
-	if err := b.writeTrie(); err != nil {
-		return err
-	}
+	// if err := b.writeTrie(); err != nil {
+	// 	return err
+	// }
 
 	b.Reset()
 	return err
@@ -410,8 +425,8 @@ func _assert(condition bool, msg string, v ...interface{}) {
 }
 
 // Seqs returns Seqs in active batch.
-func (b *Batch) Seqs() []uint64 {
-	return b.batchSeqs
+func (b *Batch) Logs() []log {
+	return b.logs
 }
 
 // Len returns number of records in the batch.
