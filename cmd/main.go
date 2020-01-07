@@ -108,10 +108,11 @@ func main() {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
 				opts.Topic = []byte("unit8.b.*?ttl=1m")
+				opts.AllowDuplicates = true
 				b.SetOptions(opts)
+				t := time.Now().Add(time.Duration(i) * time.Millisecond)
+				p, _ := t.MarshalText()
 				for j := 0; j < 250; j++ {
-					t := time.Now().Add(time.Duration(j) * time.Millisecond)
-					p, _ := t.MarshalText()
 					b.Put(p)
 					if j%100 == 0 {
 						if err := b.Write(); err != nil {

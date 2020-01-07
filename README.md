@@ -60,6 +60,7 @@ Use DB.PutEntry() or Batch.PutEntry() function to store messages to topic or del
 Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk record insertion into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
 
 ```
+    // Single topic in a batch
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1m")
@@ -76,8 +77,7 @@ Batch operation is non-blocking so client program can decide to wait for complet
 		return err
     })
 
-Or
-
+    // Multiple topics in a batch
     err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b11.1")))
 		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("msg.b.b11.2")))
@@ -116,6 +116,7 @@ Topic isolation can be achieved using Contract while putting message entries to 
 		}
 	}
 
+    // Single topic in a batch
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1m")
@@ -133,8 +134,7 @@ Topic isolation can be achieved using Contract while putting message entries to 
 		return err
     })
 
-Or
-
+    // Multiple topics in a batch
     err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Contract = contract
@@ -161,9 +161,10 @@ Batch operation support writing chunk for large batch. It is safe to use Write m
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		opts := tracedb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1m")
+		opts.AllowDuplicates = true
 		b.SetOptions(opts)
+		t := time.Now()
 		for j := 0; j < 250; j++ {
-			t := time.Now().Add(time.Duration(j) * time.Millisecond)
 			b.Put(t.MarshalText())
 			if j%100 == 0 {
 				if err := b.Write(); err != nil {

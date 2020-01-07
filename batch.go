@@ -18,18 +18,20 @@ const (
 // BatchOptions is used to set options when using batch operation
 type BatchOptions struct {
 	// In concurrent batch writes order determines how to handle conflicts
-	Order      int8
-	Topic      []byte
-	Contract   uint32
-	Encryption bool
+	Order           int8
+	Topic           []byte
+	Contract        uint32
+	Encryption      bool
+	AllowDuplicates bool
 }
 
 // DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
 var DefaultBatchOptions = &BatchOptions{
-	Order:      0,
-	Topic:      nil,
-	Contract:   message.Contract,
-	Encryption: false,
+	Order:           0,
+	Topic:           nil,
+	Contract:        message.Contract,
+	Encryption:      false,
+	AllowDuplicates: false,
 }
 
 func (index batchIndex) id(data []byte) []byte {
@@ -192,7 +194,10 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return err
 	}
 	val := snappy.Encode(nil, m)
-	key := hash.WithSalt(val, topic.GetHashCode())
+	var key uint32
+	if !b.opts.AllowDuplicates {
+		key = hash.WithSalt(val, topic.GetHashCode())
+	}
 	// Encryption.
 	if b.opts.Encryption == true {
 		val = b.db.mac.Encrypt(nil, val)
@@ -374,6 +379,11 @@ func (b *Batch) Reset() {
 }
 
 func (b *Batch) uniq() []batchIndex {
+	if b.opts.AllowDuplicates {
+		b.pendingWrites = make([]batchIndex, len(b.index))
+		copy(b.pendingWrites, b.index)
+		return b.pendingWrites
+	}
 	type indices struct {
 		idx    int
 		newidx int

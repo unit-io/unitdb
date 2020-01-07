@@ -290,6 +290,9 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		for {
 			eg.Go(func() error {
 				err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+					opts := tracedb.DefaultBatchOptions
+					opts.AllowDuplicates = true
+					b.SetOptions(opts)
 					for contract := range keys {
 						for i, k := range keys[contract] {
 							topic := append(k, []byte("?ttl=1m")...)
