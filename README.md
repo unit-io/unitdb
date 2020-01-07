@@ -154,7 +154,7 @@ Topic isolation can be achieved using Contract while putting messages into db an
 ```
 
 Batch Writing Chunk.
-Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation. Duplicate values are removed in batch write operation to specify batch option "AllowDuplicates" to keep duplicate values.
+Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation. Duplicate values are removed in batch write operation; specify batch option "AllowDuplicates" to keep duplicate values.
 
 ```
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {

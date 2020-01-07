@@ -21,17 +21,17 @@ func TestAnchor(t *testing.T) {
 	// Ex. 13
 	a.RemoveBlock(1)
 
-	if !reflect.DeepEqual(a.W, []uint32{0, 4, 2, 3, 4, 5, 6}) {
+	if !reflect.DeepEqual(a.W, []uint16{0, 4, 2, 3, 4, 5, 6}) {
 		t.Fatalf("W = %#+v", a.W)
 	}
-	if !reflect.DeepEqual(a.L, []uint32{0, 1, 2, 3, 1, 5, 6}) {
+	if !reflect.DeepEqual(a.L, []uint16{0, 1, 2, 3, 1, 5, 6}) {
 		t.Fatalf("L = %#+v", a.L)
 	}
 
 	// Ex. 14/15
 	a.RemoveBlock(0)
 
-	if !reflect.DeepEqual(a.K, []uint32{3, 4, 2, 3, 4, 5, 6}) {
+	if !reflect.DeepEqual(a.K, []uint16{3, 4, 2, 3, 4, 5, 6}) {
 		t.Fatalf("K = %#+v", a.K)
 	}
 
@@ -41,13 +41,13 @@ func TestAnchor(t *testing.T) {
 	a.AddBlock() // 5
 	a.AddBlock() // 6
 
-	if !reflect.DeepEqual(a.W, []uint32{0, 1, 2, 3, 4, 5, 6}) {
+	if !reflect.DeepEqual(a.W, []uint16{0, 1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("W = %#+v", a.W)
 	}
-	if !reflect.DeepEqual(a.L, []uint32{0, 1, 2, 3, 4, 5, 6}) {
+	if !reflect.DeepEqual(a.L, []uint16{0, 1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("L = %#+v", a.L)
 	}
-	if !reflect.DeepEqual(a.K, []uint32{0, 1, 2, 3, 4, 5, 6}) {
+	if !reflect.DeepEqual(a.K, []uint16{0, 1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("K = %#+v", a.K)
 	}
 }
@@ -58,7 +58,7 @@ func TestPaths(t *testing.T) {
 		used   = 5
 	)
 	a := InitConsistent(blocks, used)
-	path := make([]uint32, 0, 64)
+	path := make([]uint16, 0, 64)
 
 	const count = 1e6
 	sum := 0

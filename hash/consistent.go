@@ -10,17 +10,17 @@ type Consistent struct {
 	// Each bucket b ∈ {0, 1, ..., a−1} is represented by A[b] that either equals 0 if b
 	// is a working bucket (i.e., A[b] = 0 if b ∈ W), or else equals the size of the working
 	// set just after its removal (i.e., A[b] = |Wb| if b ∈ R).
-	A []uint32
+	A []uint16
 	// K stores the successor for each removed bucket b (i.e. the bucket that replaced it in W).
-	K []uint32
+	K []uint16
 	// W always contains the current set of working blocks in their desired order.
-	W []uint32
+	W []uint16
 	// L stores the most recent location for each bucket within W.
-	L []uint32
+	L []uint16
 	// R saves removed blocks in a LIFO order for possible future bucket additions.
-	R []uint32
+	R []uint16
 	// N is the current length of W
-	N uint32
+	N uint16
 }
 
 // InitConsistent a new anchor with a given capacity and initial size.
@@ -34,17 +34,17 @@ type Consistent struct {
 // 	  REMOVEBUCKET(b)
 func InitConsistent(blocks, used int) *Consistent {
 	c := &Consistent{
-		A: make([]uint32, blocks),
-		K: make([]uint32, blocks),
-		W: make([]uint32, blocks),
-		L: make([]uint32, blocks),
-		R: make([]uint32, blocks-used, blocks),
-		N: uint32(used),
+		A: make([]uint16, blocks),
+		K: make([]uint16, blocks),
+		W: make([]uint16, blocks),
+		L: make([]uint16, blocks),
+		R: make([]uint16, blocks-used, blocks),
+		N: uint16(used),
 	}
-	for b := uint32(0); b < uint32(used); b++ {
+	for b := uint16(0); b < uint16(used); b++ {
 		c.K[b], c.W[b], c.L[b] = b, b, b
 	}
-	for b, r := uint32(blocks)-1, 0; b >= uint32(used); b, r = b-1, r+1 {
+	for b, r := uint16(blocks)-1, 0; b >= uint16(used); b, r = b-1, r+1 {
 		c.A[b], c.R[r] = b, b
 	}
 	return c
@@ -66,13 +66,13 @@ func InitConsistent(blocks, used int) *Consistent {
 // 	    h ← K[h]               ◃ search for Wb[h]
 // 	  b ← h
 // 	return b
-func (c *Consistent) FindBlock(key uint64) uint32 {
+func (c *Consistent) FindBlock(key uint64) uint16 {
 	A, K := c.A, c.K
 	ha, hb, hc, hd := fleaInit(key)
-	b := FastMod(uint64(hd), uint64(len(A)))
+	b := uint16(FastMod(uint64(hd), uint64(len(A))))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := FastMod(uint64(hd), uint64(A[b]))
+		h := uint16(FastMod(uint64(hd), uint64(A[b])))
 		for A[h] >= A[b] {
 			h = K[h]
 		}
@@ -82,17 +82,17 @@ func (c *Consistent) FindBlock(key uint64) uint32 {
 }
 
 // FindPreviousBlock find the block recently removed.
-func (c *Consistent) FindPreviousBlock(key uint64) uint32 {
+func (c *Consistent) FindPreviousBlock(key uint64) uint16 {
 	A, K, W, R, N := c.A, c.K, c.W, c.R, c.N-1
 	cb := R[len(R)-1]
 	A[cb] = N
 	K[cb] = W[N]
 
 	ha, hb, hc, hd := fleaInit(key)
-	b := FastMod(uint64(hd), uint64(len(A)))
+	b := uint16(FastMod(uint64(hd), uint64(len(A))))
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := FastMod(uint64(hd), uint64(A[b]))
+		h := uint16(FastMod(uint64(hd), uint64(A[b])))
 		for A[h] >= A[b] {
 			h = K[h]
 		}
@@ -127,14 +127,14 @@ func (c *Consistent) FindPreviousBlock(key uint64) uint32 {
 // 	    P.push(h)
 // 	  b ← h
 // 	return P
-func (c *Consistent) GetPath(key uint64, pathBuffer []uint32) []uint32 {
+func (c *Consistent) GetPath(key uint64, pathBuffer []uint16) []uint16 {
 	A, K := c.A, c.K
 	ha, hb, hc, hd := fleaInit(key)
-	b := FastMod(uint64(hd), uint64(len(A)))
+	b := uint16(FastMod(uint64(hd), uint64(len(A))))
 	pathBuffer = append(pathBuffer, b)
 	for A[b] > 0 {
 		ha, hb, hc, hd = fleaRound(ha, hb, hc, hd)
-		h := FastMod(uint64(hd), uint64(A[b]))
+		h := uint16(FastMod(uint64(hd), uint64(A[b])))
 		pathBuffer = append(pathBuffer, h)
 		for A[h] >= A[b] {
 			h = K[h]
@@ -154,7 +154,7 @@ func (c *Consistent) GetPath(key uint64, pathBuffer []uint32) []uint32 {
 // 	W[L[b]] ← K[b] ← b
 // 	N ← N + 1
 // 	return b
-func (c *Consistent) AddBlock() uint32 {
+func (c *Consistent) AddBlock() uint16 {
 	A, K, W, L, R, N := c.A, c.K, c.W, c.L, c.R, c.N
 	b := R[len(R)-1]
 	c.R = R[:len(R)-1]
@@ -173,7 +173,7 @@ func (c *Consistent) AddBlock() uint32 {
 // 	A[b] ← N       ◃ Wb ← W \ b, A[b] ← |Wb|
 // 	W[L[b]] ← K[b] ← W[N]
 // 	L[W[N]] ← L[b]
-func (c *Consistent) RemoveBlock(b uint32) {
+func (c *Consistent) RemoveBlock(b uint16) {
 	if c.A[b] != 0 {
 		return
 	}
