@@ -1,10 +1,19 @@
 package message
 
 import (
+	"math"
 	"sync"
+
+	"github.com/unit-io/tracedb/hash"
 )
 
-const nul = 0x0
+const (
+	//MaxBlocks support for sharding trie
+	MaxMutex = math.MaxUint32 / 4096
+	nMutex   = 16 // TODO implelemt sharding based on total Contracts in trie
+
+	nul = 0x0
+)
 
 // ssid represents a sequence set which can contain only unique values.
 type ssid []uint64
@@ -48,6 +57,40 @@ func (ss *ssid) contains(value uint64) bool {
 	return false
 }
 
+type concurrentMutex struct {
+	sync.RWMutex // Read Write mutex, guards access to internal map.
+}
+
+// type trieMutex []*concurrentMutex
+
+// // newTrieMutex creates a new concurrent trie mutex.
+// func newTrieMutex() trieMutex {
+// 	m := make(trieMutex, nMutex)
+// 	for i := 0; i < nMutex; i++ {
+// 		m[i] = &concurrentMutex{}
+// 	}
+// 	return m
+// }
+
+type trieMutex struct {
+	m          []*concurrentMutex
+	consistent *hash.Consistent
+}
+
+// newTrieMutex creates a new concurrent mutex.
+func newTrieMutex() trieMutex {
+	mu := trieMutex{
+		m:          make([]*concurrentMutex, nMutex),
+		consistent: hash.InitConsistent(int(MaxMutex), int(nMutex)),
+	}
+
+	for i := 0; i < nMutex; i++ {
+		mu.m[i] = &concurrentMutex{}
+	}
+
+	return mu
+}
+
 type key struct {
 	query     uint32
 	wildchars uint8
@@ -89,29 +132,44 @@ func NewPartTrie() *partTrie {
 
 // Trie trie data structure to store topic parts
 type Trie struct {
-	sync.RWMutex
+	// sync.RWMutex
+	trieMutex
+	// consistent *hash.Consistent
 	partTrie *partTrie
 	count    int // Number of Trie in the Trie.
 }
 
 // NewTrie new trie creates a Trie with an initialized Trie.
 func NewTrie() *Trie {
-	return &Trie{
-		partTrie: NewPartTrie(),
+	trie := &Trie{
+		trieMutex: newTrieMutex(),
+		partTrie:  NewPartTrie(),
 	}
+	// trie.consistent = hash.InitConsistent(int(MaxMutex), int(nMutex))
+
+	return trie
+}
+
+// getMutext returns mutex under given prefix
+func (mu *trieMutex) getMutex(prefix uint64) *concurrentMutex {
+	return mu.m[mu.consistent.FindBlock(prefix)]
 }
 
 // Count returns the number of Trie.
 func (t *Trie) Count() int {
-	t.RLock()
-	defer t.RUnlock()
+	// t.RLock()
+	// defer t.RUnlock()
 	return t.count
 }
 
 // Add adds the message ssid to the topic trie.
-func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
-	t.Lock()
-	defer t.Unlock()
+func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added bool) {
+	// t.Lock()
+	// defer t.Unlock()
+	// Get mutex
+	mu := t.getMutex(prefix)
+	mu.Lock()
+	defer mu.Unlock()
 	curr := t.partTrie.root
 	for _, p := range parts {
 		k := key{
@@ -141,9 +199,12 @@ func (t *Trie) Add(parts []Part, depth uint8, seq uint64) (added bool) {
 }
 
 // Remove remove the message seq of the topic trie
-func (t *Trie) Remove(parts []Part, seq uint64) (removed bool) {
-	t.Lock()
-	defer t.Unlock()
+func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
+	// t.Lock()
+	// defer t.Unlock()
+	mu := t.getMutex(prefix)
+	mu.Lock()
+	defer mu.Unlock()
 	curr := t.partTrie.root
 
 	for _, part := range parts {
@@ -172,14 +233,17 @@ func (t *Trie) Remove(parts []Part, seq uint64) (removed bool) {
 }
 
 // Lookup returns the message Ids for the given topic.
-func (t *Trie) Lookup(parts []Part) (ss ssid) {
-	t.RLock()
-	defer t.RUnlock()
-	t.ilookup(parts, uint8(len(parts)-1), &ss, t.partTrie.root)
+func (t *Trie) Lookup(prefix uint64, parts []Part) (ss ssid) {
+	// t.RLock()
+	// defer t.RUnlock()
+	mu := t.getMutex(prefix)
+	mu.RLock()
+	defer mu.RUnlock()
+	t.ilookup(prefix, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }
 
-func (t *Trie) ilookup(parts []Part, depth uint8, ss *ssid, part *part) {
+func (t *Trie) ilookup(prefix uint64, parts []Part, depth uint8, ss *ssid, part *part) {
 	// Add message ids from the current branch
 	for _, s := range part.ss {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
@@ -193,7 +257,7 @@ func (t *Trie) ilookup(parts []Part, depth uint8, ss *ssid, part *part) {
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(parts[k.wildchars+1:], depth, ss, p)
+				t.ilookup(prefix, parts[k.wildchars+1:], depth, ss, p)
 			}
 		}
 	}

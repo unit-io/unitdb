@@ -18,9 +18,8 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Memory buffer optimization to achive hyper scale writes & reads. Memory dump to archive files to offload buffers and free memory
-- End to end lifecycle management of message entry, to better inform client about entry state (using system topic) such as entry is in commited state, error state or expired state etc..
-- Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify if error has recoverd
+- Memory buffer optimization to achive hyper scale writes & reads.
+- Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify when an error has recoverd
 - Documentation - document the technical atchitecture, design principals and advanced usage guides such as optimum configuration guideline to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
 ## Quick Start
@@ -55,7 +54,7 @@ func main() {
 ```
 
 ### Writing to a database
-Use DB.PutEntry() or Batch.PutEntry() function to store messages to topic or delete a message from topic using DB.DeleteEntry() or Batch.DeleteEntry() function. If writing to single topic in a batch then specify the topic in the BatchOpetions and use Batch.Put() function.  
+Use DB.PutEntry() or Batch.PutEntry() function to store messages to topic or delete a message from topic using DB.DeleteEntry() or Batch.DeleteEntry() function. If writing to single topic in a batch then specify the topic in the BatchOptions and use Batch.Put() function.  
 
 Batch operation is non-blocking so client program can decide to wait for completed signal and further execute any additional tasks. Batch operation speeds up bulk record insertion into tracedb. Reading data is blazing fast if batch operation is used for bulk insertion and then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
 
@@ -65,9 +64,9 @@ Batch operation is non-blocking so client program can decide to wait for complet
 		opts := tracedb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1m")
 		b.SetOptions(opts)
-		b.Put([]byte("msg.b.*.1")
-		b.Put([]byte("msg.b.*.2")
-		b.Put([]byte("msg.b.*.3")
+		b.Put([]byte("msg.b.*.1"))
+		b.Put([]byte("msg.b.*.2"))
+		b.Put([]byte("msg.b.*.3"))
 		err := b.Write()
 			go func() {
 				<-completed // it signals batch has completed and fully committed to db
@@ -95,7 +94,7 @@ Batch operation is non-blocking so client program can decide to wait for complet
 ```
 
 Topic Isolation.
-Topic isolation can be achieved using Contract while putting message entries to db and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() or Batch.PutEntry() function. Use Contract in the query to get messages from a topic.
+Topic isolation can be achieved using Contract while putting messages into db and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() or Batch.PutEntry() function. Use Contract in the query to get messages from a topic.
 
 ```
 	contract, err := db.NewContract()
@@ -122,9 +121,9 @@ Topic isolation can be achieved using Contract while putting message entries to 
 		opts.Topic = []byte("unit8.b.*?ttl=1m")
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.Put([]byte("msg.b.*.1")
-		b.Put([]byte("msg.b.*.2")
-		b.Put([]byte("msg.b.*.3")
+		b.Put([]byte("msg.b.*.1"))
+		b.Put([]byte("msg.b.*.2"))
+		b.Put([]byte("msg.b.*.3"))
 		err := b.Write()
 			go func() {
 				<-completed // it signals batch has completed and fully committed to db
@@ -155,7 +154,7 @@ Topic isolation can be achieved using Contract while putting message entries to 
 ```
 
 Batch Writing Chunk.
-Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation.
+Batch operation support writing chunk for large batch. It is safe to use Write multiple times within a batch operation. Duplicate values are removed in batch write operation to specify batch option "AllowDuplicates" to keep duplicate values.
 
 ```
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {

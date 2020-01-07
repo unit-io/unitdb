@@ -75,7 +75,8 @@ type (
 	// All DB methods are safe for concurrent use by multiple goroutines.
 	DB struct {
 		// Need 64-bit alignment.
-		mu             sync.RWMutex
+		mu sync.RWMutex
+		mutex
 		mac            *crypto.MAC
 		writeLockC     chan struct{}
 		commitLockC    chan struct{}
@@ -142,6 +143,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
+		mutex:       newMutex(),
 		index:       index,
 		data:        dataTable{table: data},
 		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
@@ -422,8 +424,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+	// db.mu.RLock()
+	// defer db.mu.RUnlock()
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -441,30 +443,35 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
+	q.prefix = message.Prefix(q.parts)
 
 	// In case of last, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
-		q.prefix = message.GenPrefix(q.parts, until.Unix())
+		q.prefixWithTime = message.GenPrefix(q.parts, until.Unix())
 		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
 			q.Limit = maxResults // Maximum number of records to return
 		}
 	}
-	// Wait entry expiry if read is inprogress
-	db.expiryW.Add(1)
-	defer db.expiryW.Done()
-	q.seqs = db.trie.Lookup(q.parts)
+
+	// // Wait entry expiry if read is inprogress
+	// db.expiryW.Add(1)
+	// defer db.expiryW.Done()
+	mu := db.getMutex(q.prefix)
+	mu.RLock()
+	defer mu.RUnlock()
+	q.seqs = db.trie.Lookup(q.prefix, q.parts)
 	if len(q.seqs) == 0 {
 		return
 	}
 	if len(q.seqs) > int(q.Limit) {
 		q.seqs = q.seqs[:q.Limit]
 	}
-	prefix := message.Prefix(q.parts)
+
 	for _, seq := range q.seqs {
 		err = func() error {
-			e, err := db.readEntry(prefix, seq)
+			e, err := db.readEntry(q.prefix, seq)
 			if err != nil {
 				return err
 			}
@@ -475,7 +482,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				}
 				topic := new(message.Topic)
 				topic.Unmarshal(val)
-				if ok := db.trie.Remove(topic.Parts, seq); ok {
+				if ok := db.trie.Remove(q.prefix, topic.Parts, seq); ok {
 					db.timeWindow.add(e)
 				}
 				// if id is expired it does not return an error but continue the iteration
@@ -547,10 +554,11 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
+	q.prefix = message.Prefix(q.parts)
 
 	// In case of ttl, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
-		q.prefix = message.GenPrefix(q.parts, until.Unix())
+		q.prefixWithTime = message.GenPrefix(q.parts, until.Unix())
 		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
@@ -669,8 +677,8 @@ func (db *DB) ExpireOldEntries() {
 		<-db.expiryLockC
 		db.closeW.Done()
 	}()
-	// wait expiry if read operation is inprogress
-	db.expiryW.Wait()
+	// // wait expiry if read operation is inprogress
+	// db.expiryW.Wait()
 	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
@@ -679,8 +687,8 @@ func (db *DB) ExpireOldEntries() {
 			continue
 		}
 		db.meter.Dels.Inc(1)
-		db.mu.Lock()
-		defer db.mu.Unlock()
+		// db.mu.Lock()
+		// defer db.mu.Unlock()
 		// TODO fix contract
 		var prefix uint64
 		e, err := db.readEntry(prefix, entry.seq)
@@ -693,7 +701,11 @@ func (db *DB) ExpireOldEntries() {
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
-		if ok := db.trie.Remove(topic.Parts, entry.seq); ok {
+		prefix = message.Prefix(topic.Parts)
+		mu := db.getMutex(prefix)
+		mu.Lock()
+		defer mu.Unlock()
+		if ok := db.trie.Remove(prefix, topic.Parts, entry.seq); ok {
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -712,15 +724,15 @@ func (db *DB) loadTrie() error {
 			logger.Error().Err(err).Str("context", "db.loadTrie")
 			return err
 		}
-		db.trie.Add(it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
+		db.trie.Add(message.Prefix(it.Topic().Parts()), it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
 	}
 	return nil
 }
 
 // NewContract generates a new Contract.
 func (db *DB) NewContract() (uint32, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// db.mu.Lock()
+	// defer db.mu.Unlock()
 	raw := make([]byte, 4)
 	rand.Read(raw)
 
@@ -836,7 +848,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.mem.Set(prefix, memseq, data); err != nil {
 		return err
 	}
-	if ok := db.trie.Add(topic.Parts, topic.Depth, seq); ok {
+	if ok := db.trie.Add(prefix, topic.Parts, topic.Depth, seq); ok {
 		if err != nil {
 			return err
 		}
@@ -985,8 +997,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
 	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// db.mu.Lock()
+	// defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.Contract
@@ -1004,8 +1016,11 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	// message ID is the database key
 	id := message.ID(e.ID)
 	id.AddContract(topic.Parts)
-
-	if ok := db.trie.Remove(topic.Parts, id.Seq()); ok {
+	prefix := message.Prefix(topic.Parts)
+	mu := db.getMutex(prefix)
+	mu.Lock()
+	defer mu.Unlock()
+	if ok := db.trie.Remove(prefix, topic.Parts, id.Seq()); ok {
 		err := db.delete(id)
 		if err != nil {
 			return err

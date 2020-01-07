@@ -286,12 +286,12 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			}
 			// itopic := new(message.Topic)
 			// itopic.Unmarshal(topic)
-			if ok := b.db.trie.Remove(itopic.Parts, index.seq); !ok {
+			if ok := b.db.trie.Remove(index.prefix, itopic.Parts, index.seq); !ok {
 				return errBadRequest
 			}
 			continue
 		}
-		if ok := b.db.trie.Add(itopic.Parts, itopic.Depth, index.seq); !ok {
+		if ok := b.db.trie.Add(index.prefix, itopic.Parts, itopic.Depth, index.seq); !ok {
 			return errBadRequest
 		}
 		// prefix := message.Prefix(itopic.Parts)
