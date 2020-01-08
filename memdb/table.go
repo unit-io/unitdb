@@ -18,6 +18,7 @@ type tableManager interface {
 	slice(start int64, end int64) ([]byte, error)
 	extend(size uint32) (int64, error)
 	truncate(size int64) error
+	truncateFront(off int64) error
 	close() error
 }
 
@@ -58,7 +59,6 @@ type memTable struct {
 	buf       []byte
 	allocated int64
 	maxSize   int64
-	offset    int64
 	closed    bool
 }
 
@@ -114,6 +114,20 @@ func (m *memTable) truncate(size int64) error {
 		m.buf = m.buf[:m.allocated]
 	}
 	m.allocated = size
+	return nil
+}
+
+func (m *memTable) truncateFront(off int64) error {
+	if m.closed {
+		return errors.New("table closed")
+	}
+	if off > m.allocated {
+		m.buf = nil
+		m.allocated = 0
+		return nil
+	}
+	m.buf = m.buf[off:m.allocated]
+	m.allocated = m.allocated - off
 	return nil
 }
 

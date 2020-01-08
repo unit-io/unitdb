@@ -61,17 +61,6 @@ type concurrentMutex struct {
 	sync.RWMutex // Read Write mutex, guards access to internal map.
 }
 
-// type trieMutex []*concurrentMutex
-
-// // newTrieMutex creates a new concurrent trie mutex.
-// func newTrieMutex() trieMutex {
-// 	m := make(trieMutex, nMutex)
-// 	for i := 0; i < nMutex; i++ {
-// 		m[i] = &concurrentMutex{}
-// 	}
-// 	return m
-// }
-
 type trieMutex struct {
 	m          []*concurrentMutex
 	consistent *hash.Consistent
@@ -132,7 +121,7 @@ func NewPartTrie() *partTrie {
 
 // Trie trie data structure to store topic parts
 type Trie struct {
-	// sync.RWMutex
+	sync.RWMutex
 	trieMutex
 	// consistent *hash.Consistent
 	partTrie *partTrie
@@ -157,15 +146,13 @@ func (mu *trieMutex) getMutex(prefix uint64) *concurrentMutex {
 
 // Count returns the number of Trie.
 func (t *Trie) Count() int {
-	// t.RLock()
-	// defer t.RUnlock()
+	t.RLock()
+	defer t.RUnlock()
 	return t.count
 }
 
 // Add adds the message ssid to the topic trie.
 func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added bool) {
-	// t.Lock()
-	// defer t.Unlock()
 	// Get mutex
 	mu := t.getMutex(prefix)
 	mu.Lock()
@@ -200,8 +187,6 @@ func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added 
 
 // Remove remove the message seq of the topic trie
 func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
-	// t.Lock()
-	// defer t.Unlock()
 	mu := t.getMutex(prefix)
 	mu.Lock()
 	defer mu.Unlock()
@@ -234,8 +219,6 @@ func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
 
 // Lookup returns the message Ids for the given topic.
 func (t *Trie) Lookup(prefix uint64, parts []Part) (ss ssid) {
-	// t.RLock()
-	// defer t.RUnlock()
 	mu := t.getMutex(prefix)
 	mu.RLock()
 	defer mu.RUnlock()

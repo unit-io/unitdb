@@ -83,7 +83,6 @@ type (
 		syncLockC      chan struct{}
 		commitLogQueue sync.Map
 		expiryLockC    chan struct{}
-		expiryW        sync.WaitGroup
 		// consistent   *hash.Consistent
 		filter     Filter
 		index      table
@@ -152,7 +151,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
-		// commitLogQueue: make(map[uint64][]uint64),
 		expiryLockC: make(chan struct{}, 1),
 		dbInfo: dbInfo{
 			nBlocks:      1,
@@ -272,6 +270,11 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-logsyncTicker.C:
 				if err := db.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
+					// run db recovery if an error occur with the db sync
+					if err := db.recoverLog(); err != nil {
+						// if unable to recover db then shurdown the db
+						panic("Unable to recover db on sync error. Shutting down db...")
+					}
 				}
 			}
 		}
@@ -424,8 +427,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	// db.mu.RLock()
-	// defer db.mu.RUnlock()
 	topic := new(message.Topic)
 	if q.Contract == 0 {
 		q.Contract = message.Contract
@@ -455,9 +456,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 	}
 
-	// // Wait entry expiry if read is inprogress
-	// db.expiryW.Add(1)
-	// defer db.expiryW.Done()
 	mu := db.getMutex(q.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
@@ -636,8 +634,6 @@ func (db *DB) Sync() error {
 				continue
 			}
 			db.count++
-			// moffset := e.mSize()
-			// m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
 				db.freeslot.free(e.seq)
 				return err
@@ -652,6 +648,7 @@ func (db *DB) Sync() error {
 				db.freeslot.free(e.seq)
 				return err
 			}
+			// db.mem.Free(log.prefix, log.seq)
 			db.filter.Append(e.seq)
 		}
 		db.meter.Puts.Inc(int64(len(logs)))
@@ -677,8 +674,6 @@ func (db *DB) ExpireOldEntries() {
 		<-db.expiryLockC
 		db.closeW.Done()
 	}()
-	// // wait expiry if read operation is inprogress
-	// db.expiryW.Wait()
 	expiredEntries := db.timeWindow.expireOldEntries()
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
@@ -687,8 +682,6 @@ func (db *DB) ExpireOldEntries() {
 			continue
 		}
 		db.meter.Dels.Inc(1)
-		// db.mu.Lock()
-		// defer db.mu.Unlock()
 		// TODO fix contract
 		var prefix uint64
 		e, err := db.readEntry(prefix, entry.seq)
@@ -878,7 +871,6 @@ func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) (
 		seq:       seq,
 		topicSize: uint16(len(topic)),
 		valueSize: uint32(len(value)),
-		// mOffset:   offset,
 		expiresAt: expiresAt,
 	}
 	data, _ := e.MarshalBinary()

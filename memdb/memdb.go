@@ -6,17 +6,21 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/unit-io/tracedb/hash"
 )
 
 const (
 	//MaxBlocks support for sharding memdb block cache
-	MaxBlocks  = math.MaxUint32 / 4096
-	nContracts = 271 // TODO implelemt sharding based on total Contracts in db
+	maxShards = math.MaxUint32 / 4096
+	nShards   = 271 // TODO implelemt sharding based on total Contracts in db
 
-	// MaxTableSize value for maximum memroy use for the memdb.
-	MaxTableSize = (int64(1) << 33) - 1
+	// maxTableSize value for maximum memroy use for the memdb.
+	maxTableSize = (int64(1) << 33) - 1
+
+	backgroundMemResetInterval = 1 * time.Second
+	memResetFactor             = 0.7
 )
 
 // A "thread" safe map of type seq:offset.
@@ -25,14 +29,15 @@ type blockCache []*concurrentCache
 
 type concurrentCache struct {
 	data         dataTable
+	freeOffset   int64            // cache keep lowest offset that can be free.
 	cache        map[uint64]int64 // seq and offset map
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
 
 // newCache creates a new concurrent block cache.
 func newCache(path string, memSize int64) blockCache {
-	m := make(blockCache, nContracts)
-	for i := 0; i < nContracts; i++ {
+	m := make(blockCache, nShards)
+	for i := 0; i < nShards; i++ {
 		path := fmt.Sprintf("%s-%d.data", path, i)
 		data, err := mem.newTable(path, memSize)
 		if err != nil {
@@ -46,28 +51,75 @@ func newCache(path string, memSize int64) blockCache {
 // DB represents the topic->key-value storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
-	//block cache
+	targetSize int64
+	resetLockC chan struct{}
+	// block cache
 	consistent *hash.Consistent
 	blockCache blockCache // seq and offset map
+
+	// close
+	closeC chan struct{}
 }
 
 // Open opens or creates a new DB. Minimum memroy size is 1GB
 func Open(path string, memSize int64) (*DB, error) {
-	if memSize > MaxTableSize {
-		memSize = MaxTableSize
+	if memSize > maxTableSize {
+		memSize = maxTableSize
 	}
 	db := &DB{
+		targetSize: memSize,
 		blockCache: newCache(path, memSize),
+		// Close
+		closeC: make(chan struct{}),
 	}
 
-	db.consistent = hash.InitConsistent(int(MaxBlocks), int(nContracts))
+	db.consistent = hash.InitConsistent(int(maxShards), int(nShards))
+
+	db.startBufferReseter(backgroundMemResetInterval)
 
 	return db, nil
 }
 
+func (db *DB) startBufferReseter(interval time.Duration) {
+	resetTicker := time.NewTicker(interval)
+	go func() {
+		defer func() {
+			resetTicker.Stop()
+		}()
+		for {
+			select {
+			case <-db.closeC:
+				return
+			case <-resetTicker.C:
+				memSize, err := db.FileSize()
+				if err == nil && float64(memSize) > float64(db.targetSize)*memResetFactor {
+					// db.shrinkDataTable()
+				}
+			}
+		}
+	}()
+}
+
+func (db *DB) shrinkDataTable() (err error) {
+	for i := 0; i < nShards; i++ {
+		shard := db.blockCache[i]
+		shard.Lock()
+		if shard.freeOffset > 0 {
+			err = shard.data.shrink(shard.freeOffset)
+			fmt.Println("memdb.shrinkDataTable: freed ", shard.freeOffset, err)
+		}
+		shard.Unlock()
+	}
+
+	return err
+}
+
 // Close closes the DB.
 func (db *DB) Close() error {
-	for i := 0; i < nContracts; i++ {
+	// Signal all goroutines.
+	close(db.closeC)
+
+	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
 		shard.RLock()
 		if err := shard.data.close(); err != nil {
@@ -82,19 +134,19 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// GetShard returns shard under given contract
-func (db *DB) GetShard(prefix uint64) *concurrentCache {
+// getShard returns shard under given contract
+func (db *DB) getShard(prefix uint64) *concurrentCache {
 	return db.blockCache[db.consistent.FindBlock(prefix)]
 }
 
 // Get gets data for the provided key
 func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
 	// Get shard
-	shard := db.GetShard(prefix)
+	shard := db.getShard(prefix)
 	shard.RLock()
 	// Get item from shard.
 	off, ok := shard.cache[key]
-	shard.RUnlock()
+	defer shard.RUnlock()
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
@@ -113,8 +165,9 @@ func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
 // Set sets the value for the given key->value. It updates the value for the existing key.
 func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
 	// Get cache shard.
-	shard := db.GetShard(prefix)
+	shard := db.getShard(prefix)
 	shard.Lock()
+	defer shard.Unlock()
 	off, err := shard.data.allocate(uint32(len(data) + 4))
 	if err != nil {
 		return err
@@ -129,14 +182,30 @@ func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
 		return err
 	}
 	shard.cache[key] = off
-	shard.Unlock()
+	return nil
+}
+
+// Free free data for the provided key, it is reclaimed
+func (db *DB) Free(prefix uint64, key uint64) error {
+	// Get shard
+	shard := db.getShard(prefix)
+	shard.Lock()
+	defer shard.Unlock()
+	// Get item from shard.
+	if off, ok := shard.cache[key]; ok {
+		delete(shard.cache, key)
+		if off > shard.freeOffset {
+			shard.freeOffset = off
+		}
+	}
+
 	return nil
 }
 
 // Count returns the number of items in the DB.
 func (db *DB) Count() uint32 {
 	count := 0
-	for i := 0; i < nContracts; i++ {
+	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
 		shard.RLock()
 		count += len(shard.cache)
@@ -148,7 +217,7 @@ func (db *DB) Count() uint32 {
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
 	size := int64(0)
-	for i := 0; i < nContracts; i++ {
+	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
 		shard.RLock()
 		size += int64(shard.data.size)

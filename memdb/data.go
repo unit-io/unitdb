@@ -26,6 +26,17 @@ func (t *dataTable) allocate(size uint32) (int64, error) {
 	return off, nil
 }
 
+func (t *dataTable) shrink(off int64) error {
+	if t.size == 0 {
+		panic("unable to shrink table of size zero bytes")
+	}
+	if err := t.truncateFront(off); err != nil {
+		return err
+	}
+	t.size -= off
+	return nil
+}
+
 func (t *dataTable) readRaw(off int64, size uint32) ([]byte, error) {
 	return t.slice(off, off+int64(size))
 }

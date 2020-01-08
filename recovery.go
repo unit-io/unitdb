@@ -118,8 +118,11 @@ func (db *DB) recover() error {
 
 func (db *DB) recoverLog() error {
 	db.closeW.Add(1)
-	defer db.closeW.Done()
-
+	db.mu.Lock()
+	defer func() {
+		db.mu.Unlock()
+		db.closeW.Done()
+	}()
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err
