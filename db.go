@@ -3,6 +3,7 @@ package tracedb
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"math/rand"
@@ -229,7 +230,10 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.wal = wal
 
 	if needLogRecovery {
-		db.recoverLog()
+		if err := db.recoverLog(); err != nil {
+			// if unable to recover db then close db
+			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
+		}
 	}
 
 	// Create a new MAC from the key.
@@ -270,11 +274,6 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-logsyncTicker.C:
 				if err := db.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
-					// run db recovery if an error occur with the db sync
-					if err := db.recoverLog(); err != nil {
-						// if unable to recover db then shurdown the db
-						panic("Unable to recover db on sync error. Shutting down db...")
-					}
 				}
 			}
 		}
@@ -591,6 +590,7 @@ func (db *DB) Sync() error {
 		db.closeW.Done()
 	}()
 
+	var needRecovery bool
 	seqs, err := db.wal.Scan()
 	if err != nil {
 		return err
@@ -602,66 +602,77 @@ func (db *DB) Sync() error {
 		return err
 	}
 	for _, s := range seqs {
-		qlogs, ok := db.commitLogQueue.Load(s)
-		if !ok {
-			continue
-		}
-		logs := qlogs.([]log)
-		for _, log := range logs {
-			memdata, err := db.mem.Get(log.prefix, log.seq)
-			if err != nil {
-				return err
+		err := func() error {
+			qlogs, ok := db.commitLogQueue.Load(s)
+			if !ok {
+				return nil
 			}
-			e := entry{}
-			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
-				return err
-			}
-			startBlockIdx := startBlockIndex(e.seq)
-			off := blockOffset(startBlockIdx)
-			b := &blockHandle{table: db.index, offset: off}
-			if err := b.read(); err != nil {
-				return err
-			}
-			entryIdx := 0
-			for i := 0; i < entriesPerBlock; i++ {
-				ie := b.entries[i]
-				if ie.seq == e.seq { //record exist in db
-					entryIdx = -1
-					break
+			logs := qlogs.([]log)
+			for _, log := range logs {
+				memdata, err := db.mem.Get(log.prefix, log.seq)
+				if err != nil {
+					return err
 				}
-			}
-			if entryIdx == -1 {
-				continue
-			}
-			db.count++
-			if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
-				db.freeslot.free(e.seq)
-				return err
-			}
-			db.meter.InBytes.Inc(int64(e.valueSize))
-			b.entries[b.entryIdx] = e
-			if b.entries[b.entryIdx].expiresAt > 0 {
-				db.timeWindow.add(b.entries[b.entryIdx])
-			}
-			b.entryIdx++
-			if err := b.write(); err != nil {
-				db.freeslot.free(e.seq)
-				return err
-			}
-			// db.mem.Free(log.prefix, log.seq)
-			db.filter.Append(e.seq)
-		}
-		db.meter.Puts.Inc(int64(len(logs)))
-		db.commitLogQueue.Delete(s)
+				e := entry{}
+				if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+					return err
+				}
+				startBlockIdx := startBlockIndex(e.seq)
+				off := blockOffset(startBlockIdx)
+				b := &blockHandle{table: db.index, offset: off}
+				if err := b.read(); err != nil {
+					return err
+				}
+				entryIdx := 0
+				for i := 0; i < entriesPerBlock; i++ {
+					ie := b.entries[i]
+					if ie.seq == e.seq { //record exist in db
+						entryIdx = -1
+						break
+					}
+				}
+				if entryIdx == -1 {
+					continue
+				}
+				db.count++
+				if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
+					db.freeslot.free(e.seq)
+					return err
+				}
+				db.meter.InBytes.Inc(int64(e.valueSize))
+				b.entries[b.entryIdx] = e
+				if b.entries[b.entryIdx].expiresAt > 0 {
+					db.timeWindow.add(b.entries[b.entryIdx])
+				}
+				b.entryIdx++
+				if err := b.write(); err != nil {
+					db.freeslot.free(e.seq)
+					return err
+				}
 
-		if err := db.sync(); err != nil {
-			return err
-		}
-		if err := db.wal.SignalLogApplied(s); err != nil {
-			return err
+				db.filter.Append(e.seq)
+			}
+			db.meter.Puts.Inc(int64(len(logs)))
+			db.mem.Free(logs[0].prefix, logs[0].seq)
+			return db.sync()
+		}()
+		db.commitLogQueue.Delete(s)
+		if err == nil {
+			if err := db.wal.SignalLogApplied(s); err != nil {
+				return err
+			}
+		} else {
+			needRecovery = true
 		}
 	}
 
+	if needRecovery {
+		// run db recovery if an error occur with the db sync
+		if err := db.recoverLog(); err != nil {
+			// if unable to recover db then close db
+			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
+		}
+	}
 	return nil
 }
 

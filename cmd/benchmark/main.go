@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	numKeys      = flag.Int("n", 1500000, "number of keys")
+	numKeys      = flag.Int("n", 500000, "number of keys")
 	minKeySize   = flag.Int("mink", 16, "minimum key size")
 	maxKeySize   = flag.Int("maxk", 64, "maximum key size")
 	minValueSize = flag.Int("minv", 128, "minimum value size")

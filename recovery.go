@@ -167,7 +167,8 @@ func (db *DB) recoverLog() error {
 				db.freeslot.free(e.seq)
 				return err
 			}
-
+			db.meter.Puts.Inc(1)
+			db.meter.InBytes.Inc(int64(e.valueSize))
 			b.entries[b.entryIdx] = e
 			if b.entries[b.entryIdx].expiresAt > 0 {
 				db.timeWindow.add(b.entries[b.entryIdx])

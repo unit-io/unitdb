@@ -64,7 +64,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
+		opts.MemdbSize = 1 << 20 // maximum size of memdb (1GB).
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 30 // maximum size of memdb (1GB).

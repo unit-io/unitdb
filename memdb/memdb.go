@@ -20,7 +20,8 @@ const (
 	maxTableSize = (int64(1) << 33) - 1
 
 	backgroundMemResetInterval = 1 * time.Second
-	memResetFactor             = 0.7
+	memShrinkFactor            = 0.7
+	dataTableShrinkFactor      = 0.2 // shirnker try to free 20% of total datatable size
 )
 
 // A "thread" safe map of type seq:offset.
@@ -75,43 +76,52 @@ func Open(path string, memSize int64) (*DB, error) {
 
 	db.consistent = hash.InitConsistent(int(maxShards), int(nShards))
 
-	db.startBufferReseter(backgroundMemResetInterval)
+	db.startBufferShrinker(backgroundMemResetInterval)
 
 	return db, nil
 }
 
-func (db *DB) startBufferReseter(interval time.Duration) {
-	resetTicker := time.NewTicker(interval)
+func (db *DB) startBufferShrinker(interval time.Duration) {
+	shrinkerTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {
-			resetTicker.Stop()
+			shrinkerTicker.Stop()
 		}()
 		for {
 			select {
 			case <-db.closeC:
 				return
-			case <-resetTicker.C:
+			case <-shrinkerTicker.C:
 				memSize, err := db.FileSize()
-				if err == nil && float64(memSize) > float64(db.targetSize)*memResetFactor {
-					// db.shrinkDataTable()
+				if err == nil && float64(memSize) > float64(db.targetSize)*memShrinkFactor {
+					db.shrinkDataTable()
 				}
 			}
 		}
 	}()
 }
 
-func (db *DB) shrinkDataTable() (err error) {
+func (db *DB) shrinkDataTable() error {
 	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
 		shard.Lock()
 		if shard.freeOffset > 0 {
-			err = shard.data.shrink(shard.freeOffset)
-			fmt.Println("memdb.shrinkDataTable: freed ", shard.freeOffset, err)
+			if err := shard.data.shrink(shard.freeOffset); err != nil {
+				return err
+			}
 		}
+		for seq, off := range shard.cache {
+			if off < shard.freeOffset {
+				delete(shard.cache, seq)
+			} else {
+				shard.cache[seq] = off - shard.freeOffset
+			}
+		}
+		shard.freeOffset = 0
 		shard.Unlock()
 	}
 
-	return err
+	return nil
 }
 
 // Close closes the DB.
@@ -146,7 +156,7 @@ func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
 	shard.RLock()
 	// Get item from shard.
 	off, ok := shard.cache[key]
-	defer shard.RUnlock()
+	shard.RUnlock()
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
@@ -185,16 +195,19 @@ func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
 	return nil
 }
 
-// Free free data for the provided key, it is reclaimed
+// Free free keeps first offset that can be free if memdb exceeds target size threshold.
 func (db *DB) Free(prefix uint64, key uint64) error {
 	// Get shard
 	shard := db.getShard(prefix)
 	shard.Lock()
 	defer shard.Unlock()
+	if shard.freeOffset > 0 {
+		return nil
+	}
+	off, ok := shard.cache[key]
 	// Get item from shard.
-	if off, ok := shard.cache[key]; ok {
-		delete(shard.cache, key)
-		if off > shard.freeOffset {
+	if ok {
+		if (shard.freeOffset == 0 || shard.freeOffset < off) && float64(off) > float64(shard.data.size)*dataTableShrinkFactor {
 			shard.freeOffset = off
 		}
 	}
