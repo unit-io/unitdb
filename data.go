@@ -32,6 +32,9 @@ func (t *dataTable) readTopic(e entry) ([]byte, error) {
 
 func (t *dataTable) allocate(size uint32) (int64, error) {
 	size = align512(size)
+	if t.fb.size < 1<<20 {
+		return t.extend(size)
+	}
 	if off := t.fb.allocate(size); off > 0 {
 		return off, nil
 	}
@@ -64,6 +67,9 @@ func (t *dataTable) writeRaw(data []byte) (off int64, err error) {
 	dataLen := align512(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
+	if t.fb.size < 1<<20 {
+		return t.append(buf)
+	}
 	off = t.fb.allocate(dataLen)
 	if off != -1 {
 		if _, err = t.WriteAt(buf, off); err != nil {

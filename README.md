@@ -4,7 +4,7 @@
   <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
-# tracedb: Blazing fast timeseries database for IoT and real-time messaging applications
+# tracedb: blazing fast timeseries database for IoT and real-time messaging applications
 
 tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 
@@ -25,8 +25,8 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 ## Table of Contents
  * [Quick Start](#Quick-Start)
  * [Usage](#Usage)
-  + [Opening a database](#Opening-a-database)
-  + [Writing to a database](#Writing-to-a-database)
+ * [Opening a database](#Opening-a-database)
+ + [Writing to a database](#Writing-to-a-database)
    - [Store a message](#Store-a-message)
    - [Writing to wildcard topics](#Writing-to-wildcard-topics)
    - [Specify ttl](#Specify-ttl)
@@ -41,7 +41,8 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Topic isolation in batch operation](#Topic-isolation-in-batch-operation)
    - [Message encryption](#Message-encryption)
    - [Batch group](#Batch-group)
- + [Iterating over items](#Iterating-over-items)
+ * [Iterating over items](#Iterating-over-items)
+ * [Statistics](#Statistics)
 
 
 ## Quick Start
@@ -92,11 +93,11 @@ Use DB.Put() to store message to a topic or use DB.PutEntry() to store message e
 Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
 
 ```
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.*.b11"), []byte("msg.*.b11.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...1")))
-		b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.*.b11"), []byte("msg.*.b11.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...1")))
+	b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
 
 ```
 
@@ -104,9 +105,9 @@ Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to w
 Specify ttl parameter to a topic while storing message to expire messages. Note, DB.Get() function does not fetch any expired messages. 
 
 ```
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1?ttl=1m"), []byte("msg.b.b1.1m")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11?ttl=1h"), []byte("msg.b.b11.1h")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b111?ttl=1h30m"), []byte("msg.b.b111.1h30m")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1?ttl=1m"), []byte("msg.b.b1.1m")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11?ttl=1h"), []byte("msg.b.b11.1h")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b111?ttl=1h30m"), []byte("msg.b.b111.1h30m")))
 
 ```
 
@@ -386,6 +387,17 @@ func print(topic []byte, db *tracedb.DB) {
 		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
+```
+
+### Statistics
+The tracedb keeps a running metrics of internal operations it performs. To get tracedb metrics use DB.Varz() function.
+
+```
+
+	if varz, err := db.Varz(); err == nil {
+		fmt.Printf("%+v\n", varz)
+	}
+
 ```
 
 ## Contributing

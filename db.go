@@ -91,7 +91,7 @@ type (
 		lock       fs.LockFile
 		wal        *wal.WAL
 		syncWrites bool
-		freeslot   freeslot
+		freeslots  freeslots
 		dbInfo
 		timeWindow timeWindowBucket
 
@@ -145,7 +145,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db := &DB{
 		mutex:       newMutex(),
 		index:       index,
-		data:        dataTable{table: data},
+		data:        dataTable{table: data, fb: newFreeBlocks()},
 		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
 		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:        lock,
@@ -153,6 +153,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
 		expiryLockC: make(chan struct{}, 1),
+		freeslots:   newFreeSlots(),
 		dbInfo: dbInfo{
 			nBlocks:      1,
 			freeblockOff: -1,
@@ -708,7 +709,7 @@ func (db *DB) ExpireOldEntries() {
 		mu.Lock()
 		defer mu.Unlock()
 		if ok := db.trie.Remove(prefix, topic.Parts, entry.seq); ok {
-			db.freeslot.free(e.seq)
+			db.freeslots.free(prefix, e.seq)
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -814,6 +815,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
+	prefix := message.Prefix(topic.Parts)
 	//message ID is the database key
 	var id message.ID
 	var ok bool
@@ -823,7 +825,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		id.AddContract(topic.Parts)
 		seq = id.Seq()
 	} else {
-		ok, seq = db.freeslot.get()
+		ok, seq = db.freeslots.get(prefix)
 		if !ok {
 			seq = db.nextSeq()
 		}
@@ -846,7 +848,6 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err != nil {
 		return err
 	}
-	prefix := message.Prefix(topic.Parts)
 	memseq := db.cacheID ^ seq
 	if err := db.mem.Set(prefix, memseq, data); err != nil {
 		return err
@@ -1069,7 +1070,14 @@ func (db *DB) delete(id []byte) error {
 	if err := b.write(); err != nil {
 		return err
 	}
-	db.freeslot.free(e.seq)
+	t, err := db.data.readTopic(e)
+	if err != nil {
+		return err
+	}
+	topic := new(message.Topic)
+	topic.Unmarshal(t)
+	prefix := message.Prefix(topic.Parts)
+	db.freeslots.free(prefix, e.seq)
 	db.data.free(e.mSize(), e.mOffset)
 	db.count--
 	if db.syncWrites {

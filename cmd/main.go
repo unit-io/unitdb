@@ -107,7 +107,7 @@ func main() {
 		for range time.Tick(100 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
-				opts.Topic = []byte("unit8.b.*?ttl=1m")
+				opts.Topic = []byte("unit8.b.*?ttl=30s")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				t := time.Now().Add(time.Duration(i) * time.Millisecond)

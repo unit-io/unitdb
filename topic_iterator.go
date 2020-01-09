@@ -36,19 +36,24 @@ func (it *TopicIterator) Next() {
 					if e.mOffset == 0 {
 						continue
 					}
+
 					if e.isExpired() {
+						// it.db.freeslots.free(prefix, e.seq)
+						// it.db.data.free(e.mSize(), e.mOffset)
+						it.db.count--
 						continue
 					}
 					id, err := it.db.data.readId(e)
 					if err != nil {
 						return err
 					}
-					etopic, err := it.db.data.readTopic(e)
+					t, err := it.db.data.readTopic(e)
 					if err != nil {
 						return err
 					}
 					topic := new(message.Topic)
-					err = topic.Unmarshal(etopic)
+					err = topic.Unmarshal(t)
+					// prefix := message.Prefix(topic.Parts)
 					if err != nil {
 						return err
 					}
