@@ -70,7 +70,7 @@ type trieMutex struct {
 func newTrieMutex() trieMutex {
 	mu := trieMutex{
 		m:          make([]*concurrentMutex, nMutex),
-		consistent: hash.InitConsistent(int(MaxMutex), int(nMutex)),
+		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
 	}
 
 	for i := 0; i < nMutex; i++ {

@@ -164,18 +164,13 @@ func (db *DB) recoverLog() error {
 			moffset := e.mSize()
 			m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(m); err != nil {
-				db.freeslot.free(e.seq)
 				return err
 			}
 			db.meter.Puts.Inc(1)
 			db.meter.InBytes.Inc(int64(e.valueSize))
 			b.entries[b.entryIdx] = e
-			if b.entries[b.entryIdx].expiresAt > 0 {
-				db.timeWindow.add(b.entries[b.entryIdx])
-			}
 			b.entryIdx++
 			if err := b.write(); err != nil {
-				db.freeslot.free(e.seq)
 				return err
 			}
 			db.filter.Append(e.seq)

@@ -39,6 +39,7 @@ func (fs *freeslot) len() int {
 }
 
 type freeblock struct {
+	seq    uint64
 	offset int64
 	size   uint32
 }

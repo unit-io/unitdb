@@ -480,7 +480,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				topic := new(message.Topic)
 				topic.Unmarshal(val)
 				if ok := db.trie.Remove(q.prefix, topic.Parts, seq); ok {
-					db.timeWindow.add(e)
+					db.timeWindow.add(q.prefix, e)
 				}
 				// if id is expired it does not return an error but continue the iteration
 				return nil
@@ -636,17 +636,15 @@ func (db *DB) Sync() error {
 				}
 				db.count++
 				if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
-					db.freeslot.free(e.seq)
 					return err
 				}
 				db.meter.InBytes.Inc(int64(e.valueSize))
 				b.entries[b.entryIdx] = e
 				if b.entries[b.entryIdx].expiresAt > 0 {
-					db.timeWindow.add(b.entries[b.entryIdx])
+					db.timeWindow.add(log.prefix, b.entries[b.entryIdx])
 				}
 				b.entryIdx++
 				if err := b.write(); err != nil {
-					db.freeslot.free(e.seq)
 					return err
 				}
 
@@ -710,6 +708,7 @@ func (db *DB) ExpireOldEntries() {
 		mu.Lock()
 		defer mu.Unlock()
 		if ok := db.trie.Remove(prefix, topic.Parts, entry.seq); ok {
+			db.freeslot.free(e.seq)
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -1040,12 +1039,10 @@ func (db *DB) delete(id []byte) error {
 		return nil
 	}
 	db.meter.Dels.Inc(1)
-	db.freeslot.free(seq)
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
 	b := &blockHandle{table: db.index, offset: off}
 	if err := b.read(); err != nil {
-		db.freeslot.free(seq)
 		return err
 	}
 	entryIdx := -1
@@ -1072,6 +1069,7 @@ func (db *DB) delete(id []byte) error {
 	if err := b.write(); err != nil {
 		return err
 	}
+	db.freeslot.free(e.seq)
 	db.data.free(e.mSize(), e.mOffset)
 	db.count--
 	if db.syncWrites {

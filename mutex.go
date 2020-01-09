@@ -27,7 +27,7 @@ type mutex struct {
 func newMutex() mutex {
 	mu := mutex{
 		m:          make([]*concurrentMutex, nMutex),
-		consistent: hash.InitConsistent(int(maxMutex), int(nMutex)),
+		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
 	}
 
 	for i := 0; i < nMutex; i++ {

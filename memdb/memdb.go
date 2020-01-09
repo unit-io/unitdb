@@ -74,7 +74,7 @@ func Open(path string, memSize int64) (*DB, error) {
 		closeC: make(chan struct{}),
 	}
 
-	db.consistent = hash.InitConsistent(int(maxShards), int(nShards))
+	db.consistent = hash.InitConsistent(int(nShards), int(nShards))
 
 	db.startBufferShrinker(backgroundMemResetInterval)
 

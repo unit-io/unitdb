@@ -18,7 +18,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Database backups and restore. Backing up tracedb to external storage systems is planned in upcoming release. Note, tracedb has built-in db recovery. 
+- Database backups and restore. add backup and restore of tracedb data to external storage systems. 
 - Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify when an error has recoverd
 - Documentation - document the technical atchitecture, design principals and advanced usage guides such as optimum configuration guideline to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
@@ -32,7 +32,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Specify ttl](#Specify-ttl)
    - [Read messages](#Read-messages)
    - [Deleting a message](#Deleting-a-message)
-   - [Topic isolation] (#Topic-isolation)
+   - [Topic isolation](#Topic-isolation)
  + [Batch operation](#Batch-operation)
    - [Writing to a batch](#Writing-to-a-batch)
    - [Writing to multiple topics in a batch](#Writing-to-multiple-topics-in-a-batch)
