@@ -16,7 +16,6 @@ type timeWindow struct {
 type timeHash int64
 
 type timeWindowBucket struct {
-	mutex
 	windows            map[timeHash]timeWindow
 	durationType       time.Duration
 	maxDurations       int
@@ -24,7 +23,7 @@ type timeWindowBucket struct {
 }
 
 func newTimeWindowBucket(durType time.Duration, maxDur int) timeWindowBucket {
-	l := timeWindowBucket{mutex: newMutex()}
+	l := timeWindowBucket{}
 	l.windows = make(map[timeHash]timeWindow)
 	l.durationType = durType
 	l.maxDurations = maxDur
@@ -66,10 +65,7 @@ func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
 	return expiredEntries
 }
 
-func (wb *timeWindowBucket) add(prefix uint64, e timeWindowEntry) {
-	mu := wb.getMutex(prefix)
-	mu.Lock()
-	defer mu.Unlock()
+func (wb *timeWindowBucket) add(e timeWindowEntry) {
 	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
 	entryTime := timeHash(time.Unix(int64(e.timeStamp()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
 	if wb.earliestExpiryHash == 0 {

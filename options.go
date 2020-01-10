@@ -39,6 +39,9 @@ type Options struct {
 	// Size of write ahead log
 	LogSize int64
 
+	// Minimum freeblocks size before free blocks are allocated and reused.
+	MinimumFreeBlocksSize int64
+
 	FileSystem fs.FileSystem
 }
 
@@ -68,6 +71,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 30 // maximum size of memdb (1GB).
+	}
+	if opts.MinimumFreeBlocksSize == 0 {
+		opts.MinimumFreeBlocksSize = 1 << 20 // minimum size of (10MB)
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

@@ -145,7 +145,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db := &DB{
 		mutex:       newMutex(),
 		index:       index,
-		data:        dataTable{table: data, fb: newFreeBlocks()},
+		data:        dataTable{table: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
 		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
 		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:        lock,
@@ -474,14 +474,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				return err
 			}
 			if e.isExpired() {
-				val, err := db.data.readTopic(e)
-				if err != nil {
-					return err
-				}
-				topic := new(message.Topic)
-				topic.Unmarshal(val)
-				if ok := db.trie.Remove(q.prefix, topic.Parts, seq); ok {
-					db.timeWindow.add(q.prefix, e)
+				if ok := db.trie.Remove(q.prefix, q.parts, seq); ok {
+					db.timeWindow.add(e)
 				}
 				// if id is expired it does not return an error but continue the iteration
 				return nil
@@ -568,7 +562,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 }
 
 func (db *DB) sync() error {
-	// writeHeader information to persist correct seq information to disk
+	// writeHeader information to persist correct seq information to disk, also sync freeblocks to disk
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
@@ -642,7 +636,7 @@ func (db *DB) Sync() error {
 				db.meter.InBytes.Inc(int64(e.valueSize))
 				b.entries[b.entryIdx] = e
 				if b.entries[b.entryIdx].expiresAt > 0 {
-					db.timeWindow.add(log.prefix, b.entries[b.entryIdx])
+					db.timeWindow.add(b.entries[b.entryIdx])
 				}
 				b.entryIdx++
 				if err := b.write(); err != nil {
@@ -691,7 +685,7 @@ func (db *DB) ExpireOldEntries() {
 		if !db.filter.Test(entry.seq) {
 			continue
 		}
-		db.meter.Dels.Inc(1)
+		// db.meter.Dels.Inc(1)
 		// TODO fix contract
 		var prefix uint64
 		e, err := db.readEntry(prefix, entry.seq)
@@ -709,7 +703,7 @@ func (db *DB) ExpireOldEntries() {
 		mu.Lock()
 		defer mu.Unlock()
 		if ok := db.trie.Remove(prefix, topic.Parts, entry.seq); ok {
-			db.freeslots.free(prefix, e.seq)
+			db.freeslots.free(e.seq)
 			db.data.free(e.mSize(), e.mOffset)
 			db.count--
 		}
@@ -1070,14 +1064,7 @@ func (db *DB) delete(id []byte) error {
 	if err := b.write(); err != nil {
 		return err
 	}
-	t, err := db.data.readTopic(e)
-	if err != nil {
-		return err
-	}
-	topic := new(message.Topic)
-	topic.Unmarshal(t)
-	prefix := message.Prefix(topic.Parts)
-	db.freeslots.free(prefix, e.seq)
+	db.freeslots.free(e.seq)
 	db.data.free(e.mSize(), e.mOffset)
 	db.count--
 	if db.syncWrites {

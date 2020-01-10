@@ -58,14 +58,8 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				if e.isExpired() {
-					// val, err := it.db.data.readTopic(e)
-					// if err != nil {
-					// 	return err
-					// }
-					// topic := new(message.Topic)
-					// topic.Unmarshal(val)
 					if ok := it.db.trie.Remove(it.query.prefix, it.query.parts, seq); ok {
-						it.db.timeWindow.add(it.query.prefix, e)
+						it.db.timeWindow.add(e)
 					}
 					it.invalidKeys++
 					// if id is expired it does not return an error but continue the iteration

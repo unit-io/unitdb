@@ -67,9 +67,6 @@ func (t *dataTable) writeRaw(data []byte) (off int64, err error) {
 	dataLen := align512(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
-	if t.fb.size < 1<<20 {
-		return t.append(buf)
-	}
 	off = t.fb.allocate(dataLen)
 	if off != -1 {
 		if _, err = t.WriteAt(buf, off); err != nil {

@@ -3,12 +3,13 @@ package tracedb
 import (
 	"encoding/binary"
 	"sort"
+	"sync"
 
 	"github.com/unit-io/tracedb/hash"
 )
 
 const (
-	nShards = 32 // TODO implelemt sharding based on total Contracts in db
+	nShards = 271 // TODO implelemt sharding based on total Contracts in db
 )
 
 // A "thread" safe freeslot.
@@ -28,11 +29,11 @@ type freeslot struct {
 // newFreeSlots creates a new concurrent free slots.
 func newFreeSlots() freeslots {
 	s := freeslots{
-		slots:      make([]*freeslot, nShards),
+		slots:      make([]*freeslot, nShards+1),
 		consistent: hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i <= nShards; i++ {
 		s.slots[i] = &freeslot{}
 	}
 
@@ -40,20 +41,25 @@ func newFreeSlots() freeslots {
 }
 
 // getShard returns shard under given prefix
-func (fs *freeslots) getShard(prefix uint64) *freeslot {
-	return fs.slots[fs.consistent.FindBlock(prefix)]
+func (fss *freeslots) getShard(prefix uint64) *freeslot {
+	return fss.slots[fss.consistent.FindBlock(prefix)]
 }
 
-func (fs *freeslot) search(seq uint64) int {
-	return sort.Search(len(fs.seqs), func(i int) bool {
-		return fs.seqs[i] == seq
-	})
+// TODO implement btree+ search
+// contains checks whether a message id is in the set.
+func (fs *freeslot) contains(value uint64) bool {
+	for _, v := range fs.seqs {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 // get first free seq
-func (fs *freeslots) get(prefix uint64) (ok bool, seq uint64) {
+func (fss *freeslots) get(prefix uint64) (ok bool, seq uint64) {
 	// Get shard
-	shard := fs.getShard(prefix)
+	shard := fss.getShard(prefix)
 	// shard.RLock()
 	// defer shard.RUnlock()
 	// Get item from shard.
@@ -66,17 +72,23 @@ func (fs *freeslots) get(prefix uint64) (ok bool, seq uint64) {
 	return true, seq
 }
 
-func (fs *freeslots) free(prefix, seq uint64) (ok bool) {
-	// Get shard
-	shard := fs.getShard(prefix)
-	// shard.Lock()
-	// defer shard.Unlock()
-	i := shard.search(seq)
-	if i < len(shard.seqs) && seq == shard.seqs[i] {
-		return false
-	}
-	shard.seqs = append(shard.seqs, seq)
-	return true
+func (fss *freeslots) free(seq uint64) (ok bool) {
+	// queue to last shard
+	fss.slots[nShards].seqs = append(fss.slots[nShards].seqs, seq)
+	go func() {
+		if len(fss.slots[nShards].seqs) < 100 {
+			return
+		}
+		for _, s := range fss.slots[nShards].seqs {
+			// Get shard
+			shard := fss.getShard(s)
+			if shard.contains(s) == false {
+				shard.seqs = append(shard.seqs, s)
+				ok = true
+			}
+		}
+	}()
+	return
 }
 
 func (fs *freeslot) len() int {
@@ -88,9 +100,10 @@ func (fs *freeslot) len() int {
 // type freeblocks []*freeblock
 
 type freeblocks struct {
-	blocks     []*shard
-	size       int64 // total size of free blocks
-	consistent *hash.Consistent
+	blocks                []*shard
+	size                  int64 // total size of free blocks
+	minimumFreeBlocksSize int64 // minimum free blocks size to allocate free blocks and reuse it.
+	consistent            *hash.Consistent
 }
 
 type freeblock struct {
@@ -99,18 +112,19 @@ type freeblock struct {
 }
 
 type shard struct {
-	blocks []freeblock
-	// sync.RWMutex // Read Write mutex, guards access to internal collection.
+	blocks       []freeblock
+	sync.RWMutex // Read Write mutex, guards access to internal collection.
 }
 
 // newFreeBlocks creates a new concurrent freeblocks.
-func newFreeBlocks() freeblocks {
+func newFreeBlocks(minimumSize int64) freeblocks {
 	fb := freeblocks{
-		blocks:     make([]*shard, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+		blocks:                make([]*shard, nShards+1),
+		minimumFreeBlocksSize: minimumSize,
+		consistent:            hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i <= nShards; i++ {
 		fb.blocks[i] = &shard{}
 	}
 
@@ -123,38 +137,101 @@ func (fb *freeblocks) getShard(prefix uint64) *shard {
 }
 
 func (s *shard) search(size uint32) int {
-	return sort.Search(len(s.blocks), func(i int) bool {
+	// limit search to first 100 freeblocks
+	return sort.Search(100, func(i int) bool {
 		return s.blocks[i].size >= size
 	})
+}
+
+// TODO implement btree+ search
+// contains checks whether a message id is in the set.
+func (s *shard) contains(off int64) bool {
+	for _, v := range s.blocks {
+		if v.offset == off {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *shard) defrag() {
+	l := len(s.blocks)
+	if l <= 1 {
+		return
+	}
+	// limit fragmentation to first 1000 freeblocks
+	if l > 1000 {
+		l = 1000
+	}
+	sort.Slice(s.blocks[:l], func(i, j int) bool {
+		return s.blocks[i].offset < s.blocks[j].offset
+	})
+	var merged []freeblock
+	curOff := s.blocks[0].offset
+	curSize := s.blocks[0].size
+	for i := 1; i < l; i++ {
+		if curOff+int64(curSize) == s.blocks[i].offset {
+			curSize += s.blocks[i].size
+		} else {
+			merged = append(merged, freeblock{size: curSize, offset: curOff})
+			curOff = s.blocks[i].offset
+			curSize = s.blocks[i].size
+		}
+	}
+	merged = append(merged, freeblock{offset: curOff, size: curSize})
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].size < merged[j].size
+	})
+	copy(s.blocks[:l], merged)
+}
+
+func (fb *freeblocks) defrag() {
+	for i := 0; i < nShards; i++ {
+		shard := fb.blocks[i]
+		shard.defrag()
+	}
+}
+
+func (fb *freeblocks) freequeue() {
+	shard := fb.blocks[nShards]
+	shard.Lock()
+	defer shard.Unlock()
+	shard.defrag()
+	for _, b := range shard.blocks {
+		// Get shard
+		s := fb.getShard(uint64(b.size))
+		if s.contains(b.offset) == false {
+			s.blocks = append(s.blocks, freeblock{offset: b.offset, size: b.size})
+			fb.size += int64(b.size)
+		}
+	}
 }
 
 func (fb *freeblocks) free(off int64, size uint32) {
 	if size == 0 {
 		panic("unable to free zero bytes")
 	}
-	// Get shard
-	shard := fb.getShard(uint64(size))
-	// shard.Lock()
-	// defer shard.Unlock()
-	i := shard.search(size)
-	if i < len(shard.blocks) && off == shard.blocks[i].offset {
-		// panic("freeing already freed offset")
+	shard := fb.blocks[nShards]
+	shard.blocks = append(shard.blocks, freeblock{offset: off, size: size})
+	if len(shard.blocks) < 100 {
 		return
 	}
-
-	shard.blocks = append(shard.blocks, freeblock{})
-	fb.size += int64(size)
-	copy(shard.blocks[i+1:], shard.blocks[i:])
-	shard.blocks[i] = freeblock{offset: off, size: size}
+	fb.freequeue()
+	return
 }
 
 func (fb *freeblocks) allocate(size uint32) int64 {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
+	if fb.size < fb.minimumFreeBlocksSize {
+		return -1
+	}
 	shard := fb.getShard(uint64(size))
-	// shard.Lock()
-	// defer shard.Unlock()
+
+	if len(shard.blocks) < 100 {
+		return -1
+	}
 	i := shard.search(size)
 	if i >= len(shard.blocks) {
 		return -1
@@ -170,38 +247,6 @@ func (fb *freeblocks) allocate(size uint32) int64 {
 	}
 	fb.size -= int64(size)
 	return off
-}
-
-func (fb *freeblocks) defrag() {
-	if len(fb.blocks) <= 1 {
-		return
-	}
-	for i := 0; i < nShards; i++ {
-		shard := fb.blocks[i]
-		if len(shard.blocks) <= 1 {
-			continue
-		}
-		sort.Slice(shard.blocks, func(i, j int) bool {
-			return shard.blocks[i].offset < shard.blocks[j].offset
-		})
-		var merged []freeblock
-		curOff := shard.blocks[0].offset
-		curSize := shard.blocks[0].size
-		for i := 1; i < len(shard.blocks); i++ {
-			if curOff+int64(curSize) == shard.blocks[i].offset {
-				curSize += shard.blocks[i].size
-			} else {
-				merged = append(merged, freeblock{size: curSize, offset: curOff})
-				curOff = shard.blocks[i].offset
-				curSize = shard.blocks[i].size
-			}
-		}
-		merged = append(merged, freeblock{offset: curOff, size: curSize})
-		sort.Slice(merged, func(i, j int) bool {
-			return merged[i].size < merged[j].size
-		})
-		shard.blocks = merged
-	}
 }
 
 // MarshalBinary serializes freeblocks into binary data
@@ -227,39 +272,39 @@ func (fb *freeblocks) read(t table, off int64) error {
 	if off == -1 {
 		return nil
 	}
-	// scratch := make([]byte, 2)
-	// if _, err := t.ReadAt(scratch, off); err != nil {
-	// 	return err
-	// }
-	// b := binary.LittleEndian.Uint16(scratch)
 
 	var size uint32
+	offset := off
 	for i := 0; i < nShards; i++ {
+		shard := fb.blocks[i]
 		buf := make([]byte, 4)
-		if _, err := t.ReadAt(buf, off); err != nil {
+		if _, err := t.ReadAt(buf, offset); err != nil {
 			return err
 		}
 		n := binary.LittleEndian.Uint32(buf)
 		size += n
 		buf = make([]byte, (4+8)*n)
-		if _, err := t.ReadAt(buf, off+4); err != nil {
+		if _, err := t.ReadAt(buf, offset+4); err != nil {
 			return err
 		}
 		for i := uint32(0); i < n; i++ {
 			blockOff := int64(binary.LittleEndian.Uint64(buf[:8]))
 			blockSize := binary.LittleEndian.Uint32(buf[8:12])
 			if blockOff != 0 {
-				fb.blocks[i].blocks = append(fb.blocks[i].blocks, freeblock{size: blockSize, offset: blockOff})
+				shard.blocks = append(shard.blocks, freeblock{size: blockSize, offset: blockOff})
 				fb.size += int64(blockSize)
 			}
 			buf = buf[12:]
 		}
+		offset += int64((4 + 8) * n)
 	}
 	fb.free(off, align512(4+(4+8)*size))
 	return nil
 }
 
 func (fb *freeblocks) write(t table) (int64, error) {
+	// free blocks in queue. As last shard is used to queue freeblocks
+	fb.freequeue()
 	if len(fb.blocks) == 0 {
 		return -1, nil
 	}
@@ -267,9 +312,6 @@ func (fb *freeblocks) write(t table) (int64, error) {
 	var buf []byte
 	for i := 0; i < nShards; i++ {
 		shard := fb.blocks[i]
-		// scratch := make([]byte, 2)
-		// binary.LittleEndian.PutUint16(scratch[0:2], uint16(i))
-		// buf = append(buf, scratch...)
 		marshaledSize += align512(shard.binarySize())
 		data, err := shard.MarshalBinary()
 		buf = append(buf, data...)

@@ -38,9 +38,7 @@ func (it *TopicIterator) Next() {
 					}
 
 					if e.isExpired() {
-						// it.db.freeslots.free(prefix, e.seq)
-						// it.db.data.free(e.mSize(), e.mOffset)
-						it.db.count--
+						it.db.timeWindow.add(e)
 						continue
 					}
 					id, err := it.db.data.readId(e)

@@ -43,6 +43,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Batch group](#Batch-group)
  * [Iterating over items](#Iterating-over-items)
  * [Statistics](#Statistics)
+ * [Limitations](#Limitations)
 
 
 ## Quick Start
@@ -55,7 +56,6 @@ To build tracedb from source code use go get command.
 ### Opening a database
 
 To open or create a new database, use the tracedb.Open() function:
-
 
 ```
 package main
@@ -102,7 +102,8 @@ Tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to w
 ```
 
 #### Specify ttl 
-Specify ttl parameter to a topic while storing message to expire messages. Note, DB.Get() function does not fetch any expired messages. 
+Specify ttl parameter to a topic while storing messages to expire it after specific duration. 
+Note, DB.Get() or DB.Items() function does not fetch expired messages. 
 
 ```
 	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1?ttl=1m"), []byte("msg.b.b1.1m")))
@@ -166,7 +167,7 @@ Topic isolation can be achieved using Contract while putting messages into trace
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into tracedb or delete records in bulk. As batch operation speeds up bulk record insertion into tracedb, reading data is also blazing fast if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
+Use batch operation to bulk insert records into tracedb or bulk delete records from tracedb. Batch operation also speeds up reading data if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
 
 #### Writing to a batch
 Use Batch.Put() to write to a single topic in a batch. To write to single topic in a batch specify topic in batch options.
@@ -303,9 +304,9 @@ Topic isolation can be achieved using Contract while putting messages into trace
 ```
 
 #### Message encryption
-Use batch options to set encryption when writng messages to tracedb, then all messages put using batch operation are encrypted. 
+Set encyrption flag in batch options to encrypt all messages in a batch. 
 
-Note, encryption can also be set on entire database using DB.Open() and provide encryption in the parameter. 
+Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter. 
 
 ```
 	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
@@ -399,6 +400,10 @@ The tracedb keeps a running metrics of internal operations it performs. To get t
 	}
 
 ```
+
+### Limitations
+The tracedb is not primarily designed for key-value storage. The tracedb mainly designed to store time-series data, messaging data, log data or AI analytics data.
+
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
