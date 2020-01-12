@@ -14,10 +14,10 @@ import (
 const (
 	//MaxBlocks support for sharding memdb block cache
 	maxShards = math.MaxUint32 / 4096
-	nShards   = 271 // TODO implelemt sharding based on total Contracts in db
+	nShards   = 32 // TODO implelemt sharding based on total Contracts in db
 
 	// maxTableSize value for maximum memroy use for the memdb.
-	maxTableSize = (int64(1) << 33) - 1
+	maxTableSize = (int64(1) << 40) - 1
 
 	backgroundMemResetInterval = 1 * time.Second
 	memShrinkFactor            = 0.7
@@ -216,7 +216,7 @@ func (db *DB) Free(prefix uint64, key uint64) error {
 }
 
 // Count returns the number of items in the DB.
-func (db *DB) Count() uint32 {
+func (db *DB) Count() uint64 {
 	count := 0
 	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
@@ -224,7 +224,7 @@ func (db *DB) Count() uint32 {
 		count += len(shard.cache)
 		shard.RUnlock()
 	}
-	return uint32(count)
+	return uint64(count)
 }
 
 // FileSize returns the total size of the disk storage used by the DB.

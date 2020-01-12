@@ -1,7 +1,6 @@
 package tracedb
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -27,6 +26,7 @@ const (
 	entriesPerBlock = 150
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
+	nShards       = 16 // TODO implelemt sharding based on total Contracts in db
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
 	logPostfix    = ".log"
@@ -47,7 +47,7 @@ const (
 	MaxValueLength = 1 << 30
 
 	// MaxKeys is the maximum numbers of keys in the DB.
-	MaxKeys = math.MaxUint32
+	MaxKeys = math.MaxUint64
 
 	// Maximum number of records to return
 	maxResults = 100000
@@ -59,7 +59,7 @@ type (
 	dbInfo struct {
 		encryption   uint8
 		seq          uint64
-		count        uint32
+		count        uint64
 		nBlocks      uint32
 		blockIndex   uint32
 		freeblockOff int64
@@ -84,7 +84,7 @@ type (
 		syncLockC      chan struct{}
 		commitLogQueue sync.Map
 		expiryLockC    chan struct{}
-		// consistent   *hash.Consistent
+		// consistent     *hash.Consistent
 		filter     Filter
 		index      table
 		data       dataTable
@@ -212,7 +212,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	// db.consistent = hash.InitConsistent(int(MaxBlocks/blockSize), int(db.nBlocks))
+	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
 	if needsRecovery {
 		if err := db.recover(); err != nil {
@@ -344,7 +344,6 @@ func (db *DB) Close() error {
 	db.writeLockC <- struct{}{}
 	db.commitLockC <- struct{}{}
 	db.syncLockC <- struct{}{}
-	db.expiryLockC <- struct{}{}
 
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
@@ -475,7 +474,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 			if e.isExpired() {
 				if ok := db.trie.Remove(q.prefix, q.parts, seq); ok {
-					db.timeWindow.add(e)
+					db.timeWindow.addExpired(e)
 				}
 				// if id is expired it does not return an error but continue the iteration
 				return nil
@@ -671,42 +670,31 @@ func (db *DB) Sync() error {
 
 // ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
 func (db *DB) ExpireOldEntries() {
-	// write to db happens synchronously
+	// expiry happens synchronously
 	db.expiryLockC <- struct{}{}
-	db.closeW.Add(1)
 	defer func() {
 		<-db.expiryLockC
-		db.closeW.Done()
 	}()
 	expiredEntries := db.timeWindow.expireOldEntries()
+	// fmt.Println("db.ExpireOldEntries: expiry count ", len(expiredEntries))
 	for _, expiredEntry := range expiredEntries {
 		entry := expiredEntry.(entry)
 		/// Test filter block if message hash presence
 		if !db.filter.Test(entry.seq) {
 			continue
 		}
-		// db.meter.Dels.Inc(1)
-		// TODO fix contract
-		var prefix uint64
-		e, err := db.readEntry(prefix, entry.seq)
-		if err != nil {
-			continue
-		}
-		etopic, err := db.data.readTopic(e)
+		etopic, err := db.data.readTopic(entry)
 		if err != nil {
 			continue
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
-		prefix = message.Prefix(topic.Parts)
+		prefix := message.Prefix(topic.Parts)
 		mu := db.getMutex(prefix)
 		mu.Lock()
-		defer mu.Unlock()
-		if ok := db.trie.Remove(prefix, topic.Parts, entry.seq); ok {
-			db.freeslots.free(e.seq)
-			db.data.free(e.mSize(), e.mOffset)
-			db.count--
-		}
+		mu.Unlock()
+		db.delete(entry.seq)
+		db.count--
 	}
 	if db.syncWrites {
 		db.sync()
@@ -729,8 +717,6 @@ func (db *DB) loadTrie() error {
 
 // NewContract generates a new Contract.
 func (db *DB) NewContract() (uint32, error) {
-	// db.mu.Lock()
-	// defer db.mu.Unlock()
 	raw := make([]byte, 4)
 	rand.Read(raw)
 
@@ -972,7 +958,7 @@ func (db *DB) commit(logs []log) error {
 		return err
 	}
 	db.commitLogQueue.Store(logSeq, logs)
-	return nil
+	return db.tinyBatch.reset()
 }
 
 // Put sets the entry for the given message. It uses default Contract to put entry into db.
@@ -1018,7 +1004,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if ok := db.trie.Remove(prefix, topic.Parts, id.Seq()); ok {
-		err := db.delete(id)
+		err := db.delete(message.ID(id).Seq())
 		if err != nil {
 			return err
 		}
@@ -1027,8 +1013,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 }
 
 // delete deletes the given key from the DB.
-func (db *DB) delete(id []byte) error {
-	seq := message.ID(id).Seq()
+func (db *DB) delete(seq uint64) error {
+	// seq := message.ID(id).Seq()
 	/// Test filter block for the message id presence
 	if !db.filter.Test(seq) {
 		return nil
@@ -1044,28 +1030,22 @@ func (db *DB) delete(id []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
 		e := b.entries[i]
 		if seq == e.seq {
-			_id, err := db.data.readId(e)
-			if err != nil {
-				return err
-			}
-			if bytes.Equal(id, _id) {
-				entryIdx = i
-				break
-			}
+			entryIdx = i
+			break
 		}
 	}
 	if entryIdx == -1 {
 		return nil // no entry in db to delete
 	}
 
-	e := b.entries[entryIdx]
+	// e := b.entries[entryIdx]
 	b.del(entryIdx)
 	b.entryIdx--
 	if err := b.write(); err != nil {
 		return err
 	}
-	db.freeslots.free(e.seq)
-	db.data.free(e.mSize(), e.mOffset)
+	// db.freeslots.free(e.seq)
+	// db.data.free(e.mSize(), e.mOffset)
 	db.count--
 	if db.syncWrites {
 		return db.sync()
@@ -1074,7 +1054,7 @@ func (db *DB) delete(id []byte) error {
 }
 
 // Count returns the number of items in the DB.
-func (db *DB) Count() uint32 {
+func (db *DB) Count() uint64 {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return db.count

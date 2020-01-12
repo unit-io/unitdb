@@ -8,10 +8,6 @@ import (
 	"github.com/unit-io/tracedb/hash"
 )
 
-const (
-	nShards = 271 // TODO implelemt sharding based on total Contracts in db
-)
-
 // A "thread" safe freeslot.
 // To avoid lock bottlenecks slots are dived to several (nShards).
 // type freeslots []*freeslot
@@ -60,8 +56,6 @@ func (fs *freeslot) contains(value uint64) bool {
 func (fss *freeslots) get(prefix uint64) (ok bool, seq uint64) {
 	// Get shard
 	shard := fss.getShard(prefix)
-	// shard.RLock()
-	// defer shard.RUnlock()
 	// Get item from shard.
 	if len(shard.seqs) == 0 {
 		return ok, seq
@@ -95,14 +89,14 @@ func (fs *freeslot) len() int {
 	return len(fs.seqs)
 }
 
-// A "thread" safe freeslot.
+// A "thread" safe freeblocks.
 // To avoid lock bottlenecks slots are dived to several (nShards).
 // type freeblocks []*freeblock
 
 type freeblocks struct {
 	blocks                []*shard
 	size                  int64 // total size of free blocks
-	minimumFreeBlocksSize int64 // minimum free blocks size to allocate free blocks and reuse it.
+	minimumFreeBlocksSize int64 // minimum free blocks size before free blocks are reused for new allocation.
 	consistent            *hash.Consistent
 }
 
@@ -193,17 +187,19 @@ func (fb *freeblocks) defrag() {
 }
 
 func (fb *freeblocks) freequeue() {
-	shard := fb.blocks[nShards]
-	shard.Lock()
-	defer shard.Unlock()
-	shard.defrag()
+	s := fb.blocks[nShards]
+	s.RLock()
+	shard := shard{blocks: s.blocks}
+	s.blocks = nil
+	s.RUnlock()
+	// shard.defrag()
 	for _, b := range shard.blocks {
 		// Get shard
 		s := fb.getShard(uint64(b.size))
-		if s.contains(b.offset) == false {
-			s.blocks = append(s.blocks, freeblock{offset: b.offset, size: b.size})
-			fb.size += int64(b.size)
-		}
+		// if s.contains(b.offset) == false {
+		s.blocks = append(s.blocks, freeblock{offset: b.offset, size: b.size})
+		fb.size += int64(b.size)
+		// }
 	}
 }
 
@@ -211,13 +207,9 @@ func (fb *freeblocks) free(off int64, size uint32) {
 	if size == 0 {
 		panic("unable to free zero bytes")
 	}
-	shard := fb.blocks[nShards]
+	shard := fb.getShard(uint64(size))
 	shard.blocks = append(shard.blocks, freeblock{offset: off, size: size})
-	if len(shard.blocks) < 100 {
-		return
-	}
-	fb.freequeue()
-	return
+	fb.size += int64(size)
 }
 
 func (fb *freeblocks) allocate(size uint32) int64 {

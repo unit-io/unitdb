@@ -44,8 +44,6 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	// it.db.mu.RLock()
-	// defer it.db.mu.RUnlock()
 	mu := it.db.getMutex(it.query.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
@@ -59,7 +57,7 @@ func (it *ItemIterator) Next() {
 				}
 				if e.isExpired() {
 					if ok := it.db.trie.Remove(it.query.prefix, it.query.parts, seq); ok {
-						it.db.timeWindow.add(e)
+						it.db.timeWindow.addExpired(e)
 					}
 					it.invalidKeys++
 					// if id is expired it does not return an error but continue the iteration

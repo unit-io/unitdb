@@ -50,7 +50,7 @@ func (src *Options) copyWithDefaults() *Options {
 	if src != nil {
 		opts = *src
 	}
-	opts.BackgroundKeyExpiry = true
+	opts.BackgroundKeyExpiry = false
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
 	}
@@ -58,7 +58,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.BackgroundSyncInterval = 1 * time.Second
 	}
 	if opts.BlockCacheSize == 0 {
-		opts.BlockCacheSize = 1 << 30 // maximum cost of cache (1GB).
+		opts.BlockCacheSize = 1 << 20 // maximum cost of cache (1MB).
 	}
 	if opts.TinyBatchSize == 0 {
 		opts.TinyBatchSize = 100
@@ -67,13 +67,13 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 33 // maximum size of memdb (1GB).
+		opts.MemdbSize = 1<<33 + 1<<32 // maximum size of memdb (12GB).
 	}
 	if opts.LogSize == 0 {
-		opts.LogSize = 1 << 30 // maximum size of memdb (1GB).
+		opts.LogSize = 1 << 33 // maximum size of memdb (8GB).
 	}
 	if opts.MinimumFreeBlocksSize == 0 {
-		opts.MinimumFreeBlocksSize = 1 << 20 // minimum size of (10MB)
+		opts.MinimumFreeBlocksSize = 1 << 24 // minimum size of (16MB)
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

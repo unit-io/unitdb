@@ -18,8 +18,8 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Database backups and restore. add backup and restore of tracedb data to external storage systems. 
-- Add system topics (read only topics) to notify clients. For example topic -> "system/errors" to send realtime detailed error messages to client or notify when an error has recoverd
+- Database backup and restore. add backup and restore of tracedb data and logs to archive these to external storage systems. 
+- Add system topics (read only topics) for systems notifications. For example topic -> "system/errors" to send realtime detailed error messages to client.
 - Documentation - document the technical atchitecture, design principals and advanced usage guides such as optimum configuration guideline to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
 ## Table of Contents
@@ -392,6 +392,7 @@ func print(topic []byte, db *tracedb.DB) {
 
 ### Statistics
 The tracedb keeps a running metrics of internal operations it performs. To get tracedb metrics use DB.Varz() function.
+The tracedb can perform hyper scale writes, but performance starts degrading due to hardware limitation if writing over 5 millions entries within span of 10 secs. The tracedb will support distribution in upcoming release.
 
 ```
 

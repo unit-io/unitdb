@@ -284,11 +284,10 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			if !b.db.filter.Test(index.seq) {
 				return nil
 			}
-			// itopic := new(message.Topic)
-			// itopic.Unmarshal(topic)
 			if ok := b.db.trie.Remove(index.prefix, itopic.Parts, index.seq); !ok {
 				return errBadRequest
 			}
+			b.db.delete(index.seq)
 			continue
 		}
 		if ok := b.db.trie.Add(index.prefix, itopic.Parts, itopic.Depth, index.seq); !ok {
@@ -336,11 +335,6 @@ func (b *Batch) Write() error {
 		return b.db.mem.Set(prefix, memseq, data)
 	})
 
-	// if err := b.writeTrie(); err != nil {
-	// 	return err
-	// }
-
-	b.Reset()
 	return err
 }
 
@@ -376,6 +370,7 @@ func (b *Batch) Abort() {
 func (b *Batch) Reset() {
 	b.data = b.data[:0]
 	b.index = b.index[:0]
+	b.pendingWrites = b.pendingWrites[:0]
 }
 
 func (b *Batch) uniq() []batchIndex {

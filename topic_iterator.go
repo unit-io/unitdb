@@ -38,7 +38,7 @@ func (it *TopicIterator) Next() {
 					}
 
 					if e.isExpired() {
-						it.db.timeWindow.add(e)
+						it.db.timeWindow.addExpired(e)
 						continue
 					}
 					id, err := it.db.data.readId(e)

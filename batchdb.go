@@ -95,10 +95,8 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 }
 
 func (db *DB) startBatchCommit() {
-	// ctx, cancel := context.WithCancel(context.Background())
-	// db.cancelCommit = cancel
 	go func() {
-		// Make sure the transaction rolls back in the event of a panic.
+		// roll back in the event of a panic.
 		defer func() {
 			b := <-db.commitQueue
 			b.Abort()

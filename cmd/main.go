@@ -114,11 +114,6 @@ func main() {
 				p, _ := t.MarshalText()
 				for j := 0; j < 250; j++ {
 					b.Put(p)
-					if j%100 == 0 {
-						if err := b.Write(); err != nil {
-							return err
-						}
-					}
 				}
 				if err := b.Write(); err != nil {
 					return err

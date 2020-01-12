@@ -1,16 +1,13 @@
 package message
 
 import (
-	"math"
 	"sync"
 
 	"github.com/unit-io/tracedb/hash"
 )
 
 const (
-	//MaxBlocks support for sharding trie
-	MaxMutex = math.MaxUint32 / 4096
-	nMutex   = 16 // TODO implelemt sharding based on total Contracts in trie
+	nShards = 16 // TODO implelemt sharding based on total Contracts in trie
 
 	nul = 0x0
 )
@@ -18,7 +15,7 @@ const (
 // ssid represents a sequence set which can contain only unique values.
 type ssid []uint64
 
-// addUnique adds a message id to the set.
+// addUnique adds a seq to the set.
 func (ss *ssid) addUnique(value uint64) (added bool) {
 	if ss.contains(value) == false {
 		*ss = append(*ss, value)
@@ -44,7 +41,7 @@ func (ss *ssid) remove(value uint64) (removed bool) {
 	return
 }
 
-// contains checks whether a message id is in the set.
+// contains checks whether a seq is in the set.
 func (ss *ssid) contains(value uint64) bool {
 	for _, v := range *ss {
 		// if bytes.Equal(v, value) {
@@ -58,7 +55,7 @@ func (ss *ssid) contains(value uint64) bool {
 }
 
 type concurrentMutex struct {
-	sync.RWMutex // Read Write mutex, guards access to internal map.
+	sync.Mutex // mutex to guard access to internal map.
 }
 
 type trieMutex struct {
@@ -69,11 +66,11 @@ type trieMutex struct {
 // newTrieMutex creates a new concurrent mutex.
 func newTrieMutex() trieMutex {
 	mu := trieMutex{
-		m:          make([]*concurrentMutex, nMutex),
-		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
+		m:          make([]*concurrentMutex, nShards),
+		consistent: hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
-	for i := 0; i < nMutex; i++ {
+	for i := 0; i < nShards; i++ {
 		mu.m[i] = &concurrentMutex{}
 	}
 
@@ -123,7 +120,6 @@ func NewPartTrie() *partTrie {
 type Trie struct {
 	sync.RWMutex
 	trieMutex
-	// consistent *hash.Consistent
 	partTrie *partTrie
 	count    int // Number of Trie in the Trie.
 }
@@ -134,14 +130,15 @@ func NewTrie() *Trie {
 		trieMutex: newTrieMutex(),
 		partTrie:  NewPartTrie(),
 	}
-	// trie.consistent = hash.InitConsistent(int(MaxMutex), int(nMutex))
 
 	return trie
 }
 
 // getMutext returns mutex under given prefix
-func (mu *trieMutex) getMutex(prefix uint64) *concurrentMutex {
-	return mu.m[mu.consistent.FindBlock(prefix)]
+func (t *Trie) getMutex(prefix uint64) *concurrentMutex {
+	t.RLock()
+	defer t.RUnlock()
+	return t.m[t.consistent.FindBlock(prefix)]
 }
 
 // Count returns the number of Trie.
@@ -151,7 +148,7 @@ func (t *Trie) Count() int {
 	return t.count
 }
 
-// Add adds the message ssid to the topic trie.
+// Add adds message seq to the topic trie.
 func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added bool) {
 	// Get mutex
 	mu := t.getMutex(prefix)
@@ -200,12 +197,12 @@ func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
 		child, ok := curr.children[k]
 		if !ok {
 			removed = false
-			// message id doesn't exist.
+			// message seq doesn't exist.
 			return
 		}
 		curr = child
 	}
-	// Remove the message id and decrement the counter
+	// Remove the message seq and decrement the counter
 	if ok := curr.ss.remove(seq); ok {
 		removed = true
 		t.count--
@@ -217,17 +214,17 @@ func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
 	return
 }
 
-// Lookup returns the message Ids for the given topic.
+// Lookup returns the seq set for the given topic.
 func (t *Trie) Lookup(prefix uint64, parts []Part) (ss ssid) {
 	mu := t.getMutex(prefix)
-	mu.RLock()
-	defer mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
 	t.ilookup(prefix, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }
 
 func (t *Trie) ilookup(prefix uint64, parts []Part, depth uint8, ss *ssid, part *part) {
-	// Add message ids from the current branch
+	// Add seq set from the current branch
 	for _, s := range part.ss {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
 			// ss.addUnique(s)

@@ -40,8 +40,8 @@ func truncateFiles(db *DB) error {
 	return nil
 }
 
-func getUsedBlocks(db *DB) (uint32, []userdblock, error) {
-	var itemCount uint32
+func getUsedBlocks(db *DB) (uint64, []userdblock, error) {
+	var itemCount uint64
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		off := blockOffset(blockIdx)
@@ -71,7 +71,7 @@ func recoverFreeBlocks(db *DB, usedBlocks []userdblock) error {
 	sort.Slice(usedBlocks, func(i, j int) bool {
 		return usedBlocks[i].offset < usedBlocks[j].offset
 	})
-	fb := freeblocks{}
+	fb := newFreeBlocks(0)
 	expectedOff := int64(headerSize)
 	for _, bl := range usedBlocks {
 		if bl.offset > expectedOff {
