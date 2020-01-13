@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -12,9 +11,7 @@ import (
 )
 
 const (
-	//MaxBlocks support for sharding memdb block cache
-	maxShards = math.MaxUint32 / 4096
-	nShards   = 32 // TODO implelemt sharding based on total Contracts in db
+	nShards = 32 // TODO implelemt sharding based on total Contracts in db
 
 	// maxTableSize value for maximum memroy use for the memdb.
 	maxTableSize = (int64(1) << 40) - 1
@@ -145,14 +142,14 @@ func (db *DB) Close() error {
 }
 
 // getShard returns shard under given contract
-func (db *DB) getShard(prefix uint64) *concurrentCache {
-	return db.blockCache[db.consistent.FindBlock(prefix)]
+func (db *DB) getShard(contract uint64) *concurrentCache {
+	return db.blockCache[db.consistent.FindBlock(contract)]
 }
 
 // Get gets data for the provided key
-func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
+func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	// Get shard
-	shard := db.getShard(prefix)
+	shard := db.getShard(contract)
 	shard.RLock()
 	// Get item from shard.
 	off, ok := shard.cache[key]
@@ -173,9 +170,9 @@ func (db *DB) Get(prefix uint64, key uint64) ([]byte, error) {
 }
 
 // Set sets the value for the given key->value. It updates the value for the existing key.
-func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
+func (db *DB) Set(contract uint64, key uint64, data []byte) error {
 	// Get cache shard.
-	shard := db.getShard(prefix)
+	shard := db.getShard(contract)
 	shard.Lock()
 	defer shard.Unlock()
 	off, err := shard.data.allocate(uint32(len(data) + 4))
@@ -196,9 +193,9 @@ func (db *DB) Set(prefix uint64, key uint64, data []byte) error {
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size threshold.
-func (db *DB) Free(prefix uint64, key uint64) error {
+func (db *DB) Free(contract uint64, key uint64) error {
 	// Get shard
-	shard := db.getShard(prefix)
+	shard := db.getShard(contract)
 	shard.Lock()
 	defer shard.Unlock()
 	if shard.freeOffset > 0 {

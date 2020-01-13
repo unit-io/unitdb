@@ -38,7 +38,7 @@ func (it *TopicIterator) Next() {
 					}
 
 					if e.isExpired() {
-						it.db.timeWindow.addExpired(e)
+						it.db.timeWindow.add(e)
 						continue
 					}
 					id, err := it.db.data.readId(e)
@@ -51,7 +51,6 @@ func (it *TopicIterator) Next() {
 					}
 					topic := new(message.Topic)
 					err = topic.Unmarshal(t)
-					// prefix := message.Prefix(topic.Parts)
 					if err != nil {
 						return err
 					}

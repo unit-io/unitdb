@@ -31,7 +31,7 @@ const (
 	dataPostfix   = ".data"
 	logPostfix    = ".log"
 	lockPostfix   = ".lock"
-	idSize        = 20
+	idSize        = 24
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
@@ -68,8 +68,8 @@ type (
 	}
 
 	log struct {
-		prefix uint64
-		seq    uint64
+		contract uint64
+		seq      uint64
 	}
 
 	// DB represents the message storage for topic->keys-values.
@@ -242,6 +242,12 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
+	// set ecnryption flag to encrypt messages
+	db.encryption = 0
+	if opts.Encryption {
+		db.encryption = 1
+	}
+
 	//initbatchdb
 	if err = db.initbatchdb(opts); err != nil {
 		return nil, err
@@ -388,10 +394,10 @@ func (db *DB) hash(data []byte) uint32 {
 	return hash.WithSalt(data, db.hashSeed)
 }
 
-func (db *DB) readEntry(prefix uint64, seq uint64) (entry, error) {
+func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 	cacheKey := db.cacheID ^ seq
 	e := entry{}
-	if data, _ := db.mem.Get(prefix, cacheKey); data != nil {
+	if data, _ := db.mem.Get(contract, cacheKey); data != nil {
 		e.UnmarshalBinary(data[:entrySize])
 		e.cacheBlock = make([]byte, len(data[entrySize:]))
 		copy(e.cacheBlock, data[entrySize:])
@@ -428,7 +434,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// defer profile.Start().Stop()
 	topic := new(message.Topic)
 	if q.Contract == 0 {
-		q.Contract = message.Contract
+		q.Contract = message.MasterContract
 	}
 	//Parse the Key
 	topic.ParseKey(q.Topic)
@@ -443,11 +449,11 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
-	q.prefix = message.Prefix(q.parts)
+	q.contract = message.Contract(q.parts)
 
 	// In case of last, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
-		q.prefixWithTime = message.GenPrefix(q.parts, until.Unix())
+		q.prefix = message.GenPrefix(q.contract, until.Unix())
 		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
@@ -455,10 +461,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 	}
 
-	mu := db.getMutex(q.prefix)
+	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	q.seqs = db.trie.Lookup(q.prefix, q.parts)
+	q.seqs = db.trie.Lookup(q.contract, q.parts)
 	if len(q.seqs) == 0 {
 		return
 	}
@@ -468,13 +474,13 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 
 	for _, seq := range q.seqs {
 		err = func() error {
-			e, err := db.readEntry(q.prefix, seq)
+			e, err := db.readEntry(q.contract, seq)
 			if err != nil {
 				return err
 			}
 			if e.isExpired() {
-				if ok := db.trie.Remove(q.prefix, q.parts, seq); ok {
-					db.timeWindow.addExpired(e)
+				if ok := db.trie.Remove(q.contract, q.parts, seq); ok {
+					db.timeWindow.add(e)
 				}
 				// if id is expired it does not return an error but continue the iteration
 				return nil
@@ -484,7 +490,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				return err
 			}
 			_id := message.ID(id)
-			if !_id.EvalPrefix(q.parts, q.cutoff) {
+			if !_id.EvalPrefix(q.contract, q.cutoff) {
 				return nil
 			}
 
@@ -530,7 +536,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	}
 	topic := new(message.Topic)
 	if q.Contract == 0 {
-		q.Contract = message.Contract
+		q.Contract = message.MasterContract
 	}
 	//Parse the Key
 	topic.ParseKey(q.Topic)
@@ -545,11 +551,11 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
-	q.prefix = message.Prefix(q.parts)
+	q.contract = message.Contract(q.parts)
 
 	// In case of ttl, include it to the query
 	if from, until, limit, ok := topic.Last(); ok {
-		q.prefixWithTime = message.GenPrefix(q.parts, until.Unix())
+		q.prefix = message.GenPrefix(q.contract, until.Unix())
 		q.cutoff = from.Unix()
 		q.Limit = limit
 		if q.Limit == 0 {
@@ -603,7 +609,7 @@ func (db *DB) Sync() error {
 			}
 			logs := qlogs.([]log)
 			for _, log := range logs {
-				memdata, err := db.mem.Get(log.prefix, log.seq)
+				memdata, err := db.mem.Get(log.contract, log.seq)
 				if err != nil {
 					return err
 				}
@@ -645,7 +651,7 @@ func (db *DB) Sync() error {
 				db.filter.Append(e.seq)
 			}
 			db.meter.Puts.Inc(int64(len(logs)))
-			db.mem.Free(logs[0].prefix, logs[0].seq)
+			db.mem.Free(logs[0].contract, logs[0].seq)
 			return db.sync()
 		}()
 		db.commitLogQueue.Delete(s)
@@ -689,8 +695,8 @@ func (db *DB) ExpireOldEntries() {
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
-		prefix := message.Prefix(topic.Parts)
-		mu := db.getMutex(prefix)
+		contract := message.Contract(topic.Parts)
+		mu := db.getMutex(contract)
 		mu.Lock()
 		mu.Unlock()
 		db.delete(entry.seq)
@@ -710,7 +716,7 @@ func (db *DB) loadTrie() error {
 			logger.Error().Err(err).Str("context", "db.loadTrie")
 			return err
 		}
-		db.trie.Add(message.Prefix(it.Topic().Parts()), it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
+		db.trie.Add(message.Contract(it.Topic().Parts()), it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
 	}
 	return nil
 }
@@ -748,6 +754,56 @@ func (db *DB) extendBlocks() error {
 	return nil
 }
 
+func (db *DB) parseTopic(e *Entry) (*message.Topic, error) {
+	topic := new(message.Topic)
+	if e.Contract == 0 {
+		e.Contract = message.MasterContract
+	}
+	//Parse the Key
+	topic.ParseKey(e.Topic)
+	e.Topic = topic.Topic
+	// Parse the topic
+	topic.Parse(e.Contract, true)
+	if topic.TopicType == message.TopicInvalid {
+		return nil, errBadRequest
+	}
+	// In case of ttl, add ttl to the msg and store to the db
+	if ttl, ok := topic.TTL(); ok {
+		//1410065408 10 sec
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+	}
+	topic.AddContract(e.Contract)
+	return topic, nil
+}
+
+func (db *DB) setEntry(e *Entry) error {
+	//message ID is the database key
+	var id message.ID
+	var ok bool
+	var seq uint64
+	if e.ID != nil {
+		id = message.ID(e.ID)
+		id.AddContract(e.contract)
+		seq = id.Seq()
+	} else {
+		ok, seq = db.freeslots.get(e.contract)
+		if !ok {
+			seq = db.nextSeq()
+		}
+		id = message.NewID(seq, db.encryption == 1)
+		id.AddContract(e.contract)
+	}
+	m, err := e.Marshal()
+	if err != nil {
+		return err
+	}
+	val := snappy.Encode(nil, m)
+	e.id = id
+	e.seq = seq
+	e.val = val
+	return nil
+}
+
 // Put sets the entry for the given message. It uses default Contract to put entry into db.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
@@ -777,62 +833,26 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic := new(message.Topic)
-	if e.Contract == 0 {
-		e.Contract = message.Contract
-	}
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return errBadRequest
-	}
-	// In case of ttl, add ttl to the msg and store to the db
-	if ttl, ok := topic.TTL(); ok {
-		//1410065408 10 sec
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
-	}
-	topic.AddContract(e.Contract)
-	prefix := message.Prefix(topic.Parts)
-	//message ID is the database key
-	var id message.ID
-	var ok bool
-	var seq uint64
-	if e.ID != nil {
-		id = message.ID(e.ID)
-		id.AddContract(topic.Parts)
-		seq = id.Seq()
-	} else {
-		ok, seq = db.freeslots.get(prefix)
-		if !ok {
-			seq = db.nextSeq()
-		}
-		id = message.NewID(seq, false)
-		id.AddContract(topic.Parts)
-	}
-	m, err := e.Marshal()
+	topic, err := db.parseTopic(e)
 	if err != nil {
 		return err
 	}
-	val := snappy.Encode(nil, m)
-	switch {
-	case len(topic.Topic) > MaxTopicLength:
-		return errTopicTooLarge
-	case len(val) > MaxValueLength:
-		return errValueTooLarge
+	e.topic = topic.Marshal()
+	e.contract = message.Contract(topic.Parts)
+	db.setEntry(e)
+	// Encryption.
+	if db.encryption == 1 {
+		e.val = db.mac.Encrypt(nil, e.val)
 	}
-
-	data, err := db.entryData(seq, id, topic.Marshal(), val, e.ExpiresAt)
+	data, err := db.packEntry(e)
 	if err != nil {
 		return err
 	}
-	memseq := db.cacheID ^ seq
-	if err := db.mem.Set(prefix, memseq, data); err != nil {
+	memseq := db.cacheID ^ e.seq
+	if err := db.mem.Set(e.contract, memseq, data); err != nil {
 		return err
 	}
-	if ok := db.trie.Add(prefix, topic.Parts, topic.Depth, seq); ok {
+	if ok := db.trie.Add(e.contract, topic.Parts, topic.Depth, e.seq); ok {
 		if err != nil {
 			return err
 		}
@@ -845,7 +865,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 			return err
 		}
-		db.tinyBatch.logs = append(db.tinyBatch.logs, log{prefix: prefix, seq: memseq})
+		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: e.contract, seq: memseq})
 		db.tinyBatch.entryCount++
 	}
 
@@ -853,23 +873,23 @@ func (db *DB) PutEntry(e *Entry) error {
 }
 
 // entryData marshal entry along with message data
-func (db *DB) entryData(seq uint64, id, topic, value []byte, expiresAt uint32) ([]byte, error) {
+func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.count == MaxKeys {
 		return nil, errFull
 	}
 
-	e := entry{
-		seq:       seq,
-		topicSize: uint16(len(topic)),
-		valueSize: uint32(len(value)),
-		expiresAt: expiresAt,
+	e1 := entry{
+		seq:       e.seq,
+		topicSize: uint16(len(e.topic)),
+		valueSize: uint32(len(e.val)),
+		expiresAt: e.ExpiresAt,
 	}
-	data, _ := e.MarshalBinary()
-	mLen := idSize + len(topic) + len(value)
+	data, _ := e1.MarshalBinary()
+	mLen := idSize + len(e.topic) + len(e.val)
 	m := make([]byte, mLen)
-	copy(m, id)
-	copy(m[idSize:], topic)
-	copy(m[len(topic)+idSize:], value)
+	copy(m, e.id)
+	copy(m[idSize:], e.topic)
+	copy(m[len(e.topic)+idSize:], e.val)
 	data = append(data, m...)
 
 	return data, nil
@@ -935,7 +955,7 @@ func (db *DB) commit(logs []log) error {
 	}
 
 	for _, log := range logs {
-		memdata, err := db.mem.Get(log.prefix, log.seq)
+		memdata, err := db.mem.Get(log.contract, log.seq)
 		if err != nil {
 			return err
 		}
@@ -984,7 +1004,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	// defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
-		e.Contract = message.Contract
+		e.Contract = message.MasterContract
 	}
 	//Parse the Key
 	topic.ParseKey(e.Topic)
@@ -998,12 +1018,12 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	topic.AddContract(e.Contract)
 	// message ID is the database key
 	id := message.ID(e.ID)
-	id.AddContract(topic.Parts)
-	prefix := message.Prefix(topic.Parts)
-	mu := db.getMutex(prefix)
+	contract := message.Contract(topic.Parts)
+	id.AddContract(contract)
+	mu := db.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
-	if ok := db.trie.Remove(prefix, topic.Parts, id.Seq()); ok {
+	if ok := db.trie.Remove(contract, topic.Parts, id.Seq()); ok {
 		err := db.delete(message.ID(id).Seq())
 		if err != nil {
 			return err

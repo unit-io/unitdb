@@ -18,14 +18,14 @@ type Item struct {
 
 // Query represents a topic to query and optional contract information.
 type Query struct {
-	Topic          []byte         // The topic of the message
-	Contract       uint32         // The contract is used as prefix in the message Id
-	parts          []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
-	prefix         uint64
-	prefixWithTime message.ID // The beginning of the time window.
-	cutoff         int64      // The end of the time window.
-	seqs           []uint64
-	Limit          uint32 // The maximum number of elements to return.
+	Topic    []byte         // The topic of the message
+	Contract uint32         // The contract is used as prefix in the message Id
+	parts    []message.Part // Ssid represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	contract uint64
+	prefix   message.ID // The beginning of the time window.
+	cutoff   int64      // The end of the time window.
+	seqs     []uint64
+	Limit    uint32 // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
@@ -44,20 +44,20 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.prefix)
+	mu := it.db.getMutex(it.query.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
 	if len(it.queue) == 0 {
 		for _, seq := range it.query.seqs[it.next:] {
 			err := func() error {
-				e, err := it.db.readEntry(it.query.prefix, seq)
+				e, err := it.db.readEntry(it.query.contract, seq)
 				if err != nil {
 					return err
 				}
 				if e.isExpired() {
-					if ok := it.db.trie.Remove(it.query.prefix, it.query.parts, seq); ok {
-						it.db.timeWindow.addExpired(e)
+					if ok := it.db.trie.Remove(it.query.contract, it.query.parts, seq); ok {
+						it.db.timeWindow.add(e)
 					}
 					it.invalidKeys++
 					// if id is expired it does not return an error but continue the iteration
@@ -68,7 +68,7 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				_id := message.ID(id)
-				if !_id.EvalPrefix(it.query.parts, it.query.cutoff) {
+				if !_id.EvalPrefix(it.query.contract, it.query.cutoff) {
 					it.invalidKeys++
 					return nil
 				}
@@ -113,7 +113,7 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	it.query.seqs = it.db.trie.Lookup(it.query.prefix, it.query.parts)
+	it.query.seqs = it.db.trie.Lookup(it.query.contract, it.query.parts)
 	if len(it.query.seqs) == 0 || it.next >= 1 {
 		return
 	}

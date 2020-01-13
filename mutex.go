@@ -10,7 +10,7 @@ type concurrentMutex struct {
 	sync.RWMutex // Read Write mutex, guards access to internal request.
 }
 
-// mutex mutex to lock/unlock on topic based on prefix and not lock/unlock db
+// mutex mutex to lock/unlock on topic based on contract and not lock/unlock db
 type mutex struct {
 	sync.RWMutex
 	m          []*concurrentMutex
@@ -31,9 +31,9 @@ func newMutex() mutex {
 	return mu
 }
 
-// getMutex returns mutex under given prefix key
-func (mu *mutex) getMutex(prefix uint64) *concurrentMutex {
+// getMutex returns mutex under given contract key
+func (mu *mutex) getMutex(contract uint64) *concurrentMutex {
 	mu.RLock()
 	defer mu.RUnlock()
-	return mu.m[mu.consistent.FindBlock(prefix)]
+	return mu.m[mu.consistent.FindBlock(contract)]
 }

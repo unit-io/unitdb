@@ -130,20 +130,20 @@ func (wb *timeWindowBucket) add(e timeWindowEntry) {
 	// wb.expireOldEntries()
 }
 
-// addExpired adds expired entries to timewindow
-func (wb *timeWindowBucket) addExpired(e timeWindowEntry) {
-	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
-	entryTime := timeHash(time.Now().Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
-	// get windows shard
-	ws := wb.getWindows(uint64(entryTime))
-	ws.Lock()
-	defer ws.Unlock()
-	if window, ok := ws.windows[entryTime]; ok {
-		ws.windows[entryTime] = timeWindow{entries: append(window.entries, e)}
-	} else {
-		ws.windows[entryTime] = timeWindow{entries: []timeWindowEntry{e}}
-	}
-}
+// // addExpired adds expired entries to timewindow
+// func (wb *timeWindowBucket) addExpired(e timeWindowEntry) {
+// 	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
+// 	entryTime := timeHash(time.Now().Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
+// 	// get windows shard
+// 	ws := wb.getWindows(uint64(entryTime))
+// 	ws.Lock()
+// 	defer ws.Unlock()
+// 	if window, ok := ws.windows[entryTime]; ok {
+// 		ws.windows[entryTime] = timeWindow{entries: append(window.entries, e)}
+// 	} else {
+// 		ws.windows[entryTime] = timeWindow{entries: []timeWindowEntry{e}}
+// 	}
+// }
 
 func (wb *timeWindowBucket) all() []timeWindowEntry {
 	wb.expireOldEntries()

@@ -134,11 +134,11 @@ func NewTrie() *Trie {
 	return trie
 }
 
-// getMutext returns mutex under given prefix
-func (t *Trie) getMutex(prefix uint64) *concurrentMutex {
+// getMutext returns mutex under given contract
+func (t *Trie) getMutex(contract uint64) *concurrentMutex {
 	t.RLock()
 	defer t.RUnlock()
-	return t.m[t.consistent.FindBlock(prefix)]
+	return t.m[t.consistent.FindBlock(contract)]
 }
 
 // Count returns the number of Trie.
@@ -149,9 +149,9 @@ func (t *Trie) Count() int {
 }
 
 // Add adds message seq to the topic trie.
-func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added bool) {
+func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (added bool) {
 	// Get mutex
-	mu := t.getMutex(prefix)
+	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -183,8 +183,8 @@ func (t *Trie) Add(prefix uint64, parts []Part, depth uint8, seq uint64) (added 
 }
 
 // Remove remove the message seq of the topic trie
-func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
-	mu := t.getMutex(prefix)
+func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) {
+	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -215,15 +215,15 @@ func (t *Trie) Remove(prefix uint64, parts []Part, seq uint64) (removed bool) {
 }
 
 // Lookup returns the seq set for the given topic.
-func (t *Trie) Lookup(prefix uint64, parts []Part) (ss ssid) {
-	mu := t.getMutex(prefix)
+func (t *Trie) Lookup(contract uint64, parts []Part) (ss ssid) {
+	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
-	t.ilookup(prefix, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
+	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }
 
-func (t *Trie) ilookup(prefix uint64, parts []Part, depth uint8, ss *ssid, part *part) {
+func (t *Trie) ilookup(contract uint64, parts []Part, depth uint8, ss *ssid, part *part) {
 	// Add seq set from the current branch
 	for _, s := range part.ss {
 		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
@@ -237,7 +237,7 @@ func (t *Trie) ilookup(prefix uint64, parts []Part, depth uint8, ss *ssid, part 
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(prefix, parts[k.wildchars+1:], depth, ss, p)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, ss, p)
 			}
 		}
 	}

@@ -1,11 +1,11 @@
 package tracedb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
-	"time"
+	"sync"
 
-	"github.com/golang/snappy"
 	"github.com/unit-io/tracedb/hash"
 	"github.com/unit-io/tracedb/message"
 )
@@ -29,23 +29,21 @@ type BatchOptions struct {
 var DefaultBatchOptions = &BatchOptions{
 	Order:           0,
 	Topic:           nil,
-	Contract:        message.Contract,
+	Contract:        message.MasterContract,
 	Encryption:      false,
 	AllowDuplicates: false,
 }
 
-func (index batchIndex) id(data []byte) []byte {
-	return data[index.mOffset : index.mOffset+int64(idSize)]
-}
+// func (index batchIndex) id(data []byte) []byte {
+// 	return data[index.mOffset : index.mOffset+int64(idSize)]
+// }
 
-func (index batchIndex) mSize() uint32 {
-	return uint32(idSize) + uint32(index.topicSize) + index.valueSize
-}
+// func (index batchIndex) mSize() uint32 {
+// 	return uint32(idSize) + uint32(index.topicSize) + index.valueSize
+// }
 
-func (index batchIndex) message(data []byte) (id, topic, value []byte) {
-	keyValue := data[index.mOffset : index.mOffset+int64(index.mSize())]
-	return keyValue[:idSize], keyValue[idSize : idSize+index.topicSize], keyValue[idSize+index.topicSize:]
-
+func (index batchIndex) message(data []byte) (id, topic []byte) {
+	return data[:idSize], data[idSize : idSize+index.topicSize]
 }
 
 // SetOptions sets batch options to defer default option and use options specified by client program
@@ -54,15 +52,15 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 }
 
 type (
+	batchInfo struct {
+		entryCount uint16
+	}
+
 	batchIndex struct {
 		delFlag   bool
-		prefix    uint64
-		seq       uint64
 		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
 		topicSize uint16
-		valueSize uint32
-		expiresAt uint32
-		mOffset   int64
+		offset    int64
 	}
 
 	// Batch is a write batch.
@@ -73,64 +71,68 @@ type (
 		order    int8
 		startSeq uint64
 		// seq           uint64
-		tinyBatch     bool
+		tinyBatch bool
+		batchInfo
+		buffer *bytes.Buffer
+		size   int64
+		logs   []log
+		mu     sync.Mutex
+
 		db            *DB
-		data          []byte
 		index         []batchIndex
 		pendingWrites []batchIndex
-		logs          []log
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
 		commitComplete chan struct{}
 	}
 )
 
-func (b *Batch) grow(n int) {
-	o := len(b.data)
-	if cap(b.data)-o < n {
-		div := 1
-		if len(b.index) > batchGrowRec {
-			div = len(b.index) / batchGrowRec
-		}
-		ndata := make([]byte, o, o+n+o/div)
-		copy(ndata, b.data)
-		b.data = ndata
-	}
-}
+// func (b *Batch) grow(n int) {
+// 	o := len(b.data)
+// 	if cap(b.data)-o < n {
+// 		div := 1
+// 		if len(b.index) > batchGrowRec {
+// 			div = len(b.index) / batchGrowRec
+// 		}
+// 		ndata := make([]byte, o, o+n+o/div)
+// 		copy(ndata, b.data)
+// 		b.data = ndata
+// 	}
+// }
 
-func (b *Batch) appendRec(dFlag bool, prefix, seq uint64, key uint32, id, topic, value []byte, expiresAt uint32) {
-	n := 1 + len(id)
-	n += len(topic)
-	if !dFlag {
-		n += len(value)
-	}
-	b.grow(n)
-	index := batchIndex{}
-	o := len(b.data)
-	data := b.data[:o+n]
-	if dFlag {
-		data[o] = 1
-	} else {
-		data[o] = 0
-	}
-	o++
-	index.mOffset = int64(o)
-	index.prefix = prefix
-	index.seq = seq
-	index.key = key
-	// index.idSize = uint16(len(id))
-	index.topicSize = uint16(len(topic))
-	o += copy(data[o:], id)
-	o += copy(data[o:], topic)
-	if !dFlag {
-		index.valueSize = uint32(len(value))
-		o += copy(data[o:], value)
-	}
-	b.data = data[:o]
+// func (b *Batch) appendRec(dFlag bool, contract, seq uint64, key uint32, id, topic, value []byte, expiresAt uint32) {
+// 	n := 1 + len(id)
+// 	n += len(topic)
+// 	if !dFlag {
+// 		n += len(value)
+// 	}
+// 	b.grow(n)
+// 	index := batchIndex{}
+// 	o := len(b.data)
+// 	data := b.data[:o+n]
+// 	if dFlag {
+// 		data[o] = 1
+// 	} else {
+// 		data[o] = 0
+// 	}
+// 	o++
+// 	index.mOffset = int64(o)
+// 	index.contract = contract
+// 	index.seq = seq
+// 	index.key = key
+// 	// index.idSize = uint16(len(id))
+// 	index.topicSize = uint16(len(topic))
+// 	o += copy(data[o:], id)
+// 	o += copy(data[o:], topic)
+// 	if !dFlag {
+// 		index.valueSize = uint32(len(value))
+// 		o += copy(data[o:], value)
+// 	}
+// 	b.data = data[:o]
 
-	index.expiresAt = expiresAt
-	b.index = append(b.index, index)
-}
+// 	index.expiresAt = expiresAt
+// 	b.index = append(b.index, index)
+// }
 
 // Put appends 'put operation' of the given topic->key/value pair to the batch.
 // Client must provide Topic to the BatchOptions.
@@ -158,52 +160,39 @@ func (b *Batch) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic := new(message.Topic)
-	if e.Contract == 0 {
-		e.Contract = b.opts.Contract
-	}
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return errBadRequest
-	}
-
-	// In case of ttl, add ttl to the msg and store to the db
-	if ttl, ok := topic.TTL(); ok {
-		//1410065408 10 sec
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
-	}
-	topic.AddContract(e.Contract)
-	prefix := message.Prefix(topic.Parts)
-	var id message.ID
-	var seq uint64
-	if e.ID != nil {
-		id = message.ID(e.ID)
-		id.AddContract(topic.Parts)
-		seq = id.Seq()
-	} else {
-		seq = b.db.nextSeq()
-		id = message.NewID(seq, b.opts.Encryption)
-		id.AddContract(topic.Parts)
-	}
-	m, err := e.Marshal()
+	topic, err := b.db.parseTopic(e)
 	if err != nil {
 		return err
 	}
-	val := snappy.Encode(nil, m)
+	e.topic = topic.Marshal()
+	e.contract = message.Contract(topic.Parts)
+	b.db.setEntry(e)
 	var key uint32
 	if !b.opts.AllowDuplicates {
-		key = hash.WithSalt(val, topic.GetHashCode())
+		key = hash.WithSalt(e.val, topic.GetHashCode())
 	}
 	// Encryption.
 	if b.opts.Encryption == true {
-		val = b.db.mac.Encrypt(nil, val)
+		e.val = b.db.mac.Encrypt(nil, e.val)
 	}
 
-	b.appendRec(false, prefix, seq, key, id, topic.Marshal(), val, e.ExpiresAt)
+	data, err := b.db.packEntry(e)
+	if err != nil {
+		return err
+	}
+	var scratch [4]byte
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
+		return err
+	}
+	if _, err := b.buffer.Write(data); err != nil {
+		return err
+	}
+	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
+	b.size += int64(len(data) + 4)
+	b.entryCount++
+	// b.appendRec(false, e.contract, e.seq, key, e.id, e.topic, e.val, e.ExpiresAt)
 
 	return nil
 }
@@ -229,26 +218,34 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-
-	topic := new(message.Topic)
-	if e.Contract == 0 {
-		e.Contract = message.Contract
+	topic, err := b.db.parseTopic(e)
+	if err != nil {
+		return err
 	}
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return errBadRequest
-	}
-
-	topic.AddContract(e.Contract)
-	prefix := message.Prefix(topic.Parts)
+	e.topic = topic.Marshal()
+	e.contract = message.Contract(topic.Parts)
 	id := message.ID(e.ID)
-	id.AddContract(topic.Parts)
+	id.AddContract(e.contract)
+	e.id = id
+	e.seq = id.Seq()
 	key := topic.GetHashCode()
-	b.appendRec(true, prefix, id.Seq(), key, id, topic.Marshal(), nil, 0)
+	data, err := b.db.packEntry(e)
+	if err != nil {
+		return err
+	}
+	var scratch [4]byte
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
+		return err
+	}
+	if _, err := b.buffer.Write(data); err != nil {
+		return err
+	}
+	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
+	b.size += int64(len(data) + 4)
+	b.entryCount++
+	// b.appendRec(true, e.contract, e.seq, key, e.id, e.topic, nil, 0)
 	return nil
 }
 
@@ -258,44 +255,46 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	if b.Len() <= b.db.opts.TinyBatchSize {
-		b.tinyBatch = true
-	}
-
+	buff := b.buffer.Bytes()
 	topics := make(map[uint64]*message.Topic)
 	for i, index := range b.pendingWrites {
-		id, topic, val := index.message(b.data)
-		data, err := b.db.entryData(index.seq, id, topic, val, index.expiresAt)
-		if err != nil {
-			return err
-		}
+		dataLen := binary.LittleEndian.Uint32(buff[index.offset : index.offset+4])
+		data := buff[index.offset+4 : index.offset+int64(dataLen)]
+		id, topic := index.message(data)
+		// data, err := b.db.packEntry(index.seq, id, topic, val, index.expiresAt)
+		// if err != nil {
+		// 	return err
+		// }
 
+		ID := message.ID(id)
+		seq := ID.Seq()
+		contract := ID.Contract()
 		if b.startSeq == 0 {
-			b.startSeq = b.db.cacheID ^ index.seq
+			b.startSeq = b.db.cacheID ^ seq
 		}
-		if _, ok := topics[index.prefix]; !ok {
+		if _, ok := topics[contract]; !ok {
 			t := new(message.Topic)
 			t.Unmarshal(topic)
-			topics[index.prefix] = t
+			topics[contract] = t
 		}
-		itopic := topics[index.prefix]
+		itopic := topics[contract]
 		if index.delFlag {
 			/// Test filter block for presence
-			if !b.db.filter.Test(index.seq) {
+			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			if ok := b.db.trie.Remove(index.prefix, itopic.Parts, index.seq); !ok {
+			if ok := b.db.trie.Remove(contract, itopic.Parts, seq); !ok {
 				return errBadRequest
 			}
-			b.db.delete(index.seq)
+			b.db.delete(seq)
 			continue
 		}
-		if ok := b.db.trie.Add(index.prefix, itopic.Parts, itopic.Depth, index.seq); !ok {
+		if ok := b.db.trie.Add(contract, itopic.Parts, itopic.Depth, seq); !ok {
 			return errBadRequest
 		}
-		// prefix := message.Prefix(itopic.Parts)
-		memseq := b.db.cacheID ^ index.seq
-		if err := fn(i, index.prefix, memseq, data); err != nil {
+		// contract := message.contract(itopic.Parts)
+		memseq := b.db.cacheID ^ seq
+		if err := fn(i, contract, memseq, data); err != nil {
 			return err
 		}
 		if b.tinyBatch {
@@ -308,11 +307,11 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			if _, err := b.db.tinyBatch.buffer.Write(data); err != nil {
 				return err
 			}
-			b.db.tinyBatch.logs = append(b.db.tinyBatch.logs, log{prefix: index.prefix, seq: memseq})
+			b.db.tinyBatch.logs = append(b.db.tinyBatch.logs, log{contract: contract, seq: memseq})
 			b.db.tinyBatch.entryCount++
 			continue
 		}
-		b.logs = append(b.logs, log{prefix: index.prefix, seq: memseq})
+		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
 	return nil
 }
@@ -331,8 +330,8 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
-	err := b.writeInternal(func(i int, prefix uint64, memseq uint64, data []byte) error {
-		return b.db.mem.Set(prefix, memseq, data)
+	err := b.writeInternal(func(i int, contract uint64, memseq uint64, data []byte) error {
+		return b.db.mem.Set(contract, memseq, data)
 	})
 
 	return err
@@ -368,7 +367,10 @@ func (b *Batch) Abort() {
 
 // Reset resets the batch.
 func (b *Batch) Reset() {
-	b.data = b.data[:0]
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.entryCount = 0
+	b.buffer.Reset()
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
 }
@@ -400,12 +402,12 @@ func (b *Batch) uniq() []batchIndex {
 }
 
 func (b *Batch) append(bnew *Batch) {
-	off := len(b.data)
+	off := b.size
 	for _, idx := range bnew.index {
-		idx.mOffset = idx.mOffset + int64(off)
+		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
-	b.data = append(b.data, bnew.data...)
+	b.buffer.Write(bnew.buffer.Bytes())
 }
 
 // _assert will panic with a given formatted message if the given condition is false.

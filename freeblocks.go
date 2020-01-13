@@ -36,9 +36,9 @@ func newFreeSlots() freeslots {
 	return s
 }
 
-// getShard returns shard under given prefix
-func (fss *freeslots) getShard(prefix uint64) *freeslot {
-	return fss.slots[fss.consistent.FindBlock(prefix)]
+// getShard returns shard under given contract
+func (fss *freeslots) getShard(contract uint64) *freeslot {
+	return fss.slots[fss.consistent.FindBlock(contract)]
 }
 
 // TODO implement btree+ search
@@ -53,9 +53,9 @@ func (fs *freeslot) contains(value uint64) bool {
 }
 
 // get first free seq
-func (fss *freeslots) get(prefix uint64) (ok bool, seq uint64) {
+func (fss *freeslots) get(contract uint64) (ok bool, seq uint64) {
 	// Get shard
-	shard := fss.getShard(prefix)
+	shard := fss.getShard(contract)
 	// Get item from shard.
 	if len(shard.seqs) == 0 {
 		return ok, seq
@@ -125,9 +125,9 @@ func newFreeBlocks(minimumSize int64) freeblocks {
 	return fb
 }
 
-// getShard returns shard under given prefix
-func (fb *freeblocks) getShard(prefix uint64) *shard {
-	return fb.blocks[fb.consistent.FindBlock(prefix)]
+// getShard returns shard under given contract
+func (fb *freeblocks) getShard(contract uint64) *shard {
+	return fb.blocks[fb.consistent.FindBlock(contract)]
 }
 
 func (s *shard) search(size uint32) int {

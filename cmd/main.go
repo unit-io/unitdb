@@ -64,7 +64,7 @@ func main() {
 		Contract: contract,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	printWithContract([]byte("ttl.ttl1?last=2m"), contract, db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
@@ -72,7 +72,7 @@ func main() {
 		Contract: contract,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	printWithContract([]byte("ttl.ttl1?last=2m"), contract, db)
 
 	func(retry int) {
 		i := 1
@@ -234,7 +234,7 @@ func main() {
 		return nil
 	})
 
-	err = g.Run()
+	// err = g.Run()
 
 	if err != nil {
 		log.Fatal(err)

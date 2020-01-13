@@ -12,12 +12,12 @@ import (
 )
 
 type (
-	batchInfo struct {
+	tinyBatchInfo struct {
 		entryCount uint16
 	}
 
 	tinyBatch struct {
-		batchInfo
+		tinyBatchInfo
 		buffer *bytes.Buffer
 		logs   []log
 		mu     sync.Mutex
@@ -50,7 +50,9 @@ type batchdb struct {
 
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
-	return &Batch{opts: DefaultBatchOptions, db: db}
+	opts := DefaultBatchOptions
+	opts.Encryption = (db.encryption == 1)
+	return &Batch{opts: opts, buffer: bufPool.Get(), db: db}
 }
 
 func (db *DB) initbatchdb(opts *Options) error {
