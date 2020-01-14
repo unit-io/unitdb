@@ -110,9 +110,6 @@ func (db *DB) startBatchCommit() {
 				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
 					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 				}
-				// if err := db.commit(b.Logs()); err != nil {
-				// 	logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error committing batch with startSeq %d, size %d", b.startSeq, b.Len())
-				// }
 				b.Abort()
 				close(b.commitComplete)
 			case <-db.closeC:

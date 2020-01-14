@@ -934,53 +934,6 @@ func (db *DB) commit(entryCount uint16, logs []log, tinyBatchData []byte) error 
 	return db.tinyBatch.reset()
 }
 
-// func (db *DB) commit(logs []log) error {
-// 	// // CPU profiling by default
-// 	// defer profile.Start().Stop()
-// 	if err := db.ok(); err != nil {
-// 		return err
-// 	}
-
-// 	// commit writes batches into write ahead log. The write happen synchronously.
-// 	db.commitLockC <- struct{}{}
-// 	db.closeW.Add(1)
-// 	defer func() {
-// 		db.closeW.Done()
-// 		<-db.commitLockC
-// 	}()
-
-// 	logWriter, err := db.wal.NewWriter()
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	for _, log := range logs {
-// 		memdata, err := db.mem.Get(log.contract, log.seq)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		e := entry{}
-// 		if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
-// 			return err
-// 		}
-
-// 		if err := <-logWriter.Append(memdata); err != nil {
-// 			return err
-// 		}
-// 	}
-
-// 	db.meter.InMsgs.Inc(int64(len(logs)))
-// 	logSeq := db.wal.NextSeq()
-// 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
-// 		return err
-// 	}
-// 	if err := db.writeHeader(false); err != nil {
-// 		return err
-// 	}
-// 	db.commitLogQueue.Store(logSeq, logs)
-// 	return db.tinyBatch.reset()
-// }
-
 // Put sets the entry for the given message. It uses default Contract to put entry into db.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
