@@ -99,6 +99,11 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 					b.SetOptions(opts)
 					for k := 0; k < batchSize; k++ {
 						b.Put(vals[k])
+						if k%100000 == 0 {
+							if err := b.Write(); err != nil {
+								return err
+							}
+						}
 					}
 					err := b.Write()
 					return err
@@ -294,9 +299,14 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 					opts.AllowDuplicates = true
 					b.SetOptions(opts)
 					for contract := range keys {
-						for _, k := range keys[contract] {
+						for n, k := range keys[contract] {
 							topic := append(k, []byte("?ttl=1m")...)
 							b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
+							if n%100000 == 0 {
+								if err := b.Write(); err != nil {
+									return err
+								}
+							}
 						}
 					}
 					err := b.Write()

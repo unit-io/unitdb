@@ -107,9 +107,12 @@ func (db *DB) startBatchCommit() {
 		for {
 			select {
 			case b := <-db.commitQueue:
-				if err := db.commit(b.Logs()); err != nil {
-					logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error committing batch with startSeq %d, size %d", b.startSeq, b.Len())
+				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
+					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 				}
+				// if err := db.commit(b.Logs()); err != nil {
+				// 	logger.Error().Err(err).Str("context", "startBatchCommit").Msgf("Error committing batch with startSeq %d, size %d", b.startSeq, b.Len())
+				// }
 				b.Abort()
 				close(b.commitComplete)
 			case <-db.closeC:
@@ -222,7 +225,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			select {
 			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
-					if err := db.tinyCommit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
+					if err := db.commit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
 						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 					}
 				}
