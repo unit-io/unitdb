@@ -1,16 +1,17 @@
 package wal
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 
-	"github.com/unit-io/tracedb/collection"
+	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/tracedb/uid"
 )
 
 // Writer writes entries to the write ahead log.
 // Thread-safe.
 type Writer struct {
+	Id            uint64
 	writeComplete bool
 	// commitComplete  bool
 	releaseComplete bool
@@ -24,7 +25,7 @@ type Writer struct {
 	startSeq   uint64
 	entryCount uint32
 
-	buffer  *bytes.Buffer
+	buffer  *bpool.Buffer
 	logSize int64
 
 	wal *WAL
@@ -39,16 +40,15 @@ func (wal *WAL) NewWriter() (writer Writer, err error) {
 		return writer, err
 	}
 	writer = Writer{
+		Id:             uint64(uid.NewLID()),
 		startSeq:       wal.seq,
-		buffer:         bufPool.Get(),
 		wal:            wal,
 		writeCompleted: make(chan struct{}),
 	}
 
+	writer.buffer = wal.bufPool.Get(writer.Id)
 	return writer, nil
 }
-
-var bufPool = collection.NewBufferPool()
 
 func (w *Writer) append(data []byte) error {
 	if len(data) == 0 {
@@ -76,8 +76,6 @@ func (w *Writer) append(data []byte) error {
 // Append appends records into write ahead log
 func (w *Writer) Append(data []byte) <-chan error {
 	done := make(chan error, 1)
-	// w.wal.wg.Add(1)
-	// defer w.wal.wg.Done()
 
 	if w.writeComplete || w.releaseComplete {
 		done <- errors.New("logWriter error - can't append to log once it is written/released")
@@ -92,7 +90,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog(seq uint64) error {
 	defer close(w.writeCompleted)
-	defer bufPool.Put(w.buffer)
+	defer w.wal.bufPool.Put(w.Id)
 
 	// Set the transaction status
 	w.status = logStatusWritten

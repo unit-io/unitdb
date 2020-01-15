@@ -241,18 +241,18 @@ func main() {
 		return
 	}
 
-	func(retry int) {
-		i := 1
-		for range time.Tick(1 * time.Second) {
-			print([]byte("unit8.b1?last=20"), db)
-			print([]byte("unit8.b.b1?last=20"), db)
-			print([]byte("unit8.b.b11?last=20"), db)
-			print([]byte("unit8?last=10"), db)
-			print([]byte("unit9?last=10"), db)
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(4)
+	// func(retry int) {
+	// 	i := 1
+	// 	for range time.Tick(1 * time.Second) {
+	// 		print([]byte("unit8.b1?last=20"), db)
+	// 		print([]byte("unit8.b.b1?last=20"), db)
+	// 		print([]byte("unit8.b.b11?last=20"), db)
+	// 		print([]byte("unit8?last=10"), db)
+	// 		print([]byte("unit9?last=10"), db)
+	// 		if i >= retry {
+	// 			return
+	// 		}
+	// 		i++
+	// 	}
+	// }(4)
 }

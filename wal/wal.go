@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/fs"
 )
 
@@ -52,6 +53,7 @@ type (
 		opts Options
 		logs []logInfo
 
+		bufPool *bpool.BufferPool
 		logFile file
 		lock    fs.LockFile
 
@@ -71,6 +73,7 @@ func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 	wal = &WAL{
 		writeLockC: make(chan struct{}, 1),
 		opts:       opts,
+		bufPool:    bpool.NewBufferPool(opts.TargetSize),
 	}
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
@@ -205,6 +208,7 @@ type Reader struct {
 	blockOffset int64
 }
 
+// Read reads log for the given seq and returns Reader iterator
 func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {

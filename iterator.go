@@ -79,17 +79,12 @@ func (it *ItemIterator) Next() {
 						return err
 					}
 				}
-				var entry Entry
 				var buffer []byte
 				val, err = snappy.Decode(buffer, val)
 				if err != nil {
 					return err
 				}
-				err = entry.Unmarshal(val)
-				if err != nil {
-					return err
-				}
-				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: entry.Payload, err: err})
+				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
 				it.db.meter.Gets.Inc(1)
 				it.db.meter.OutMsgs.Inc(1)
 				it.db.meter.OutBytes.Inc(int64(e.valueSize))

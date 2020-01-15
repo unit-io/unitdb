@@ -13,7 +13,6 @@ import (
 
 	"github.com/allegro/bigcache"
 	"github.com/golang/snappy"
-	"github.com/unit-io/tracedb/collection"
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
 	"github.com/unit-io/tracedb/fs"
@@ -52,8 +51,6 @@ const (
 	// Maximum number of records to return
 	maxResults = 100000
 )
-
-var bufPool = collection.NewBufferPool()
 
 type (
 	dbInfo struct {
@@ -500,17 +497,12 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return err
 				}
 			}
-			var entry Entry
 			var buffer []byte
 			val, err = snappy.Decode(buffer, val)
 			if err != nil {
 				return err
 			}
-			err = entry.Unmarshal(val)
-			if err != nil {
-				return err
-			}
-			items = append(items, entry.Payload)
+			items = append(items, val)
 			db.meter.OutBytes.Inc(int64(e.valueSize))
 			return nil
 		}()
@@ -650,7 +642,7 @@ func (db *DB) Sync() error {
 
 				db.filter.Append(e.seq)
 			}
-			db.meter.Puts.Inc(int64(len(logs)))
+
 			db.mem.Free(logs[0].contract, logs[0].seq)
 			return db.sync()
 		}()
@@ -793,11 +785,7 @@ func (db *DB) setEntry(e *Entry) error {
 		id = message.NewID(seq, db.encryption == 1)
 		id.AddContract(e.contract)
 	}
-	m, err := e.Marshal()
-	if err != nil {
-		return err
-	}
-	val := snappy.Encode(nil, m)
+	val := snappy.Encode(nil, e.Payload)
 	e.id = id
 	e.seq = seq
 	e.val = val
@@ -867,6 +855,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		}
 		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: e.contract, seq: memseq})
 		db.tinyBatch.entryCount++
+		db.meter.Puts.Inc(1)
 	}
 
 	return nil
@@ -896,7 +885,7 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 }
 
 // tinyCommit commits tinyBatch with size less than entriesPerBlock
-func (db *DB) commit(entryCount uint16, logs []log, tinyBatchData []byte) error {
+func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -915,8 +904,8 @@ func (db *DB) commit(entryCount uint16, logs []log, tinyBatchData []byte) error 
 
 	offset := uint32(0)
 	for i := uint16(0); i < entryCount; i++ {
-		dataLen := binary.LittleEndian.Uint32(tinyBatchData[offset : offset+4])
-		if err := <-logWriter.Append(tinyBatchData[offset+4 : offset+dataLen]); err != nil {
+		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
+		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			return err
 		}
 		offset += dataLen
@@ -931,7 +920,7 @@ func (db *DB) commit(entryCount uint16, logs []log, tinyBatchData []byte) error 
 		return err
 	}
 	db.commitLogQueue.Store(logSeq, logs)
-	return db.tinyBatch.reset()
+	return nil
 }
 
 // Put sets the entry for the given message. It uses default Contract to put entry into db.

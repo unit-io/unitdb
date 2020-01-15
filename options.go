@@ -33,6 +33,9 @@ type Options struct {
 	// Setting the value to 0 immediately writes entries into db.
 	TinyBatchWriteInterval time.Duration
 
+	// Size of buffer to use for pooling
+	BufferSize int64
+
 	// Size of memory db
 	MemdbSize int64
 
@@ -65,6 +68,9 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.TinyBatchWriteInterval == 0 {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
+	}
+	if opts.BufferSize == 0 {
+		opts.BufferSize = 1 << 33 // maximum size of memdb (8GB).
 	}
 	if opts.MemdbSize == 0 {
 		opts.MemdbSize = 1<<33 + 1<<32 // maximum size of memdb (12GB).

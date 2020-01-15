@@ -1,14 +1,14 @@
 package tracedb
 
 import (
-	"bytes"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/unit-io/tracedb/collection"
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/memdb"
+	"github.com/unit-io/tracedb/uid"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -18,8 +18,10 @@ type (
 	}
 
 	tinyBatch struct {
+		Id uint64
 		tinyBatchInfo
-		buffer *bytes.Buffer
+		buffer *bpool.Buffer
+		size   int64
 		logs   []log
 		mu     sync.Mutex
 	}
@@ -29,7 +31,7 @@ func (b *tinyBatch) reset() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.entryCount = 0
-	b.buffer.Reset()
+	// b.buffer.Reset()
 	return nil
 }
 
@@ -44,6 +46,7 @@ type batchdb struct {
 
 	opts *Options
 	//tiny Batch
+	bufPool   *bpool.BufferPool
 	tinyBatch *tinyBatch
 	//once run batchLoop once
 	once Once
@@ -53,14 +56,18 @@ type batchdb struct {
 func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
 	opts.Encryption = (db.encryption == 1)
-	return &Batch{opts: opts, buffer: collection.NewBuffPool("batch", opts.Size), db: db}
+	b := &Batch{opts: opts, batchId: uint64(uid.NewLID()), db: db}
+	b.buffer = db.bufPool.Get(b.batchId)
+
+	return b
 }
 
 func (db *DB) initbatchdb(opts *Options) error {
 	bdb := &batchdb{
 		// batchDB
 		opts:        opts,
-		tinyBatch:   &tinyBatch{buffer: bufPool.Get()},
+		bufPool:     bpool.NewBufferPool(opts.BufferSize),
+		tinyBatch:   &tinyBatch{Id: uint64(uid.NewLID())},
 		batchQueue:  make(chan *Batch, 100),
 		commitQueue: make(chan *Batch, 1),
 	}
@@ -71,6 +78,7 @@ func (db *DB) initbatchdb(opts *Options) error {
 		return err
 	}
 
+	db.tinyBatch.buffer = db.bufPool.Get(db.tinyBatch.Id)
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
 	db.startBatchCommit()
 	return nil
@@ -108,7 +116,7 @@ func (db *DB) startBatchCommit() {
 		for {
 			select {
 			case b := <-db.commitQueue:
-				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes(0)); err != nil {
+				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
 					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 				}
 				b.Abort()
@@ -226,6 +234,8 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 					if err := db.commit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
 						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 					}
+					db.tinyBatch.reset()
+					db.bufPool.Put(db.tinyBatch.Id)
 				}
 			case <-db.closeC:
 				return

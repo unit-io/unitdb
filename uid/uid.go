@@ -3,6 +3,7 @@ package uid
 import (
 	"math"
 	"math/rand"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +20,9 @@ var (
 	)
 )
 
+// LID represents a process-wide unique ID.
+type LID uint64
+
 // NewApoch creats an appoch to generate uniue id
 func NewApoch() uint32 {
 	now := uint32(time.Now().Unix() - Offset)
@@ -32,4 +36,9 @@ func NewUnique() uint32 {
 	random.Read(b)
 	u := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(0)
 	return u
+}
+
+// NewID generates a new, process-wide unique ID.
+func NewLID() LID {
+	return LID(atomic.AddUint32(&Next, 1))
 }

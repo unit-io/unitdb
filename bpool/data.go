@@ -1,4 +1,4 @@
-package collection
+package bpool
 
 import "encoding"
 
@@ -51,6 +51,14 @@ func (d *data) read(off int64, size uint32) ([]byte, error) {
 
 func (d *data) bytes() ([]byte, error) {
 	return d.slice(0, d.size)
+}
+
+func (d *data) reset() (ok bool) {
+	d.size = 0
+	if err := d.truncate(0); err != nil {
+		return false
+	}
+	return true
 }
 
 func (d *data) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {

@@ -1,43 +1,16 @@
-package collection
+package bpool
 
 import (
 	"errors"
 )
 
-// type table struct {
-// 	tables map[string]*buffTable
-// }
-
-// // bufferManager represents a memory-mapped table.
-// type bufferManager interface {
-// 	readAt(p []byte, off int64) (int, error)
-// 	writeAt(p []byte, off int64) (int, error)
-
-// 	name() string
-// 	size() int64
-// 	slice(start int64, end int64) ([]byte, error)
-// 	extend(size uint32) (int64, error)
-// 	truncate(size int64) error
-// }
-
-// // buffer represents a virtual memory table.
-// type buffer interface {
-// 	newTable(name string, size int) (bufferManager, error)
-// 	remove(name string) error
-// }
-
-// // buff is a store backed by memory table.
-// var buff = &table{tables: map[string]*buffTable{}}
-
-func newTable(name string, size int64) (*buffTable, error) {
+func newTable(size int64) (*buffTable, error) {
 	tb := &buffTable{}
-	tb.tableName = name
 	tb.maxSize = size
 	return tb, nil
 }
 
 type buffTable struct {
-	tableName string
 	buf       []byte
 	allocated int64
 	maxSize   int64
@@ -81,8 +54,10 @@ func (m *buffTable) truncate(size int64) error {
 	return nil
 }
 
-func (m *buffTable) name() string {
-	return m.tableName
+func (m *buffTable) reset() error {
+	m.allocated = 0
+	m.buf = m.buf[:0]
+	return nil
 }
 
 func (m *buffTable) size() int64 {

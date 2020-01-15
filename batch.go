@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/unit-io/tracedb/collection"
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/hash"
 	"github.com/unit-io/tracedb/message"
 )
@@ -59,12 +59,13 @@ type (
 
 	// Batch is a write batch.
 	Batch struct {
+		batchId uint64
 		opts    *BatchOptions
 		managed bool
 		grouped bool
 		order   int8
 		batchInfo
-		buffer *collection.BuffPool
+		buffer *bpool.Buffer
 		size   int64
 		logs   []log
 		mu     sync.Mutex
@@ -127,10 +128,10 @@ func (b *Batch) PutEntry(e *Entry) error {
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := b.buffer.Write(e.contract, scratch[:]); err != nil {
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.buffer.Write(e.contract, data); err != nil {
+	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
 	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
@@ -180,10 +181,10 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := b.buffer.Write(e.contract, scratch[:]); err != nil {
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.buffer.Write(e.contract, data); err != nil {
+	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
 	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
@@ -199,7 +200,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	buff := b.buffer.Bytes(0)
+	buff := b.buffer.Bytes()
 	topics := make(map[uint64]*message.Topic)
 	for i, index := range b.pendingWrites {
 		dataLen := binary.LittleEndian.Uint32(buff[index.offset : index.offset+4])
@@ -236,6 +237,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 		}
 		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
+	b.db.meter.Puts.Inc(int64(len(b.pendingWrites)))
 	return nil
 }
 
@@ -288,7 +290,7 @@ func (b *Batch) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.entryCount = 0
-	// bufPool.Put(b.buffer)
+	b.db.bufPool.Put(b.batchId)
 	// b.buffer.Reset()
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
@@ -326,7 +328,7 @@ func (b *Batch) append(bnew *Batch) {
 		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
-	// b.buffer.Write(0, bnew.buffer.Bytes(0))
+	// b.buffer.Write(bnew.buffer.Bytes())
 }
 
 // _assert will panic with a given formatted message if the given condition is false.
