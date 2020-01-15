@@ -1,31 +1,71 @@
 package collection
 
-type data struct {
-	bufferManager
-	size int64
-}
+import "encoding"
 
-func (t *data) append(data []byte) (int64, error) {
-	off := t.size
-	if _, err := t.writeAt(data, off); err != nil {
+type (
+	header struct {
+		size       int64 // free size at the start
+		currOffset int64 // current offset for write
+		currSize   int64 // size available for write
+	}
+
+	data struct {
+		*buffTable
+		header
+		size       int64
+		targetSize int64
+	}
+)
+
+func (d *data) append(data []byte) (int64, error) {
+	off := d.size
+	if _, err := d.writeAt(data, off); err != nil {
 		return 0, err
 	}
-	t.size += int64(len(data))
+	d.size += int64(len(data))
 	return off, nil
 }
 
-func (t *data) allocate(size uint32) (int64, error) {
+func (d *data) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	off := t.size
-	if err := t.truncate(off + int64(size)); err != nil {
-		return 0, err
+	// do not allocate freeblocks until target size has reached of the log to avoid fragmentation
+	if d.targetSize > (d.size+int64(size)) || (d.targetSize < (d.size+int64(size)) && d.currSize < int64(size)) {
+		off := d.size
+		if err := d.truncate(off + int64(size)); err != nil {
+			return 0, err
+		}
+		d.size += int64(size)
+		return off, nil
 	}
-	t.size += int64(size)
+	off := d.currOffset
+	d.currSize -= int64(size)
+	d.currOffset += int64(size)
 	return off, nil
 }
 
-func (t *data) read(off int64, size uint32) ([]byte, error) {
-	return t.slice(off, off+int64(size))
+func (d *data) read(off int64, size uint32) ([]byte, error) {
+	return d.slice(off, off+int64(size))
+}
+
+func (d *data) bytes() ([]byte, error) {
+	return d.slice(0, d.size)
+}
+
+func (d *data) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
+	buf, err := m.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	_, err = d.writeAt(buf, off)
+	return err
+}
+
+func (d *data) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
+	buf := make([]byte, size)
+	if _, err := d.readAt(buf, off); err != nil {
+		return err
+	}
+	return m.UnmarshalBinary(buf)
 }

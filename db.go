@@ -26,7 +26,7 @@ const (
 	entriesPerBlock = 150
 	loadFactor      = 0.7
 	// MaxBlocks       = math.MaxUint32
-	nShards       = 16 // TODO implelemt sharding based on total Contracts in db
+	nShards       = 16
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
 	logPostfix    = ".log"

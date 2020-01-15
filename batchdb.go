@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/unit-io/tracedb/collection"
 	"github.com/unit-io/tracedb/memdb"
 	"golang.org/x/sync/errgroup"
 )
@@ -52,7 +53,7 @@ type batchdb struct {
 func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
 	opts.Encryption = (db.encryption == 1)
-	return &Batch{opts: opts, buffer: bufPool.Get(), db: db}
+	return &Batch{opts: opts, buffer: collection.NewBuffPool("batch", opts.Size), db: db}
 }
 
 func (db *DB) initbatchdb(opts *Options) error {
@@ -107,7 +108,7 @@ func (db *DB) startBatchCommit() {
 		for {
 			select {
 			case b := <-db.commitQueue:
-				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
+				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes(0)); err != nil {
 					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 				}
 				b.Abort()

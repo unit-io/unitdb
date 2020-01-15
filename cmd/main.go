@@ -136,8 +136,8 @@ func main() {
 		}
 	}(1)
 
-	// print([]byte("unit8.b.b1?last=30m"), db)
-	// print([]byte("unit8.b.b11?last=30m"), db)
+	print([]byte("unit8.b.b1?last=30m"), db)
+	print([]byte("unit8.b.b11?last=30m"), db)
 
 	messageId = db.NewID()
 	err = db.PutEntry(&tracedb.Entry{

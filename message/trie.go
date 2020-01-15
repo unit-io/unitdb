@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	nShards = 16 // TODO implelemt sharding based on total Contracts in trie
+	nMutex = 16
 
 	nul = 0x0
 )
@@ -66,11 +66,11 @@ type trieMutex struct {
 // newTrieMutex creates a new concurrent mutex.
 func newTrieMutex() trieMutex {
 	mu := trieMutex{
-		m:          make([]*concurrentMutex, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+		m:          make([]*concurrentMutex, nMutex),
+		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i < nMutex; i++ {
 		mu.m[i] = &concurrentMutex{}
 	}
 

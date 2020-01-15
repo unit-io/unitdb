@@ -6,6 +6,10 @@ import (
 	"github.com/unit-io/tracedb/hash"
 )
 
+const (
+	nMutex = 16
+)
+
 type concurrentMutex struct {
 	sync.RWMutex // Read Write mutex, guards access to internal request.
 }
@@ -20,11 +24,11 @@ type mutex struct {
 // newMutex creates a new concurrent mutex.
 func newMutex() mutex {
 	mu := mutex{
-		m:          make([]*concurrentMutex, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+		m:          make([]*concurrentMutex, nMutex),
+		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i < nMutex; i++ {
 		mu.m[i] = &concurrentMutex{}
 	}
 
