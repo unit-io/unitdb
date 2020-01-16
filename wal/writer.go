@@ -11,7 +11,7 @@ import (
 // Writer writes entries to the write ahead log.
 // Thread-safe.
 type Writer struct {
-	Id            uint64
+	Id            uid.LID
 	writeComplete bool
 	// commitComplete  bool
 	releaseComplete bool
@@ -40,13 +40,13 @@ func (wal *WAL) NewWriter() (writer Writer, err error) {
 		return writer, err
 	}
 	writer = Writer{
-		Id:             uint64(uid.NewLID()),
+		Id:             uid.NewLID(),
 		startSeq:       wal.seq,
 		wal:            wal,
 		writeCompleted: make(chan struct{}),
 	}
 
-	writer.buffer = wal.bufPool.Get(writer.Id)
+	writer.buffer = wal.bufPool.Get()
 	return writer, nil
 }
 
@@ -90,7 +90,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog(seq uint64) error {
 	defer close(w.writeCompleted)
-	defer w.wal.bufPool.Put(w.Id)
+	defer w.wal.bufPool.Put(w.buffer)
 
 	// Set the transaction status
 	w.status = logStatusWritten

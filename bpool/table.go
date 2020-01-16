@@ -4,19 +4,19 @@ import (
 	"errors"
 )
 
-func newTable(size int64) (*buffTable, error) {
-	tb := &buffTable{}
+func newTable(size int64) (*bufTable, error) {
+	tb := &bufTable{}
 	tb.maxSize = size
 	return tb, nil
 }
 
-type buffTable struct {
+type bufTable struct {
 	buf       []byte
 	allocated int64
 	maxSize   int64
 }
 
-func (m *buffTable) readAt(p []byte, off int64) (int, error) {
+func (m *bufTable) readAt(p []byte, off int64) (int, error) {
 	n := len(p)
 	if int64(n) > m.allocated-off {
 		return 0, errors.New("eof")
@@ -25,7 +25,7 @@ func (m *buffTable) readAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (m *buffTable) writeAt(p []byte, off int64) (int, error) {
+func (m *bufTable) writeAt(p []byte, off int64) (int, error) {
 	n := len(p)
 	if off == m.allocated {
 		m.buf = append(m.buf, p...)
@@ -38,12 +38,12 @@ func (m *buffTable) writeAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (m *buffTable) extend(size uint32) (int64, error) {
+func (m *bufTable) extend(size uint32) (int64, error) {
 	off := m.allocated
 	return off, m.truncate(m.allocated + int64(size))
 }
 
-func (m *buffTable) truncate(size int64) error {
+func (m *bufTable) truncate(size int64) error {
 	if size > m.allocated {
 		diff := int(size - m.allocated)
 		m.buf = append(m.buf, make([]byte, diff)...)
@@ -54,16 +54,16 @@ func (m *buffTable) truncate(size int64) error {
 	return nil
 }
 
-func (m *buffTable) reset() error {
+func (m *bufTable) reset() error {
 	m.allocated = 0
 	m.buf = m.buf[:0]
 	return nil
 }
 
-func (m *buffTable) size() int64 {
+func (m *bufTable) size() int64 {
 	return m.allocated
 }
 
-func (m *buffTable) slice(start int64, end int64) ([]byte, error) {
+func (m *bufTable) slice(start int64, end int64) ([]byte, error) {
 	return m.buf[start:end], nil
 }

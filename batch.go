@@ -8,6 +8,7 @@ import (
 	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/hash"
 	"github.com/unit-io/tracedb/message"
+	"github.com/unit-io/tracedb/uid"
 )
 
 const (
@@ -59,7 +60,7 @@ type (
 
 	// Batch is a write batch.
 	Batch struct {
-		batchId uint64
+		batchId uid.LID
 		opts    *BatchOptions
 		managed bool
 		grouped bool
@@ -237,7 +238,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 		}
 		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
-	b.db.meter.Puts.Inc(int64(len(b.pendingWrites)))
+	b.db.meter.Puts.Inc(int64(b.Len()))
 	return nil
 }
 
@@ -290,7 +291,7 @@ func (b *Batch) Reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.entryCount = 0
-	b.db.bufPool.Put(b.batchId)
+	b.db.bufPool.Put(b.buffer)
 	// b.buffer.Reset()
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]

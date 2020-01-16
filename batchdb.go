@@ -56,8 +56,8 @@ type batchdb struct {
 func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
 	opts.Encryption = (db.encryption == 1)
-	b := &Batch{opts: opts, batchId: uint64(uid.NewLID()), db: db}
-	b.buffer = db.bufPool.Get(b.batchId)
+	b := &Batch{opts: opts, batchId: uid.NewLID(), db: db}
+	b.buffer = db.bufPool.Get()
 
 	return b
 }
@@ -78,7 +78,7 @@ func (db *DB) initbatchdb(opts *Options) error {
 		return err
 	}
 
-	db.tinyBatch.buffer = db.bufPool.Get(db.tinyBatch.Id)
+	db.tinyBatch.buffer = db.bufPool.Get()
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
 	db.startBatchCommit()
 	return nil
@@ -235,7 +235,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
 					}
 					db.tinyBatch.reset()
-					db.bufPool.Put(db.tinyBatch.Id)
+					db.bufPool.Put(db.tinyBatch.buffer)
 				}
 			case <-db.closeC:
 				return
