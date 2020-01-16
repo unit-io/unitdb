@@ -18,7 +18,7 @@ type (
 	}
 
 	tinyBatch struct {
-		Id uint64
+		Id uid.LID
 		tinyBatchInfo
 		buffer *bpool.Buffer
 		size   int64
@@ -38,9 +38,7 @@ func (b *tinyBatch) reset() error {
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	memMu       sync.RWMutex
-	memPool     chan *memdb.DB
-	mem         *mem
+	mem         *memdb.DB
 	batchQueue  chan *Batch
 	commitQueue chan *Batch
 
@@ -67,17 +65,18 @@ func (db *DB) initbatchdb(opts *Options) error {
 		// batchDB
 		opts:        opts,
 		bufPool:     bpool.NewBufferPool(opts.BufferSize),
-		tinyBatch:   &tinyBatch{Id: uint64(uid.NewLID())},
+		tinyBatch:   &tinyBatch{Id: uid.NewLID()},
 		batchQueue:  make(chan *Batch, 100),
 		commitQueue: make(chan *Batch, 1),
 	}
 
 	db.batchdb = bdb
 	// Create a memdb.
-	if _, err := db.newMem(0); err != nil {
-		return err
+	mem, err := memdb.Open("memdb", opts.MemdbSize)
+	if err != nil {
+		logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
 	}
-
+	db.mem = mem
 	db.tinyBatch.buffer = db.bufPool.Get()
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
 	db.startBatchCommit()

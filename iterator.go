@@ -44,7 +44,7 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.contract)
+	mu := it.db.GetMutex(it.query.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil

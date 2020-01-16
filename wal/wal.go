@@ -127,9 +127,6 @@ func (wal *WAL) readHeader() error {
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
 	}
-	// if !bytes.Equal(h.signature[:], signature[:]) {
-	// 	return errCorrupted
-	// }
 	wal.seq = h.upperSequence
 	wal.logFile.fb = h.freeBlock
 	return nil
@@ -160,7 +157,7 @@ func (wal *WAL) recoverLogHeaders() error {
 	return nil
 }
 
-// recoverWal recovers a WAL that was written but not released logs and updates free blocks
+// recoverWal recovers a WAL for the log written but not released. It also updates free blocks
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
 	wal.logFile.size = align512(wal.logFile.size)
@@ -179,17 +176,15 @@ func (wal *WAL) put(log logInfo) error {
 			wal.logs[i].entryCount = log.entryCount
 			wal.logs[i].seq = log.seq
 			wal.logs[i].size = log.size
-			// wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 			return nil
 		}
 	}
 
-	// wal.logFile.writeMarshalableAt(log, log.offset)
 	wal.logs = append(wal.logs, log)
 	return nil
 }
 
-// Scan provides list of sequeces written to log but not yet fully applied
+// Scan provides list of sequences written to the log but not yet fully applied
 func (wal *WAL) Scan() (seqs []uint64, err error) {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {

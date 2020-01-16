@@ -80,7 +80,7 @@ type (
 	}
 )
 
-// Put appends 'put operation' of the given topic->key/value pair to the batch.
+// Put adds entry to batch for given topic->key/value.
 // Client must provide Topic to the BatchOptions.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
@@ -94,7 +94,7 @@ func (b *Batch) Put(value []byte) error {
 	return b.PutEntry(&Entry{Topic: b.opts.Topic, Payload: value, Contract: b.opts.Contract})
 }
 
-// PutEntry appends 'put operation' of the given key/value pair to the batch.
+// PutEntry appends entries to a bacth for given topic->key/value pair.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) PutEntry(e *Entry) error {
@@ -138,19 +138,18 @@ func (b *Batch) PutEntry(e *Entry) error {
 	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
-	// b.appendRec(false, e.contract, e.seq, key, e.id, e.topic, e.val, e.ExpiresAt)
 
 	return nil
 }
 
-// Delete appends 'delete operation' of the given key to the batch.
+// Delete appends delete entry to batch for given key.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) Delete(id, topic []byte) error {
 	return b.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
-// DeleteEntry appends 'delete operation' of the given key to the batch.
+// DeleteEntry appends entry for deletion to a batch for given key.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
@@ -191,7 +190,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
-	// b.appendRec(true, e.contract, e.seq, key, e.id, e.topic, nil, 0)
 	return nil
 }
 
@@ -231,7 +229,6 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 		if ok := b.db.trie.Add(contract, itopic.Parts, itopic.Depth, seq); !ok {
 			return errBadRequest
 		}
-		// contract := message.contract(itopic.Parts)
 		memseq := b.db.cacheID ^ seq
 		if err := fn(i, contract, memseq, data); err != nil {
 			return err
@@ -268,9 +265,6 @@ func (b *Batch) Write() error {
 func (b *Batch) Commit() error {
 	// defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
-	if b.db.mem == nil || b.db.mem.getref() == 0 {
-		return nil
-	}
 	if len(b.pendingWrites) == 0 {
 		return nil
 	}

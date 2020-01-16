@@ -3,7 +3,6 @@ package memdb
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -11,14 +10,14 @@ import (
 )
 
 const (
-	nShards = 32 // TODO implelemt sharding based on total Contracts in db
+	nShards = 32
 
-	// maxTableSize value for maximum memroy use for the memdb.
+	// maxTableSize value for maximum memroy use for memdb.
 	maxTableSize = (int64(1) << 40) - 1
 
 	backgroundMemResetInterval = 1 * time.Second
 	memShrinkFactor            = 0.7
-	dataTableShrinkFactor      = 0.2 // shirnker try to free 20% of total datatable size
+	dataTableShrinkFactor      = 0.2 // shirnker try to free 20% of total memdb size
 )
 
 // A "thread" safe map of type seq:offset.
@@ -36,12 +35,7 @@ type concurrentCache struct {
 func newCache(path string, memSize int64) blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		path := fmt.Sprintf("%s-%d.data", path, i)
-		data, err := mem.newTable(path, memSize)
-		if err != nil {
-			return nil
-		}
-		m[i] = &concurrentCache{data: dataTable{tableManager: data}, cache: make(map[uint64]int64)}
+		m[i] = &concurrentCache{data: dataTable{maxSize: memSize}, cache: make(map[uint64]int64)}
 	}
 	return m
 }
@@ -59,7 +53,7 @@ type DB struct {
 	closeC chan struct{}
 }
 
-// Open opens or creates a new DB. Minimum memroy size is 1GB
+// Open opens or creates a new DB of given size.
 func Open(path string, memSize int64) (*DB, error) {
 	if memSize > maxTableSize {
 		memSize = maxTableSize
@@ -121,18 +115,12 @@ func (db *DB) shrinkDataTable() error {
 	return nil
 }
 
-// Close closes the DB.
+// Close closes the memdb.
 func (db *DB) Close() error {
-	// Signal all goroutines.
-	close(db.closeC)
-
 	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
 		shard.RLock()
 		if err := shard.data.close(); err != nil {
-			return err
-		}
-		if err := mem.remove(shard.data.name()); err != nil {
 			return err
 		}
 		shard.RUnlock()
@@ -146,7 +134,7 @@ func (db *DB) getShard(contract uint64) *concurrentCache {
 	return db.blockCache[db.consistent.FindBlock(contract)]
 }
 
-// Get gets data for the provided key
+// Get gets data for the provided key under a contract
 func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	// Get shard
 	shard := db.getShard(contract)
@@ -157,7 +145,7 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
-	scratch, err := shard.data.readRaw(off, 4) // read dataLength
+	scratch, err := shard.data.readRaw(off, 4) // read data length
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +157,7 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	return data[4:], nil
 }
 
-// Set sets the value for the given key->value. It updates the value for the existing key.
+// Set sets the value for the given entry for a contract.
 func (db *DB) Set(contract uint64, key uint64, data []byte) error {
 	// Get cache shard.
 	shard := db.getShard(contract)
@@ -192,7 +180,7 @@ func (db *DB) Set(contract uint64, key uint64, data []byte) error {
 	return nil
 }
 
-// Free free keeps first offset that can be free if memdb exceeds target size threshold.
+// Free free keeps first offset that can be free if memdb exceeds target size.
 func (db *DB) Free(contract uint64, key uint64) error {
 	// Get shard
 	shard := db.getShard(contract)
@@ -212,7 +200,7 @@ func (db *DB) Free(contract uint64, key uint64) error {
 	return nil
 }
 
-// Count returns the number of items in the DB.
+// Count returns the number of items in memdb.
 func (db *DB) Count() uint64 {
 	count := 0
 	for i := 0; i < nShards; i++ {
@@ -224,7 +212,7 @@ func (db *DB) Count() uint64 {
 	return uint64(count)
 }
 
-// FileSize returns the total size of the disk storage used by the DB.
+// FileSize returns the total size of memdb.
 func (db *DB) FileSize() (int64, error) {
 	size := int64(0)
 	for i := 0; i < nShards; i++ {
