@@ -27,14 +27,6 @@ type (
 	}
 )
 
-func (b *tinyBatch) reset() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.entryCount = 0
-	// b.buffer.Reset()
-	return nil
-}
-
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
@@ -42,9 +34,9 @@ type batchdb struct {
 	batchQueue  chan *Batch
 	commitQueue chan *Batch
 
-	opts *Options
+	opts    *Options
+	bufPool *bpool.BufferPool
 	//tiny Batch
-	bufPool   *bpool.BufferPool
 	tinyBatch *tinyBatch
 	//once run batchLoop once
 	once Once
@@ -53,7 +45,7 @@ type batchdb struct {
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
-	opts.Encryption = (db.encryption == 1)
+	opts.Encryption = db.encryption == 1
 	b := &Batch{opts: opts, batchId: uid.NewLID(), db: db}
 	b.buffer = db.bufPool.Get()
 
@@ -74,7 +66,7 @@ func (db *DB) initbatchdb(opts *Options) error {
 	// Create a memdb.
 	mem, err := memdb.Open("memdb", opts.MemdbSize)
 	if err != nil {
-		logger.Error().Err(err).Str("context", "mem.mpoolGet").Msg("Unable to open database")
+		return err
 	}
 	db.mem = mem
 	db.tinyBatch.buffer = db.bufPool.Get()
@@ -84,10 +76,10 @@ func (db *DB) initbatchdb(opts *Options) error {
 }
 
 // Batch executes a function within the context of a read-write managed transaction.
-// If no error is returned from the function then the transaction is committed.
+// If no error is returned from the function then the transaction is written.
 // If an error is returned then the entire transaction is rolled back.
-// Any error that is returned from the function or returned from the commit is
-// returned from the Update() method.
+// Any error that is returned from the function or returned from the write is
+// returned from the Batch() method.
 //
 // Attempting to manually commit or rollback within the function will cause a panic.
 func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
@@ -96,8 +88,9 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	b.setManaged()
 	b.commitComplete = make(chan struct{})
 	// If an error is returned from the function then rollback and return error.
-	err := fn(b, b.commitComplete)
-	if err != nil {
+	if err := fn(b, b.commitComplete); err != nil {
+		b.Abort()
+		close(b.commitComplete)
 		return err
 	}
 	b.unsetManaged()
@@ -116,7 +109,7 @@ func (db *DB) startBatchCommit() {
 			select {
 			case b := <-db.commitQueue:
 				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
-					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
+					logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 				}
 				b.Abort()
 				close(b.commitComplete)
@@ -231,10 +224,12 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			case <-tinyBatchWriterTicker.C:
 				if db.tinyBatch.entryCount > 0 {
 					if err := db.commit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
-						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tincy batch")
+						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tinyBatch")
 					}
-					db.tinyBatch.reset()
+					db.tinyBatch.mu.Lock()
+					db.tinyBatch.entryCount = 0
 					db.bufPool.Put(db.tinyBatch.buffer)
+					db.tinyBatch.mu.Unlock()
 				}
 			case <-db.closeC:
 				return

@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/unit-io/tracedb/bpool"
-	"github.com/unit-io/tracedb/fs"
 )
 
 const (
@@ -44,8 +43,8 @@ type (
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown
-		wg         sync.WaitGroup
-		writeLockC chan struct{}
+		wg sync.WaitGroup
+		mu sync.RWMutex
 
 		// nextSeq is recoved sequence
 		seq uint64
@@ -55,7 +54,7 @@ type (
 
 		bufPool *bpool.BufferPool
 		logFile file
-		lock    fs.LockFile
+		// lock    fs.LockFile
 
 		closed uint32
 	}
@@ -71,9 +70,9 @@ type (
 func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
-		writeLockC: make(chan struct{}, 1),
-		opts:       opts,
-		bufPool:    bpool.NewBufferPool(opts.TargetSize),
+		// writeLockC: make(chan struct{}, 1),
+		opts:    opts,
+		bufPool: bpool.NewBufferPool(opts.TargetSize),
 	}
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
@@ -108,6 +107,8 @@ func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 }
 
 func (wal *WAL) writeHeader() error {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
 	h := header{
 		signature:     signature,
 		version:       version,
@@ -169,7 +170,9 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
+	wal.mu.RLock()
 	l := len(wal.logs)
+	wal.mu.RUnlock()
 	for i := 0; i < l; i++ {
 		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
@@ -179,14 +182,17 @@ func (wal *WAL) put(log logInfo) error {
 			return nil
 		}
 	}
-
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
 	wal.logs = append(wal.logs, log)
 	return nil
 }
 
 // Scan provides list of sequences written to the log but not yet fully applied
 func (wal *WAL) Scan() (seqs []uint64, err error) {
+	wal.mu.RLock()
 	l := len(wal.logs)
+	wal.mu.RUnlock()
 	for i := 0; i < l; i++ {
 		if wal.logs[i].status == logStatusWritten {
 			seqs = append(seqs, wal.logs[i].seq)
@@ -277,14 +283,14 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 
 // NextSeq next sequence to use in log write function
 func (wal *WAL) NextSeq() uint64 {
-	return atomic.AddUint64(&wal.seq, 1)
+	wal.mu.RLock()
+	defer wal.mu.RUnlock()
+	wal.seq++
+	return wal.seq
 }
 
 //Sync syncs log entries to disk
 func (wal *WAL) Sync() error {
-	// wal.wg.Add(1)
-	// defer wal.wg.Done()
-
 	wal.writeHeader()
 	return wal.logFile.Sync()
 }

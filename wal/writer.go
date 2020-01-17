@@ -22,7 +22,7 @@ type Writer struct {
 
 	// startSeq is a unique identifier for the log that orders
 	// it in relation to other logs. It is marshalled to disk.
-	startSeq   uint64
+	// startSeq   uint64
 	entryCount uint32
 
 	buffer  *bpool.Buffer
@@ -40,8 +40,8 @@ func (wal *WAL) NewWriter() (writer Writer, err error) {
 		return writer, err
 	}
 	writer = Writer{
-		Id:             uid.NewLID(),
-		startSeq:       wal.seq,
+		Id: uid.NewLID(),
+		// startSeq:       wal.seq,
 		wal:            wal,
 		writeCompleted: make(chan struct{}),
 	}

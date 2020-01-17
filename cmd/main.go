@@ -170,7 +170,7 @@ func main() {
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		t, _ := time.Now().MarshalText()
-		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl3?ttl=3m"), t))
+		b.PutEntry(tracedb.NewEntry([]byte(""), t))
 		err := b.Write()
 
 		return err

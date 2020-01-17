@@ -47,7 +47,7 @@ const (
 	MaxValueLength = 1 << 30
 
 	// MaxKeys is the maximum numbers of keys in the DB.
-	MaxKeys = math.MaxUint64
+	MaxKeys = math.MaxInt64
 
 	// Maximum number of records to return
 	maxResults = 100000
@@ -57,7 +57,7 @@ type (
 	dbInfo struct {
 		encryption   uint8
 		seq          uint64
-		count        uint64
+		count        int64
 		nBlocks      uint32
 		blockIndex   uint32
 		freeblockOff int64
@@ -309,11 +309,13 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 		}
 		db.dbInfo.freeblockOff = freeblockOff
 	}
+	db.mu.RLock()
 	h := header{
 		signature: signature,
 		version:   version,
 		dbInfo:    db.dbInfo,
 	}
+	db.mu.RUnlock()
 	return db.index.writeMarshalableAt(h, 0)
 }
 
@@ -628,7 +630,7 @@ func (db *DB) Sync() error {
 				if entryIdx == -1 {
 					continue
 				}
-				db.count++
+				db.incCount()
 				if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
 					return err
 				}
@@ -694,7 +696,7 @@ func (db *DB) ExpireOldEntries() {
 		mu.Lock()
 		mu.Unlock()
 		db.delete(entry.seq)
-		db.count--
+		db.decCount()
 	}
 	if db.syncWrites {
 		db.sync()
@@ -739,7 +741,7 @@ func (db *DB) newBlock() (int64, error) {
 
 // extendBlocks adds new blocks to db table for the batch write
 func (db *DB) extendBlocks() error {
-	nBlocks := uint32(float64(db.seq-1) / float64(entriesPerBlock))
+	nBlocks := uint32(float64(db.getSeq()) / float64(entriesPerBlock))
 	for nBlocks > db.blockIndex {
 		if _, err := db.newBlock(); err != nil {
 			return err
@@ -784,7 +786,8 @@ func (db *DB) setEntry(e *Entry) error {
 		if !ok {
 			seq = db.nextSeq()
 		}
-		id = message.NewID(seq, db.encryption == 1)
+		encryption := db.encryption == 1 || e.encryption
+		id = message.NewID(seq, encryption)
 		id.AddContract(e.contract)
 	}
 	val := snappy.Encode(nil, e.Payload)
@@ -865,7 +868,7 @@ func (db *DB) PutEntry(e *Entry) error {
 
 // packentry marshal entry along with message data
 func (db *DB) packEntry(e *Entry) ([]byte, error) {
-	if db.count == MaxKeys {
+	if db.Count() == MaxKeys {
 		return nil, errFull
 	}
 
@@ -918,9 +921,9 @@ func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	if err := db.writeHeader(false); err != nil {
-		return err
-	}
+	// if err := db.writeHeader(false); err != nil {
+	// 	return err
+	// }
 	db.commitLogQueue.Store(logSeq, logs)
 	return nil
 }
@@ -1010,18 +1013,11 @@ func (db *DB) delete(seq uint64) error {
 	}
 	// db.freeslots.free(e.seq)
 	// db.data.free(e.mSize(), e.mOffset)
-	db.count--
+	db.decCount()
 	if db.syncWrites {
 		return db.sync()
 	}
 	return nil
-}
-
-// Count returns the number of items in the DB.
-func (db *DB) Count() uint64 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.count
 }
 
 // FileSize returns the total size of the disk storage used by the DB.
@@ -1041,11 +1037,37 @@ func (db *DB) FileSize() (int64, error) {
 }
 
 func (db *DB) getSeq() uint64 {
-	return atomic.LoadUint64(&db.seq)
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.seq
 }
 
 func (db *DB) nextSeq() uint64 {
-	return atomic.AddUint64(&db.seq, 1)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.seq++
+	return db.seq
+}
+
+// Count returns the number of items in the DB.
+func (db *DB) Count() int64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.count
+}
+
+func (db *DB) incCount() int64 {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.count++
+	return db.count
+}
+
+func (db *DB) decCount() int64 {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.count--
+	return db.count
 }
 
 // Set closed flag; return true if not already closed.

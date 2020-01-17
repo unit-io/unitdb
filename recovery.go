@@ -40,8 +40,8 @@ func truncateFiles(db *DB) error {
 	return nil
 }
 
-func getUsedBlocks(db *DB) (uint64, []userdblock, error) {
-	var itemCount uint64
+func getUsedBlocks(db *DB) (int64, []userdblock, error) {
+	var itemCount int64
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		off := blockOffset(blockIdx)
