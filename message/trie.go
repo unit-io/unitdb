@@ -129,7 +129,9 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 			query:     p.Query,
 			wildchars: p.Wildchars,
 		}
+		t.RLock()
 		child, ok := curr.children[k]
+		t.RUnlock()
 		if !ok {
 			child = &part{
 				k:        k,
@@ -181,19 +183,18 @@ func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) 
 		t.count--
 	}
 	// Remove orphans
+	t.Lock()
+	defer t.Unlock()
 	if len(curr.ss) == 0 && len(curr.children) == 0 {
-		t.Lock()
 		curr.orphan()
-		t.Unlock()
 	}
 	return
 }
 
 // Lookup returns seq set for given topic.
 func (t *Trie) Lookup(contract uint64, parts []Part) (ss ssid) {
-	mu := t.GetMutex(contract)
-	mu.RLock()
-	defer mu.RUnlock()
+	t.RLock()
+	defer t.RUnlock()
 	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }
