@@ -24,17 +24,12 @@ type ID []byte
 // AddContract adds a Contract to ID, it is used to validate prefix.
 func (id *ID) AddContract(contract uint64) {
 	newid := make(ID, fixed+8)
-	// if len(parts) == 1 {
-	// 	binary.BigEndian.PutUint32(newid[0:4], parts[0].Query^Wildcard)
-	// } else {
-	// 	binary.BigEndian.PutUint32(newid[0:4], parts[0].Query^parts[1].Query)
-	// }
 	binary.BigEndian.PutUint64(newid[0:8], contract)
 	copy(newid[8:], *id)
 	*id = newid
 }
 
-// IsEncrypted return if the encyption is set on ID
+// IsEncrypted return if an encyption is set on ID
 func (id ID) IsEncrypted() bool {
 	num := binary.BigEndian.Uint64(id[16:24])
 	return num&0xff != 0

@@ -2,14 +2,11 @@ package bpool
 
 import (
 	"sync"
-	"sync/atomic"
-
-	"github.com/unit-io/tracedb/hash"
+	"time"
 )
 
 const (
-	nShards = 1000
-
+	nShards = 32
 	// maxBufferSize value for maximum memory use for the buffer.
 	maxBufferSize = (int64(1) << 34) - 1
 )
@@ -19,17 +16,29 @@ type Buffer struct {
 	sync.RWMutex // Read Write mutex, guards access to internal buffer.
 }
 
-// Get returns shard under given key
+// Get returns buffer if any in pool or create a new buffer
 func (pool *BufferPool) Get() *Buffer {
-	key := pool.Next()
-	return pool.buf[pool.consistent.FindBlock(key)]
+	var buf *Buffer
+	select {
+	case buf = <-pool.buf:
+	default:
+	}
+	if buf == nil {
+		buf = &Buffer{internal: buffer{maxSize: pool.targetSize}}
+	}
+	return buf
 }
 
-// Put reset data under shard for given key
+// Put reset the buffer and put it to the pool
 func (pool *BufferPool) Put(buf *Buffer) {
 	buf.internal.reset()
+	select {
+	case pool.buf <- buf:
+	default:
+	}
 }
 
+// Write writes to buffer
 func (buf *Buffer) Write(p []byte) (int, error) {
 	buf.Lock()
 	defer buf.Unlock()
@@ -43,7 +52,7 @@ func (buf *Buffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Get gets data for the provided key
+// Bytes gets data for from the internal buffer
 func (buf *Buffer) Bytes() []byte {
 	buf.RLock()
 	defer buf.RUnlock()
@@ -51,18 +60,18 @@ func (buf *Buffer) Bytes() []byte {
 	return data
 }
 
+// Size internal buffer size
 func (buf *Buffer) Size() int64 {
 	buf.RLock()
 	defer buf.RUnlock()
 	return buf.internal.size
 }
 
-// BufferPool represents the thread safe circular buffer pool.
+// BufferPool represents the thread safe buffer pool.
 // All BufferPool methods are safe for concurrent use by multiple goroutines.
 type BufferPool struct {
-	next       uint64
-	buf        []*Buffer
-	consistent *hash.Consistent
+	targetSize int64
+	buf        chan *Buffer
 }
 
 // NewBufferPool creates a new buffer pool. Minimum memroy size is 1GB
@@ -71,34 +80,25 @@ func NewBufferPool(size int64) *BufferPool {
 		size = maxBufferSize
 	}
 
-	b := &BufferPool{
-		buf:        make([]*Buffer, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+	pool := &BufferPool{
+		targetSize: size,
+		buf:        make(chan *Buffer, nShards),
 	}
 
-	for i := 0; i < nShards; i++ {
-		buff, err := newTable(size)
-		if err != nil {
-			return b
+	go pool.drain()
+
+	return pool
+}
+
+func (pool *BufferPool) drain() {
+	ticker := time.NewTicker(30 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case <-pool.buf:
+			default:
+			}
 		}
-		b.buf[i] = &Buffer{internal: buffer{bufTable: buff}}
 	}
-
-	return b
-}
-
-func (pool *BufferPool) Size() int64 {
-	size := int64(0)
-	for i := 0; i < nShards; i++ {
-		shard := pool.buf[i]
-		shard.RLock()
-		size += shard.internal.size
-		shard.RUnlock()
-	}
-
-	return size
-}
-
-func (pool *BufferPool) Next() uint64 {
-	return atomic.AddUint64(&pool.next, 1)
 }

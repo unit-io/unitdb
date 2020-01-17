@@ -2,12 +2,10 @@ package message
 
 import (
 	"sync"
-
-	"github.com/unit-io/tracedb/hash"
 )
 
 const (
-	nMutex = 16
+	// nMutex = 16
 
 	nul = 0x0
 )
@@ -54,29 +52,6 @@ func (ss *ssid) contains(value uint64) bool {
 	return false
 }
 
-type concurrentMutex struct {
-	sync.Mutex // mutex to guard access to internal map.
-}
-
-type trieMutex struct {
-	m          []*concurrentMutex
-	consistent *hash.Consistent
-}
-
-// newTrieMutex creates a new concurrent mutex.
-func newTrieMutex() trieMutex {
-	mu := trieMutex{
-		m:          make([]*concurrentMutex, nMutex),
-		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
-	}
-
-	for i := 0; i < nMutex; i++ {
-		mu.m[i] = &concurrentMutex{}
-	}
-
-	return mu
-}
-
 type key struct {
 	query     uint32
 	wildchars uint8
@@ -119,39 +94,33 @@ func NewPartTrie() *partTrie {
 // Trie trie data structure to store topic parts
 type Trie struct {
 	sync.RWMutex
-	trieMutex
+	Mutex
 	partTrie *partTrie
 	count    int // Number of Trie in the Trie.
 }
 
 // NewTrie new trie creates a Trie with an initialized Trie.
+// Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
 func NewTrie() *Trie {
 	trie := &Trie{
-		trieMutex: newTrieMutex(),
-		partTrie:  NewPartTrie(),
+		Mutex:    NewMutex(),
+		partTrie: NewPartTrie(),
 	}
 
 	return trie
 }
 
-// getMutext returns mutex under given contract
-func (t *Trie) getMutex(contract uint64) *concurrentMutex {
-	t.RLock()
-	defer t.RUnlock()
-	return t.m[t.consistent.FindBlock(contract)]
-}
-
-// Count returns the number of Trie.
+// Count returns the number of entries in Trie.
 func (t *Trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
 	return t.count
 }
 
-// Add adds message seq to the topic trie.
+// Add adds a message seq to topic trie.
 func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (added bool) {
 	// Get mutex
-	mu := t.getMutex(contract)
+	mu := t.GetMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -160,7 +129,9 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 			query:     p.Query,
 			wildchars: p.Wildchars,
 		}
+		t.RLock()
 		child, ok := curr.children[k]
+		t.RUnlock()
 		if !ok {
 			child = &part{
 				k:        k,
@@ -168,7 +139,9 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 				parent:   curr,
 				children: make(map[key]*part),
 			}
+			t.Lock()
 			curr.children[k] = child
+			t.Unlock()
 		}
 		curr = child
 	}
@@ -182,9 +155,9 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 	return
 }
 
-// Remove remove the message seq of the topic trie
+// Remove removes a message seq from topic trie
 func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) {
-	mu := t.getMutex(contract)
+	mu := t.GetMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -194,7 +167,9 @@ func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) 
 			query:     part.Query,
 			wildchars: part.Wildchars,
 		}
+		t.RLock()
 		child, ok := curr.children[k]
+		t.RUnlock()
 		if !ok {
 			removed = false
 			// message seq doesn't exist.
@@ -202,23 +177,24 @@ func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) 
 		}
 		curr = child
 	}
-	// Remove the message seq and decrement the counter
+	// Remove a message seq and decrement the counter
 	if ok := curr.ss.remove(seq); ok {
 		removed = true
 		t.count--
 	}
 	// Remove orphans
+	t.Lock()
+	defer t.Unlock()
 	if len(curr.ss) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
 	return
 }
 
-// Lookup returns the seq set for the given topic.
+// Lookup returns seq set for given topic.
 func (t *Trie) Lookup(contract uint64, parts []Part) (ss ssid) {
-	mu := t.getMutex(contract)
-	mu.Lock()
-	defer mu.Unlock()
+	t.RLock()
+	defer t.RUnlock()
 	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
 	return
 }

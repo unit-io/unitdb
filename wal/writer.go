@@ -34,7 +34,7 @@ type Writer struct {
 	writeCompleted chan struct{}
 }
 
-// NewWriter returns new writer to write to log ahead log file
+// NewWriter returns new writer to write to write ahead log file
 func (wal *WAL) NewWriter() (writer Writer, err error) {
 	if err := wal.ok(); err != nil {
 		return writer, err

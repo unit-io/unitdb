@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -74,7 +75,7 @@ type (
 	DB struct {
 		// Need 64-bit alignment.
 		mu sync.RWMutex
-		mutex
+		message.Mutex
 		mac            *crypto.MAC
 		writeLockC     chan struct{}
 		commitLockC    chan struct{}
@@ -140,7 +141,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		mutex:       newMutex(),
+		Mutex:       message.NewMutex(),
 		index:       index,
 		data:        dataTable{table: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
 		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
@@ -367,8 +368,8 @@ func (db *DB) Close() error {
 		return err
 	}
 
-	// Clear memdbs.
-	db.clearMems()
+	// close memdb
+	db.mem.Close()
 
 	var err error
 	if db.closer != nil {
@@ -458,7 +459,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 	}
 
-	mu := db.getMutex(q.contract)
+	mu := db.GetMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	q.seqs = db.trie.Lookup(q.contract, q.parts)
@@ -572,7 +573,8 @@ func (db *DB) sync() error {
 	return nil
 }
 
-// Sync commits the contents of the database to the backing FileSystem; this is effectively a noop for an in-memory database. It must only be called while the database is opened.
+// Sync commits the contents of the database to the backing FileSystem.
+// It must only be called while the database is opened.
 func (db *DB) Sync() error {
 	// write to db happens synchronously
 	db.syncLockC <- struct{}{}
@@ -688,7 +690,7 @@ func (db *DB) ExpireOldEntries() {
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
-		mu := db.getMutex(contract)
+		mu := db.GetMutex(contract)
 		mu.Lock()
 		mu.Unlock()
 		db.delete(entry.seq)
@@ -722,7 +724,7 @@ func (db *DB) NewContract() (uint32, error) {
 	return contract, nil
 }
 
-// NewID generates new ID that is later used client program to EntryPut or EntryDelete.
+// NewID generates new ID that is later used in client program to put entry or delete entry.
 func (db *DB) NewID() []byte {
 	return message.NewID(db.nextSeq(), false)
 }
@@ -792,14 +794,14 @@ func (db *DB) setEntry(e *Entry) error {
 	return nil
 }
 
-// Put sets the entry for the given message. It uses default Contract to put entry into db.
+// Put puts entry to db. It uses default Contract to put entry into db.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (db *DB) Put(topic, value []byte) error {
 	return db.PutEntry(NewEntry(topic, value))
 }
 
-// PutEntry sets the entry for the given message.
+// PutEntry puts entry to the db, if contract is not specifies then it uses master contract.
 // It is safe to modify the contents of the argument after PutEntry returns but not
 // before.
 func (db *DB) PutEntry(e *Entry) error {
@@ -861,7 +863,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	return nil
 }
 
-// entryData marshal entry along with message data
+// packentry marshal entry along with message data
 func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.count == MaxKeys {
 		return nil, errFull
@@ -884,7 +886,7 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	return data, nil
 }
 
-// tinyCommit commits tinyBatch with size less than entriesPerBlock
+// commit commits batches to write ahead log
 func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	if err := db.ok(); err != nil {
 		return err
@@ -923,14 +925,14 @@ func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	return nil
 }
 
-// Put sets the entry for the given message. It uses default Contract to put entry into db.
-// It is safe to modify the contents of the argument after Put returns but not
+// Delete sets entry for deletion.
+// It is safe to modify the contents of the argument after Delete returns but not
 // before.
 func (db *DB) Delete(id, topic []byte) error {
 	return db.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
-// DeleteEntry delets an entry from database. you must provide an ID to delete message.
+// DeleteEntry delets an entry from db. you must provide an ID to delete an entry.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
@@ -962,7 +964,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	id := message.ID(e.ID)
 	contract := message.Contract(topic.Parts)
 	id.AddContract(contract)
-	mu := db.getMutex(contract)
+	mu := db.GetMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	if ok := db.trie.Remove(contract, topic.Parts, id.Seq()); ok {
@@ -1044,4 +1046,22 @@ func (db *DB) getSeq() uint64 {
 
 func (db *DB) nextSeq() uint64 {
 	return atomic.AddUint64(&db.seq, 1)
+}
+
+// Set closed flag; return true if not already closed.
+func (db *DB) setClosed() bool {
+	return atomic.CompareAndSwapUint32(&db.closed, 0, 1)
+}
+
+// Check whether DB was closed.
+func (db *DB) isClosed() bool {
+	return atomic.LoadUint32(&db.closed) != 0
+}
+
+// Check read ok status.
+func (db *DB) ok() error {
+	if db.isClosed() {
+		return errors.New("wal is closed.")
+	}
+	return nil
 }
