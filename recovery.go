@@ -40,8 +40,8 @@ func truncateFiles(db *DB) error {
 	return nil
 }
 
-func getUsedBlocks(db *DB) (uint64, []userdblock, error) {
-	var itemCount uint64
+func getUsedBlocks(db *DB) (int64, []userdblock, error) {
+	var itemCount int64
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		off := blockOffset(blockIdx)
@@ -118,9 +118,7 @@ func (db *DB) recover() error {
 
 func (db *DB) recoverLog() error {
 	db.closeW.Add(1)
-	db.mu.Lock()
 	defer func() {
-		db.mu.Unlock()
 		db.closeW.Done()
 	}()
 	seqs, err := db.wal.Scan()
@@ -160,7 +158,7 @@ func (db *DB) recoverLog() error {
 			if entryIdx == -1 {
 				continue
 			}
-			db.count++
+			db.incount()
 			moffset := e.mSize()
 			m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(m); err != nil {

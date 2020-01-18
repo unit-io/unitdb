@@ -145,27 +145,21 @@ func TestBatch(t *testing.T) {
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
 		// wg.Add(1)
 		for i = 0; i < n; i++ {
+			itopic := append(topic, []byte("?ttl=1m")...)
 			val := []byte("msg.")
 			val = append(val, i)
-			if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+			if err := b.PutEntry(&Entry{Topic: itopic, Payload: val, Contract: contract}); err != nil {
 				t.Fatal(err)
 			}
 		}
 		err := b.Write()
-		//// it seems we could use wait group in test function
-		// go func() {
-		// 	<-completed // it signals batch has completed and fully committed to log
-		// 	verifyMsgsAndClose()
-		// 	wg.Done()
-		// }()
 		return err
 	})
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// wg.Wait()
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -195,18 +189,14 @@ func TestBatchGroup(t *testing.T) {
 	batch := func(b *Batch, completed <-chan struct{}) error {
 		// wg.Add(1)
 		for i = 0; i < n; i++ {
+			itopic := append(topic, []byte("?ttl=10s")...)
 			val := []byte("msg.")
 			val = append(val, i)
-			if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+			if err := db.PutEntry(&Entry{Topic: itopic, Payload: val, Contract: contract}); err != nil {
 				t.Fatal(err)
 			}
 		}
 		err := b.Write()
-		//// it seems we could use wait group in test function
-		// go func() {
-		// 	<-completed // it signals batch has completed and fully committed to log
-		// 	wg.Done()
-		// }()
 		return err
 	}
 
@@ -261,7 +251,7 @@ func TestExpiry(t *testing.T) {
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
 		// wg.Add(1)
 		for i = 0; i < n; i++ {
-			itopic := append(topic, []byte("?ttl=1s")...)
+			itopic := append(topic, []byte("?ttl=10s")...)
 			val := []byte("msg.")
 			val = append(val, i)
 			if err := db.PutEntry(&Entry{Topic: itopic, Payload: val, Contract: contract}); err != nil {

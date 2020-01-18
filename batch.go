@@ -3,7 +3,6 @@ package tracedb
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
 
 	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/hash"
@@ -11,16 +10,10 @@ import (
 	"github.com/unit-io/tracedb/uid"
 )
 
-const (
-	batchHeaderLen = 8 + 4
-	batchGrowRec   = 3000
-)
-
 // BatchOptions is used to set options when using batch operation
 type BatchOptions struct {
 	// In concurrent batch writes order determines how to handle conflicts
 	Order           int8
-	Size            int64
 	Topic           []byte
 	Contract        uint32
 	Encryption      bool
@@ -30,7 +23,6 @@ type BatchOptions struct {
 // DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
 var DefaultBatchOptions = &BatchOptions{
 	Order:           0,
-	Size:            1 << 33,
 	Topic:           nil,
 	Contract:        message.MasterContract,
 	Encryption:      false,
@@ -48,7 +40,7 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 
 type (
 	batchInfo struct {
-		entryCount uint16
+		entryCount int
 	}
 
 	batchIndex struct {
@@ -69,7 +61,7 @@ type (
 		buffer *bpool.Buffer
 		size   int64
 		logs   []log
-		mu     sync.Mutex
+		// mu     sync.Mutex
 
 		db            *DB
 		index         []batchIndex
@@ -112,13 +104,14 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
+	e.encryption = b.opts.Encryption
 	b.db.setEntry(e)
 	var key uint32
 	if !b.opts.AllowDuplicates {
 		key = hash.WithSalt(e.val, topic.GetHashCode())
 	}
 	// Encryption.
-	if b.opts.Encryption == true {
+	if e.encryption {
 		e.val = b.db.mac.Encrypt(nil, e.val)
 	}
 
@@ -282,11 +275,10 @@ func (b *Batch) Abort() {
 
 // Reset resets the batch.
 func (b *Batch) Reset() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	// b.mu.Lock()
+	// defer b.mu.Unlock()
 	b.entryCount = 0
 	b.db.bufPool.Put(b.buffer)
-	// b.buffer.Reset()
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
 }
@@ -318,12 +310,15 @@ func (b *Batch) uniq() []batchIndex {
 }
 
 func (b *Batch) append(bnew *Batch) {
+	if bnew.Len() == 0 {
+		return
+	}
 	off := b.size
 	for _, idx := range bnew.index {
 		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
-	// b.buffer.Write(bnew.buffer.Bytes())
+	b.buffer.Write(bnew.buffer.Bytes())
 }
 
 // _assert will panic with a given formatted message if the given condition is false.

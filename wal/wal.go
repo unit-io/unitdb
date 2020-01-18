@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/unit-io/tracedb/bpool"
-	"github.com/unit-io/tracedb/fs"
 )
 
 const (
@@ -44,18 +43,21 @@ type (
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown
-		wg         sync.WaitGroup
-		writeLockC chan struct{}
+		wg sync.WaitGroup
+		mu sync.RWMutex
 
 		// nextSeq is recoved sequence
 		seq uint64
+
+		// count is total logs in wal
+		count int64
 
 		opts Options
 		logs []logInfo
 
 		bufPool *bpool.BufferPool
 		logFile file
-		lock    fs.LockFile
+		// lock    fs.LockFile
 
 		closed uint32
 	}
@@ -71,9 +73,9 @@ type (
 func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
-		writeLockC: make(chan struct{}, 1),
-		opts:       opts,
-		bufPool:    bpool.NewBufferPool(opts.TargetSize),
+		// writeLockC: make(chan struct{}, 1),
+		opts:    opts,
+		bufPool: bpool.NewBufferPool(opts.TargetSize),
 	}
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
@@ -111,7 +113,7 @@ func (wal *WAL) writeHeader() error {
 	h := header{
 		signature:     signature,
 		version:       version,
-		upperSequence: wal.seq,
+		upperSequence: atomic.LoadUint64(&wal.seq),
 		freeBlock: freeBlock{
 			offset:     wal.logFile.fb.offset,
 			size:       wal.logFile.fb.size,
@@ -169,8 +171,10 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
-	l := len(wal.logs)
-	for i := 0; i < l; i++ {
+	l := wal.Count()
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+	for i := int64(0); i < l; i++ {
 		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
 			wal.logs[i].entryCount = log.entryCount
@@ -179,15 +183,17 @@ func (wal *WAL) put(log logInfo) error {
 			return nil
 		}
 	}
-
+	wal.incount()
 	wal.logs = append(wal.logs, log)
 	return nil
 }
 
 // Scan provides list of sequences written to the log but not yet fully applied
 func (wal *WAL) Scan() (seqs []uint64, err error) {
-	l := len(wal.logs)
-	for i := 0; i < l; i++ {
+	l := wal.Count()
+	wal.mu.RLock()
+	defer wal.mu.RUnlock()
+	for i := int64(0); i < l; i++ {
 		if wal.logs[i].status == logStatusWritten {
 			seqs = append(seqs, wal.logs[i].seq)
 		}
@@ -205,8 +211,10 @@ type Reader struct {
 
 // Read reads log for the given seq and returns Reader iterator
 func (wal *WAL) Read(seq uint64) (*Reader, error) {
-	l := len(wal.logs)
-	for i := 0; i < l; i++ {
+	l := wal.Count()
+	wal.mu.RLock()
+	defer wal.mu.RUnlock()
+	for i := int64(0); i < l; i++ {
 		if wal.logs[i].seq == seq && wal.logs[i].entryCount > 0 {
 			ul := wal.logs[i]
 			data, err := wal.logFile.readRaw(ul.offset+int64(logHeaderSize), int64(ul.size))
@@ -235,8 +243,12 @@ func (r *Reader) Next() ([]byte, bool) {
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
 func (wal *WAL) SignalLogApplied(seq uint64) error {
+	wal.mu.Lock()
 	wal.wg.Add(1)
-	defer wal.wg.Done()
+	defer func() {
+		wal.wg.Done()
+		wal.mu.Unlock()
+	}()
 
 	// sort wal logs by offset so that adjacent free blocks can be merged
 	sort.Slice(wal.logs[:], func(i, j int) bool {
@@ -275,6 +287,16 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	return nil
 }
 
+// Count count returns total number logs in wal
+func (wal *WAL) Count() int64 {
+	return atomic.LoadInt64(&wal.count)
+}
+
+// Count count returns total number logs in wal
+func (wal *WAL) incount() int64 {
+	return atomic.AddInt64(&wal.count, 1)
+}
+
 // NextSeq next sequence to use in log write function
 func (wal *WAL) NextSeq() uint64 {
 	return atomic.AddUint64(&wal.seq, 1)
@@ -282,9 +304,6 @@ func (wal *WAL) NextSeq() uint64 {
 
 //Sync syncs log entries to disk
 func (wal *WAL) Sync() error {
-	// wal.wg.Add(1)
-	// defer wal.wg.Done()
-
 	wal.writeHeader()
 	return wal.logFile.Sync()
 }

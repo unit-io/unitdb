@@ -99,8 +99,8 @@ func main() {
 		}
 	}(1)
 
-	// print([]byte("unit8.c.c1?last=30m"), db)
-	// print([]byte("unit8.c.c11?last=30m"), db)
+	print([]byte("unit8.c.c1?last=30m"), db)
+	print([]byte("unit8.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 1
@@ -170,7 +170,7 @@ func main() {
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		t, _ := time.Now().MarshalText()
-		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl3?ttl=3m"), t))
+		b.PutEntry(tracedb.NewEntry([]byte(""), t))
 		err := b.Write()
 
 		return err

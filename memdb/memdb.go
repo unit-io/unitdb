@@ -83,7 +83,7 @@ func (db *DB) startBufferShrinker(interval time.Duration) {
 			case <-db.closeC:
 				return
 			case <-shrinkerTicker.C:
-				memSize, err := db.FileSize()
+				memSize, err := db.Size()
 				if err == nil && float64(memSize) > float64(db.targetSize)*memShrinkFactor {
 					db.shrinkDataTable()
 				}
@@ -139,9 +139,9 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	// Get shard
 	shard := db.getShard(contract)
 	shard.RLock()
+	defer shard.RUnlock()
 	// Get item from shard.
 	off, ok := shard.cache[key]
-	shard.RUnlock()
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
@@ -212,8 +212,8 @@ func (db *DB) Count() uint64 {
 	return uint64(count)
 }
 
-// FileSize returns the total size of memdb.
-func (db *DB) FileSize() (int64, error) {
+// Size returns the total size of memdb.
+func (db *DB) Size() (int64, error) {
 	size := int64(0)
 	for i := 0; i < nShards; i++ {
 		shard := db.blockCache[i]
