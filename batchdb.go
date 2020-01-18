@@ -14,7 +14,7 @@ import (
 
 type (
 	tinyBatchInfo struct {
-		entryCount uint16
+		entryCount uint32
 	}
 
 	tinyBatch struct {
@@ -22,10 +22,23 @@ type (
 		tinyBatchInfo
 		buffer *bpool.Buffer
 		size   int64
-		logs   []log
-		mu     sync.Mutex
+		// logs   []log
+		mu sync.Mutex
 	}
 )
+
+func (b *tinyBatch) reset() {
+	b.entryCount = 0
+	// b.logs = b.logs[:0]
+}
+
+func (b *tinyBatch) count() uint32 {
+	return atomic.LoadUint32(&b.entryCount)
+}
+
+func (b *tinyBatch) incount() uint32 {
+	return atomic.AddUint32(&b.entryCount, 1)
+}
 
 // batchdb manages the batch execution
 type batchdb struct {
@@ -222,14 +235,8 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 		for {
 			select {
 			case <-tinyBatchWriterTicker.C:
-				if db.tinyBatch.entryCount > 0 {
-					if err := db.commit(db.tinyBatch.entryCount, db.tinyBatch.logs, db.tinyBatch.buffer.Bytes()); err != nil {
-						logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tinyBatch")
-					}
-					db.tinyBatch.mu.Lock()
-					db.tinyBatch.entryCount = 0
-					db.bufPool.Put(db.tinyBatch.buffer)
-					db.tinyBatch.mu.Unlock()
+				if err := db.tinyCommit(); err != nil {
+					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tinyBatch")
 				}
 			case <-db.closeC:
 				return

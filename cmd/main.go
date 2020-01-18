@@ -99,8 +99,8 @@ func main() {
 		}
 	}(1)
 
-	// print([]byte("unit8.c.c1?last=30m"), db)
-	// print([]byte("unit8.c.c11?last=30m"), db)
+	print([]byte("unit8.c.c1?last=30m"), db)
+	print([]byte("unit8.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 1

@@ -40,7 +40,7 @@ func (b *Batch) SetOptions(opts *BatchOptions) {
 
 type (
 	batchInfo struct {
-		entryCount uint16
+		entryCount int
 	}
 
 	batchIndex struct {
@@ -310,12 +310,15 @@ func (b *Batch) uniq() []batchIndex {
 }
 
 func (b *Batch) append(bnew *Batch) {
+	if bnew.Len() == 0 {
+		return
+	}
 	off := b.size
 	for _, idx := range bnew.index {
 		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
-	// b.buffer.Write(bnew.buffer.Bytes())
+	b.buffer.Write(bnew.buffer.Bytes())
 }
 
 // _assert will panic with a given formatted message if the given condition is false.

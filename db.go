@@ -309,13 +309,20 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 		}
 		db.dbInfo.freeblockOff = freeblockOff
 	}
-	db.mu.RLock()
 	h := header{
 		signature: signature,
 		version:   version,
-		dbInfo:    db.dbInfo,
+		dbInfo: dbInfo{
+			encryption:   db.encryption,
+			seq:          atomic.LoadUint64(&db.seq),
+			count:        atomic.LoadInt64(&db.count),
+			nBlocks:      db.nBlocks,
+			blockIndex:   db.blockIndex,
+			freeblockOff: db.freeblockOff,
+			cacheID:      db.cacheID,
+			hashSeed:     db.hashSeed,
+		},
 	}
-	db.mu.RUnlock()
 	return db.index.writeMarshalableAt(h, 0)
 }
 
@@ -439,7 +446,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	//Parse the Key
 	topic.ParseKey(q.Topic)
 	// Parse the topic
-	topic.Parse(q.Contract, true)
+	topic.Parse(q.Contract, false)
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
@@ -536,7 +543,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	//Parse the Key
 	topic.ParseKey(q.Topic)
 	// Parse the topic
-	topic.Parse(q.Contract, true)
+	topic.Parse(q.Contract, false)
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
@@ -630,7 +637,7 @@ func (db *DB) Sync() error {
 				if entryIdx == -1 {
 					continue
 				}
-				db.incCount()
+				db.incount()
 				if e.mOffset, err = db.data.writeRaw(memdata[entrySize:]); err != nil {
 					return err
 				}
@@ -696,7 +703,7 @@ func (db *DB) ExpireOldEntries() {
 		mu.Lock()
 		mu.Unlock()
 		db.delete(entry.seq)
-		db.decCount()
+		db.decount()
 	}
 	if db.syncWrites {
 		db.sync()
@@ -858,8 +865,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 			return err
 		}
-		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: e.contract, seq: memseq})
-		db.tinyBatch.entryCount++
+		db.tinyBatch.incount()
 		db.meter.Puts.Inc(1)
 	}
 
@@ -889,8 +895,57 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	return data, nil
 }
 
+// tinyCommit commits tiny batch to write ahead log
+func (db *DB) tinyCommit() error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.writeLockC <- struct{}{}
+	db.closeW.Add(1)
+	defer func() {
+		db.closeW.Done()
+		<-db.writeLockC
+	}()
+
+	if db.tinyBatch.count() == 0 {
+		return nil
+	}
+
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
+		return err
+	}
+
+	offset := uint32(0)
+	data := db.tinyBatch.buffer.Bytes()
+	logs := make([]log, db.tinyBatch.count())
+	for i := uint32(0); i < db.tinyBatch.count(); i++ {
+		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
+		id := data[offset+entrySize+4 : offset+entrySize+idSize+4]
+		ID := message.ID(id)
+		seq := ID.Seq()
+		contract := ID.Contract()
+		logs = append(logs, log{contract: contract, seq: db.cacheID ^ seq})
+		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
+			return err
+		}
+		offset += dataLen
+	}
+
+	db.meter.InMsgs.Inc(int64(db.tinyBatch.count()))
+	logSeq := db.wal.NextSeq()
+	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
+		return err
+	}
+	db.commitLogQueue.Store(logSeq, logs)
+	db.tinyBatch.reset()
+	db.bufPool.Put(db.tinyBatch.buffer)
+	return nil
+}
+
 // commit commits batches to write ahead log
-func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
+func (db *DB) commit(entryCount int, logs []log, data []byte) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -908,7 +963,7 @@ func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	}
 
 	offset := uint32(0)
-	for i := uint16(0); i < entryCount; i++ {
+	for i := 0; i < entryCount; i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
 		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			return err
@@ -921,9 +976,6 @@ func (db *DB) commit(entryCount uint16, logs []log, data []byte) error {
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	// if err := db.writeHeader(false); err != nil {
-	// 	return err
-	// }
 	db.commitLogQueue.Store(logSeq, logs)
 	return nil
 }
@@ -947,8 +999,6 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
 	}
-	// db.mu.Lock()
-	// defer db.mu.Unlock()
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.MasterContract
@@ -1013,7 +1063,7 @@ func (db *DB) delete(seq uint64) error {
 	}
 	// db.freeslots.free(e.seq)
 	// db.data.free(e.mSize(), e.mOffset)
-	db.decCount()
+	db.decount()
 	if db.syncWrites {
 		return db.sync()
 	}
@@ -1037,37 +1087,24 @@ func (db *DB) FileSize() (int64, error) {
 }
 
 func (db *DB) getSeq() uint64 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.seq
+	return atomic.LoadUint64(&db.seq)
 }
 
 func (db *DB) nextSeq() uint64 {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.seq++
-	return db.seq
+	return atomic.AddUint64(&db.seq, 1)
 }
 
 // Count returns the number of items in the DB.
 func (db *DB) Count() int64 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.count
+	return atomic.LoadInt64(&db.count)
 }
 
-func (db *DB) incCount() int64 {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.count++
-	return db.count
+func (db *DB) incount() int64 {
+	return atomic.AddInt64(&db.count, 1)
 }
 
-func (db *DB) decCount() int64 {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.count--
-	return db.count
+func (db *DB) decount() int64 {
+	return atomic.AddInt64(&db.count, -11)
 }
 
 // Set closed flag; return true if not already closed.

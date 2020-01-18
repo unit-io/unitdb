@@ -181,8 +181,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	func(concurrent int) error {
 		i := 1
 		for {
+			topic := append(topics[i-1], []byte("?ttl=1m")...)
 			eg.Go(func() error {
-				topic := append(topics[i-1], []byte("?ttl=1m")...)
 				for k := 0; k < batchSize; k++ {
 					if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
 						return err
@@ -324,6 +324,12 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	printStats(db)
 	forceGC()
 
+	for contract := range keys {
+		for _, k := range keys[contract] {
+			k = append(k, []byte("?last=1m")...)
+		}
+	}
+
 	start = time.Now()
 	func(concurrent int) error {
 		i := 1
@@ -331,8 +337,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			eg.Go(func() error {
 				for contract := range keys {
 					for _, k := range keys[contract] {
-						topic := append(k, []byte("?last=1m")...)
-						_, err := db.Get(&tracedb.Query{Topic: topic, Contract: contract})
+						_, err := db.Get(&tracedb.Query{Topic: k, Contract: contract})
 						if err != nil {
 							return err
 						}

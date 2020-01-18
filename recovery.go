@@ -118,9 +118,7 @@ func (db *DB) recover() error {
 
 func (db *DB) recoverLog() error {
 	db.closeW.Add(1)
-	db.mu.Lock()
 	defer func() {
-		db.mu.Unlock()
 		db.closeW.Done()
 	}()
 	seqs, err := db.wal.Scan()
@@ -160,7 +158,7 @@ func (db *DB) recoverLog() error {
 			if entryIdx == -1 {
 				continue
 			}
-			db.count++
+			db.incount()
 			moffset := e.mSize()
 			m := data[:moffset]
 			if e.mOffset, err = db.data.writeRaw(m); err != nil {
