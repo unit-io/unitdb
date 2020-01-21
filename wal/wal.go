@@ -145,11 +145,12 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
-		if l.status == logStatusWritten {
-			wal.logs = append(wal.logs, *l)
-		}
-		if l.seq >= wal.seq {
+		if l.seq == 0 || l.seq > wal.seq {
 			break
+		}
+		if l.status == logStatusWritten {
+			wal.incount()
+			wal.logs = append(wal.logs, *l)
 		}
 		offset = l.offset + align512(l.size+int64(logHeaderSize))
 		if offset == wal.logFile.fb.currOffset {
@@ -283,7 +284,9 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	}
 
 	wal.writeHeader()
-
+	if err := wal.Sync(); err != nil {
+		return err
+	}
 	return nil
 }
 

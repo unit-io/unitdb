@@ -113,9 +113,7 @@ func (wb *timeWindowBucket) add(e timeWindowEntry) {
 	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
 	entryTime := int64(time.Unix(int64(e.timeStamp()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, entryTime)
-	// if wb.earliestExpiryHash == 0 {
-	// 	wb.earliestExpiryHash = entryTime
-	// }
+
 	// get windows shard
 	ws := wb.getWindows(uint64(entryTime))
 	ws.Lock()
@@ -124,7 +122,7 @@ func (wb *timeWindowBucket) add(e timeWindowEntry) {
 		ws.windows[entryTime] = timeWindow{entries: append(window.entries, e)}
 	} else {
 		ws.windows[entryTime] = timeWindow{entries: []timeWindowEntry{e}}
-		if wb.earliestExpiryHash > entryTime {
+		if atomic.LoadInt64(&wb.earliestExpiryHash) > entryTime {
 			wb.earliestExpiryHash = entryTime
 		}
 	}
