@@ -109,7 +109,9 @@ func (w *Writer) writeLog(seq uint64) error {
 		size:       int64(w.logSize),
 		offset:     int64(off),
 	}
-	w.wal.put(h)
+	if err := w.wal.put(h); err != nil {
+		return err
+	}
 	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
 		return err
 	}

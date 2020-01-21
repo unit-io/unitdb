@@ -3,6 +3,8 @@ package tracedb
 import (
 	"encoding/binary"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/hash"
@@ -68,6 +70,7 @@ type (
 		pendingWrites []batchIndex
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
+		commitW        sync.WaitGroup
 		commitComplete chan struct{}
 	}
 )
@@ -98,9 +101,12 @@ func (b *Batch) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic, err := b.db.parseTopic(e)
+	topic, ttl, err := b.db.parseTopic(e)
 	if err != nil {
 		return err
+	}
+	if ttl > 0 {
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
@@ -156,7 +162,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic, err := b.db.parseTopic(e)
+	topic, _, err := b.db.parseTopic(e)
 	if err != nil {
 		return err
 	}
@@ -187,7 +193,9 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 }
 
 func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, data []byte) error) error {
-	// // CPU profiling by default
+	if err := b.db.ok(); err != nil {
+		return err
+	} // // CPU profiling by default
 	// defer profile.Start().Stop()
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
@@ -249,8 +257,36 @@ func (b *Batch) Write() error {
 	err := b.writeInternal(func(i int, contract uint64, memseq uint64, data []byte) error {
 		return b.db.mem.Set(contract, memseq, data)
 	})
+	if err != nil {
+		return err
+	}
+	return b.commit()
+}
 
-	return err
+func (b *Batch) commit() error {
+	if b.Len() == 0 || len(b.pendingWrites) == 0 {
+		return nil
+	}
+	logs := make([]log, len(b.logs))
+	copy(logs, b.logs)
+	data := make([]byte, b.buffer.Size())
+	copy(data, b.buffer.Bytes())
+	buf := b.db.bufPool.Get()
+	buf.Write(data)
+	go func() {
+		b.commitW.Add(1)
+		defer func() {
+			b.db.bufPool.Put(buf)
+			b.commitW.Done()
+		}()
+		logSeq, err := b.db.commit(logs, buf.Bytes())
+		if err1 := <-err; err1 != nil {
+			logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
+		}
+		b.db.commitLogQueue.Store(logSeq, logs)
+	}()
+	b.Reset()
+	return nil
 }
 
 // Commit commits changes to the db. In batch operation commit is manages and client progress is not allowed to call commit.
@@ -258,29 +294,26 @@ func (b *Batch) Write() error {
 func (b *Batch) Commit() error {
 	// defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
-	if len(b.pendingWrites) == 0 {
-		return nil
-	}
 
-	b.db.commitQueue <- b
-	return nil
+	return b.commit()
 }
 
 //Abort abort is a batch cleanup operation on batch complete
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
 	b.Reset()
+	b.db.bufPool.Put(b.buffer)
 	b.db = nil
 }
 
 // Reset resets the batch.
 func (b *Batch) Reset() {
-	// b.mu.Lock()
-	// defer b.mu.Unlock()
+	b.buffer.Reset()
 	b.entryCount = 0
-	b.db.bufPool.Put(b.buffer)
+	b.size = 0
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
+	b.logs = b.logs[:0]
 }
 
 func (b *Batch) uniq() []batchIndex {
@@ -318,6 +351,7 @@ func (b *Batch) append(bnew *Batch) {
 		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
+	b.size += bnew.size
 	b.buffer.Write(bnew.buffer.Bytes())
 }
 

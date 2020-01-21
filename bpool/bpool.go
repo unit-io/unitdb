@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	nShards = 32
+	nShards = 2048
 	// maxBufferSize value for maximum memory use for the buffer.
 	maxBufferSize = (int64(1) << 34) - 1
 )
@@ -58,6 +58,20 @@ func (buf *Buffer) Bytes() []byte {
 	defer buf.RUnlock()
 	data, _ := buf.internal.bytes()
 	return data
+}
+
+// Reset reset the buffer
+func (buf *Buffer) Reset() {
+	buf.Lock()
+	defer buf.Unlock()
+	buf.internal.reset()
+}
+
+// Truncate truncates buffer from front and free it
+func (buf *Buffer) Truncate(off int64) {
+	buf.Lock()
+	defer buf.Unlock()
+	buf.internal.truncateFront(off)
 }
 
 // Size internal buffer size

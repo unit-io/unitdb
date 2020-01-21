@@ -21,15 +21,14 @@ type (
 		Id uid.LID
 		tinyBatchInfo
 		buffer *bpool.Buffer
-		size   int64
-		// logs   []log
-		mu sync.Mutex
+		logs   []log
 	}
 )
 
 func (b *tinyBatch) reset() {
+	b.Id = uid.NewLID()
 	b.entryCount = 0
-	// b.logs = b.logs[:0]
+	atomic.StoreUint32(&b.entryCount, 0)
 }
 
 func (b *tinyBatch) count() uint32 {
@@ -83,8 +82,8 @@ func (db *DB) initbatchdb(opts *Options) error {
 	}
 	db.mem = mem
 	db.tinyBatch.buffer = db.bufPool.Get()
+	// add close wait for commits
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
-	db.startBatchCommit()
 	return nil
 }
 
@@ -107,30 +106,12 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	return b.Commit()
-}
-
-func (db *DB) startBatchCommit() {
 	go func() {
-		// roll back in the event of a panic.
-		defer func() {
-			b := <-db.commitQueue
-			b.Abort()
-			close(b.commitComplete)
-		}()
-		for {
-			select {
-			case b := <-db.commitQueue:
-				if err := db.commit(b.entryCount, b.logs, b.buffer.Bytes()); err != nil {
-					logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
-				}
-				b.Abort()
-				close(b.commitComplete)
-			case <-db.closeC:
-				return
-			}
-		}
+		b.commitW.Wait()
+		close(b.commitComplete)
+		// b.Abort()
 	}()
+	return nil
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
@@ -227,9 +208,11 @@ func (g *BatchGroup) writeBatchGroup() error {
 func (db *DB) tinyBatchLoop(interval time.Duration) {
 	// ctx, cancel := context.WithCancel(context.Background())
 	// db.cancelCommit = cancel
+	db.closeW.Add(1)
 	tinyBatchWriterTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {
+			db.closeW.Done()
 			tinyBatchWriterTicker.Stop()
 		}()
 		for {

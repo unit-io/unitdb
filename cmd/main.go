@@ -54,40 +54,43 @@ func main() {
 	print([]byte("unit8?last=1m"), db)
 	print([]byte("unit9?last=1m"), db)
 
+	print([]byte("unit8.c.c1?last=30m"), db)
+	print([]byte("unit8.c.c11?last=30m"), db)
+
 	contract, err := db.NewContract()
 
 	messageId := db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("ttl.ttl1?ttl=3m"),
-		Payload:  []byte("ttl.ttl1.2"),
+		Topic:    []byte("unit1?ttl=3m"),
+		Payload:  []byte("unit1.1"),
 		Contract: contract,
 	})
 
-	printWithContract([]byte("ttl.ttl1?last=2m"), contract, db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("ttl.ttl1"),
+		Topic:    []byte("unit1"),
 		Contract: contract,
 	})
 
-	printWithContract([]byte("ttl.ttl1?last=2m"), contract, db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	func(retry int) {
 		i := 1
-		for range time.Tick(100 * time.Millisecond) {
-			for j := 0; j < 50; j++ {
+		for range time.Tick(1 * time.Millisecond) {
+			for j := 0; j < 5; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1m"), Payload: p, Contract: contract})
+				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1m"), Payload: p})
 
-				db.DeleteEntry(&tracedb.Entry{
-					ID:       messageId,
-					Topic:    []byte("unit8.b.*"),
-					Contract: contract,
-				})
+				// db.DeleteEntry(&tracedb.Entry{
+				// 	ID:       messageId,
+				// 	Topic:    []byte("unit8.b.*"),
+				// 	Contract: contract,
+				// })
 			}
 			if err != nil {
 				log.Printf("Error update1: %s", err)
@@ -99,12 +102,12 @@ func main() {
 		}
 	}(1)
 
-	print([]byte("unit8.c.c1?last=30m"), db)
-	print([]byte("unit8.c.c11?last=30m"), db)
+	// print([]byte("unit8.c.c1?last=30m"), db)
+	// print([]byte("unit8.c.c11?last=30m"), db)
 
 	func(retry int) {
 		i := 1
-		for range time.Tick(100 * time.Millisecond) {
+		for range time.Tick(10 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
 				opts.Topic = []byte("unit8.b.*?ttl=30s")
@@ -114,6 +117,11 @@ func main() {
 				p, _ := t.MarshalText()
 				for j := 0; j < 250; j++ {
 					b.Put(p)
+					if j%100 == 0 {
+						if err := b.Write(); err != nil {
+							return err
+						}
+					}
 				}
 				if err := b.Write(); err != nil {
 					return err
@@ -142,44 +150,31 @@ func main() {
 	messageId = db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("ttl.ttl1?ttl=3m"),
-		Payload:  []byte("ttl.ttl1.3"),
+		Topic:    []byte("unit1?ttl=3m"),
+		Payload:  []byte("unit1.2"),
 		Contract: contract,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	print([]byte("unit1?last=2m"), db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
-		Topic:    []byte("ttl.ttl1"),
+		Topic:    []byte("unit1"),
 		Contract: contract,
 	})
 
-	print([]byte("ttl.ttl1?last=2m"), db)
+	print([]byte("unit1?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		// opts := tracedb.DefaultBatchOptions
 		// opts.Encryption= true
 		// b.SetOptions(opts)
-		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl1?ttl=3m"), []byte("ttl.ttl1.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl2?ttl=3m"), []byte("ttl.ttl2.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("ttl.ttl3?ttl=3m"), []byte("ttl.ttl3.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit1?ttl=3m"), []byte("unit1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit2?ttl=3m"), []byte("unit2.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit3?ttl=3m"), []byte("unit3.1")))
 		err := b.Write()
 		return err
 	})
-
-	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		t, _ := time.Now().MarshalText()
-		b.PutEntry(tracedb.NewEntry([]byte(""), t))
-		err := b.Write()
-
-		return err
-	})
-	if err != nil {
-		log.Print(err)
-	}
-
-	print([]byte("ttl.ttl3?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(&tracedb.Entry{Topic: []byte("unit8.*.b11"), Payload: []byte("unit8.*.b11.1"), Contract: contract})
@@ -254,5 +249,5 @@ func main() {
 	// 		}
 	// 		i++
 	// 	}
-	// }(4)
+	// }(1)
 }

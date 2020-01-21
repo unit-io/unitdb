@@ -757,26 +757,27 @@ func (db *DB) extendBlocks() error {
 	return nil
 }
 
-func (db *DB) parseTopic(e *Entry) (*message.Topic, error) {
+func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 	topic := new(message.Topic)
 	if e.Contract == 0 {
 		e.Contract = message.MasterContract
 	}
 	//Parse the Key
 	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
+	// e.Topic = topic.Topic
 	// Parse the topic
 	topic.Parse(e.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
-		return nil, errBadRequest
+		return nil, 0, errBadRequest
 	}
+	topic.AddContract(e.Contract)
 	// In case of ttl, add ttl to the msg and store to the db
 	if ttl, ok := topic.TTL(); ok {
 		//1410065408 10 sec
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+		// e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+		return topic, ttl, nil
 	}
-	topic.AddContract(e.Contract)
-	return topic, nil
+	return topic, 0, nil
 }
 
 func (db *DB) setEntry(e *Entry) error {
@@ -815,16 +816,15 @@ func (db *DB) Put(topic, value []byte) error {
 // It is safe to modify the contents of the argument after PutEntry returns but not
 // before.
 func (db *DB) PutEntry(e *Entry) error {
-	// start := time.Now()
+	if err := db.ok(); err != nil {
+		return err
+	} // start := time.Now()
 	// defer log.Printf("db.Put %d", time.Since(start).Nanoseconds())
 	// The write happen synchronously.
 	db.writeLockC <- struct{}{}
 	defer func() {
 		<-db.writeLockC
 	}()
-	if err := db.ok(); err != nil {
-		return err
-	}
 	switch {
 	case len(e.Topic) == 0:
 		return errTopicEmpty
@@ -833,9 +833,12 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic, err := db.parseTopic(e)
+	topic, ttl, err := db.parseTopic(e)
 	if err != nil {
 		return err
+	}
+	if ttl > 0 {
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
@@ -919,14 +922,14 @@ func (db *DB) tinyCommit() error {
 
 	offset := uint32(0)
 	data := db.tinyBatch.buffer.Bytes()
-	logs := make([]log, db.tinyBatch.count())
+	db.tinyBatch.logs = make([]log, db.tinyBatch.count())
 	for i := uint32(0); i < db.tinyBatch.count(); i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
 		id := data[offset+entrySize+4 : offset+entrySize+idSize+4]
 		ID := message.ID(id)
 		seq := ID.Seq()
 		contract := ID.Contract()
-		logs = append(logs, log{contract: contract, seq: db.cacheID ^ seq})
+		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: contract, seq: db.cacheID ^ seq})
 		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			return err
 		}
@@ -938,16 +941,18 @@ func (db *DB) tinyCommit() error {
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	db.commitLogQueue.Store(logSeq, logs)
+	db.commitLogQueue.Store(logSeq, db.tinyBatch.logs)
 	db.tinyBatch.reset()
 	db.bufPool.Put(db.tinyBatch.buffer)
 	return nil
 }
 
 // commit commits batches to write ahead log
-func (db *DB) commit(entryCount int, logs []log, data []byte) error {
+func (db *DB) commit(logs []log, data []byte) (uint64, <-chan error) {
+	done := make(chan error, 1)
 	if err := db.ok(); err != nil {
-		return err
+		done <- err
+		return 0, done
 	}
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.writeLockC <- struct{}{}
@@ -959,25 +964,25 @@ func (db *DB) commit(entryCount int, logs []log, data []byte) error {
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		return err
+		done <- err
+		return 0, done
 	}
 
 	offset := uint32(0)
-	for i := 0; i < entryCount; i++ {
+	for i := 0; i < len(logs); i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
-			return err
+		buf := make([]byte, dataLen-4)
+		copy(buf, data[offset+4:offset+dataLen])
+		if err := <-logWriter.Append(buf); err != nil {
+			done <- err
+			return 0, done
 		}
 		offset += dataLen
 	}
 
-	db.meter.InMsgs.Inc(int64(entryCount))
+	db.meter.InMsgs.Inc(int64(len(logs)))
 	logSeq := db.wal.NextSeq()
-	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
-		return err
-	}
-	db.commitLogQueue.Store(logSeq, logs)
-	return nil
+	return logSeq, logWriter.SignalInitWrite(logSeq)
 }
 
 // Delete sets entry for deletion.
