@@ -921,16 +921,17 @@ func (db *DB) tinyCommit() error {
 	}
 
 	offset := uint32(0)
-	data := db.tinyBatch.buffer.Bytes()
+	buf := db.tinyBatch.buffer.Bytes()
 	db.tinyBatch.logs = make([]log, db.tinyBatch.count())
 	for i := uint32(0); i < db.tinyBatch.count(); i++ {
-		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		id := data[offset+entrySize+4 : offset+entrySize+idSize+4]
+		dataLen := binary.LittleEndian.Uint32(buf[offset : offset+4])
+		data := buf[offset+4 : offset+dataLen]
+		id := data[entrySize : entrySize+idSize]
 		ID := message.ID(id)
 		seq := ID.Seq()
 		contract := ID.Contract()
 		db.tinyBatch.logs = append(db.tinyBatch.logs, log{contract: contract, seq: db.cacheID ^ seq})
-		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
+		if err := <-logWriter.Append(data); err != nil {
 			return err
 		}
 		offset += dataLen
@@ -954,13 +955,8 @@ func (db *DB) commit(logs []log, data []byte) (uint64, <-chan error) {
 		done <- err
 		return 0, done
 	}
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
-	defer func() {
-		db.closeW.Done()
-		<-db.writeLockC
-	}()
+	defer db.closeW.Done()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
@@ -971,9 +967,7 @@ func (db *DB) commit(logs []log, data []byte) (uint64, <-chan error) {
 	offset := uint32(0)
 	for i := 0; i < len(logs); i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		buf := make([]byte, dataLen-4)
-		copy(buf, data[offset+4:offset+dataLen])
-		if err := <-logWriter.Append(buf); err != nil {
+		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			done <- err
 			return 0, done
 		}

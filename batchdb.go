@@ -106,12 +106,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	go func() {
-		b.commitW.Wait()
-		close(b.commitComplete)
-		// b.Abort()
-	}()
-	return nil
+	return b.Commit()
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts

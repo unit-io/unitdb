@@ -139,9 +139,9 @@ func (db *DB) recoverLog() error {
 				break
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
-			e := entry{}
-			e.UnmarshalBinary(entryData)
-			startBlockIdx := startBlockIndex(e.seq)
+			logEntry := entry{}
+			logEntry.UnmarshalBinary(entryData)
+			startBlockIdx := startBlockIndex(logEntry.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}
 			if err := b.read(); err != nil {
@@ -149,8 +149,8 @@ func (db *DB) recoverLog() error {
 			}
 			entryIdx := 0
 			for i := 0; i < entriesPerBlock; i++ {
-				ie := b.entries[i]
-				if ie.seq == e.seq { //record exist in db
+				e := b.entries[i]
+				if e.seq == logEntry.seq { //record exist in db
 					entryIdx = -1
 					break
 				}
@@ -159,19 +159,19 @@ func (db *DB) recoverLog() error {
 				continue
 			}
 			db.incount()
-			moffset := e.mSize()
+			moffset := logEntry.mSize()
 			m := data[:moffset]
-			if e.mOffset, err = db.data.writeRaw(m); err != nil {
+			if logEntry.mOffset, err = db.data.writeRaw(m); err != nil {
 				return err
 			}
 			db.meter.Puts.Inc(1)
-			db.meter.InBytes.Inc(int64(e.valueSize))
-			b.entries[b.entryIdx] = e
+			db.meter.InBytes.Inc(int64(logEntry.valueSize))
+			b.entries[b.entryIdx] = logEntry
 			b.entryIdx++
 			if err := b.write(); err != nil {
 				return err
 			}
-			db.filter.Append(e.seq)
+			db.filter.Append(logEntry.seq)
 		}
 		if err := db.sync(); err != nil {
 			return err

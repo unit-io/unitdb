@@ -253,49 +253,51 @@ func (b *Batch) Write() error {
 		b.db.batchQueue <- b
 		return nil
 	}
-
+	if b.Len() == 0 || len(b.pendingWrites) == 0 {
+		return nil
+	}
 	err := b.writeInternal(func(i int, contract uint64, memseq uint64, data []byte) error {
 		return b.db.mem.Set(contract, memseq, data)
 	})
 	if err != nil {
 		return err
 	}
-	return b.commit()
+	logs := append(make([]log, 0, len(b.logs)), b.logs...)
+	buf := b.db.bufPool.Get()
+	buf.Write(b.buffer.Bytes())
+	go func(logs []log, data []byte) error {
+		defer b.db.bufPool.Put(buf)
+		return b.commit(logs, data)
+	}(logs, buf.Bytes())
+	b.Reset()
+	return nil
 }
 
-func (b *Batch) commit() error {
-	if b.Len() == 0 || len(b.pendingWrites) == 0 {
-		return nil
-	}
-	logs := make([]log, len(b.logs))
-	copy(logs, b.logs)
-	data := make([]byte, b.buffer.Size())
-	copy(data, b.buffer.Bytes())
-	buf := b.db.bufPool.Get()
-	buf.Write(data)
-	go func() {
-		b.commitW.Add(1)
-		defer func() {
-			b.db.bufPool.Put(buf)
-			b.commitW.Done()
-		}()
-		logSeq, err := b.db.commit(logs, buf.Bytes())
-		if err1 := <-err; err1 != nil {
-			logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
-		}
-		b.db.commitLogQueue.Store(logSeq, logs)
+func (b *Batch) commit(logs []log, data []byte) error {
+	b.db.writeLockC <- struct{}{}
+	defer func() {
+		<-b.db.writeLockC
 	}()
-	b.Reset()
+	logSeq, err := b.db.commit(logs, data)
+	if err1 := <-err; err1 != nil {
+		logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
+	}
+	b.db.commitLogQueue.Store(logSeq, logs)
 	return nil
 }
 
 // Commit commits changes to the db. In batch operation commit is manages and client progress is not allowed to call commit.
 // On Commit complete batch operation signal to the cliend program if the batch is fully commmited to db.
 func (b *Batch) Commit() error {
-	// defer bufPool.Put(b.tinyBatch.buffer)
 	_assert(!b.managed, "managed tx commit not allowed")
-
-	return b.commit()
+	defer close(b.commitComplete)
+	if b.Len() == 0 || len(b.pendingWrites) == 0 {
+		return nil
+	}
+	logs := append(make([]log, 0, len(b.logs)), b.logs...)
+	buf := b.db.bufPool.Get()
+	buf.Write(b.buffer.Bytes())
+	return b.commit(logs, buf.Bytes())
 }
 
 //Abort abort is a batch cleanup operation on batch complete
@@ -318,8 +320,7 @@ func (b *Batch) Reset() {
 
 func (b *Batch) uniq() []batchIndex {
 	if b.opts.AllowDuplicates {
-		b.pendingWrites = make([]batchIndex, len(b.index))
-		copy(b.pendingWrites, b.index)
+		b.pendingWrites = append(make([]batchIndex, 0, len(b.index)), b.index...)
 		return b.pendingWrites
 	}
 	type indices struct {
