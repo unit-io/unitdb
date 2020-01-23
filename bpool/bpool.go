@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	nShards = 2048
+	maxPoolSize = 2048
 	// maxBufferSize value for maximum memory use for the buffer.
 	maxBufferSize = (int64(1) << 34) - 1
 )
@@ -52,7 +52,7 @@ func (buf *Buffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Bytes gets data for from the internal buffer
+// Bytes gets data from internal buffer
 func (buf *Buffer) Bytes() []byte {
 	buf.RLock()
 	defer buf.RUnlock()
@@ -60,18 +60,11 @@ func (buf *Buffer) Bytes() []byte {
 	return data
 }
 
-// Reset reset the buffer
+// Reset resets the buffer
 func (buf *Buffer) Reset() {
 	buf.Lock()
 	defer buf.Unlock()
 	buf.internal.reset()
-}
-
-// Truncate truncates buffer from front and free it
-func (buf *Buffer) Truncate(off int64) {
-	buf.Lock()
-	defer buf.Unlock()
-	buf.internal.truncateFront(off)
 }
 
 // Size internal buffer size
@@ -96,7 +89,7 @@ func NewBufferPool(size int64) *BufferPool {
 
 	pool := &BufferPool{
 		targetSize: size,
-		buf:        make(chan *Buffer, nShards),
+		buf:        make(chan *Buffer, maxPoolSize),
 	}
 
 	go pool.drain()

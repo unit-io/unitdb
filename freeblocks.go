@@ -98,6 +98,9 @@ type freeblocks struct {
 	size                  int64 // total size of free blocks
 	minimumFreeBlocksSize int64 // minimum free blocks size before free blocks are reused for new allocation.
 	consistent            *hash.Consistent
+
+	// runs once
+	once Once
 }
 
 type freeblock struct {
@@ -107,7 +110,8 @@ type freeblock struct {
 
 type shard struct {
 	blocks       []freeblock
-	sync.RWMutex // Read Write mutex, guards access to internal collection.
+	cache        map[int64]bool // cache free offset
+	sync.RWMutex                // Read Write mutex, guards access to internal collection.
 }
 
 // newFreeBlocks creates a new concurrent freeblocks.
@@ -119,7 +123,7 @@ func newFreeBlocks(minimumSize int64) freeblocks {
 	}
 
 	for i := 0; i <= nShards; i++ {
-		fb.blocks[i] = &shard{}
+		fb.blocks[i] = &shard{cache: make(map[int64]bool)}
 	}
 
 	return fb
@@ -166,6 +170,7 @@ func (s *shard) defrag() {
 	for i := 1; i < l; i++ {
 		if curOff+int64(curSize) == s.blocks[i].offset {
 			curSize += s.blocks[i].size
+			delete(s.cache, s.blocks[i].offset)
 		} else {
 			merged = append(merged, freeblock{size: curSize, offset: curOff})
 			curOff = s.blocks[i].offset
@@ -189,17 +194,15 @@ func (fb *freeblocks) defrag() {
 func (fb *freeblocks) freequeue() {
 	s := fb.blocks[nShards]
 	s.RLock()
-	shard := shard{blocks: s.blocks}
-	s.blocks = nil
+	blocks := append(make([]freeblock, 0, len(s.blocks)), s.blocks...)
+	// shard := shard{blocks: blocks}
+	s.blocks = s.blocks[:0]
 	s.RUnlock()
-	// shard.defrag()
-	for _, b := range shard.blocks {
+	for _, b := range blocks {
 		// Get shard
 		s := fb.getShard(uint64(b.size))
-		// if s.contains(b.offset) == false {
 		s.blocks = append(s.blocks, freeblock{offset: b.offset, size: b.size})
 		fb.size += int64(b.size)
-		// }
 	}
 }
 
@@ -208,8 +211,19 @@ func (fb *freeblocks) free(off int64, size uint32) {
 		panic("unable to free zero bytes")
 	}
 	shard := fb.getShard(uint64(size))
+	shard.Lock()
+	defer shard.Unlock()
+	// Verify that block is not already free.
+	if shard.cache[off] {
+		return
+	}
+	// }
 	shard.blocks = append(shard.blocks, freeblock{offset: off, size: size})
+	shard.cache[off] = true
 	fb.size += int64(size)
+	if len(shard.blocks) > 1000 {
+		fb.freequeue()
+	}
 }
 
 func (fb *freeblocks) allocate(size uint32) int64 {
@@ -220,7 +234,8 @@ func (fb *freeblocks) allocate(size uint32) int64 {
 		return -1
 	}
 	shard := fb.getShard(uint64(size))
-
+	shard.Lock()
+	defer shard.Unlock()
 	if len(shard.blocks) < 100 {
 		return -1
 	}
@@ -237,6 +252,7 @@ func (fb *freeblocks) allocate(size uint32) int64 {
 		shard.blocks[i].size -= size
 		shard.blocks[i].offset += int64(size)
 	}
+	delete(shard.cache, off)
 	fb.size -= int64(size)
 	return off
 }

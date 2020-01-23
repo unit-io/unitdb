@@ -24,7 +24,7 @@ type TopicIterator struct {
 func (it *TopicIterator) Next() {
 	it.topic = nil
 	if len(it.queue) == 0 {
-		for it.nextBlockIdx < it.db.nBlocks {
+		for it.nextBlockIdx < it.db.blocks() {
 			err := func() error {
 				off := blockOffset(it.nextBlockIdx)
 				b := blockHandle{table: it.db.index.FileManager, offset: off}

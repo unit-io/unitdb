@@ -128,6 +128,11 @@ func (db *DB) recoverLog() error {
 	if err := db.extendBlocks(); err != nil {
 		return err
 	}
+	for db.wal.Blocks() > db.blockIndex {
+		if _, err := db.newBlock(); err != nil {
+			return err
+		}
+	}
 	for _, s := range seqs {
 		it, err := db.wal.Read(s)
 		if err != nil {
@@ -141,9 +146,6 @@ func (db *DB) recoverLog() error {
 			entryData, data := logData[:entrySize], logData[entrySize:]
 			logEntry := entry{}
 			logEntry.UnmarshalBinary(entryData)
-			if db.seq < logEntry.seq {
-				db.newBlock()
-			}
 			startBlockIdx := startBlockIndex(logEntry.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}

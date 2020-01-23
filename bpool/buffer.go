@@ -69,17 +69,6 @@ func (b *buffer) truncate(size int64) error {
 	return nil
 }
 
-func (b *buffer) truncateFront(off int64) error {
-	if off > b.size {
-		b.buf = nil
-		b.size = 0
-		return nil
-	}
-	b.buf = b.buf[off:b.size]
-	b.size = b.size - off
-	return nil
-}
-
 func (b *buffer) slice(start int64, end int64) ([]byte, error) {
 	return b.buf[start:end], nil
 }

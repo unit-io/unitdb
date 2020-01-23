@@ -38,7 +38,7 @@ const (
 	// keyExpirationMaxDur expired keys are deleted from db after durType*keyExpirationMaxDur.
 	// For example if durType is Minute and keyExpirationMaxDur then
 	// all expired keys are deleted from db in 5 minutes
-	keyExpirationMaxDur = 1
+	keyExpirationMaxDur = 15
 
 	// MaxTopicLength is the maximum size of a topic in bytes.
 	MaxTopicLength = 1 << 16
@@ -144,7 +144,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		Mutex:       message.NewMutex(),
 		index:       index,
 		data:        dataTable{table: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
-		timeWindow:  newTimeWindowBucket(time.Minute, keyExpirationMaxDur),
+		timeWindow:  newTimeWindowBucket(time.Second, keyExpirationMaxDur),
 		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
 		lock:        lock,
 		writeLockC:  make(chan struct{}, 1),
@@ -254,10 +254,10 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	// db.startSyncer(opts.BackgroundSyncInterval)
+	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
-		db.startExpirer(time.Minute, keyExpirationMaxDur)
+		db.startExpirer(time.Second, keyExpirationMaxDur)
 	}
 	return db, nil
 }
@@ -316,7 +316,7 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 			encryption:   db.encryption,
 			seq:          atomic.LoadUint64(&db.seq),
 			count:        atomic.LoadInt64(&db.count),
-			nBlocks:      db.nBlocks,
+			nBlocks:      atomic.LoadUint32(&db.nBlocks),
 			blockIndex:   db.blockIndex,
 			freeblockOff: db.freeblockOff,
 			cacheID:      db.cacheID,
@@ -685,12 +685,12 @@ func (db *DB) Sync() error {
 // ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
 func (db *DB) ExpireOldEntries() {
 	// expiry happens synchronously
-	db.expiryLockC <- struct{}{}
+	db.syncLockC <- struct{}{}
 	defer func() {
-		<-db.expiryLockC
+		<-db.syncLockC
 	}()
 	expiredEntries := db.timeWindow.expireOldEntries()
-	// fmt.Println("db.ExpireOldEntries: expiry count ", len(expiredEntries))
+	fmt.Println("db.ExpireOldEntries: expiry count ", len(expiredEntries))
 	for _, expiredEntry := range expiredEntries {
 		e := expiredEntry.(entry)
 		/// Test filter block if message hash presence
@@ -705,6 +705,9 @@ func (db *DB) ExpireOldEntries() {
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
 		db.trie.Remove(contract, topic.Parts, e.seq)
+		db.freeslots.free(e.seq)
+		db.data.free(e.mSize(), e.mOffset)
+		db.decount()
 	}
 }
 
@@ -739,7 +742,7 @@ func (db *DB) NewID() []byte {
 // newBlock adds new block to db table and return block offset
 func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
-	db.nBlocks++
+	db.addblock()
 	db.blockIndex++
 	return off, err
 }
@@ -937,6 +940,7 @@ func (db *DB) tinyCommit() error {
 
 	db.meter.InMsgs.Inc(int64(db.tinyBatch.count()))
 	logSeq := db.wal.NextSeq()
+	db.wal.SetBlocks(db.blocks())
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
@@ -974,6 +978,7 @@ func (db *DB) commit(logs []log, data []byte) (uint64, <-chan error) {
 
 	db.meter.InMsgs.Inc(int64(len(logs)))
 	logSeq := db.wal.NextSeq()
+	db.wal.SetBlocks(db.blocks())
 	return logSeq, logWriter.SignalInitWrite(logSeq)
 }
 
@@ -1096,12 +1101,54 @@ func (db *DB) Count() int64 {
 	return atomic.LoadInt64(&db.count)
 }
 
+// Count returns the number of items in the DB.
+func (db *DB) blocks() uint32 {
+	return atomic.LoadUint32(&db.nBlocks)
+}
+
+// Count returns the number of items in the DB.
+func (db *DB) addblock() uint32 {
+	return atomic.AddUint32(&db.nBlocks, 1)
+}
+
 func (db *DB) incount() int64 {
 	return atomic.AddInt64(&db.count, 1)
 }
 
 func (db *DB) decount() int64 {
 	return atomic.AddInt64(&db.count, -11)
+}
+
+// Once is an object that will perform exactly one action
+// until Reset is called.
+// See http://golang.org/pkg/sync/#Once
+type Once struct {
+	m    sync.Mutex
+	done uint32
+}
+
+// Do simulates sync.Once.Do by executing the specified function
+// only once, until Reset is called.
+// See http://golang.org/pkg/sync/#Once
+func (o *Once) Do(f func()) {
+	if atomic.LoadUint32(&o.done) == 1 {
+		return
+	}
+	// Slow-path.
+	o.m.Lock()
+	defer o.m.Unlock()
+	if o.done == 0 {
+		defer atomic.StoreUint32(&o.done, 1)
+		f()
+	}
+}
+
+// Reset indicates that the next call to Do should actually be called
+// once again.
+func (o *Once) Reset() {
+	o.m.Lock()
+	defer o.m.Unlock()
+	atomic.StoreUint32(&o.done, 0)
 }
 
 // Set closed flag; return true if not already closed.

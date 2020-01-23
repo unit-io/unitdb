@@ -49,6 +49,9 @@ type (
 		// nextSeq is recoved sequence
 		seq uint64
 
+		// db blocks
+		nBlocks uint32
+
 		// count is total logs in wal
 		count int64
 
@@ -114,6 +117,7 @@ func (wal *WAL) writeHeader() error {
 		signature:     signature,
 		version:       version,
 		upperSequence: atomic.LoadUint64(&wal.seq),
+		nBlocks:       atomic.LoadUint32(&wal.nBlocks),
 		freeBlock: freeBlock{
 			offset:     wal.logFile.fb.offset,
 			size:       wal.logFile.fb.size,
@@ -303,6 +307,20 @@ func (wal *WAL) incount() int64 {
 // NextSeq next sequence to use in log write function
 func (wal *WAL) NextSeq() uint64 {
 	return atomic.AddUint64(&wal.seq, 1)
+}
+
+// SetBlocks sets total blocks in db
+func (wal *WAL) SetBlocks(nblocks uint32) {
+	wal.mu.Lock()
+	defer wal.mu.Unlock()
+	if wal.nBlocks < nblocks {
+		wal.nBlocks = nblocks
+	}
+}
+
+// Blocks gets total blocks in db
+func (wal *WAL) Blocks() uint32 {
+	return atomic.LoadUint32(&wal.nBlocks)
 }
 
 //Sync syncs log entries to disk
