@@ -53,7 +53,7 @@ func (src *Options) copyWithDefaults() *Options {
 	if src != nil {
 		opts = *src
 	}
-	opts.BackgroundKeyExpiry = false
+	opts.BackgroundKeyExpiry = true
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
 	}

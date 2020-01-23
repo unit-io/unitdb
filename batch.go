@@ -253,14 +253,14 @@ func (b *Batch) Write() error {
 		b.db.batchQueue <- b
 		return nil
 	}
-	if b.Len() == 0 || len(b.pendingWrites) == 0 {
-		return nil
-	}
 	err := b.writeInternal(func(i int, contract uint64, memseq uint64, data []byte) error {
 		return b.db.mem.Set(contract, memseq, data)
 	})
 	if err != nil {
 		return err
+	}
+	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
+		return nil
 	}
 	logs := append(make([]log, 0, len(b.logs)), b.logs...)
 	buf := b.db.bufPool.Get()
@@ -291,7 +291,7 @@ func (b *Batch) commit(logs []log, data []byte) error {
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	defer close(b.commitComplete)
-	if b.Len() == 0 || len(b.pendingWrites) == 0 {
+	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
 	logs := append(make([]log, 0, len(b.logs)), b.logs...)

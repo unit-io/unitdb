@@ -141,6 +141,9 @@ func (db *DB) recoverLog() error {
 			entryData, data := logData[:entrySize], logData[entrySize:]
 			logEntry := entry{}
 			logEntry.UnmarshalBinary(entryData)
+			if db.seq < logEntry.seq {
+				db.newBlock()
+			}
 			startBlockIdx := startBlockIndex(logEntry.seq)
 			off := blockOffset(startBlockIdx)
 			b := &blockHandle{table: db.index, offset: off}

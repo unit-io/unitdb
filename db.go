@@ -254,7 +254,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	// loadTrie loads topic into trie on opening an existing database file.
 	db.loadTrie()
 
-	db.startSyncer(opts.BackgroundSyncInterval)
+	// db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, keyExpirationMaxDur)
@@ -478,47 +478,52 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if len(q.seqs) > int(q.Limit) {
 		q.seqs = q.seqs[:q.Limit]
 	}
-
-	for _, seq := range q.seqs {
-		err = func() error {
-			e, err := db.readEntry(q.contract, seq)
-			if err != nil {
-				return err
-			}
-			if e.isExpired() {
-				if ok := db.trie.Remove(q.contract, q.parts, seq); ok {
-					db.timeWindow.add(e)
-				}
-				// if id is expired it does not return an error but continue the iteration
-				return nil
-			}
-			id, val, err := db.data.readMessage(e)
-			if err != nil {
-				return err
-			}
-			_id := message.ID(id)
-			if !_id.EvalPrefix(q.contract, q.cutoff) {
-				return nil
-			}
-
-			if _id.IsEncrypted() {
-				val, err = db.mac.Decrypt(nil, val)
+	for {
+		for _, seq := range q.seqs {
+			err = func() error {
+				e, err := db.readEntry(q.contract, seq)
 				if err != nil {
 					return err
 				}
-			}
-			var buffer []byte
-			val, err = snappy.Decode(buffer, val)
+				if e.isExpired() {
+					if ok := db.trie.Remove(q.contract, q.parts, seq); ok {
+						db.timeWindow.add(e)
+					}
+					// if id is expired it does not return an error but continue the iteration
+					return nil
+				}
+				id, val, err := db.data.readMessage(e)
+				if err != nil {
+					return err
+				}
+				_id := message.ID(id)
+				if !_id.EvalPrefix(q.contract, q.cutoff) {
+					return nil
+				}
+
+				if _id.IsEncrypted() {
+					val, err = db.mac.Decrypt(nil, val)
+					if err != nil {
+						return err
+					}
+				}
+				var buffer []byte
+				val, err = snappy.Decode(buffer, val)
+				if err != nil {
+					return err
+				}
+				items = append(items, val)
+				db.meter.OutBytes.Inc(int64(e.valueSize))
+				return nil
+			}()
 			if err != nil {
-				return err
+				return items, err
 			}
-			items = append(items, val)
-			db.meter.OutBytes.Inc(int64(e.valueSize))
-			return nil
-		}()
-		if err != nil {
-			return items, err
 		}
+		if len(q.seqs) < int(q.Limit) || len(items) >= int(q.Limit) {
+			break
+		}
+		q.seqs = q.seqs[len(items) : q.Limit-uint32(len(items))]
 	}
 	db.meter.Gets.Inc(int64(len(items)))
 	db.meter.OutMsgs.Inc(int64(len(items)))
@@ -687,26 +692,19 @@ func (db *DB) ExpireOldEntries() {
 	expiredEntries := db.timeWindow.expireOldEntries()
 	// fmt.Println("db.ExpireOldEntries: expiry count ", len(expiredEntries))
 	for _, expiredEntry := range expiredEntries {
-		entry := expiredEntry.(entry)
+		e := expiredEntry.(entry)
 		/// Test filter block if message hash presence
-		if !db.filter.Test(entry.seq) {
+		if !db.filter.Test(e.seq) {
 			continue
 		}
-		etopic, err := db.data.readTopic(entry)
+		etopic, err := db.data.readTopic(e)
 		if err != nil {
 			continue
 		}
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
-		mu := db.GetMutex(contract)
-		mu.Lock()
-		mu.Unlock()
-		db.delete(entry.seq)
-		db.decount()
-	}
-	if db.syncWrites {
-		db.sync()
+		db.trie.Remove(contract, topic.Parts, e.seq)
 	}
 }
 
@@ -1054,14 +1052,14 @@ func (db *DB) delete(seq uint64) error {
 		return nil // no entry in db to delete
 	}
 
-	// e := b.entries[entryIdx]
+	e := b.entries[entryIdx]
 	b.del(entryIdx)
 	b.entryIdx--
 	if err := b.write(); err != nil {
 		return err
 	}
-	// db.freeslots.free(e.seq)
-	// db.data.free(e.mSize(), e.mOffset)
+	db.freeslots.free(e.seq)
+	db.data.free(e.mSize(), e.mOffset)
 	db.decount()
 	if db.syncWrites {
 		return db.sync()

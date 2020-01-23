@@ -102,9 +102,10 @@ func main() {
 		}
 	}(1)
 
-	// print([]byte("unit8.c.c1?last=30m"), db)
-	// print([]byte("unit8.c.c11?last=30m"), db)
+	print([]byte("unit8.c.c1?last=30m"), db)
+	print([]byte("unit8.c.c11?last=30m"), db)
 
+	time.Sleep(100 * time.Millisecond)
 	func(retry int) {
 		i := 1
 		for range time.Tick(10 * time.Millisecond) {
