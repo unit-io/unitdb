@@ -10,6 +10,8 @@ tracedb is blazing fast timeseries database for IoT, realtime messaging  applica
 
 Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
 
+# WARNING: This is Alpha software and not intended for use until a stable release.
+
 # Key characteristics
 - 100% Go.
 - Optimized for fast lookups and bulk inserts.

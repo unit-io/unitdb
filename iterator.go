@@ -44,7 +44,7 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.GetMutex(it.query.contract)
+	mu := it.db.getMutex(it.query.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
@@ -56,7 +56,7 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				if e.isExpired() {
-					if ok := it.db.trie.Remove(it.query.contract, it.query.parts, seq); ok {
+					if ok := it.db.trie.remove(it.query.contract, it.query.parts, seq); ok {
 						it.db.timeWindow.add(e)
 					}
 					it.invalidKeys++
@@ -108,7 +108,7 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	it.query.seqs = it.db.trie.Lookup(it.query.contract, it.query.parts)
+	it.query.seqs = it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
 	if len(it.query.seqs) == 0 || it.next >= 1 {
 		return
 	}

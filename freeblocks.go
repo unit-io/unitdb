@@ -18,8 +18,8 @@ type freeslots struct {
 }
 
 type freeslot struct {
-	seqs []uint64 // seq holds free sequences
-	// sync.RWMutex          // Read Write mutex, guards access to internal collection.
+	sm           map[uint64]bool
+	sync.RWMutex // Read Write mutex, guards access to internal collection.
 }
 
 // newFreeSlots creates a new concurrent free slots.
@@ -30,7 +30,7 @@ func newFreeSlots() freeslots {
 	}
 
 	for i := 0; i <= nShards; i++ {
-		s.slots[i] = &freeslot{}
+		s.slots[i] = &freeslot{sm: make(map[uint64]bool)}
 	}
 
 	return s
@@ -41,66 +41,44 @@ func (fss *freeslots) getShard(contract uint64) *freeslot {
 	return fss.slots[fss.consistent.FindBlock(contract)]
 }
 
-// TODO implement btree+ search
-// contains checks whether a message id is in the set.
-func (fs *freeslot) contains(value uint64) bool {
-	for _, v := range fs.seqs {
-		if v == value {
-			return true
-		}
-	}
-	return false
-}
-
 // get first free seq
 func (fss *freeslots) get(contract uint64) (ok bool, seq uint64) {
 	// Get shard
 	shard := fss.getShard(contract)
-	// Get item from shard.
-	if len(shard.seqs) == 0 {
+	shard.Lock()
+	defer shard.Unlock()
+	for seq, ok = range shard.sm {
+		delete(shard.sm, seq)
 		return ok, seq
 	}
 
-	seq = shard.seqs[0]
-	shard.seqs = shard.seqs[1:]
-	return true, seq
+	return false, seq
 }
 
 func (fss *freeslots) free(seq uint64) (ok bool) {
-	// queue to last shard
-	fss.slots[nShards].seqs = append(fss.slots[nShards].seqs, seq)
-	go func() {
-		if len(fss.slots[nShards].seqs) < 100 {
-			return
-		}
-		for _, s := range fss.slots[nShards].seqs {
-			// Get shard
-			shard := fss.getShard(s)
-			if shard.contains(s) == false {
-				shard.seqs = append(shard.seqs, s)
-				ok = true
-			}
-		}
-	}()
-	return
+	// Get shard
+	shard := fss.getShard(seq)
+	shard.Lock()
+	defer shard.Unlock()
+	if ok := shard.sm[seq]; ok {
+		return !ok
+	}
+	shard.sm[seq] = true
+	return true
 }
 
 func (fs *freeslot) len() int {
-	return len(fs.seqs)
+	return len(fs.sm)
 }
 
 // A "thread" safe freeblocks.
 // To avoid lock bottlenecks slots are dived to several (nShards).
 // type freeblocks []*freeblock
-
 type freeblocks struct {
 	blocks                []*shard
 	size                  int64 // total size of free blocks
 	minimumFreeBlocksSize int64 // minimum free blocks size before free blocks are reused for new allocation.
 	consistent            *hash.Consistent
-
-	// runs once
-	once Once
 }
 
 type freeblock struct {
@@ -210,7 +188,7 @@ func (fb *freeblocks) free(off int64, size uint32) {
 	if size == 0 {
 		panic("unable to free zero bytes")
 	}
-	shard := fb.getShard(uint64(size))
+	shard := fb.getShard(uint64(off))
 	shard.Lock()
 	defer shard.Unlock()
 	// Verify that block is not already free.
@@ -221,9 +199,6 @@ func (fb *freeblocks) free(off int64, size uint32) {
 	shard.blocks = append(shard.blocks, freeblock{offset: off, size: size})
 	shard.cache[off] = true
 	fb.size += int64(size)
-	if len(shard.blocks) > 1000 {
-		fb.freequeue()
-	}
 }
 
 func (fb *freeblocks) allocate(size uint32) int64 {

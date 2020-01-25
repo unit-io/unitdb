@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/allegro/bigcache"
 	"github.com/golang/snappy"
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
@@ -75,13 +74,13 @@ type (
 	DB struct {
 		// Need 64-bit alignment.
 		mu sync.RWMutex
-		message.Mutex
-		mac            *crypto.MAC
-		writeLockC     chan struct{}
-		commitLockC    chan struct{}
-		syncLockC      chan struct{}
-		commitLogQueue sync.Map
-		expiryLockC    chan struct{}
+		mutex
+		mac         *crypto.MAC
+		writeLockC  chan struct{}
+		commitLockC chan struct{}
+		syncLockC   chan struct{}
+		commitLog   sync.Map
+		expiryLockC chan struct{}
 		// consistent     *hash.Consistent
 		filter     Filter
 		index      table
@@ -96,7 +95,7 @@ type (
 		//batchdb
 		*batchdb
 		//trie
-		trie *message.Trie
+		trie *trie
 		// The db start time
 		start time.Time
 		// The metircs to measure timeseries on message events
@@ -135,17 +134,12 @@ func Open(path string, opts *Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	cache, err := bigcache.NewBigCache(config)
-	if err != nil {
-		return nil, err
-	}
-	cacheID := uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 	db := &DB{
-		Mutex:       message.NewMutex(),
+		mutex:       newMutex(),
 		index:       index,
 		data:        dataTable{table: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
 		timeWindow:  newTimeWindowBucket(time.Second, keyExpirationMaxDur),
-		filter:      Filter{table: filter, cache: cache, cacheID: cacheID, filterBlock: fltr.NewFilterGenerator()},
+		filter:      Filter{table: filter, filterBlock: fltr.NewFilterGenerator()},
 		lock:        lock,
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
@@ -157,12 +151,15 @@ func Open(path string, opts *Options) (*DB, error) {
 			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
-		trie:    message.NewTrie(),
+		trie:    newTrie(uint32(opts.CacheCap)),
 		start:   time.Now(),
 		meter:   NewMeter(),
 		// Close
 		closeC: make(chan struct{}),
 	}
+
+	db.filter.cache = db.mem
+	db.filter.cacheID = db.cacheID
 
 	if index.size == 0 {
 		if data.size != 0 {
@@ -468,10 +465,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 	}
 
-	mu := db.GetMutex(q.contract)
+	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	q.seqs = db.trie.Lookup(q.contract, q.parts)
+	q.seqs = db.trie.lookup(q.contract, q.parts, q.Limit)
 	if len(q.seqs) == 0 {
 		return
 	}
@@ -486,7 +483,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return err
 				}
 				if e.isExpired() {
-					if ok := db.trie.Remove(q.contract, q.parts, seq); ok {
+					if ok := db.trie.remove(q.contract, q.parts, seq); ok {
 						db.timeWindow.add(e)
 					}
 					// if id is expired it does not return an error but continue the iteration
@@ -520,7 +517,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				return items, err
 			}
 		}
-		if len(q.seqs) < int(q.Limit) || len(items) >= int(q.Limit) {
+		if len(q.seqs) < int(q.Limit-uint32(len(items))) || len(items) >= int(q.Limit) {
 			break
 		}
 		q.seqs = q.seqs[len(items) : q.Limit-uint32(len(items))]
@@ -611,7 +608,7 @@ func (db *DB) Sync() error {
 	}
 	for _, s := range seqs {
 		err := func() error {
-			qlogs, ok := db.commitLogQueue.Load(s)
+			qlogs, ok := db.commitLog.Load(s)
 			if !ok {
 				return nil
 			}
@@ -658,11 +655,11 @@ func (db *DB) Sync() error {
 
 				db.filter.Append(e.seq)
 			}
-
+			db.meter.InMsgs.Inc(int64(len(logs)))
 			db.mem.Free(logs[0].contract, logs[0].seq)
 			return db.sync()
 		}()
-		db.commitLogQueue.Delete(s)
+		db.commitLog.Delete(s)
 		if err == nil {
 			if err := db.wal.SignalLogApplied(s); err != nil {
 				return err
@@ -689,7 +686,7 @@ func (db *DB) ExpireOldEntries() {
 	defer func() {
 		<-db.syncLockC
 	}()
-	expiredEntries := db.timeWindow.expireOldEntries()
+	expiredEntries := db.timeWindow.expireOldEntries(maxResults)
 	fmt.Println("db.ExpireOldEntries: expiry count ", len(expiredEntries))
 	for _, expiredEntry := range expiredEntries {
 		e := expiredEntry.(entry)
@@ -704,7 +701,7 @@ func (db *DB) ExpireOldEntries() {
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
-		db.trie.Remove(contract, topic.Parts, e.seq)
+		db.trie.remove(contract, topic.Parts, e.seq)
 		db.freeslots.free(e.seq)
 		db.data.free(e.mSize(), e.mOffset)
 		db.decount()
@@ -720,7 +717,7 @@ func (db *DB) loadTrie() error {
 			logger.Error().Err(err).Str("context", "db.loadTrie")
 			return err
 		}
-		db.trie.Add(message.Contract(it.Topic().Parts()), it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
+		db.trie.add(message.Contract(it.Topic().Parts()), it.Topic().Parts(), it.Topic().Depth(), it.Topic().Seq())
 	}
 	return nil
 }
@@ -856,7 +853,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.mem.Set(e.contract, memseq, data); err != nil {
 		return err
 	}
-	if ok := db.trie.Add(e.contract, topic.Parts, topic.Depth, e.seq); ok {
+	if ok := db.trie.add(e.contract, topic.Parts, topic.Depth, e.seq); ok {
 		if err != nil {
 			return err
 		}
@@ -870,7 +867,6 @@ func (db *DB) PutEntry(e *Entry) error {
 			return err
 		}
 		db.tinyBatch.incount()
-		db.meter.Puts.Inc(1)
 	}
 
 	return nil
@@ -938,13 +934,13 @@ func (db *DB) tinyCommit() error {
 		offset += dataLen
 	}
 
-	db.meter.InMsgs.Inc(int64(db.tinyBatch.count()))
+	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
 	logSeq := db.wal.NextSeq()
 	db.wal.SetBlocks(db.blocks())
 	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
 		return err
 	}
-	db.commitLogQueue.Store(logSeq, db.tinyBatch.logs)
+	db.commitLog.Store(logSeq, db.tinyBatch.logs)
 	db.tinyBatch.reset()
 	db.bufPool.Put(db.tinyBatch.buffer)
 	return nil
@@ -976,7 +972,7 @@ func (db *DB) commit(logs []log, data []byte) (uint64, <-chan error) {
 		offset += dataLen
 	}
 
-	db.meter.InMsgs.Inc(int64(len(logs)))
+	db.meter.Puts.Inc(int64(len(logs)))
 	logSeq := db.wal.NextSeq()
 	db.wal.SetBlocks(db.blocks())
 	return logSeq, logWriter.SignalInitWrite(logSeq)
@@ -1019,10 +1015,10 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	id := message.ID(e.ID)
 	contract := message.Contract(topic.Parts)
 	id.AddContract(contract)
-	mu := db.GetMutex(contract)
+	mu := db.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
-	if ok := db.trie.Remove(contract, topic.Parts, id.Seq()); ok {
+	if ok := db.trie.remove(contract, topic.Parts, id.Seq()); ok {
 		err := db.delete(message.ID(id).Seq())
 		if err != nil {
 			return err

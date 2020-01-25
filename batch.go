@@ -200,11 +200,11 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	buff := b.buffer.Bytes()
+	buf := b.buffer.Bytes()
 	topics := make(map[uint64]*message.Topic)
 	for i, index := range b.pendingWrites {
-		dataLen := binary.LittleEndian.Uint32(buff[index.offset : index.offset+4])
-		data := buff[index.offset+4 : index.offset+int64(dataLen)]
+		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
+		data := buf[index.offset+4 : index.offset+int64(dataLen)]
 		id, topic := index.message(data[entrySize:])
 
 		ID := message.ID(id)
@@ -221,13 +221,13 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			if ok := b.db.trie.Remove(contract, itopic.Parts, seq); !ok {
+			if ok := b.db.trie.remove(contract, itopic.Parts, seq); !ok {
 				return errBadRequest
 			}
 			b.db.delete(seq)
 			continue
 		}
-		if ok := b.db.trie.Add(contract, itopic.Parts, itopic.Depth, seq); !ok {
+		if ok := b.db.trie.add(contract, itopic.Parts, itopic.Depth, seq); !ok {
 			return errBadRequest
 		}
 		memseq := b.db.cacheID ^ seq
@@ -236,7 +236,6 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 		}
 		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
-	b.db.meter.Puts.Inc(int64(b.Len()))
 	return nil
 }
 
@@ -282,7 +281,7 @@ func (b *Batch) commit(logs []log, data []byte) error {
 	if err1 := <-err; err1 != nil {
 		logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
 	}
-	b.db.commitLogQueue.Store(logSeq, logs)
+	b.db.commitLog.Store(logSeq, logs)
 	return nil
 }
 

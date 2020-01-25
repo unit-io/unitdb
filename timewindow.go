@@ -69,7 +69,7 @@ func newTimeWindowBucket(durType time.Duration, maxDur int) timeWindowBucket {
 	return l
 }
 
-func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
+func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 	var expiredEntries []timeWindowEntry
 	startTime := uint32(time.Now().Unix())
 
@@ -88,7 +88,7 @@ func (wb *timeWindowBucket) expireOldEntries() []timeWindowEntry {
 		}
 		sort.Slice(windowTimes[:], func(i, j int) bool { return windowTimes[i] < windowTimes[j] })
 		for i := 0; i < len(windowTimes); i++ {
-			if windowTimes[i] > int64(startTime) {
+			if windowTimes[i] > int64(startTime) || len(expiredEntries) > maxResults {
 				break
 			}
 			window := ws.windows[windowTimes[i]]
@@ -128,8 +128,8 @@ func (wb *timeWindowBucket) add(e timeWindowEntry) {
 	}
 }
 
-func (wb *timeWindowBucket) all() []timeWindowEntry {
-	wb.expireOldEntries()
+func (wb *timeWindowBucket) all(maxResults int) []timeWindowEntry {
+	wb.expireOldEntries(maxResults)
 	startTime := time.Now().Add(-time.Duration(wb.maxDurations) * wb.durationType).Unix()
 
 	var all []timeWindowEntry

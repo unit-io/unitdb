@@ -1,17 +1,38 @@
-package message
+package tracedb
 
 import (
 	"sync"
+
+	"github.com/unit-io/tracedb/message"
 )
 
 const (
-	// nMutex = 16
-
 	nul = 0x0
 )
 
 // ssid represents a sequence set which can contain only unique values.
 type ssid []uint64
+
+// new returns seq set of given cap.
+func newSsid(cap uint32) ssid {
+	return make([]uint64, 0, cap)
+}
+
+// extend extends the cap of seq set.
+func (ss *ssid) extend(cap uint32) {
+	if cap < ss.len() {
+		return
+	}
+	l := cap - ss.len()
+	*ss = append(*ss, make([]uint64, l)...)
+}
+
+// shrink shrinks the cap of seq set.
+func (ss *ssid) shrink(cap uint32) {
+	newssid := make([]uint64, 0, ss.len())
+	copy(newssid, *ss)
+	*ss = newssid
+}
 
 // addUnique adds a seq to the set.
 func (ss *ssid) addUnique(value uint64) (added bool) {
@@ -52,6 +73,11 @@ func (ss *ssid) contains(value uint64) bool {
 	return false
 }
 
+// len length of seq set.
+func (ss *ssid) len() uint32 {
+	return uint32(len(*ss))
+}
+
 type key struct {
 	query     uint32
 	wildchars uint8
@@ -60,6 +86,7 @@ type key struct {
 type part struct {
 	k        key
 	depth    uint8
+	cap      uint32
 	ss       ssid
 	parent   *part
 	children map[key]*part
@@ -81,46 +108,45 @@ type partTrie struct {
 	root *part // The root node of the tree.
 }
 
-// NewPartTrie creates a new matcher for the Trie.
-func NewPartTrie() *partTrie {
+// newPartTrie creates a new matcher for the Trie.
+func newPartTrie(cacheCap uint32) *partTrie {
 	return &partTrie{
 		root: &part{
-			ss:       ssid{},
+			cap:      cacheCap,
+			ss:       newSsid(cacheCap),
 			children: make(map[key]*part),
 		},
 	}
 }
 
-// Trie trie data structure to store topic parts
-type Trie struct {
+// trie trie data structure to store topic parts
+type trie struct {
 	sync.RWMutex
-	Mutex
+	mutex
 	partTrie *partTrie
 	count    int // Number of Trie in the Trie.
 }
 
 // NewTrie new trie creates a Trie with an initialized Trie.
 // Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
-func NewTrie() *Trie {
-	trie := &Trie{
-		Mutex:    NewMutex(),
-		partTrie: NewPartTrie(),
+func newTrie(cacheCap uint32) *trie {
+	return &trie{
+		mutex:    newMutex(),
+		partTrie: newPartTrie(cacheCap),
 	}
-
-	return trie
 }
 
 // Count returns the number of entries in Trie.
-func (t *Trie) Count() int {
+func (t *trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
 	return t.count
 }
 
-// Add adds a message seq to topic trie.
-func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (added bool) {
+// add adds a message seq to topic trie.
+func (t *trie) add(contract uint64, parts []message.Part, depth uint8, seq uint64) (added bool) {
 	// Get mutex
-	mu := t.GetMutex(contract)
+	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -135,7 +161,8 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 		if !ok {
 			child = &part{
 				k:        k,
-				ss:       ssid{},
+				cap:      t.partTrie.root.cap,
+				ss:       newSsid(t.partTrie.root.cap),
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -145,19 +172,21 @@ func (t *Trie) Add(contract uint64, parts []Part, depth uint8, seq uint64) (adde
 		}
 		curr = child
 	}
-	// if ok := curr.ss.addUnique(ssid); ok {
+	if curr.ss.len() >= curr.cap {
+		curr.ss = curr.ss[:curr.ss.len()-1]
+	}
+	// curr.ss = append([]uint64{seq}, curr.ss...)
 	curr.ss = append(curr.ss, seq)
 	added = true
 	curr.depth = depth
 	t.count++
-	// }
 
 	return
 }
 
-// Remove removes a message seq from topic trie
-func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) {
-	mu := t.GetMutex(contract)
+// remove removes a message seq from topic trie
+func (t *trie) remove(contract uint64, parts []message.Part, seq uint64) (removed bool) {
+	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
 	curr := t.partTrie.root
@@ -180,6 +209,11 @@ func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) 
 	// Remove a message seq and decrement the counter
 	if ok := curr.ss.remove(seq); ok {
 		removed = true
+		// adjust the cap of the seq set
+		if curr.ss.len() > t.partTrie.root.cap {
+			curr.cap = curr.ss.len()
+			curr.ss.shrink(curr.cap)
+		}
 		t.count--
 	}
 	// Remove orphans
@@ -191,20 +225,29 @@ func (t *Trie) Remove(contract uint64, parts []Part, seq uint64) (removed bool) 
 	return
 }
 
-// Lookup returns seq set for given topic.
-func (t *Trie) Lookup(contract uint64, parts []Part) (ss ssid) {
+// lookup returns seq set for given topic.
+func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ss ssid) {
 	t.RLock()
 	defer t.RUnlock()
-	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root)
+	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root, limit)
 	return
 }
 
-func (t *Trie) ilookup(contract uint64, parts []Part, depth uint8, ss *ssid, part *part) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ss *ssid, part *part, limit uint32) {
 	// Add seq set from the current branch
-	for _, s := range part.ss {
-		if part.depth == depth || (part.depth >= TopicMaxDepth && depth > part.depth-TopicMaxDepth) {
-			// ss.addUnique(s)
-			*ss = append(*ss, s)
+	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
+		var l uint32
+		// for _, s := range part.ss {
+		// 	*ss = append(*ss, s)
+		// }
+		*ss = append(*ss, part.ss...)
+		// on lookup cap increased to 10 folds of current cap of the seq set of the part
+		if ss.len() > limit {
+			l = limit
+		}
+		if part.cap < 2*l {
+			part.cap = 2 * l
+			part.ss.extend(part.cap)
 		}
 	}
 
@@ -213,7 +256,7 @@ func (t *Trie) ilookup(contract uint64, parts []Part, depth uint8, ss *ssid, par
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, ss, p)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, ss, p, limit)
 			}
 		}
 	}

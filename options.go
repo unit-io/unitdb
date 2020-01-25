@@ -23,8 +23,8 @@ type Options struct {
 	// Encryption Key
 	EncryptionKey []byte
 
-	// Block cache size
-	BlockCacheSize int64
+	// Cache cacpity is number of seq to cache per topic in a seq set of a topic
+	CacheCap int64
 
 	//Tiny Batch Size to group tiny batches and write into db on tiny batch interval
 	TinyBatchSize int
@@ -53,15 +53,15 @@ func (src *Options) copyWithDefaults() *Options {
 	if src != nil {
 		opts = *src
 	}
-	opts.BackgroundKeyExpiry = true
+	opts.BackgroundKeyExpiry = false
 	if opts.FileSystem == nil {
 		opts.FileSystem = fs.FileIO
 	}
 	if opts.BackgroundSyncInterval == 0 {
 		opts.BackgroundSyncInterval = 1 * time.Second
 	}
-	if opts.BlockCacheSize == 0 {
-		opts.BlockCacheSize = 1 << 20 // maximum cost of cache (1MB).
+	if opts.CacheCap == 0 {
+		opts.CacheCap = 1000
 	}
 	if opts.TinyBatchSize == 0 {
 		opts.TinyBatchSize = 100

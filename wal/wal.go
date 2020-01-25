@@ -134,6 +134,7 @@ func (wal *WAL) readHeader() error {
 		return err
 	}
 	wal.seq = h.upperSequence
+	wal.nBlocks = h.nBlocks
 	wal.logFile.fb = h.freeBlock
 	return nil
 }
