@@ -12,12 +12,12 @@ import (
 const (
 	nShards = 32
 
-	// maxTableSize value for maximum memroy use for memdb.
+	// maxTableSize value for maximum memory use for memdb.
 	maxTableSize = (int64(1) << 40) - 1
 
-	backgroundMemResetInterval = 1 * time.Second
-	memShrinkFactor            = 0.7
-	dataTableShrinkFactor      = 0.2 // shirnker try to free 20% of total memdb size
+	drainInterval         = 1 * time.Second
+	memShrinkFactor       = 0.7
+	dataTableShrinkFactor = 0.2 // shirnker try to free 20% of total memdb size
 )
 
 // A "thread" safe map of type seq:offset.
@@ -32,7 +32,7 @@ type concurrentCache struct {
 }
 
 // newCache creates a new concurrent block cache.
-func newCache(path string, memSize int64) blockCache {
+func newCache(memSize int64) blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
 		m[i] = &concurrentCache{data: dataTable{maxSize: memSize}, cache: make(map[uint64]int64)}
@@ -54,25 +54,25 @@ type DB struct {
 }
 
 // Open opens or creates a new DB of given size.
-func Open(path string, memSize int64) (*DB, error) {
+func Open(memSize int64) (*DB, error) {
 	if memSize > maxTableSize {
 		memSize = maxTableSize
 	}
 	db := &DB{
 		targetSize: memSize,
-		blockCache: newCache(path, memSize),
+		blockCache: newCache(memSize),
 		// Close
 		closeC: make(chan struct{}),
 	}
 
 	db.consistent = hash.InitConsistent(int(nShards), int(nShards))
 
-	db.startBufferShrinker(backgroundMemResetInterval)
+	db.drain(drainInterval)
 
 	return db, nil
 }
 
-func (db *DB) startBufferShrinker(interval time.Duration) {
+func (db *DB) drain(interval time.Duration) {
 	shrinkerTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {

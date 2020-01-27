@@ -1,7 +1,7 @@
 package tracedb
 
 type dataTable struct {
-	table
+	file
 	fb freeblocks
 }
 

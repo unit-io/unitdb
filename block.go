@@ -14,11 +14,16 @@ type entry struct {
 	expiresAt uint32
 	mOffset   int64
 
+	entryTime  uint32
 	cacheBlock []byte
 }
 
-func (e entry) timeStamp() uint32 {
+func (e entry) expiryTime() uint32 {
 	return e.expiresAt
+}
+
+func (e entry) timeStamp() uint32 {
+	return e.entryTime
 }
 
 func (e entry) isExpired() bool {

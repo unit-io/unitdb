@@ -7,7 +7,7 @@ import (
 
 // Filter filter is bloom filter generator
 type Filter struct {
-	table
+	file
 	filterBlock *filter.Generator
 	cache       *memdb.DB
 	cacheID     uint64

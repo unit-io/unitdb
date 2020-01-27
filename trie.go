@@ -173,9 +173,8 @@ func (t *trie) add(contract uint64, parts []message.Part, depth uint8, seq uint6
 		curr = child
 	}
 	if curr.ss.len() >= curr.cap {
-		curr.ss = curr.ss[:curr.ss.len()-1]
+		curr.ss = curr.ss[1:]
 	}
-	// curr.ss = append([]uint64{seq}, curr.ss...)
 	curr.ss = append(curr.ss, seq)
 	added = true
 	curr.depth = depth
@@ -209,7 +208,7 @@ func (t *trie) remove(contract uint64, parts []message.Part, seq uint64) (remove
 	// Remove a message seq and decrement the counter
 	if ok := curr.ss.remove(seq); ok {
 		removed = true
-		// adjust the cap of the seq set
+		// adjust cap of the seq set
 		if curr.ss.len() > t.partTrie.root.cap {
 			curr.cap = curr.ss.len()
 			curr.ss.shrink(curr.cap)
@@ -237,9 +236,6 @@ func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ss *s
 	// Add seq set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
 		var l uint32
-		// for _, s := range part.ss {
-		// 	*ss = append(*ss, s)
-		// }
 		*ss = append(*ss, part.ss...)
 		// on lookup cap increased to 10 folds of current cap of the seq set of the part
 		if ss.len() > limit {

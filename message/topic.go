@@ -24,20 +24,6 @@ const (
 	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
 )
 
-// AddContract adds contract to the parts of a topic.
-func (t *Topic) AddContract(contract uint32) {
-	part := Part{
-		Wildchars: 0,
-		Query:     contract,
-	}
-	if t.Parts[0].Query == Wildcard {
-		t.Parts[0].Query = contract
-	} else {
-		parts := []Part{part}
-		t.Parts = append(parts, t.Parts...)
-	}
-}
-
 // TopicOption represents a key/value pair option.
 type TopicOption struct {
 	Key   string
@@ -71,6 +57,29 @@ func nextPart(buf *bytes.Buffer) (Part, bool) {
 	part.Wildchars = uint8(buf.Next(1)[0])
 	part.Query = binary.LittleEndian.Uint32(buf.Next(4))
 	return part, true
+}
+
+// AddContract adds contract to the parts of a topic.
+func (t *Topic) AddContract(contract uint32) {
+	part := Part{
+		Wildchars: 0,
+		Query:     contract,
+	}
+	if t.Parts[0].Query == Wildcard {
+		t.Parts[0].Query = contract
+	} else {
+		parts := []Part{part}
+		t.Parts = append(parts, t.Parts...)
+	}
+}
+
+// GetHash combines the parts into a single hash.
+func (t *Topic) GetHash() uint32 {
+	h := t.Parts[0].Query
+	for _, i := range t.Parts[1:] {
+		h ^= i.Query
+	}
+	return h
 }
 
 // Marshal seriliazes topic to binay

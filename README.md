@@ -10,8 +10,6 @@ tracedb is blazing fast timeseries database for IoT, realtime messaging  applica
 
 Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
 
-# WARNING: This is Alpha software and not intended for use until a stable release.
-
 # Key characteristics
 - 100% Go.
 - Optimized for fast lookups and bulk inserts.
@@ -20,7 +18,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Database backup and restore. add backup and restore of tracedb data and logs to archive these to external storage systems. 
 - Add system topics (read only topics) for systems notifications. For example topic -> "system/errors" to send realtime detailed error messages to client.
 - Documentation - document the technical atchitecture, design principals and advanced usage guides such as optimum configuration guideline to acive maximum throughput for hyper scale writes/reads operations (without bloting memory buffers).
 
@@ -45,8 +42,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Batch group](#Batch-group)
  * [Iterating over items](#Iterating-over-items)
  * [Statistics](#Statistics)
- * [Limitations](#Limitations)
-
 
 ## Quick Start
 To build tracedb from source code use go get command.
@@ -403,10 +398,6 @@ The tracedb can perform hyper scale writes, but performance starts degrading due
 	}
 
 ```
-
-### Limitations
-The tracedb is not primarily designed for key-value storage. The tracedb mainly designed to store time-series data, messaging data, log data or AI analytics data.
-
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.

@@ -63,7 +63,6 @@ type (
 		buffer *bpool.Buffer
 		size   int64
 		logs   []log
-		// mu     sync.Mutex
 
 		db            *DB
 		index         []batchIndex

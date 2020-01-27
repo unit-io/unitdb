@@ -1,6 +1,7 @@
 package tracedb
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -13,37 +14,39 @@ import (
 // To avoid lock bottlenecks timeWindows are dived to several (nShards).
 type timeWindows struct {
 	sync.RWMutex
-	timeWindows []*windows
-	consistent  *hash.Consistent
+	windows    []*windows
+	consistent *hash.Consistent
 }
 
 type windows struct {
-	windows      map[int64]timeWindow
+	expiry       map[int64]timeWindow
+	blocks       map[int64]timeWindow
 	sync.RWMutex // Read Write mutex, guards access to internal collection.
 }
 
 // newTimeWindows creates a new concurrent timeWindows.
 func newTimeWindows() timeWindows {
-	tw := timeWindows{
-		timeWindows: make([]*windows, nShards+1),
-		consistent:  hash.InitConsistent(int(nShards), int(nShards)),
+	w := timeWindows{
+		windows:    make([]*windows, nShards+1),
+		consistent: hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
 	for i := 0; i < nShards; i++ {
-		tw.timeWindows[i] = &windows{windows: make(map[int64]timeWindow)}
+		w.windows[i] = &windows{expiry: make(map[int64]timeWindow), blocks: make(map[int64]timeWindow)}
 	}
 
-	return tw
+	return w
 }
 
 // getWindows returns shard under given key
-func (tw *timeWindows) getWindows(key uint64) *windows {
-	tw.RLock()
-	defer tw.RUnlock()
-	return tw.timeWindows[tw.consistent.FindBlock(key)]
+func (w *timeWindows) getWindows(key uint64) *windows {
+	w.RLock()
+	defer w.RUnlock()
+	return w.windows[w.consistent.FindBlock(key)]
 }
 
 type timeWindowEntry interface {
+	expiryTime() uint32
 	timeStamp() uint32
 }
 
@@ -54,16 +57,19 @@ type timeWindow struct {
 // type timeHash int64
 
 type timeWindowBucket struct {
+	file
 	timeWindows
 	durationType       time.Duration
 	maxDurations       int
+	blockDurations     int
 	earliestExpiryHash int64
 }
 
-func newTimeWindowBucket(durType time.Duration, maxDur int) timeWindowBucket {
-	l := timeWindowBucket{}
+func newTimeWindowBucket(f file, durType time.Duration, maxDur, blockDur int) timeWindowBucket {
+	l := timeWindowBucket{file: f}
 	l.timeWindows = newTimeWindows()
 	l.durationType = durType
+	l.blockDurations = blockDur
 	l.maxDurations = maxDur
 
 	return l
@@ -79,11 +85,11 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 
 	for i := 0; i < nShards; i++ {
 		// get windows shard
-		ws := wb.timeWindows.timeWindows[i]
+		ws := wb.timeWindows.windows[i]
 		ws.Lock()
 		defer ws.Unlock()
-		windowTimes := make([]int64, 0, len(ws.windows))
-		for windowTime := range ws.windows {
+		windowTimes := make([]int64, 0, len(ws.expiry))
+		for windowTime := range ws.expiry {
 			windowTimes = append(windowTimes, windowTime)
 		}
 		sort.Slice(windowTimes[:], func(i, j int) bool { return windowTimes[i] < windowTimes[j] })
@@ -91,7 +97,7 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 			if windowTimes[i] > int64(startTime) || len(expiredEntries) > maxResults {
 				break
 			}
-			window := ws.windows[windowTimes[i]]
+			window := ws.expiry[windowTimes[i]]
 			expiredEntriesCount := 0
 			for i := range window.entries {
 				entry := window.entries[i]
@@ -102,7 +108,7 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 				}
 			}
 			if expiredEntriesCount == len(window.entries) {
-				delete(ws.windows, windowTimes[i])
+				delete(ws.expiry, windowTimes[i])
 			}
 		}
 	}
@@ -111,45 +117,52 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 
 func (wb *timeWindowBucket) add(e timeWindowEntry) {
 	// logger.Printf("entry add time %v", time.Unix(int64(entry.timeStamp()), 0).Truncate(wb.durationType))
+	expiryTime := int64(time.Unix(int64(e.expiryTime()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
 	entryTime := int64(time.Unix(int64(e.timeStamp()), 0).Truncate(wb.durationType).Add(1 * wb.durationType).Unix())
-	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, entryTime)
+	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, expiryTime)
 
 	// get windows shard
-	ws := wb.getWindows(uint64(entryTime))
+	ws := wb.getWindows(uint64(expiryTime))
 	ws.Lock()
 	defer ws.Unlock()
-	if window, ok := ws.windows[entryTime]; ok {
-		ws.windows[entryTime] = timeWindow{entries: append(window.entries, e)}
+	if expiry, ok := ws.expiry[expiryTime]; ok {
+		ws.expiry[expiryTime] = timeWindow{entries: append(expiry.entries, e)}
 	} else {
-		ws.windows[entryTime] = timeWindow{entries: []timeWindowEntry{e}}
-		if atomic.LoadInt64(&wb.earliestExpiryHash) > entryTime {
-			wb.earliestExpiryHash = entryTime
+		ws.expiry[expiryTime] = timeWindow{entries: []timeWindowEntry{e}}
+		if atomic.LoadInt64(&wb.earliestExpiryHash) > expiryTime {
+			wb.earliestExpiryHash = expiryTime
 		}
+	}
+
+	if block, ok := ws.blocks[entryTime]; ok {
+		ws.blocks[entryTime] = timeWindow{entries: append(block.entries, e)}
+	} else {
+		ws.blocks[entryTime] = timeWindow{entries: []timeWindowEntry{e}}
 	}
 }
 
-func (wb *timeWindowBucket) all(maxResults int) []timeWindowEntry {
-	wb.expireOldEntries(maxResults)
-	startTime := time.Now().Add(-time.Duration(wb.maxDurations) * wb.durationType).Unix()
+func (wb *timeWindowBucket) readAll(maxResults int) (startTime time.Time, entries []timeWindowEntry) {
+	wb.expireOldEntries(math.MaxInt32)
+	startTime = time.Now().Add(-time.Duration(wb.blockDurations) * wb.durationType)
 
-	var all []timeWindowEntry
+	start := uint32(startTime.Unix())
 	for i := 0; i < nShards; i++ {
 		// get windows shard
-		ws := wb.timeWindows.timeWindows[i]
+		ws := wb.timeWindows.windows[i]
 		ws.Lock()
 		defer ws.Unlock()
-		for windowTime := range ws.windows {
-			window := ws.windows[windowTime]
+		for windowTime := range ws.expiry {
+			window := ws.expiry[windowTime]
 
 			for i := range window.entries {
 				entry := window.entries[i]
 
-				if entry.timeStamp() > uint32(startTime) {
-					all = append(all, entry)
+				if entry.timeStamp() > start {
+					entries = append(entries, entry)
 				}
 			}
 		}
 	}
 
-	return all
+	return startTime, entries
 }

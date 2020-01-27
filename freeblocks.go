@@ -95,12 +95,12 @@ type shard struct {
 // newFreeBlocks creates a new concurrent freeblocks.
 func newFreeBlocks(minimumSize int64) freeblocks {
 	fb := freeblocks{
-		blocks:                make([]*shard, nShards+1),
+		blocks:                make([]*shard, nShards),
 		minimumFreeBlocksSize: minimumSize,
 		consistent:            hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
-	for i := 0; i <= nShards; i++ {
+	for i := 0; i < nShards; i++ {
 		fb.blocks[i] = &shard{cache: make(map[int64]bool)}
 	}
 
@@ -119,7 +119,6 @@ func (s *shard) search(size uint32) int {
 	})
 }
 
-// TODO implement btree+ search
 // contains checks whether a message id is in the set.
 func (s *shard) contains(off int64) bool {
 	for _, v := range s.blocks {
@@ -166,21 +165,6 @@ func (fb *freeblocks) defrag() {
 	for i := 0; i < nShards; i++ {
 		shard := fb.blocks[i]
 		shard.defrag()
-	}
-}
-
-func (fb *freeblocks) freequeue() {
-	s := fb.blocks[nShards]
-	s.RLock()
-	blocks := append(make([]freeblock, 0, len(s.blocks)), s.blocks...)
-	// shard := shard{blocks: blocks}
-	s.blocks = s.blocks[:0]
-	s.RUnlock()
-	for _, b := range blocks {
-		// Get shard
-		s := fb.getShard(uint64(b.size))
-		s.blocks = append(s.blocks, freeblock{offset: b.offset, size: b.size})
-		fb.size += int64(b.size)
 	}
 }
 
@@ -251,7 +235,7 @@ func (s *shard) binarySize() uint32 {
 	return uint32((4 + (8+4)*len(s.blocks))) // FIXME: this is ugly
 }
 
-func (fb *freeblocks) read(t table, off int64) error {
+func (fb *freeblocks) read(f file, off int64) error {
 	if off == -1 {
 		return nil
 	}
@@ -261,13 +245,13 @@ func (fb *freeblocks) read(t table, off int64) error {
 	for i := 0; i < nShards; i++ {
 		shard := fb.blocks[i]
 		buf := make([]byte, 4)
-		if _, err := t.ReadAt(buf, offset); err != nil {
+		if _, err := f.ReadAt(buf, offset); err != nil {
 			return err
 		}
 		n := binary.LittleEndian.Uint32(buf)
 		size += n
 		buf = make([]byte, (4+8)*n)
-		if _, err := t.ReadAt(buf, offset+4); err != nil {
+		if _, err := f.ReadAt(buf, offset+4); err != nil {
 			return err
 		}
 		for i := uint32(0); i < n; i++ {
@@ -285,9 +269,7 @@ func (fb *freeblocks) read(t table, off int64) error {
 	return nil
 }
 
-func (fb *freeblocks) write(t table) (int64, error) {
-	// free blocks in queue. As last shard is used to queue freeblocks
-	fb.freequeue()
+func (fb *freeblocks) write(f file) (int64, error) {
 	if len(fb.blocks) == 0 {
 		return -1, nil
 	}
@@ -302,10 +284,10 @@ func (fb *freeblocks) write(t table) (int64, error) {
 			return -1, err
 		}
 	}
-	off, err := t.extend(marshaledSize)
+	off, err := f.extend(marshaledSize)
 	if err != nil {
 		return -1, err
 	}
-	_, err = t.WriteAt(buf, off)
+	_, err = f.WriteAt(buf, off)
 	return off, err
 }

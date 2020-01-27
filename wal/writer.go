@@ -11,18 +11,10 @@ import (
 // Writer writes entries to the write ahead log.
 // Thread-safe.
 type Writer struct {
-	Id            uid.LID
-	writeComplete bool
-	// commitComplete  bool
+	Id              uid.LID
+	writeComplete   bool
 	releaseComplete bool
 
-	// status indicates the status of the log. It is marshalled to
-	// disk.
-	status uint16
-
-	// startSeq is a unique identifier for the log that orders
-	// it in relation to other logs. It is marshalled to disk.
-	// startSeq   uint64
 	entryCount uint32
 
 	buffer  *bpool.Buffer
@@ -92,8 +84,6 @@ func (w *Writer) writeLog(seq uint64) error {
 	defer close(w.writeCompleted)
 	defer w.wal.bufPool.Put(w.buffer)
 
-	// Set the transaction status
-	w.status = logStatusWritten
 	if w.logSize == 0 {
 		return nil
 	}

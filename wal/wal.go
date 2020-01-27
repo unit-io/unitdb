@@ -60,7 +60,6 @@ type (
 
 		bufPool *bpool.BufferPool
 		logFile file
-		// lock    fs.LockFile
 
 		closed uint32
 	}
@@ -76,7 +75,6 @@ type (
 func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
-		// writeLockC: make(chan struct{}, 1),
 		opts:    opts,
 		bufPool: bpool.NewBufferPool(opts.TargetSize),
 	}

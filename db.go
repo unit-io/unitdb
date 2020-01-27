@@ -28,16 +28,22 @@ const (
 	nShards       = 16
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
+	timePostfix   = ".time"
 	logPostfix    = ".log"
 	lockPostfix   = ".lock"
 	idSize        = 24
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
-	// keyExpirationMaxDur expired keys are deleted from db after durType*keyExpirationMaxDur.
-	// For example if durType is Minute and keyExpirationMaxDur then
-	// all expired keys are deleted from db in 5 minutes
-	keyExpirationMaxDur = 15
+	// expiryMaxDur expired keys are deleted from db after durType*expiryMaxDur.
+	// For example if durType is Minute and expiryMaxDur then
+	// all expired keys are deleted from db in 1 minutes
+	expiryMaxDur = 1
+
+	// blockMaxDur entries are stored in timewindow blocks in db i.e. durType*blockMaxDur.
+	// For example if durType is Hours and blockMaxDur then
+	// all entries are stored in db in 4 hours time window
+	blockMaxDur = 240
 
 	// MaxTopicLength is the maximum size of a topic in bytes.
 	MaxTopicLength = 1 << 16
@@ -83,7 +89,7 @@ type (
 		expiryLockC chan struct{}
 		// consistent     *hash.Consistent
 		filter     Filter
-		index      table
+		index      file
 		data       dataTable
 		lock       fs.LockFile
 		wal        *wal.WAL
@@ -122,24 +128,28 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
-	index, err := newTable(fs, path+indexPostfix)
+	index, err := newFile(fs, path+indexPostfix)
 	if err != nil {
 		return nil, err
 	}
-	data, err := newTable(fs, path+dataPostfix)
+	data, err := newFile(fs, path+dataPostfix)
 	if err != nil {
 		return nil, err
 	}
-	filter, err := newTable(fs, path+filterPostfix)
+	timewindow, err := newFile(fs, path+timePostfix)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := newFile(fs, path+filterPostfix)
 	if err != nil {
 		return nil, err
 	}
 	db := &DB{
 		mutex:       newMutex(),
 		index:       index,
-		data:        dataTable{table: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
-		timeWindow:  newTimeWindowBucket(time.Second, keyExpirationMaxDur),
-		filter:      Filter{table: filter, filterBlock: fltr.NewFilterGenerator()},
+		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
+		timeWindow:  newTimeWindowBucket(timewindow, time.Minute, expiryMaxDur, blockMaxDur),
+		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		lock:        lock,
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
@@ -254,7 +264,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
-		db.startExpirer(time.Second, keyExpirationMaxDur)
+		db.startExpirer(time.Minute, expiryMaxDur)
 	}
 	return db, nil
 }
@@ -300,7 +310,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
 		db.data.fb.defrag()
-		freeblockOff, err := db.data.fb.write(db.data.table)
+		freeblockOff, err := db.data.fb.write(db.data.file)
 		if err != nil {
 			return err
 		}
@@ -333,7 +343,7 @@ func (db *DB) readHeader(readFreeList bool) error {
 	// }
 	db.dbInfo = h.dbInfo
 	if readFreeList {
-		if err := db.data.fb.read(db.data.table, db.dbInfo.freeblockOff); err != nil {
+		if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
 			return err
 		}
 	}
@@ -877,12 +887,12 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.Count() == MaxKeys {
 		return nil, errFull
 	}
-
 	e1 := entry{
 		seq:       e.seq,
 		topicSize: uint16(len(e.topic)),
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
+		entryTime: uint32(time.Now().Unix()),
 	}
 	data, _ := e1.MarshalBinary()
 	mLen := idSize + len(e.topic) + len(e.val)

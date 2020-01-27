@@ -8,7 +8,7 @@ import (
 
 func TestSimple(t *testing.T) {
 	size := 1 << 33
-	mdb, err := Open("memdb", int64(size))
+	mdb, err := Open(int64(size))
 	if err != nil {
 		t.Fatal(err)
 	}

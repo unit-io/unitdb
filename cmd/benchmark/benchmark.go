@@ -133,6 +133,8 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	fmt.Printf("Fie size: %s\n", byteSize(sz))
 	printStats(db)
 
+	forceGC()
+
 	start = time.Now()
 	func(concurrent int) error {
 		i := 1
@@ -216,6 +218,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
+
+	forceGC()
 
 	start = time.Now()
 	func(concurrent int) error {

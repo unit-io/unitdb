@@ -75,13 +75,13 @@ func (db *DB) initbatchdb(opts *Options) error {
 
 	db.batchdb = bdb
 	// Create a memdb.
-	mem, err := memdb.Open("memdb", opts.MemdbSize)
+	mem, err := memdb.Open(opts.MemdbSize)
 	if err != nil {
 		return err
 	}
 	db.mem = mem
 	db.tinyBatch.buffer = db.bufPool.Get()
-	// add close wait for commits
+
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
 	return nil
 }
@@ -144,7 +144,6 @@ func (g *BatchGroup) Run() error {
 	g.batchQueue = make(chan *Batch, len(g.fn))
 	for i, fn := range g.fn {
 		func(order int, fn func(*Batch, <-chan struct{}) error) {
-			//TODO implement cloing to pass a copy of batch
 			b := g.batch()
 			b.setManaged()
 			b.setGrouped(g)
@@ -200,8 +199,6 @@ func (g *BatchGroup) writeBatchGroup() error {
 
 // tinyBatchLoop handles tiny bacthes write
 func (db *DB) tinyBatchLoop(interval time.Duration) {
-	// ctx, cancel := context.WithCancel(context.Background())
-	// db.cancelCommit = cancel
 	db.closeW.Add(1)
 	tinyBatchWriterTicker := time.NewTicker(interval)
 	go func() {
