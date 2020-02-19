@@ -73,7 +73,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.BufferSize = 1 << 33 // maximum size of memdb (8GB).
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 33 // maximum size of memdb (12GB).
+		opts.MemdbSize = 1 << 33 // maximum size of memdb (8GB).
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 33 // maximum size of memdb (8GB).
