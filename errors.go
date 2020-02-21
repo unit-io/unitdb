@@ -9,6 +9,7 @@ var (
 	errMsgIdEmpty          = errors.New("Message Id is empty")
 	errMsgIdDoesNotExist   = errors.New("Message Id does not exist in database")
 	errMsgIdPrefixMismatch = errors.New("Message Id does not match topic or Contract")
+	errTtlTooLarge         = errors.New("TTL is too large")
 	errTopicTooLarge       = errors.New("Topic is too large")
 	errMsgExpired          = errors.New("Message has expired")
 	errValueTooLarge       = errors.New("value is too large")

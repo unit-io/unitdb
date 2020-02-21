@@ -5,12 +5,12 @@ import (
 )
 
 var (
-	signature  = [8]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b', '\xfd'}
+	signature  = [7]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b'}
 	headerSize uint32
 )
 
 type header struct {
-	signature [8]byte
+	signature [7]byte
 	version   uint32
 	dbInfo
 	_ [256]byte
@@ -23,23 +23,24 @@ func init() {
 // MarshalBinary serializes header into binary data
 func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
-	copy(buf[:8], h.signature[:])
+	copy(buf[:7], h.signature[:])
+	buf[7] = h.encryption
 	binary.LittleEndian.PutUint32(buf[8:12], h.version)
-	binary.LittleEndian.PutUint64(buf[12:20], uint64(h.seq))
+	binary.LittleEndian.PutUint64(buf[12:20], h.seq)
 	binary.LittleEndian.PutUint64(buf[20:28], uint64(h.count))
 	binary.LittleEndian.PutUint32(buf[28:32], h.nBlocks)
 	binary.LittleEndian.PutUint32(buf[32:36], h.blockIndex)
 	binary.LittleEndian.PutUint64(buf[36:44], uint64(h.freeblockOff))
 	binary.LittleEndian.PutUint64(buf[44:52], h.cacheID)
 	binary.LittleEndian.PutUint32(buf[52:56], h.hashSeed)
-	buf[57] = h.encryption
+	binary.LittleEndian.PutUint32(buf[56:60], uint32(h.timeWindowIdx))
 	return buf, nil
 }
 
 // UnmarshalBinary deserializes header from binary data
 func (h *header) UnmarshalBinary(data []byte) error {
-	copy(h.signature[:], data[:8])
-	h.version = binary.LittleEndian.Uint32(data[8:12])
+	copy(h.signature[:], data[:7])
+	h.encryption = data[7]
 	h.seq = binary.LittleEndian.Uint64(data[12:20])
 	h.count = int64(binary.LittleEndian.Uint64(data[20:28]))
 	h.nBlocks = binary.LittleEndian.Uint32(data[28:32])
@@ -47,6 +48,7 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	h.freeblockOff = int64(binary.LittleEndian.Uint64(data[36:44]))
 	h.cacheID = binary.LittleEndian.Uint64(data[44:52])
 	h.hashSeed = binary.LittleEndian.Uint32(data[52:56])
-	h.encryption = data[57]
+	h.timeWindowIdx = int32(binary.LittleEndian.Uint32(data[56:60]))
+
 	return nil
 }

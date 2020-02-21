@@ -74,12 +74,15 @@ func (t *Topic) AddContract(contract uint32) {
 }
 
 // GetHash combines the parts into a single hash.
-func (t *Topic) GetHash() uint32 {
+func (t *Topic) GetHash(contract uint64) uint64 {
+	if len(t.Parts) == 1 {
+		return contract
+	}
 	h := t.Parts[0].Query
 	for _, i := range t.Parts[1:] {
 		h ^= i.Query
 	}
-	return h
+	return uint64(h)<<32 + contract
 }
 
 // Marshal seriliazes topic to binay
@@ -162,21 +165,20 @@ func (t *Topic) TTL() (int64, bool) {
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.
-func (t *Topic) Last() (time.Time, time.Time, uint32, bool) {
+func (t *Topic) Last() (time.Time, uint32, bool) {
 	dur, last, ok := t.getOption("last")
 	if ok {
 		if last > 0 {
-			u1 := time.Now().Unix()
-			return zeroTime, toUnix(u1), last, ok
+			return zeroTime, last, ok
 		}
 		base := time.Now()
 		var duration time.Duration
 		duration, _ = time.ParseDuration(dur)
 		start := base.Add(-duration)
-		return start, base, 0, ok
+		return start, 0, ok
 	}
 
-	return zeroTime, zeroTime, 0, ok
+	return zeroTime, 0, ok
 }
 
 // Converts the time to Unix Time with validation.

@@ -62,7 +62,6 @@ type (
 		batchInfo
 		buffer *bpool.Buffer
 		size   int64
-		logs   []log
 
 		db            *DB
 		index         []batchIndex
@@ -109,8 +108,11 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
+	e.topicHash = topic.GetHash(e.contract)
 	e.encryption = b.opts.Encryption
-	b.db.setEntry(e)
+	if err := b.db.setEntry(e, ttl); err != nil {
+		return err
+	}
 	var key uint32
 	if !b.opts.AllowDuplicates {
 		key = hash.WithSalt(e.val, topic.GetHashCode())
@@ -167,11 +169,13 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
+	e.topicHash = topic.GetHash(e.contract)
 	id := message.ID(e.ID)
 	id.AddContract(e.contract)
 	e.id = id
 	e.seq = id.Seq()
 	key := topic.GetHashCode()
+	e.topicOffset, _ = b.db.trie.getOffset(topic.GetHash(e.contract))
 	data, err := b.db.packEntry(e)
 	if err != nil {
 		return err
@@ -204,36 +208,43 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	for i, index := range b.pendingWrites {
 		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
 		data := buf[index.offset+4 : index.offset+int64(dataLen)]
-		id, topic := index.message(data[entrySize:])
+		id, ptopic := index.message(data[entrySize:])
 
 		ID := message.ID(id)
 		seq := ID.Seq()
 		contract := ID.Contract()
 		if _, ok := topics[contract]; !ok {
 			t := new(message.Topic)
-			t.Unmarshal(topic)
+			t.Unmarshal(ptopic)
 			topics[contract] = t
 		}
-		itopic := topics[contract]
+		topic := topics[contract]
+		te := timeEntry{
+			contract:  contract,
+			seq:       seq,
+			entryTime: uint32(time.Now().Unix()),
+		}
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			if ok := b.db.trie.remove(contract, itopic.Parts, seq); !ok {
+			if ok := b.db.trie.remove(contract, topic.Parts, te); !ok {
 				return errBadRequest
 			}
 			b.db.delete(seq)
 			continue
 		}
-		if ok := b.db.trie.add(contract, itopic.Parts, itopic.Depth, seq); !ok {
+		topicHash := topic.GetHash(contract)
+		if ok := b.db.trie.add(contract, topicHash, topic.Parts, topic.Depth, te); !ok {
 			return errBadRequest
 		}
+		b.db.timeWindow.add(topicHash, te)
+
 		memseq := b.db.cacheID ^ seq
 		if err := fn(i, contract, memseq, data); err != nil {
 			return err
 		}
-		b.logs = append(b.logs, log{contract: contract, seq: memseq})
 	}
 	return nil
 }
@@ -260,27 +271,25 @@ func (b *Batch) Write() error {
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
-	logs := append(make([]log, 0, len(b.logs)), b.logs...)
 	buf := b.db.bufPool.Get()
 	buf.Write(b.buffer.Bytes())
-	go func(logs []log, data []byte) error {
+	go func(l int, data []byte) error {
 		defer b.db.bufPool.Put(buf)
-		return b.commit(logs, data)
-	}(logs, buf.Bytes())
+		return b.commit(l, data)
+	}(b.Len(), buf.Bytes())
 	b.Reset()
 	return nil
 }
 
-func (b *Batch) commit(logs []log, data []byte) error {
+func (b *Batch) commit(l int, data []byte) error {
 	b.db.writeLockC <- struct{}{}
 	defer func() {
 		<-b.db.writeLockC
 	}()
-	logSeq, err := b.db.commit(logs, data)
+	_, err := b.db.commit(l, data)
 	if err1 := <-err; err1 != nil {
 		logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
 	}
-	b.db.commitLog.Store(logSeq, logs)
 	return nil
 }
 
@@ -292,10 +301,9 @@ func (b *Batch) Commit() error {
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
-	logs := append(make([]log, 0, len(b.logs)), b.logs...)
 	buf := b.db.bufPool.Get()
 	buf.Write(b.buffer.Bytes())
-	return b.commit(logs, buf.Bytes())
+	return b.commit(b.Len(), buf.Bytes())
 }
 
 //Abort abort is a batch cleanup operation on batch complete
@@ -313,7 +321,6 @@ func (b *Batch) Reset() {
 	b.size = 0
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
-	b.logs = b.logs[:0]
 }
 
 func (b *Batch) uniq() []batchIndex {
@@ -359,11 +366,6 @@ func _assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
 		panic(fmt.Sprintf("assertion failed: "+msg, v...))
 	}
-}
-
-// Seqs returns Seqs in active batch.
-func (b *Batch) Logs() []log {
-	return b.logs
 }
 
 // Len returns number of records in the batch.

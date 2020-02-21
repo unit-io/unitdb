@@ -95,20 +95,20 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 			db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
 				opts.AllowDuplicates = true
-				opts.Topic = append(topics[i-1], []byte("?ttl=1m")...)
+				opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
 				b.SetOptions(opts)
 				for k := 0; k < batchSize; k++ {
 					b.Put(vals[k])
-					if k%500000 == 0 {
-						b.Write()
-					}
+					// if k%500000 == 0 {
+					// 	b.Write()
+					// }
 				}
-				b.Write()
-				eg.Go(func() error {
-					<-completed // it signals batch has completed and fully committed to db
-					return nil
-				})
-				return nil
+				return b.Write()
+				// eg.Go(func() error {
+				// 	<-completed // it signals batch has completed and fully committed to db
+				// 	return nil
+				// })
+				// return nil
 			})
 			if i >= concurrent {
 				return nil
@@ -302,20 +302,20 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				for contract := range keys {
-					for j, k := range keys[contract] {
+					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1m")...)
 						b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
-						if j%50000 == 0 {
-							b.Write()
-						}
+						// if j%50000 == 0 {
+						// 	b.Write()
+						// }
 					}
 				}
-				b.Write()
-				eg.Go(func() error {
-					<-completed // it signals batch has completed and fully committed to db
-					return nil
-				})
-				return nil
+				return b.Write()
+				// eg.Go(func() error {
+				// 	<-completed // it signals batch has completed and fully committed to db
+				// 	return nil
+				// })
+				// return nil
 			})
 			if i >= concurrent {
 				return nil

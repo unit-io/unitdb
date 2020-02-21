@@ -20,7 +20,6 @@ type (
 		Id uid.LID
 		tinyBatchInfo
 		buffer *bpool.Buffer
-		logs   []log
 	}
 )
 
@@ -49,8 +48,6 @@ type batchdb struct {
 	bufPool *bpool.BufferPool
 	//tiny Batch
 	tinyBatch *tinyBatch
-	//once run batchLoop once
-	once Once
 }
 
 // Batch starts a new batch.

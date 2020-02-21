@@ -118,11 +118,11 @@ func main() {
 				p, _ := t.MarshalText()
 				for j := 0; j < 250; j++ {
 					b.Put(p)
-					if j%100 == 0 {
-						if err := b.Write(); err != nil {
-							return err
-						}
-					}
+					// if j%100 == 0 {
+					// 	if err := b.Write(); err != nil {
+					// 		return err
+					// 	}
+					// }
 				}
 				if err := b.Write(); err != nil {
 					return err
@@ -251,4 +251,8 @@ func main() {
 	// 		i++
 	// 	}
 	// }(1)
+	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=2h"), Limit: 250})
+	for _, msg := range msgs {
+		log.Printf("%s ", msg)
+	}
 }

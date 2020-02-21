@@ -6,10 +6,12 @@ import (
 
 // Topic topic returned by iterator
 type Topic struct {
-	parts []message.Part
-	depth uint8
-	seq   uint64
-	err   error
+	parts    []message.Part
+	contract uint64
+	hash     uint64
+	depth    uint8
+	seq      uint64
+	err      error
 }
 
 // TopicIterator is an iterator over DB key/value pairs. It iterates the Topics in an unspecified order.
@@ -27,7 +29,7 @@ func (it *TopicIterator) Next() {
 		for it.nextBlockIdx < it.db.blocks() {
 			err := func() error {
 				off := blockOffset(it.nextBlockIdx)
-				b := blockHandle{table: it.db.index.FileManager, offset: off}
+				b := blockHandle{file: it.db.index.FileManager, offset: off}
 				if err := b.read(); err != nil {
 					return err
 				}
@@ -38,7 +40,7 @@ func (it *TopicIterator) Next() {
 					}
 
 					if e.isExpired() {
-						it.db.timeWindow.add(e)
+						it.db.timeWindow.addExpiry(e)
 						continue
 					}
 					id, err := it.db.data.readId(e)
@@ -54,11 +56,11 @@ func (it *TopicIterator) Next() {
 					if err != nil {
 						return err
 					}
-					it.queue = append(it.queue, &Topic{parts: topic.Parts, depth: topic.Depth, seq: message.ID(id).Seq(), err: err})
+					contract := message.Contract(topic.Parts)
+					it.queue = append(it.queue, &Topic{contract: contract, hash: topic.GetHash(contract), parts: topic.Parts, depth: topic.Depth, seq: message.ID(id).Seq(), err: err})
 				}
 				return nil
 			}()
-
 			if err != nil {
 				it.queue = append(it.queue, &Topic{err: err})
 			}
@@ -74,20 +76,6 @@ func (it *TopicIterator) Next() {
 	}
 }
 
-// First returns the first key/value pair if available.
-func (it *TopicIterator) First() {
-	if it.nextBlockIdx >= 1 {
-		return
-	}
-	it.Next()
-}
-
-// Topic returns pointer to the current key-value pair.
-// This Topic is only valid until it.Next() gets called.
-func (it *TopicIterator) Topic() *Topic {
-	return it.topic
-}
-
 // Valid returns false when iteration is done.
 func (it *TopicIterator) Valid() bool {
 	if len(it.queue) > 0 {
@@ -99,7 +87,27 @@ func (it *TopicIterator) Valid() bool {
 // Error returns any accumulated error. Exhausting all the key/value pairs
 // is not considered to be an error. A memory iterator cannot encounter errors.
 func (it *TopicIterator) Error() error {
-	return nil
+	return it.topic.err
+}
+
+// Topic returns pointer to the current key-value pair.
+// This Topic is only valid until it.Next() gets called.
+func (it *TopicIterator) Topic() *Topic {
+	return it.topic
+}
+
+// Contract returns contract of the parts, or nil if done. The
+// caller should not modify the contents of the returned slice, and its contents
+// may change on the next call to Next.
+func (Topic *Topic) Contract() uint64 {
+	return Topic.contract
+}
+
+// Hash returns topic hash, or nil if done. The
+// caller should not modify the contents of the returned slice, and its contents
+// may change on the next call to Next.
+func (Topic *Topic) Hash() uint64 {
+	return Topic.hash
 }
 
 // Parts returns the topic parts, or nil if done. The

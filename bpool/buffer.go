@@ -1,6 +1,9 @@
 package bpool
 
-import "errors"
+import (
+	"errors"
+	"sync/atomic"
+)
 
 type (
 	buffer struct {
@@ -22,8 +25,8 @@ func (b *buffer) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	off := b.size
-	return off, b.truncate(b.size + int64(size))
+	off := atomic.LoadInt64(&b.size)
+	return off, b.truncate(off + int64(size))
 }
 
 func (b *buffer) bytes() ([]byte, error) {
@@ -31,7 +34,7 @@ func (b *buffer) bytes() ([]byte, error) {
 }
 
 func (b *buffer) reset() (ok bool) {
-	b.size = 0
+	atomic.StoreInt64(&b.size, 0)
 	b.buf = b.buf[:0]
 	return true
 }
@@ -59,16 +62,26 @@ func (b *buffer) writeAt(p []byte, off int64) (int, error) {
 }
 
 func (b *buffer) truncate(size int64) error {
-	if size > b.size {
-		diff := int(size - b.size)
+	if size > b.Size() {
+		diff := int(size - b.Size())
 		b.buf = append(b.buf, make([]byte, diff)...)
 	} else {
-		b.buf = b.buf[:b.size]
+		b.buf = b.buf[:b.Size()]
 	}
-	b.size = size
+	atomic.StoreInt64(&b.size, size)
 	return nil
 }
 
 func (b *buffer) slice(start int64, end int64) ([]byte, error) {
 	return b.buf[start:end], nil
+}
+
+// Size returns buffer size
+func (b *buffer) Size() int64 {
+	return atomic.LoadInt64(&b.size)
+}
+
+// incSize increases buffer size to allocate buffer
+func (b *buffer) incSize(size int64) int64 {
+	return atomic.AddInt64(&b.size, size)
 }

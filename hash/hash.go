@@ -49,7 +49,7 @@ func shuffleInPlace(text []byte, contract uint32) []byte {
 		return text
 	}
 	salt := make([]byte, 4)
-	binary.BigEndian.PutUint32(salt[0:4], contract)
+	binary.LittleEndian.PutUint32(salt[0:4], contract)
 
 	result := duplicateSlice(text)
 	for i, v, p := len(result)-1, 0, 0; i > 0; i-- {

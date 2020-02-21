@@ -1,9 +1,11 @@
 package tracedb
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/tracedb/message"
 )
 
 type userdblock struct {
@@ -20,13 +22,6 @@ func truncateFiles(db *DB) error {
 	if err := db.index.Truncate(db.index.size); err != nil {
 		return err
 	}
-
-	if db.index.Type() == "MemoryMap" {
-		if err := db.index.FileManager.(*fs.OSFile).Mmap(db.index.size); err != nil {
-			return err
-		}
-	}
-
 	db.data.size = align51264(db.data.size)
 	if err := db.data.Truncate(db.data.size); err != nil {
 		return err
@@ -45,7 +40,7 @@ func getUsedBlocks(db *DB) (int64, []userdblock, error) {
 	var usedBlocks []userdblock
 	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
 		off := blockOffset(blockIdx)
-		b := blockHandle{table: db.index.FileManager, offset: off}
+		b := blockHandle{file: db.index.FileManager, offset: off}
 		if err := b.read(); err != nil {
 			return 0, nil, err
 		}
@@ -116,6 +111,40 @@ func (db *DB) recover() error {
 	return nil
 }
 
+func (db *DB) recoverTimeWindow() error {
+	err := db.timeWindow.foreachTimeWindow(true, func(timeHash int64, windowEntries map[uint64]windowEntries) (bool, error) {
+		for h, t := range windowEntries {
+			off, ok := db.trie.getOffset(h)
+			if !ok {
+				return true, errors.New("recovery.recoverTimeWindow error: unbale to get topic offset from trie")
+			}
+			tb, err := db.timeWindow.getTimeBlockHandle(h, off)
+			if err != nil {
+				return true, err
+			}
+			for _, te := range t {
+				newOff, err := db.timeWindow.write(&tb, te)
+				if err != nil {
+					return true, err
+				}
+				if newOff > off {
+					if ok := db.trie.setOffset(h, newOff); !ok {
+						return true, errors.New("recovery.recoverTimeWindow error: unbale to set topic offset in trie")
+					}
+				}
+			}
+			if err != nil {
+				return true, err
+			}
+			if err := db.timeWindow.Sync(); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	})
+	return err
+}
+
 func (db *DB) recoverLog() error {
 	db.closeW.Add(1)
 	defer func() {
@@ -145,10 +174,12 @@ func (db *DB) recoverLog() error {
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
 			logEntry := entry{}
-			logEntry.UnmarshalBinary(entryData)
+			if err := logEntry.UnmarshalBinary(entryData); err != nil {
+				return err
+			}
 			startBlockIdx := startBlockIndex(logEntry.seq)
 			off := blockOffset(startBlockIdx)
-			b := &blockHandle{table: db.index, offset: off}
+			b := &blockHandle{file: db.index, offset: off}
 			if err := b.read(); err != nil {
 				return err
 			}
@@ -166,8 +197,31 @@ func (db *DB) recoverLog() error {
 			db.incount()
 			moffset := logEntry.mSize()
 			m := data[:moffset]
-			if logEntry.mOffset, err = db.data.writeRaw(m); err != nil {
+			if logEntry.mOffset, err = db.data.write(m); err != nil {
 				return err
+			}
+			t, err := db.data.readTopic(logEntry)
+			if err != nil {
+				return err
+			}
+			topic := new(message.Topic)
+			err = topic.Unmarshal(t)
+			if err != nil {
+				return err
+			}
+			contract := message.Contract(topic.Parts)
+			topicHash := topic.GetHash(contract)
+			te := timeEntry{
+				contract: contract,
+				seq:      logEntry.seq,
+			}
+			db.timeWindow.add(topicHash, te)
+			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
+				if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth, timeEntry{}); ok {
+					if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
+						return errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
+					}
+				}
 			}
 			db.meter.Puts.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
@@ -178,6 +232,9 @@ func (db *DB) recoverLog() error {
 			}
 			db.filter.Append(logEntry.seq)
 		}
+		if err := db.recoverTimeWindow(); err != nil {
+			return err
+		}
 		if err := db.sync(); err != nil {
 			return err
 		}
@@ -186,5 +243,5 @@ func (db *DB) recoverLog() error {
 		}
 	}
 
-	return nil
+	return err
 }

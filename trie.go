@@ -10,49 +10,49 @@ const (
 	nul = 0x0
 )
 
-// ssid represents a sequence set which can contain only unique values.
-type ssid []uint64
+// timeEntries represents a time entry set which can contain only unique values.
+type timeEntries []timeEntry
 
-// new returns seq set of given cap.
-func newSsid(cap uint32) ssid {
-	return make([]uint64, 0, cap)
+// new returns time entry set of given cap.
+func newTimeEntries(cap uint32) timeEntries {
+	return make([]timeEntry, 0, cap)
 }
 
-// extend extends the cap of seq set.
-func (ss *ssid) extend(cap uint32) {
-	if cap < ss.len() {
+// extend extends the cap of time entry set.
+func (ts *timeEntries) extend(cap uint32) {
+	if cap < ts.len() {
 		return
 	}
-	l := cap - ss.len()
-	*ss = append(*ss, make([]uint64, l)...)
+	l := cap - ts.len()
+	*ts = append(*ts, make([]timeEntry, l)...)
 }
 
 // shrink shrinks the cap of seq set.
-func (ss *ssid) shrink(cap uint32) {
-	newssid := make([]uint64, 0, ss.len())
-	copy(newssid, *ss)
-	*ss = newssid
+func (ts *timeEntries) shrink(cap uint32) {
+	newts := make([]timeEntry, 0, ts.len())
+	copy(newts, *ts)
+	*ts = newts
 }
 
 // addUnique adds a seq to the set.
-func (ss *ssid) addUnique(value uint64) (added bool) {
-	if ss.contains(value) == false {
-		*ss = append(*ss, value)
+func (ts *timeEntries) addUnique(value timeEntry) (added bool) {
+	if ts.contains(value) == false {
+		*ts = append(*ts, value)
 		added = true
 	}
 	return
 }
 
 // remove a seq from the set.
-func (ss *ssid) remove(value uint64) (removed bool) {
-	for i, v := range *ss {
+func (ts *timeEntries) remove(value timeEntry) (removed bool) {
+	for i, v := range *ts {
 		// if bytes.Equal(v, value) {
 		if v == value {
-			a := *ss
+			a := *ts
 			a[i] = a[len(a)-1]
 			//a[len(a)-1] = nil
 			a = a[:len(a)-1]
-			*ss = a
+			*ts = a
 			removed = true
 			return
 		}
@@ -61,8 +61,8 @@ func (ss *ssid) remove(value uint64) (removed bool) {
 }
 
 // contains checks whether a seq is in the set.
-func (ss *ssid) contains(value uint64) bool {
-	for _, v := range *ss {
+func (ts *timeEntries) contains(value timeEntry) bool {
+	for _, v := range *ts {
 		// if bytes.Equal(v, value) {
 		// 	return true
 		// }
@@ -74,8 +74,8 @@ func (ss *ssid) contains(value uint64) bool {
 }
 
 // len length of seq set.
-func (ss *ssid) len() uint32 {
-	return uint32(len(*ss))
+func (ts *timeEntries) len() uint32 {
+	return uint32(len(*ts))
 }
 
 type key struct {
@@ -87,9 +87,10 @@ type part struct {
 	k        key
 	depth    uint8
 	cap      uint32
-	ss       ssid
+	ts       timeEntries
 	parent   *part
 	children map[key]*part
+	offset   int64
 }
 
 func (p *part) orphan() {
@@ -98,22 +99,24 @@ func (p *part) orphan() {
 	}
 
 	delete(p.parent.children, p.k)
-	if len(p.parent.ss) == 0 && len(p.parent.children) == 0 {
+	if len(p.parent.ts) == 0 && len(p.parent.children) == 0 {
 		p.parent.orphan()
 	}
 }
 
 // partTrie represents an efficient collection of Trie with lookup capability.
 type partTrie struct {
-	root *part // The root node of the tree.
+	summary map[uint64]*part // summary is map of topichash to part
+	root    *part            // The root node of the tree.
 }
 
 // newPartTrie creates a new matcher for the Trie.
 func newPartTrie(cacheCap uint32) *partTrie {
 	return &partTrie{
+		summary: make(map[uint64]*part),
 		root: &part{
 			cap:      cacheCap,
-			ss:       newSsid(cacheCap),
+			ts:       newTimeEntries(cacheCap),
 			children: make(map[key]*part),
 		},
 	}
@@ -144,7 +147,7 @@ func (t *trie) Count() int {
 }
 
 // add adds a message seq to topic trie.
-func (t *trie) add(contract uint64, parts []message.Part, depth uint8, seq uint64) (added bool) {
+func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, depth uint8, te timeEntry) (added bool) {
 	// Get mutex
 	mu := t.getMutex(contract)
 	mu.Lock()
@@ -162,7 +165,7 @@ func (t *trie) add(contract uint64, parts []message.Part, depth uint8, seq uint6
 			child = &part{
 				k:        k,
 				cap:      t.partTrie.root.cap,
-				ss:       newSsid(t.partTrie.root.cap),
+				ts:       newTimeEntries(t.partTrie.root.cap),
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -172,19 +175,24 @@ func (t *trie) add(contract uint64, parts []message.Part, depth uint8, seq uint6
 		}
 		curr = child
 	}
-	if curr.ss.len() >= curr.cap {
-		curr.ss = curr.ss[1:]
+	t.Lock()
+	t.partTrie.summary[topicHash] = curr
+	t.Unlock()
+	if curr.ts.len() >= curr.cap {
+		curr.ts = curr.ts[1:] // remove first if capacity has reached
 	}
-	curr.ss = append(curr.ss, seq)
+	if te.seq > 0 {
+		curr.ts = append(curr.ts, te)
+	}
 	added = true
 	curr.depth = depth
 	t.count++
 
-	return
+	return added
 }
 
 // remove removes a message seq from topic trie
-func (t *trie) remove(contract uint64, parts []message.Part, seq uint64) (removed bool) {
+func (t *trie) remove(contract uint64, parts []message.Part, e timeEntry) (removed bool) {
 	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
@@ -206,44 +214,45 @@ func (t *trie) remove(contract uint64, parts []message.Part, seq uint64) (remove
 		curr = child
 	}
 	// Remove a message seq and decrement the counter
-	if ok := curr.ss.remove(seq); ok {
+	if ok := curr.ts.remove(e); ok {
 		removed = true
 		// adjust cap of the seq set
-		if curr.ss.len() > t.partTrie.root.cap {
-			curr.cap = curr.ss.len()
-			curr.ss.shrink(curr.cap)
+		if curr.ts.len() > t.partTrie.root.cap {
+			curr.cap = curr.ts.len()
+			curr.ts.shrink(curr.cap)
 		}
 		t.count--
 	}
 	// Remove orphans
 	t.Lock()
 	defer t.Unlock()
-	if len(curr.ss) == 0 && len(curr.children) == 0 {
+	if len(curr.ts) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
 	return
 }
 
 // lookup returns seq set for given topic.
-func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ss ssid) {
+func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts timeEntries, offs []int64, fanout bool) {
 	t.RLock()
 	defer t.RUnlock()
-	t.ilookup(contract, parts, uint8(len(parts)-1), &ss, t.partTrie.root, limit)
-	return
+	t.ilookup(contract, parts, uint8(len(parts)-1), &ts, &offs, t.partTrie.root, limit)
+	return ts, offs, ts.len() < limit
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ss *ssid, part *part, limit uint32) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *timeEntries, offs *[]int64, part *part, limit uint32) {
 	// Add seq set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
 		var l uint32
-		*ss = append(*ss, part.ss...)
-		// on lookup cap increased to 10 folds of current cap of the seq set of the part
-		if ss.len() > limit {
+		*offs = append(*offs, part.offset)
+		*ts = append(*ts, part.ts...)
+		// on lookup cap increased to 2 folds of current cap of the seq set
+		if ts.len() > limit {
 			l = limit
 		}
 		if part.cap < 2*l {
 			part.cap = 2 * l
-			part.ss.extend(part.cap)
+			part.ts.extend(part.cap)
 		}
 	}
 
@@ -252,8 +261,29 @@ func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ss *s
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, ss, p, limit)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, ts, offs, p, limit)
 			}
 		}
 	}
+}
+
+func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
+	t.RLock()
+	defer t.RUnlock()
+	if curr, ok := t.partTrie.summary[topicHash]; ok {
+		return curr.offset, ok
+	}
+	return 0, ok
+}
+
+func (t *trie) setOffset(topicHash uint64, off int64) (ok bool) {
+	t.Lock()
+	defer t.Unlock()
+	if curr, ok := t.partTrie.summary[topicHash]; ok {
+		if curr.offset < off {
+			curr.offset = off
+		}
+		return ok
+	}
+	return false
 }

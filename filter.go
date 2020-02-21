@@ -53,10 +53,6 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 	}
 	var cacheKey uint64
 	if f.cache != nil {
-		// var kb [8]byte
-		// binary.LittleEndian.PutUint64(kb[:8], f.cacheID^uint64(f.size))
-		// // binary.LittleEndian.PutUint64(kb[4:], uint64(f.size))
-		// cacheKey = string(kb[:])
 		cacheKey = f.cacheID ^ uint64(f.size)
 		if data, err := f.cache.Get(0, cacheKey); data != nil {
 			return filter.NewFilterBlock(data), err
