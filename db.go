@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	entriesPerBlock  = 150 // (4096 i.e blocksize/26 i.e entry slot size)
-	seqsPerTimeBlock = 400 // ((4096 i.e. blocksize - 26 fixed)/10 i.e. timeentry size)
+	entriesPerBlock    = 150 // (4096 i.e blocksize/26 i.e entry slot size)
+	seqsPerWindowBlock = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. timeentry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
 	indexPostfix  = ".index"
@@ -353,14 +353,14 @@ func (db *DB) readHeader(readFreeList bool) error {
 
 // initLoad loads topic and offset from timewindow files
 func (db *DB) loadTopicHash() error {
-	err := db.timeWindow.foreachTimeBlock(func(curb timeHandle) (bool, error) {
+	err := db.timeWindow.foreachWindowBlock(func(curb windowHandle) (bool, error) {
 		b := &curb
-		off := b.offset
+		pOff := b.offset
 		sOff, ok := db.trie.getOffset(b.topicHash)
-		if !ok || sOff < off {
-			if ok := db.trie.setOffset(b.topicHash, off); !ok {
-				lOff := blockOffset(startBlockIndex(b.timeEntries[0].seq))
-				lb := blockHandle{file: db.index, offset: lOff}
+		if !ok || sOff < pOff {
+			if ok := db.trie.setOffset(b.topicHash, pOff); !ok {
+				off := blockOffset(startBlockIndex(b.winEntries[0].seq))
+				lb := blockHandle{file: db.index, offset: off}
 				if err := lb.read(); err == io.EOF {
 					return false, nil
 				}
@@ -375,8 +375,8 @@ func (db *DB) loadTopicHash() error {
 				if err != nil {
 					return true, err
 				}
-				if ok := db.trie.add(message.Contract(topic.Parts), b.topicHash, topic.Parts, topic.Depth, timeEntry{}); ok {
-					if ok := db.trie.setOffset(b.topicHash, off); !ok {
+				if ok := db.trie.add(message.Contract(topic.Parts), b.topicHash, topic.Parts, topic.Depth, winEntry{}); ok {
+					if ok := db.trie.setOffset(b.topicHash, pOff); !ok {
 						return true, errors.New("topic_trie loading error: unable to set topic offset to topic trie")
 					}
 				}
@@ -400,7 +400,7 @@ func (db *DB) loadTrie() error {
 			logger.Error().Err(err).Str("context", "db.loadTrie")
 			return err
 		}
-		te := timeEntry{
+		te := winEntry{
 			contract: it.Topic().Contract(),
 			seq:      it.Topic().Seq(),
 		}
@@ -441,37 +441,35 @@ func (db *DB) Sync() error {
 		return nil
 	}
 
-	err = db.timeWindow.foreachTimeWindow(true, func(timeHash int64, windowEntries map[uint64]windowEntries) (bool, error) {
+	err = db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		if err := db.extendBlocks(); err != nil {
 			return false, err
 		}
 
-		var tEntry timeEntry
-		for h, t := range windowEntries {
-			timeOff, ok := db.trie.getOffset(h)
+		var wEntry winEntry
+		for h, wEntries := range windowEntries {
+			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
 				return true, errors.New("timeWindow sync error: unbale to get topic offset from trie")
 			}
-			tb, err := db.timeWindow.getTimeBlockHandle(h, timeOff)
+			wb, err := db.timeWindow.getWindowBlockHandle(h, topicOff)
 			if err != nil {
 				return true, err
 			}
-			var lOff int64
 			var b *blockHandle
-			// fmt.Println("db.sync: timeEntries, entries ", len(timeEntries), len(t))
-			for _, te := range t {
-				tEntry = te.(timeEntry)
-				newOff, err := db.timeWindow.write(&tb, te)
+			for _, we := range wEntries {
+				wEntry = we.(winEntry)
+				newOff, err := db.timeWindow.write(&wb, we)
 				if err != nil {
 					return true, err
 				}
-				if newOff > timeOff {
+				if newOff > topicOff {
 					if ok := db.trie.setOffset(h, newOff); !ok {
 						return true, errors.New("timeWindow sync error: unbale to set topic offset in trie")
 					}
 				}
-				mseq := db.cacheID ^ tEntry.seq
-				memdata, err := db.mem.Get(tEntry.contract, mseq)
+				mseq := db.cacheID ^ wEntry.seq
+				memdata, err := db.mem.Get(wEntry.contract, mseq)
 				if err != nil {
 					return true, err
 				}
@@ -482,8 +480,8 @@ func (db *DB) Sync() error {
 
 				startTimeIdx := startBlockIndex(e.seq)
 				off := blockOffset(startTimeIdx)
-				if off != lOff {
-					lOff = off
+				if off != newOff {
+					newOff = off
 					b = &blockHandle{file: db.index, offset: off}
 					if err := b.read(); err != nil {
 						return true, err
@@ -522,12 +520,15 @@ func (db *DB) Sync() error {
 				db.meter.InMsgs.Inc(1)
 			}
 		}
-		if err := db.timeWindow.Sync(); err != nil {
-			return true, err
-		}
-		db.mem.Free(tEntry.contract, tEntry.seq)
+		db.mem.Free(wEntry.contract, wEntry.seq)
 		return false, nil
 	})
+	if err := db.timeWindow.Sync(); err != nil {
+		return err
+	}
+	if err := db.sync(); err != nil {
+		return err
+	}
 	if err == nil {
 		for _, s := range seqs {
 			if err := db.wal.SignalLogApplied(s); err != nil {
@@ -541,7 +542,7 @@ func (db *DB) Sync() error {
 			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
 		}
 	}
-	return db.sync()
+	return nil
 }
 
 // ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
@@ -565,7 +566,7 @@ func (db *DB) ExpireOldEntries() {
 		topic := new(message.Topic)
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
-		db.trie.remove(contract, topic.Parts, expiredEntry.(timeEntry))
+		db.trie.remove(contract, topic.Parts, expiredEntry.(winEntry))
 		db.freeslots.free(e.seq)
 		db.data.free(e.mSize(), e.mOffset)
 		db.decount()
@@ -651,7 +652,8 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 			return e, nil
 		}
 	}
-	return entry{}, errMsgIdDoesNotExist
+	// return entry{}, errMsgIdDoesNotExist
+	return entry{}, nil
 }
 
 // Get return items matching the query paramater
@@ -704,28 +706,28 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		return
 	}
 	if q.fanout {
-		limit := q.Limit - uint32(len(q.entries))
-		pEntries, _ := db.timeWindow.lookup(q.topicHash, q.topicOffsets, limit)
+		// q.entries = q.entries[:0]
+		// limit := q.Limit - uint32(len(q.entries))
+		pEntries, _ := db.timeWindow.lookup(q.topicHash, q.topicOffsets, q.Limit)
 		q.entries = append(q.entries, pEntries...)
-		// fmt.Println("db.Get: pEntries count, fanout ", len(pEntries), q.fanout)
 	}
 	if len(q.entries) > int(q.Limit) {
 		q.entries = q.entries[:q.Limit]
 	}
+	expiryCount := 0
 	for {
-		expiryCount := 0
-		for _, te := range q.entries {
+		for _, we := range q.entries {
 			err = func() error {
-				if te.seq == 0 {
-					return nil
-				}
-				e, err := db.readEntry(q.contract, te.seq)
+				// if we.seq == 0 {
+				// 	return nil
+				// }
+				e, err := db.readEntry(q.contract, we.seq)
 				if err != nil {
 					return err
 				}
 				if e.isExpired() {
 					expiryCount++
-					if ok := db.trie.remove(q.contract, q.parts, te); ok {
+					if ok := db.trie.remove(q.contract, q.parts, we); ok {
 						db.timeWindow.addExpiry(e)
 					}
 					// if id is expired it does not return an error but continue the iteration
@@ -760,10 +762,14 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				return items, err
 			}
 		}
-		if len(q.entries) < int(q.Limit-uint32(len(items))) || len(items) >= int(q.Limit) {
+		if len(q.entries) == 0 || cap(q.entries) < int(q.Limit) || len(items) >= int(q.Limit) {
 			break
 		}
-		q.entries = q.entries[len(items) : q.Limit-uint32(len(items))]
+		if len(q.entries) < int(q.Limit+uint32(expiryCount)) {
+			q.entries = q.entries[q.Limit:]
+		} else {
+			q.entries = q.entries[q.Limit : q.Limit+uint32(expiryCount)]
+		}
 	}
 	db.meter.Gets.Inc(int64(len(items)))
 	db.meter.OutMsgs.Inc(int64(len(items)))
@@ -942,13 +948,12 @@ func (db *DB) PutEntry(e *Entry) error {
 	}
 
 	var ok bool
-	te := timeEntry{
-		contract:  e.contract,
-		seq:       e.seq,
-		entryTime: uint32(time.Now().Unix()),
+	we := winEntry{
+		contract: e.contract,
+		seq:      e.seq,
 	}
-	if ok = db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth, te); ok {
-		if err := db.timeWindow.add(e.topicHash, te); err != nil {
+	if ok = db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth, we); ok {
+		if err := db.timeWindow.add(e.topicHash, we); err != nil {
 			return err
 		}
 		e.topicOffset, _ = db.trie.getOffset(e.topicHash)
@@ -987,7 +992,6 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
 
-		// topicHash:   e.topicHash,
 		topicOffset: e.topicOffset,
 	}
 	data, _ := e1.MarshalBinary()
@@ -1117,7 +1121,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	mu := db.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
-	te := timeEntry{
+	te := winEntry{
 		contract: contract,
 		seq:      message.ID(id).Seq(),
 	}

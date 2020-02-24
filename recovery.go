@@ -111,14 +111,14 @@ func (db *DB) recover() error {
 	return nil
 }
 
-func (db *DB) recoverTimeWindow() error {
-	err := db.timeWindow.foreachTimeWindow(true, func(timeHash int64, windowEntries map[uint64]windowEntries) (bool, error) {
+func (db *DB) recoverWindowBlocks() error {
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, t := range windowEntries {
 			off, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, errors.New("recovery.recoverTimeWindow error: unbale to get topic offset from trie")
+				return true, errors.New("recovery.recoverWindowBlocks error: unbale to get topic offset from trie")
 			}
-			tb, err := db.timeWindow.getTimeBlockHandle(h, off)
+			tb, err := db.timeWindow.getWindowBlockHandle(h, off)
 			if err != nil {
 				return true, err
 			}
@@ -129,7 +129,7 @@ func (db *DB) recoverTimeWindow() error {
 				}
 				if newOff > off {
 					if ok := db.trie.setOffset(h, newOff); !ok {
-						return true, errors.New("recovery.recoverTimeWindow error: unbale to set topic offset in trie")
+						return true, errors.New("recovery.recoverWindowBlocks error: unbale to set topic offset in trie")
 					}
 				}
 			}
@@ -211,13 +211,13 @@ func (db *DB) recoverLog() error {
 			}
 			contract := message.Contract(topic.Parts)
 			topicHash := topic.GetHash(contract)
-			te := timeEntry{
+			we := winEntry{
 				contract: contract,
 				seq:      logEntry.seq,
 			}
-			db.timeWindow.add(topicHash, te)
+			db.timeWindow.add(topicHash, we)
 			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
-				if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth, timeEntry{}); ok {
+				if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth, winEntry{}); ok {
 					if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
 						return errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
 					}
@@ -232,7 +232,7 @@ func (db *DB) recoverLog() error {
 			}
 			db.filter.Append(logEntry.seq)
 		}
-		if err := db.recoverTimeWindow(); err != nil {
+		if err := db.recoverWindowBlocks(); err != nil {
 			return err
 		}
 		if err := db.sync(); err != nil {

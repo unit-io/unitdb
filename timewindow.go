@@ -11,48 +11,47 @@ import (
 )
 
 const (
-	timBlockSize uint32 = 4096
+	winBlockSize uint32 = 4096
 )
 
 type (
-	timeEntry struct {
-		contract  uint64 // contract is used to query memdb it is not stored into timewindow files
-		seq       uint64 //seq specific to time block entries
-		entryTime uint32
+	winEntry struct {
+		contract uint64
+		seq      uint64 //seq specific to time block entries
 	}
-	timeBlock struct {
-		contract    uint64
-		topicHash   uint64
-		timeEntries [seqsPerTimeBlock]timeEntry
-		next        int64 //next stores offset that links multiple timeblocks for a topic hash. Most recent offset is stored into trie (to iterate entries in reverse order)
-		entryIdx    uint16
+	winBlock struct {
+		contract   uint64
+		topicHash  uint64
+		winEntries [seqsPerWindowBlock]winEntry
+		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie (to iterate entries in reverse order)
+		entryIdx   uint16
 	}
 )
 
-type timeHandle struct {
-	timeBlock
+type windowHandle struct {
+	winBlock
 	file   file
 	offset int64
 }
 
-func timeBlockOffset(idx int32) int64 {
+func winBlockOffset(idx int32) int64 {
 	return (int64(blockSize) * int64(idx))
 }
 
-func (e timeEntry) time() uint32 {
-	return e.entryTime
+func (e winEntry) time() uint32 {
+	return 0
 }
 
-func (e timeEntry) Seq() uint64 {
+func (e winEntry) Seq() uint64 {
 	return e.seq
 }
 
 // MarshalBinary serliazed time block into binary data
-func (b timeBlock) MarshalBinary() ([]byte, error) {
+func (b winBlock) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, blockSize)
 	data := buf
-	for i := 0; i < seqsPerTimeBlock; i++ {
-		e := b.timeEntries[i]
+	for i := 0; i < seqsPerWindowBlock; i++ {
+		e := b.winEntries[i]
 		binary.LittleEndian.PutUint64(buf[:8], e.seq)
 		buf = buf[8:]
 	}
@@ -64,10 +63,10 @@ func (b timeBlock) MarshalBinary() ([]byte, error) {
 }
 
 // UnmarshalBinary dserliazed time block from binary data
-func (b *timeBlock) UnmarshalBinary(data []byte) error {
-	for i := 0; i < seqsPerTimeBlock; i++ {
+func (b *winBlock) UnmarshalBinary(data []byte) error {
+	for i := 0; i < seqsPerWindowBlock; i++ {
 		_ = data[8] // bounds check hint to compiler; see golang.org/issue/14808
-		b.timeEntries[i].seq = binary.LittleEndian.Uint64(data[:8])
+		b.winEntries[i].seq = binary.LittleEndian.Uint64(data[:8])
 		data = data[8:]
 	}
 	b.contract = binary.LittleEndian.Uint64(data[:8])
@@ -77,7 +76,7 @@ func (b *timeBlock) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (h *timeHandle) read() error {
+func (h *windowHandle) read() error {
 	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
@@ -85,7 +84,7 @@ func (h *timeHandle) read() error {
 	return h.UnmarshalBinary(buf)
 }
 
-func (h *timeHandle) write() error {
+func (h *windowHandle) write() error {
 	buf, err := h.MarshalBinary()
 	if err != nil {
 		return err
@@ -105,8 +104,8 @@ type timeWindows struct {
 
 type windows struct {
 	expiry map[int64]windowEntries // map[expiryHash]windowEntries
-	blocks map[int64]timeWindow    // map[entryHash]timeWindow
-	mu     sync.RWMutex            // Read Write mutex, guards access to internal collection.
+	timeWindow
+	mu sync.RWMutex // Read Write mutex, guards access to internal collection.
 }
 
 // newTimeWindows creates a new concurrent timeWindows.
@@ -117,7 +116,7 @@ func newTimeWindows() *timeWindows {
 	}
 
 	for i := 0; i < nShards; i++ {
-		w.windows[i] = &windows{expiry: make(map[int64]windowEntries), blocks: make(map[int64]timeWindow)}
+		w.windows[i] = &windows{expiry: make(map[int64]windowEntries), timeWindow: timeWindow{friezedEntries: make(map[uint64]windowEntries), entries: make(map[uint64]windowEntries)}}
 	}
 
 	return w
@@ -186,12 +185,13 @@ func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	return l
 }
 
-// newBlock adds new block to timwWindowBucket and returns block offset
+// newBlock adds new block to windowBlock and returns block offset
 func (wb *timeWindowBucket) newBlock() (int64, error) {
 	off, err := wb.extend(blockSize)
 	if err != nil {
 		return off, err
 	}
+	wb.nextTimeWindowIdx()
 	return off, err
 }
 
@@ -234,7 +234,7 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 	return expiredEntries
 }
 
-// addExpiry adds expiry for first timeblock. Entries expires in future is not added yet to expiry window
+// addExpiry adds expiry for first winBlock. Entries expires in future is not added yet to expiry window
 func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
 	timeExpiry := int64(time.Unix(int64(e.time()), 0).Truncate(wb.opts.expDurationType).Add(1 * wb.opts.expDurationType).Unix())
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
@@ -257,43 +257,29 @@ func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
 }
 
 func (wb *timeWindowBucket) add(topicHash uint64, e timeWindowEntry) error {
-	entryTime := int64(time.Unix(int64(e.time()), 0).Truncate(wb.opts.expDurationType).Add(1 * wb.opts.expDurationType).Unix())
-
 	// get windows shard
-	ws := wb.getWindows(uint64(entryTime))
+	ws := wb.getWindows(topicHash)
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	block, ok := ws.blocks[entryTime]
-	if block.freezed {
-		if ok {
-			if _, ok := block.friezedEntries[topicHash]; ok {
-				ws.blocks[entryTime].friezedEntries[topicHash] = append(ws.blocks[entryTime].friezedEntries[topicHash], e)
-			} else {
-				entries := map[uint64][]timeWindowEntry{}
-				entries[topicHash] = []timeWindowEntry{e}
-				ws.blocks[entryTime].friezedEntries[topicHash] = entries[topicHash]
-			}
+	if ws.freezed {
+		if _, ok := ws.friezedEntries[topicHash]; ok {
+			ws.friezedEntries[topicHash] = append(ws.friezedEntries[topicHash], e)
 		} else {
-			windowEntries := map[uint64]windowEntries{}
-			windowEntries[topicHash] = []timeWindowEntry{e}
-			ws.blocks[entryTime] = timeWindow{friezedEntries: windowEntries}
+			ws.friezedEntries[topicHash] = []timeWindowEntry{e}
 		}
 		return nil
 	}
-	if ok {
-		if _, ok := block.entries[topicHash]; ok {
-			ws.blocks[entryTime].entries[topicHash] = append(ws.blocks[entryTime].entries[topicHash], e)
-		} else {
-			entries := map[uint64][]timeWindowEntry{}
-			entries[topicHash] = []timeWindowEntry{e}
-			ws.blocks[entryTime].entries[topicHash] = entries[topicHash]
-		}
+	if _, ok := ws.entries[topicHash]; ok {
+		ws.entries[topicHash] = append(ws.entries[topicHash], e)
 	} else {
-		windowEntries := map[uint64]windowEntries{}
-		windowEntries[topicHash] = []timeWindowEntry{e}
-		ws.blocks[entryTime] = timeWindow{entries: windowEntries}
+		ws.entries[topicHash] = []timeWindowEntry{e}
 	}
+	return nil
+}
+
+func (w *timeWindow) reset() error {
+	w.entries = make(map[uint64]windowEntries)
 	return nil
 }
 
@@ -304,9 +290,8 @@ func (w *timeWindow) freeze() error {
 
 func (w *timeWindow) unFreeze() error {
 	w.freezed = false
-	w.entries = make(map[uint64]windowEntries)
 	for h, _ := range w.friezedEntries {
-		w.entries[h] = w.friezedEntries[h]
+		w.entries[h] = append(w.entries[h], w.friezedEntries[h]...)
 	}
 	w.friezedEntries = make(map[uint64]windowEntries)
 	return nil
@@ -314,71 +299,65 @@ func (w *timeWindow) unFreeze() error {
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to timewindow files
 // it takes timewindow snapshot to iterate and deletes blocks from timewindow
-func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(timeHash int64, w map[uint64]windowEntries) (bool, error)) (err error) {
+func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
 		ws := wb.timeWindows.windows[i]
-		windowTimes := make([]int64, 0, len(ws.blocks))
-		for windowTime := range ws.blocks {
-			windowTimes = append(windowTimes, windowTime)
+		ws.mu.RLock()
+		wEntries := make(map[uint64]windowEntries)
+		if freeze {
+			ws.freeze()
 		}
-		for j := 0; j < len(windowTimes); j++ {
-			window := ws.blocks[windowTimes[j]]
+		for h, entries := range ws.entries {
+			wEntries[h] = entries
+		}
+		ws.mu.RUnlock()
+		if stop, err1 := f(wEntries); stop || err1 != nil {
+			err = err1
 			if freeze {
 				ws.mu.Lock()
-				window.freeze()
+				ws.unFreeze()
 				ws.mu.Unlock()
 			}
-			if stop, err1 := f(windowTimes[j], window.entries); stop || err1 != nil {
-				err = err1
-				continue
-			}
-			if windowTimes[j] == 0 {
-				for _, windowEntries := range window.entries {
-					for _, te := range windowEntries {
-						if err := wb.addExpiry(te); err != nil {
-							return err
-						}
-					}
-				}
-			}
-			if freeze {
-				ws.mu.Lock()
-				window.unFreeze()
-				ws.mu.Unlock()
-			}
+			continue
+		}
+		if freeze {
+			ws.mu.Lock()
+			ws.reset()
+			ws.unFreeze()
+			ws.mu.Unlock()
 		}
 	}
 	return nil
 }
 
-// foreachTimeBlock iterates timeblocks on init db to store topic hash and last offset of topic in a timeWindow file into trie.
-func (wb *timeWindowBucket) foreachTimeBlock(f func(timeHandle) (bool, error)) (err error) {
-	timeBlockIdx := int32(0)
-	nTimeBlocks := wb.getTimeWindowIdx() + 1
-	for timeBlockIdx < nTimeBlocks {
-		off := timeBlockOffset(timeBlockIdx)
-		b := timeHandle{file: wb.file, offset: off}
+// foreachwinBlock iterates winBlocks on init db to store topic hash and last offset of topic in a timeWindow file into trie.
+func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
+	winBlockIdx := int32(0)
+	nwinBlocks := wb.getTimeWindowIdx() + 1
+	for winBlockIdx < nwinBlocks {
+		off := winBlockOffset(winBlockIdx)
+		b := windowHandle{file: wb.file, offset: off}
 		if err := b.read(); err != nil {
 			return err
 		}
 		if stop, err := f(b); stop || err != nil {
 			return err
 		}
-		timeBlockIdx++
+		winBlockIdx++
 	}
 	return nil
 }
 
-// getTimeBlockHandle reads timeblock from timewindow file for windowIdx (file num) and a topic.
-// If offset is zero then its a new topic so it create a new timeblock to the end of timewindow file
-func (wb *timeWindowBucket) getTimeBlockHandle(topicHash uint64, off int64) (timeHandle, error) {
+// getwinBlockHandle reads winBlock from timewindow file for windowIdx (file num) and a topic.
+// If offset is zero then its a new topic so it create a new winBlock to the end of timewindow file
+func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (windowHandle, error) {
 	var err error
 	if off == 0 {
 		if off, err = wb.newBlock(); err != nil {
-			return timeHandle{}, err
+			return windowHandle{}, err
 		}
 	}
-	b := timeHandle{file: wb.file, offset: off}
+	b := windowHandle{file: wb.file, offset: off}
 	if err := b.read(); err != nil {
 		return b, err
 	}
@@ -388,11 +367,11 @@ func (wb *timeWindowBucket) getTimeBlockHandle(topicHash uint64, off int64) (tim
 	return b, nil
 }
 
-func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, limit uint32) (timeEntries []timeEntry, fanout bool) {
-	timeEntries = make([]timeEntry, 0)
-	next := func(off int64, f func(timeHandle) (bool, error)) error {
+func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, limit uint32) (winEntries []winEntry, fanout bool) {
+	winEntries = make([]winEntry, 0)
+	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
-			b := timeHandle{file: wb.file, offset: off}
+			b := windowHandle{file: wb.file, offset: off}
 			if err := b.read(); err != nil {
 				return err
 			}
@@ -405,43 +384,45 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, limit uint32)
 			off = b.next
 		}
 	}
-	err := wb.foreachTimeWindow(false, func(timeHash int64, windowEntries map[uint64]windowEntries) (bool, error) {
-		entries := windowEntries[topicHash]
-		for _, te := range entries {
-			timeEntries = append(timeEntries, te.(timeEntry))
-
+	for i := 0; i < nShards; i++ {
+		ws := wb.timeWindows.windows[i]
+		ws.mu.RLock()
+		wEntries := ws.friezedEntries[topicHash]
+		for _, we := range wEntries {
+			winEntries = append(winEntries, we.(winEntry))
 		}
-		return false, nil
-	})
-	if err != nil {
-		return timeEntries, false
-	}
-	if uint32(len(timeEntries)) > limit {
-		return timeEntries, false
+		wEntries = ws.entries[topicHash]
+		for _, we := range wEntries {
+			winEntries = append(winEntries, we.(winEntry))
+		}
+		ws.mu.RUnlock()
+		if uint32(len(winEntries)) > limit {
+			return winEntries, false
+		}
 	}
 	for _, off := range offs {
-		err := next(off, func(curb timeHandle) (bool, error) {
+		err := next(off, func(curb windowHandle) (bool, error) {
 			b := &curb
-			timeEntries = append(timeEntries, b.timeEntries[:]...)
-			if uint32(len(timeEntries)) > limit {
+			winEntries = append(winEntries, b.winEntries[:]...)
+			if uint32(len(winEntries)) > limit {
 				return true, nil
 			}
 			return false, nil
 		})
 		if err != nil {
-			return timeEntries, false
+			return winEntries, false
 		}
 	}
-	return timeEntries, len(timeEntries) < int(limit)
+	return winEntries, len(winEntries) < int(limit)
 }
 
 // write writes timewidnow entries into timewindow files
-func (wb *timeWindowBucket) write(b *timeHandle, te timeWindowEntry) (off int64, err error) {
+func (wb *timeWindowBucket) write(b *windowHandle, we timeWindowEntry) (off int64, err error) {
 	entryIdx := 0
-	e := te.(timeEntry)
-	for i := 0; i < seqsPerTimeBlock; i++ {
-		entry := b.timeEntries[i]
-		if entry.seq == e.seq { //record exist in db
+	// e := we.(winEntry)
+	for i := 0; i < seqsPerWindowBlock; i++ {
+		entry := b.winEntries[i]
+		if entry.seq == we.Seq() { //record exist in db
 			entryIdx = -1
 			break
 		}
@@ -449,22 +430,21 @@ func (wb *timeWindowBucket) write(b *timeHandle, te timeWindowEntry) (off int64,
 	if entryIdx == -1 {
 		return 0, nil
 	}
-	if b.entryIdx == seqsPerTimeBlock {
+	if b.entryIdx == seqsPerWindowBlock {
 		off, err = wb.newBlock()
 		if err != nil {
 			return 0, err
 		}
 		topicHash := b.topicHash
 		next := b.offset
-		*b = timeHandle{file: wb.file, offset: off}
+		*b = windowHandle{file: wb.file, offset: off}
 		b.topicHash = topicHash
 		b.next = next
 		wb.nextTimeWindowIdx()
-		// fmt.Println("timewindow.write: off ", off)
 	}
 
-	b.timeEntries[b.entryIdx] = timeEntry{
-		seq: e.seq,
+	b.winEntries[b.entryIdx] = winEntry{
+		seq: we.Seq(),
 	}
 	b.entryIdx++
 

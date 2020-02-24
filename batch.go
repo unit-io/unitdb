@@ -219,27 +219,26 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			topics[contract] = t
 		}
 		topic := topics[contract]
-		te := timeEntry{
-			contract:  contract,
-			seq:       seq,
-			entryTime: uint32(time.Now().Unix()),
+		we := winEntry{
+			contract: contract,
+			seq:      seq,
 		}
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			if ok := b.db.trie.remove(contract, topic.Parts, te); !ok {
+			if ok := b.db.trie.remove(contract, topic.Parts, we); !ok {
 				return errBadRequest
 			}
 			b.db.delete(seq)
 			continue
 		}
 		topicHash := topic.GetHash(contract)
-		if ok := b.db.trie.add(contract, topicHash, topic.Parts, topic.Depth, te); !ok {
+		if ok := b.db.trie.add(contract, topicHash, topic.Parts, topic.Depth, we); !ok {
 			return errBadRequest
 		}
-		b.db.timeWindow.add(topicHash, te)
+		b.db.timeWindow.add(topicHash, we)
 
 		memseq := b.db.cacheID ^ seq
 		if err := fn(i, contract, memseq, data); err != nil {

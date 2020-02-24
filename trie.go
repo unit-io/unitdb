@@ -10,32 +10,32 @@ const (
 	nul = 0x0
 )
 
-// timeEntries represents a time entry set which can contain only unique values.
-type timeEntries []timeEntry
+// winEntries represents a time entry set which can contain only unique values.
+type winEntries []winEntry
 
 // new returns time entry set of given cap.
-func newTimeEntries(cap uint32) timeEntries {
-	return make([]timeEntry, 0, cap)
+func newWinEntries(cap uint32) winEntries {
+	return make([]winEntry, 0, cap)
 }
 
 // extend extends the cap of time entry set.
-func (ts *timeEntries) extend(cap uint32) {
+func (ts *winEntries) extend(cap uint32) {
 	if cap < ts.len() {
 		return
 	}
 	l := cap - ts.len()
-	*ts = append(*ts, make([]timeEntry, l)...)
+	*ts = append(*ts, make([]winEntry, l)...)
 }
 
 // shrink shrinks the cap of seq set.
-func (ts *timeEntries) shrink(cap uint32) {
-	newts := make([]timeEntry, 0, ts.len())
+func (ts *winEntries) shrink(cap uint32) {
+	newts := make([]winEntry, 0, ts.len())
 	copy(newts, *ts)
 	*ts = newts
 }
 
 // addUnique adds a seq to the set.
-func (ts *timeEntries) addUnique(value timeEntry) (added bool) {
+func (ts *winEntries) addUnique(value winEntry) (added bool) {
 	if ts.contains(value) == false {
 		*ts = append(*ts, value)
 		added = true
@@ -44,7 +44,7 @@ func (ts *timeEntries) addUnique(value timeEntry) (added bool) {
 }
 
 // remove a seq from the set.
-func (ts *timeEntries) remove(value timeEntry) (removed bool) {
+func (ts *winEntries) remove(value winEntry) (removed bool) {
 	for i, v := range *ts {
 		// if bytes.Equal(v, value) {
 		if v == value {
@@ -61,7 +61,7 @@ func (ts *timeEntries) remove(value timeEntry) (removed bool) {
 }
 
 // contains checks whether a seq is in the set.
-func (ts *timeEntries) contains(value timeEntry) bool {
+func (ts *winEntries) contains(value winEntry) bool {
 	for _, v := range *ts {
 		// if bytes.Equal(v, value) {
 		// 	return true
@@ -74,7 +74,7 @@ func (ts *timeEntries) contains(value timeEntry) bool {
 }
 
 // len length of seq set.
-func (ts *timeEntries) len() uint32 {
+func (ts *winEntries) len() uint32 {
 	return uint32(len(*ts))
 }
 
@@ -87,7 +87,7 @@ type part struct {
 	k        key
 	depth    uint8
 	cap      uint32
-	ts       timeEntries
+	ts       winEntries
 	parent   *part
 	children map[key]*part
 	offset   int64
@@ -116,7 +116,7 @@ func newPartTrie(cacheCap uint32) *partTrie {
 		summary: make(map[uint64]*part),
 		root: &part{
 			cap:      cacheCap,
-			ts:       newTimeEntries(cacheCap),
+			ts:       newWinEntries(cacheCap),
 			children: make(map[key]*part),
 		},
 	}
@@ -147,7 +147,7 @@ func (t *trie) Count() int {
 }
 
 // add adds a message seq to topic trie.
-func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, depth uint8, te timeEntry) (added bool) {
+func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, depth uint8, we winEntry) (added bool) {
 	// Get mutex
 	mu := t.getMutex(contract)
 	mu.Lock()
@@ -165,7 +165,7 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 			child = &part{
 				k:        k,
 				cap:      t.partTrie.root.cap,
-				ts:       newTimeEntries(t.partTrie.root.cap),
+				ts:       newWinEntries(t.partTrie.root.cap),
 				parent:   curr,
 				children: make(map[key]*part),
 			}
@@ -181,8 +181,8 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 	if curr.ts.len() >= curr.cap {
 		curr.ts = curr.ts[1:] // remove first if capacity has reached
 	}
-	if te.seq > 0 {
-		curr.ts = append(curr.ts, te)
+	if we.seq > 0 {
+		curr.ts = append(curr.ts, we)
 	}
 	added = true
 	curr.depth = depth
@@ -192,7 +192,7 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 }
 
 // remove removes a message seq from topic trie
-func (t *trie) remove(contract uint64, parts []message.Part, e timeEntry) (removed bool) {
+func (t *trie) remove(contract uint64, parts []message.Part, e winEntry) (removed bool) {
 	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
@@ -233,14 +233,14 @@ func (t *trie) remove(contract uint64, parts []message.Part, e timeEntry) (remov
 }
 
 // lookup returns seq set for given topic.
-func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts timeEntries, offs []int64, fanout bool) {
+func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts winEntries, offs []int64, fanout bool) {
 	t.RLock()
 	defer t.RUnlock()
 	t.ilookup(contract, parts, uint8(len(parts)-1), &ts, &offs, t.partTrie.root, limit)
 	return ts, offs, ts.len() < limit
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *timeEntries, offs *[]int64, part *part, limit uint32) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *winEntries, offs *[]int64, part *part, limit uint32) {
 	// Add seq set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
 		var l uint32

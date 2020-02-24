@@ -25,7 +25,7 @@ type Query struct {
 	cutoff       int64 // The end of the time window.
 	topicHash    uint64
 	topicOffsets []int64
-	entries      []timeEntry
+	entries      []winEntry
 	fanout       bool
 	Limit        uint32 // The maximum number of elements to return.
 }
@@ -51,17 +51,17 @@ func (it *ItemIterator) Next() {
 	defer mu.RUnlock()
 	it.item = nil
 	if len(it.queue) == 0 {
-		for _, te := range it.query.entries[it.next:] {
+		for _, we := range it.query.entries[it.next:] {
 			err := func() error {
-				if te.seq == 0 {
+				if we.seq == 0 {
 					return nil
 				}
-				e, err := it.db.readEntry(it.query.contract, te.seq)
+				e, err := it.db.readEntry(it.query.contract, we.seq)
 				if err != nil {
 					return err
 				}
 				if e.isExpired() {
-					if ok := it.db.trie.remove(it.query.contract, it.query.parts, te); ok {
+					if ok := it.db.trie.remove(it.query.contract, it.query.parts, we); ok {
 						it.db.timeWindow.addExpiry(e)
 					}
 					it.invalidKeys++
@@ -115,8 +115,9 @@ func (it *ItemIterator) Next() {
 func (it *ItemIterator) First() {
 	it.query.entries, it.query.topicOffsets, it.query.fanout = it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
 	if it.query.fanout {
-		limit := it.query.Limit - uint32(len(it.query.entries))
-		pEntries, _ := it.db.timeWindow.lookup(it.query.topicHash, it.query.topicOffsets, limit)
+		// it.query.entries = it.query.entries[:0]
+		// limit := it.query.Limit - uint32(len(it.query.entries))
+		pEntries, _ := it.db.timeWindow.lookup(it.query.topicHash, it.query.topicOffsets, it.query.Limit)
 		it.query.entries = append(it.query.entries, pEntries...)
 	}
 	if len(it.query.entries) == 0 || it.next >= 1 {
