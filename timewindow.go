@@ -367,23 +367,9 @@ func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (w
 	return b, nil
 }
 
-func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, limit uint32) (winEntries []winEntry, fanout bool) {
+// ilookup lookups window entries timeWindowBucket and not yet sync to db
+func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry, fanout bool) {
 	winEntries = make([]winEntry, 0)
-	next := func(off int64, f func(windowHandle) (bool, error)) error {
-		for {
-			b := windowHandle{file: wb.file, offset: off}
-			if err := b.read(); err != nil {
-				return err
-			}
-			if stop, err := f(b); stop || err != nil {
-				return err
-			}
-			if b.next == 0 {
-				return nil
-			}
-			off = b.next
-		}
-	}
 	for i := 0; i < nShards; i++ {
 		ws := wb.timeWindows.windows[i]
 		ws.mu.RLock()
@@ -400,10 +386,35 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, limit uint32)
 			return winEntries, false
 		}
 	}
+	return winEntries, len(winEntries) < int(limit)
+}
+
+func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, skip int, limit uint32) (winEntries []winEntry, fanout bool) {
+	winEntries = make([]winEntry, 0)
+	next := func(off int64, f func(windowHandle) (bool, error)) error {
+		for {
+			b := windowHandle{file: wb.file, offset: off}
+			if err := b.read(); err != nil {
+				return err
+			}
+			if stop, err := f(b); stop || err != nil {
+				return err
+			}
+			if b.next == 0 {
+				return nil
+			}
+			off = b.next
+		}
+	}
+	count := 0
 	for _, off := range offs {
 		err := next(off, func(curb windowHandle) (bool, error) {
 			b := &curb
-			winEntries = append(winEntries, b.winEntries[:]...)
+			if skip > count+seqsPerWindowBlock {
+				count += seqsPerWindowBlock
+				return false, nil
+			}
+			winEntries = append(winEntries, b.winEntries[:b.entryIdx]...)
 			if uint32(len(winEntries)) > limit {
 				return true, nil
 			}

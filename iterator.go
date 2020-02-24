@@ -61,7 +61,7 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				if e.isExpired() {
-					if ok := it.db.trie.remove(it.query.contract, it.query.parts, we); ok {
+					if ok := it.db.trie.remove(it.query.topicHash, we); ok {
 						it.db.timeWindow.addExpiry(e)
 					}
 					it.invalidKeys++
@@ -113,12 +113,19 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	it.query.entries, it.query.topicOffsets, it.query.fanout = it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
+	it.query.entries, it.query.fanout = it.db.timeWindow.ilookup(it.query.topicHash, it.query.Limit)
+	var wEntries winEntries
 	if it.query.fanout {
-		// it.query.entries = it.query.entries[:0]
-		// limit := it.query.Limit - uint32(len(it.query.entries))
-		pEntries, _ := it.db.timeWindow.lookup(it.query.topicHash, it.query.topicOffsets, it.query.Limit)
-		it.query.entries = append(it.query.entries, pEntries...)
+		wEntries, it.query.topicOffsets, it.query.fanout = it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
+		it.query.entries = append(it.query.entries, wEntries...)
+	}
+	if it.query.fanout {
+		limit := it.query.Limit - uint32(len(wEntries))
+		wEntries, it.query.fanout = it.db.timeWindow.lookup(it.query.topicHash, it.query.topicOffsets, len(wEntries), limit)
+		it.query.entries = append(it.query.entries, wEntries...)
+	}
+	if len(it.query.entries) > int(it.query.Limit) {
+		it.query.entries = it.query.entries[len(it.query.entries)-int(it.query.Limit):]
 	}
 	if len(it.query.entries) == 0 || it.next >= 1 {
 		return

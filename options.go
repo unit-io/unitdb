@@ -61,7 +61,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.BackgroundSyncInterval = 1 * time.Second
 	}
 	if opts.CacheCap == 0 {
-		opts.CacheCap = 1000
+		opts.CacheCap = 100
 	}
 	if opts.TinyBatchSize == 0 {
 		opts.TinyBatchSize = 100

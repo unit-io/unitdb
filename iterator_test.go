@@ -44,6 +44,7 @@ func TestIterator(t *testing.T) {
 
 	for i = 0; i < 255; i++ {
 		items[i] = false
+		topic := append(topic, []byte("?ttl=1h")...)
 		val := []byte("msg.")
 		val = append(val, i)
 		// vals = append(vals, val)
@@ -53,7 +54,7 @@ func TestIterator(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	topic = append(topic, []byte("?last=1m")...)
+	topic = append(topic, []byte("?last=255")...)
 	it, err := db.Items(&Query{Topic: topic, Contract: contract})
 	if err != nil {
 		t.Fatal(err)

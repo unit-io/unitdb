@@ -147,11 +147,14 @@ func (t *trie) Count() int {
 }
 
 // add adds a message seq to topic trie.
-func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, depth uint8, we winEntry) (added bool) {
+func (t *trie) addTopic(contract uint64, topicHash uint64, parts []message.Part, depth uint8) (added bool) {
 	// Get mutex
 	mu := t.getMutex(contract)
 	mu.Lock()
 	defer mu.Unlock()
+	if _, ok := t.partTrie.summary[topicHash]; ok {
+		return true
+	}
 	curr := t.partTrie.root
 	for _, p := range parts {
 		k := key{
@@ -178,12 +181,6 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 	t.Lock()
 	t.partTrie.summary[topicHash] = curr
 	t.Unlock()
-	if curr.ts.len() >= curr.cap {
-		curr.ts = curr.ts[1:] // remove first if capacity has reached
-	}
-	if we.seq > 0 {
-		curr.ts = append(curr.ts, we)
-	}
 	added = true
 	curr.depth = depth
 	t.count++
@@ -191,30 +188,36 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 	return added
 }
 
-// remove removes a message seq from topic trie
-func (t *trie) remove(contract uint64, parts []message.Part, e winEntry) (removed bool) {
-	mu := t.getMutex(contract)
+// add adds a message seq to topic trie.
+func (t *trie) add(topicHash uint64, we winEntry) (added bool) {
+	// Get mutex
+	mu := t.getMutex(we.contract)
 	mu.Lock()
 	defer mu.Unlock()
-	curr := t.partTrie.root
+	curr, ok := t.partTrie.summary[topicHash]
+	if !ok {
+		return false
+	}
+	if curr.ts.len() >= curr.cap {
+		curr.ts = curr.ts[1:] // remove first if capacity has reached
+	}
+	curr.ts = append(curr.ts, we)
+	added = true
+	t.count++
+	return
+}
 
-	for _, part := range parts {
-		k := key{
-			query:     part.Query,
-			wildchars: part.Wildchars,
-		}
-		t.RLock()
-		child, ok := curr.children[k]
-		t.RUnlock()
-		if !ok {
-			removed = false
-			// message seq doesn't exist.
-			return
-		}
-		curr = child
+// remove removes a message seq from topic trie
+func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
+	mu := t.getMutex(we.contract)
+	mu.Lock()
+	defer mu.Unlock()
+	curr, ok := t.partTrie.summary[topicHash]
+	if !ok {
+		return false
 	}
 	// Remove a message seq and decrement the counter
-	if ok := curr.ts.remove(e); ok {
+	if ok := curr.ts.remove(we); ok {
 		removed = true
 		// adjust cap of the seq set
 		if curr.ts.len() > t.partTrie.root.cap {

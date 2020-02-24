@@ -217,8 +217,12 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			t := new(message.Topic)
 			t.Unmarshal(ptopic)
 			topics[contract] = t
+			if ok := b.db.trie.addTopic(contract, t.GetHash(contract), t.Parts, t.Depth); !ok {
+				return errBadRequest
+			}
 		}
 		topic := topics[contract]
+		topicHash := topic.GetHash(contract)
 		we := winEntry{
 			contract: contract,
 			seq:      seq,
@@ -228,16 +232,15 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			if ok := b.db.trie.remove(contract, topic.Parts, we); !ok {
+			if ok := b.db.trie.remove(topicHash, we); !ok {
 				return errBadRequest
 			}
 			b.db.delete(seq)
 			continue
 		}
-		topicHash := topic.GetHash(contract)
-		if ok := b.db.trie.add(contract, topicHash, topic.Parts, topic.Depth, we); !ok {
-			return errBadRequest
-		}
+		// if ok := b.db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); !ok {
+		// 	return errBadRequest
+		// }
 		b.db.timeWindow.add(topicHash, we)
 
 		memseq := b.db.cacheID ^ seq

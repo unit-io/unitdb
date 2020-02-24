@@ -217,7 +217,7 @@ func (db *DB) recoverLog() error {
 			}
 			db.timeWindow.add(topicHash, we)
 			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
-				if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth, winEntry{}); ok {
+				if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); ok {
 					if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
 						return errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
 					}

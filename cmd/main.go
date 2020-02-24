@@ -57,7 +57,7 @@ func main() {
 	print([]byte("unit8.c.c1?last=30m"), db)
 	print([]byte("unit8.c.c11?last=30m"), db)
 
-	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.c.c1?last=1h"), Limit: 250})
+	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 250})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
 	}
@@ -121,7 +121,7 @@ func main() {
 		for range time.Tick(10 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
-				opts.Topic = []byte("unit8.b.b1?ttl=30s")
+				opts.Topic = []byte("unit8.b.b1?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				t := time.Now().Add(time.Duration(i) * time.Millisecond)
