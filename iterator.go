@@ -18,16 +18,13 @@ type Item struct {
 
 // Query represents a topic to query and optional contract information.
 type Query struct {
-	Topic        []byte         // The topic of the message
-	Contract     uint32         // The contract is used as prefix in the message Id
-	parts        []message.Part // parts represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
-	contract     uint64
-	cutoff       int64 // The end of the time window.
-	topicHash    uint64
-	topicOffsets []int64
-	entries      []winEntry
-	fanout       bool
-	Limit        uint32 // The maximum number of elements to return.
+	Topic      []byte         // The topic of the message
+	Contract   uint32         // The contract is used as prefix in the message Id
+	parts      []message.Part // parts represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	contract   uint64
+	cutoff     int64 // The end of the time window.
+	winEntries []winEntry
+	Limit      uint32 // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
@@ -51,7 +48,7 @@ func (it *ItemIterator) Next() {
 	defer mu.RUnlock()
 	it.item = nil
 	if len(it.queue) == 0 {
-		for _, we := range it.query.entries[it.next:] {
+		for _, we := range it.query.winEntries[it.next:] {
 			err := func() error {
 				if we.seq == 0 {
 					return nil
@@ -61,9 +58,9 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				if e.isExpired() {
-					if ok := it.db.trie.remove(it.query.topicHash, we); ok {
-						it.db.timeWindow.addExpiry(e)
-					}
+					// if ok := it.db.trie.remove(it.query.topicHash, we); ok {
+					it.db.timeWindow.addExpiry(e)
+					// }
 					it.invalidKeys++
 					// if id is expired it does not return an error but continue the iteration
 					return nil
@@ -113,21 +110,21 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	it.query.entries, it.query.fanout = it.db.timeWindow.ilookup(it.query.topicHash, it.query.Limit)
-	var wEntries winEntries
-	if it.query.fanout {
-		wEntries, it.query.topicOffsets, it.query.fanout = it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
-		it.query.entries = append(it.query.entries, wEntries...)
+	wEntries, topicHss, topicOffsets, fanout := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
+	for i, topicHash := range topicHss {
+		if it.query.winEntries, fanout = it.db.timeWindow.ilookup(topicHash, it.query.Limit); fanout {
+			it.query.winEntries = append(it.query.winEntries, wEntries...)
+		}
+		if fanout {
+			limit := it.query.Limit - uint32(len(wEntries))
+			wEntries, fanout = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
+			it.query.winEntries = append(it.query.winEntries, wEntries...)
+		}
 	}
-	if it.query.fanout {
-		limit := it.query.Limit - uint32(len(wEntries))
-		wEntries, it.query.fanout = it.db.timeWindow.lookup(it.query.topicHash, it.query.topicOffsets, len(wEntries), limit)
-		it.query.entries = append(it.query.entries, wEntries...)
+	if len(it.query.winEntries) > int(it.query.Limit) {
+		it.query.winEntries = it.query.winEntries[len(it.query.winEntries)-int(it.query.Limit):]
 	}
-	if len(it.query.entries) > int(it.query.Limit) {
-		it.query.entries = it.query.entries[len(it.query.entries)-int(it.query.Limit):]
-	}
-	if len(it.query.entries) == 0 || it.next >= 1 {
+	if len(it.query.winEntries) == 0 || it.next >= 1 {
 		return
 	}
 	it.Next()

@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"encoding/binary"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -333,11 +334,14 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 // foreachwinBlock iterates winBlocks on init db to store topic hash and last offset of topic in a timeWindow file into trie.
 func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
-	nwinBlocks := wb.getTimeWindowIdx() + 1
+	nwinBlocks := wb.getTimeWindowIdx()
 	for winBlockIdx < nwinBlocks {
 		off := winBlockOffset(winBlockIdx)
 		b := windowHandle{file: wb.file, offset: off}
 		if err := b.read(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
 			return err
 		}
 		if stop, err := f(b); stop || err != nil {
@@ -389,7 +393,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 	return winEntries, len(winEntries) < int(limit)
 }
 
-func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, skip int, limit uint32) (winEntries []winEntry, fanout bool) {
+func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit uint32) (winEntries []winEntry, fanout bool) {
 	winEntries = make([]winEntry, 0)
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
@@ -407,22 +411,20 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, offs []int64, skip int, lim
 		}
 	}
 	count := 0
-	for _, off := range offs {
-		err := next(off, func(curb windowHandle) (bool, error) {
-			b := &curb
-			if skip > count+seqsPerWindowBlock {
-				count += seqsPerWindowBlock
-				return false, nil
-			}
-			winEntries = append(winEntries, b.winEntries[:b.entryIdx]...)
-			if uint32(len(winEntries)) > limit {
-				return true, nil
-			}
+	err := next(off, func(curb windowHandle) (bool, error) {
+		b := &curb
+		if skip > count+seqsPerWindowBlock {
+			count += seqsPerWindowBlock
 			return false, nil
-		})
-		if err != nil {
-			return winEntries, false
 		}
+		winEntries = append(winEntries, b.winEntries[:b.entryIdx]...)
+		if uint32(len(winEntries)) > limit {
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		return winEntries, false
 	}
 	return winEntries, len(winEntries) < int(limit)
 }

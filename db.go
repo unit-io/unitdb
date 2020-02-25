@@ -362,8 +362,11 @@ func (db *DB) loadTopicHash() error {
 				seq := b.winEntries[b.entryIdx-1].seq
 				off := blockOffset(startBlockIndex(seq))
 				lb := blockHandle{file: db.index, offset: off}
-				if err := lb.read(); err == io.EOF {
-					return false, nil
+				if err := lb.read(); err != nil {
+					if err == io.EOF {
+						return false, nil
+					}
+					return true, err
 				}
 				entryIdx := -1
 				for i := 0; i < entriesPerBlock; i++ {
@@ -704,7 +707,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 	q.contract = message.Contract(q.parts)
-	q.topicHash = topic.GetHash(q.contract)
 
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
@@ -720,82 +722,85 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	q.entries, q.fanout = db.timeWindow.ilookup(q.topicHash, q.Limit)
-	var wEntries winEntries
-	if q.fanout {
-		wEntries, q.topicOffsets, q.fanout = db.trie.lookup(q.contract, q.parts, q.Limit)
-		q.entries = append(q.entries, wEntries...)
-	}
-	if q.fanout {
-		limit := q.Limit - uint32(len(wEntries))
-		wEntries, q.fanout = db.timeWindow.lookup(q.topicHash, q.topicOffsets, len(wEntries), limit)
-		q.entries = append(q.entries, wEntries...)
-	}
-	if len(q.entries) == 0 {
-		return
-	}
-	if len(q.entries) > int(q.Limit) {
-		q.entries = q.entries[len(q.entries)-int(q.Limit):]
-	}
-	expiryCount := 0
-	for {
-		for _, we := range q.entries {
-			err = func() error {
-				if we.seq == 0 {
-					return nil
-				}
-				e, err := db.readEntry(q.contract, we.seq)
-				if err != nil {
-					return err
-				}
-				if e.isExpired() {
-					expiryCount++
-					if ok := db.trie.remove(q.topicHash, we); ok {
-						db.timeWindow.addExpiry(e)
+	// var wEntries winEntries
+	// var topicHss []uint64
+	wEntries, topicHss, topicOffsets, fanout := db.trie.lookup(q.contract, q.parts, q.Limit)
+	for i, topicHash := range topicHss {
+		// q.topicHash = topicHash
+		if q.winEntries, fanout = db.timeWindow.ilookup(topicHash, q.Limit); fanout {
+			q.winEntries = append(q.winEntries, wEntries...)
+		}
+		if fanout {
+			limit := q.Limit - uint32(len(wEntries))
+			wEntries, fanout = db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
+			q.winEntries = append(q.winEntries, wEntries...)
+		}
+		if len(q.winEntries) == 0 {
+			return
+		}
+		if len(q.winEntries) > int(q.Limit) {
+			q.winEntries = q.winEntries[len(q.winEntries)-int(q.Limit):]
+		}
+		expiryCount := 0
+		for {
+			for _, we := range q.winEntries {
+				err = func() error {
+					if we.seq == 0 {
+						return nil
 					}
-					// if id is expired it does not return an error but continue the iteration
-					return nil
-				}
-				var id message.ID
-				id, val, err := db.data.readMessage(e)
-				if err != nil {
-					return err
-				}
-				id = message.ID(id)
-				if !id.EvalPrefix(q.contract, q.cutoff) {
-					return nil
-				}
-
-				if id.IsEncrypted() {
-					val, err = db.mac.Decrypt(nil, val)
+					e, err := db.readEntry(q.contract, we.seq)
 					if err != nil {
 						return err
 					}
-				}
-				var buffer []byte
-				val, err = snappy.Decode(buffer, val)
+					if e.isExpired() {
+						expiryCount++
+						if ok := db.trie.remove(topicHash, we); ok {
+							db.timeWindow.addExpiry(e)
+						}
+						// if id is expired it does not return an error but continue the iteration
+						return nil
+					}
+					var id message.ID
+					id, val, err := db.data.readMessage(e)
+					if err != nil {
+						return err
+					}
+					id = message.ID(id)
+					if !id.EvalPrefix(q.contract, q.cutoff) {
+						return nil
+					}
+
+					if id.IsEncrypted() {
+						val, err = db.mac.Decrypt(nil, val)
+						if err != nil {
+							return err
+						}
+					}
+					var buffer []byte
+					val, err = snappy.Decode(buffer, val)
+					if err != nil {
+						return err
+					}
+					items = append(items, val)
+					db.meter.OutBytes.Inc(int64(e.valueSize))
+					return nil
+				}()
 				if err != nil {
-					return err
+					return items, err
 				}
-				items = append(items, val)
-				db.meter.OutBytes.Inc(int64(e.valueSize))
-				return nil
-			}()
-			if err != nil {
-				return items, err
+			}
+			if len(q.winEntries) == 0 || cap(q.winEntries) < int(q.Limit) || len(items) >= int(q.Limit) {
+				break
+			}
+			if cap(q.winEntries) < int(q.Limit+uint32(expiryCount)) {
+				q.winEntries = q.winEntries[q.Limit:]
+			} else {
+				q.winEntries = q.winEntries[q.Limit : q.Limit+uint32(expiryCount)]
 			}
 		}
-		if len(q.entries) == 0 || cap(q.entries) < int(q.Limit) || len(items) >= int(q.Limit) {
-			break
-		}
-		if cap(q.entries) < int(q.Limit+uint32(expiryCount)) {
-			q.entries = q.entries[q.Limit:]
-		} else {
-			q.entries = q.entries[q.Limit : q.Limit+uint32(expiryCount)]
-		}
+		db.meter.Gets.Inc(int64(len(items)))
+		db.meter.OutMsgs.Inc(int64(len(items)))
 	}
-	db.meter.Gets.Inc(int64(len(items)))
-	db.meter.OutMsgs.Inc(int64(len(items)))
 	return items, nil
 }
 
@@ -828,7 +833,6 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 	q.contract = message.Contract(q.parts)
-	q.topicHash = topic.GetHash(q.contract)
 
 	// In case of ttl, include it to the query
 	if from, limit, ok := topic.Last(); ok {

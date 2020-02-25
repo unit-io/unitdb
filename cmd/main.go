@@ -89,7 +89,7 @@ func main() {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.c1?ttl=1h"), Payload: p})
+				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1h"), Payload: p})
 
 				// db.DeleteEntry(&tracedb.Entry{
 				// 	ID:       messageId,
@@ -121,7 +121,7 @@ func main() {
 		for range time.Tick(10 * time.Millisecond) {
 			err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
 				opts := tracedb.DefaultBatchOptions
-				opts.Topic = []byte("unit8.b.b1?ttl=1h")
+				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				t := time.Now().Add(time.Duration(i) * time.Millisecond)
