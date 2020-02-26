@@ -107,7 +107,7 @@ func main() {
 		}
 	}(1)
 
-	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.c.c1?last=1h"), Limit: 250})
+	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.c.c1?last=1h"), Limit: 10})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
 	}
@@ -124,9 +124,9 @@ func main() {
 				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
-				t := time.Now().Add(time.Duration(i) * time.Millisecond)
-				p, _ := t.MarshalText()
 				for j := 0; j < 250; j++ {
+					t := time.Now().Add(time.Duration(j) * time.Millisecond)
+					p, _ := t.MarshalText()
 					b.Put(p)
 					// if j%100 == 0 {
 					// 	if err := b.Write(); err != nil {
@@ -261,7 +261,7 @@ func main() {
 			i++
 		}
 	}(1)
-	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 250})
+	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 100})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
 	}

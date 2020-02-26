@@ -52,7 +52,7 @@ const (
 	// MaxSeq is the maximum number of seq supported.
 	MaxSeq = uint64(1<<56 - 1)
 	// Maximum number of records to return
-	maxResults = 100000
+	maxResults = 1000000
 )
 
 type (
@@ -359,6 +359,9 @@ func (db *DB) loadTopicHash() error {
 		sOff, ok := db.trie.getOffset(b.topicHash)
 		if !ok || sOff < pOff {
 			if ok := db.trie.setOffset(b.topicHash, pOff); !ok {
+				if b.entryIdx == 0 {
+					return false, nil
+				}
 				seq := b.winEntries[b.entryIdx-1].seq
 				off := blockOffset(startBlockIndex(seq))
 				lb := blockHandle{file: db.index, offset: off}
@@ -722,28 +725,34 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	// var wEntries winEntries
-	// var topicHss []uint64
+	// lookups are performed in following order
+	// ilookup lookups in memory entries from timeWindow those are not yet sync
+	// trie lookup lookups in memory entries from trie as trie cachse recent entries at the time of timeWindow sync
+	// lookup lookups persisted entries if fanout is true
+	// lookup gets most recent entries without need for sorting. This is an art and not technological solution:)
 	wEntries, topicHss, topicOffsets, fanout := db.trie.lookup(q.contract, q.parts, q.Limit)
 	for i, topicHash := range topicHss {
-		// q.topicHash = topicHash
+		nextOff := int64(0)
 		if q.winEntries, fanout = db.timeWindow.ilookup(topicHash, q.Limit); fanout {
 			q.winEntries = append(q.winEntries, wEntries...)
 		}
 		if fanout {
 			limit := q.Limit - uint32(len(wEntries))
-			wEntries, fanout = db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
+			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
 			q.winEntries = append(q.winEntries, wEntries...)
 		}
 		if len(q.winEntries) == 0 {
 			return
 		}
-		if len(q.winEntries) > int(q.Limit) {
-			q.winEntries = q.winEntries[len(q.winEntries)-int(q.Limit):]
-		}
+
 		expiryCount := 0
+		start := uint32(0)
+		limit := q.Limit
+		if len(q.winEntries) < int(q.Limit) {
+			limit = uint32(len(q.winEntries))
+		}
 		for {
-			for _, we := range q.winEntries {
+			for _, we := range q.winEntries[start:limit] {
 				err = func() error {
 					if we.seq == 0 {
 						return nil
@@ -789,13 +798,26 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return items, err
 				}
 			}
-			if len(q.winEntries) == 0 || cap(q.winEntries) < int(q.Limit) || len(items) >= int(q.Limit) {
+
+			if uint32(cap(q.winEntries)) == limit && cap(q.winEntries) < int(q.Limit) && nextOff > 0 {
+				limit := q.Limit - uint32(len(items))
+				wEntries, nextOff = db.timeWindow.lookup(topicHash, nextOff, 0, limit)
+				if len(wEntries) == 0 {
+					break
+				}
+				q.winEntries = append(q.winEntries, wEntries...)
+			}
+
+			if len(items) >= int(q.Limit) || uint32(cap(q.winEntries)) == limit {
 				break
 			}
+
 			if cap(q.winEntries) < int(q.Limit+uint32(expiryCount)) {
-				q.winEntries = q.winEntries[q.Limit:]
+				start = limit
+				limit = uint32(cap(q.winEntries))
 			} else {
-				q.winEntries = q.winEntries[q.Limit : q.Limit+uint32(expiryCount)]
+				start = limit
+				limit = limit + uint32(expiryCount)
 			}
 		}
 		db.meter.Gets.Inc(int64(len(items)))

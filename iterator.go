@@ -117,7 +117,7 @@ func (it *ItemIterator) First() {
 		}
 		if fanout {
 			limit := it.query.Limit - uint32(len(wEntries))
-			wEntries, fanout = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
+			wEntries, _ = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
 			it.query.winEntries = append(it.query.winEntries, wEntries...)
 		}
 	}

@@ -254,19 +254,25 @@ func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts w
 }
 
 func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *winEntries, topicHss *[]uint64, offs *[]int64, part *part, limit uint32) {
+	l := limit
 	// Add seq set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
-		var l uint32
 		*topicHss = append(*topicHss, part.topicHash)
 		*offs = append(*offs, part.offset)
-		*ts = append(*ts, part.ts...)
-		// on lookup cap increased to 2 folds of current cap of the seq set
-		if ts.len() > limit {
-			l = limit
-		}
-		if part.cap < 2*l {
-			part.cap = 2 * l
-			part.ts.extend(part.cap)
+		if len(part.ts) > 0 {
+			if uint32(len(part.ts)) < l {
+				l = uint32(len(part.ts))
+			}
+			*ts = append(*ts, part.ts[uint32(len(part.ts))-l:]...) // begin from end to get recent entries
+			// set new limit
+			l = limit - l
+			// on lookup cap increased to 2 folds of current cap of the set
+			if ts.len() > limit {
+				if part.cap < 2*limit {
+					part.cap = 2 * limit
+					part.ts.extend(part.cap)
+				}
+			}
 		}
 	}
 
@@ -275,7 +281,7 @@ func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *w
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, ts, topicHss, offs, p, limit)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, ts, topicHss, offs, p, l)
 			}
 		}
 	}

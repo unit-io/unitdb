@@ -374,26 +374,38 @@ func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (w
 // ilookup lookups window entries timeWindowBucket and not yet sync to db
 func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry, fanout bool) {
 	winEntries = make([]winEntry, 0)
-	for i := 0; i < nShards; i++ {
-		ws := wb.timeWindows.windows[i]
-		ws.mu.RLock()
-		wEntries := ws.friezedEntries[topicHash]
-		for _, we := range wEntries {
-			winEntries = append(winEntries, we.(winEntry))
+	// get windows shard
+	ws := wb.getWindows(topicHash)
+	ws.mu.RLock()
+	var l uint32
+	wEntries := ws.friezedEntries[topicHash]
+	if len(wEntries) > 0 {
+		l = limit
+		if uint32(len(wEntries)) < limit {
+			l = uint32(len(wEntries))
 		}
-		wEntries = ws.entries[topicHash]
-		for _, we := range wEntries {
+		for _, we := range wEntries[uint32(len(wEntries))-l:] { // most recent enrties are appended to the end so get the entries from end
 			winEntries = append(winEntries, we.(winEntry))
-		}
-		ws.mu.RUnlock()
-		if uint32(len(winEntries)) > limit {
-			return winEntries, false
 		}
 	}
+	wEntries = ws.entries[topicHash]
+	if len(wEntries) > 0 {
+		l = limit - l
+		if uint32(len(wEntries)) < l {
+			l = uint32(len(wEntries))
+		}
+		for _, we := range wEntries[uint32(len(wEntries))-l:] {
+			winEntries = append(winEntries, we.(winEntry))
+		}
+	}
+	ws.mu.RUnlock()
+	// if uint32(len(winEntries)) > limit {
+	// 	return winEntries, false
+	// }
 	return winEntries, len(winEntries) < int(limit)
 }
 
-func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit uint32) (winEntries []winEntry, fanout bool) {
+func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit uint32) (winEntries []winEntry, nextOff int64) {
 	winEntries = make([]winEntry, 0)
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
@@ -413,20 +425,23 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	count := 0
 	err := next(off, func(curb windowHandle) (bool, error) {
 		b := &curb
-		if skip > count+seqsPerWindowBlock {
-			count += seqsPerWindowBlock
+		if skip > count+int(b.entryIdx) {
+			count += int(b.entryIdx)
 			return false, nil
 		}
-		winEntries = append(winEntries, b.winEntries[:b.entryIdx]...)
-		if uint32(len(winEntries)) > limit {
+		if uint32(len(winEntries)) > limit-uint32(b.entryIdx) {
+			limit = limit - uint32(len(winEntries))
+			winEntries = append(winEntries, b.winEntries[b.entryIdx-uint16(limit):b.entryIdx]...)
+			nextOff = b.next
 			return true, nil
 		}
+		winEntries = append(winEntries, b.winEntries[:b.entryIdx]...)
 		return false, nil
 	})
 	if err != nil {
-		return winEntries, false
+		return winEntries, nextOff
 	}
-	return winEntries, len(winEntries) < int(limit)
+	return winEntries, nextOff
 }
 
 // write writes timewidnow entries into timewindow files
