@@ -730,15 +730,19 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// trie lookup lookups in memory entries from trie as trie cachse recent entries at the time of timeWindow sync
 	// lookup lookups persisted entries if fanout is true
 	// lookup gets most recent entries without need for sorting. This is an art and not technological solution:)
-	wEntries, topicHss, topicOffsets, fanout := db.trie.lookup(q.contract, q.parts, q.Limit)
+	pEntries, topicHss, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
 	for i, topicHash := range topicHss {
+		var fanout bool
+		var wEntries []winEntry
 		nextOff := int64(0)
 		if q.winEntries, fanout = db.timeWindow.ilookup(topicHash, q.Limit); fanout {
-			q.winEntries = append(q.winEntries, wEntries...)
+			if len(pEntries) > i {
+				q.winEntries = append(q.winEntries, pEntries[i]...)
+			}
 		}
-		if fanout {
-			limit := q.Limit - uint32(len(wEntries))
-			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
+		if uint32(len(q.winEntries)) < q.Limit {
+			limit := q.Limit - uint32(len(q.winEntries))
+			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(q.winEntries), limit)
 			q.winEntries = append(q.winEntries, wEntries...)
 		}
 		if len(q.winEntries) == 0 {

@@ -128,7 +128,6 @@ type trie struct {
 	sync.RWMutex
 	mutex
 	partTrie *partTrie
-	count    int // Number of Trie in the Trie.
 }
 
 // NewTrie new trie creates a Trie with an initialized Trie.
@@ -140,11 +139,11 @@ func newTrie(cacheCap uint32) *trie {
 	}
 }
 
-// Count returns the number of entries in Trie.
+// Count returns the number of topics in the Trie.
 func (t *trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
-	return t.count
+	return len(t.partTrie.summary)
 }
 
 // add adds a message seq to topic trie.
@@ -205,7 +204,6 @@ func (t *trie) add(topicHash uint64, we winEntry) (added bool) {
 	}
 	curr.ts = append(curr.ts, we)
 	added = true
-	t.count++
 	return
 }
 
@@ -228,7 +226,6 @@ func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
 			curr.cap = curr.ts.len()
 			curr.ts.shrink(curr.cap)
 		}
-		t.count--
 	}
 	// Remove orphans
 	t.Lock()
@@ -240,7 +237,7 @@ func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
 }
 
 // lookup returns seq set for given topic.
-func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts winEntries, topicHss []uint64, offs []int64, fanout bool) {
+func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (tss []winEntries, topicHss []uint64, offs []int64) {
 	t.RLock()
 	mu := t.getMutex(contract)
 	mu.Lock()
@@ -249,25 +246,25 @@ func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (ts w
 		mu.Unlock()
 	}()
 
-	t.ilookup(contract, parts, uint8(len(parts)-1), &ts, &topicHss, &offs, t.partTrie.root, limit)
-	return ts, topicHss, offs, ts.len() < limit
+	t.ilookup(contract, parts, uint8(len(parts)-1), &tss, &topicHss, &offs, t.partTrie.root, limit)
+	return tss, topicHss, offs
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *winEntries, topicHss *[]uint64, offs *[]int64, part *part, limit uint32) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, tss *[]winEntries, topicHss *[]uint64, offs *[]int64, part *part, limit uint32) {
 	l := limit
 	// Add seq set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
 		*topicHss = append(*topicHss, part.topicHash)
 		*offs = append(*offs, part.offset)
-		if len(part.ts) > 0 {
-			if uint32(len(part.ts)) < l {
-				l = uint32(len(part.ts))
+		if part.ts.len() > 0 {
+			if uint32(part.ts.len()) < l {
+				l = uint32(part.ts.len())
 			}
-			*ts = append(*ts, part.ts[uint32(len(part.ts))-l:]...) // begin from end to get recent entries
+			*tss = append(*tss, part.ts[uint32(part.ts.len())-l:]) // begin from end to get recent entries
 			// set new limit
 			l = limit - l
 			// on lookup cap increased to 2 folds of current cap of the set
-			if ts.len() > limit {
+			if part.ts.len() > limit {
 				if part.cap < 2*limit {
 					part.cap = 2 * limit
 					part.ts.extend(part.cap)
@@ -281,7 +278,7 @@ func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ts *w
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, ts, topicHss, offs, p, l)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, tss, topicHss, offs, p, l)
 			}
 		}
 	}

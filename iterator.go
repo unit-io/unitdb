@@ -110,19 +110,20 @@ func (it *ItemIterator) Next() {
 
 // First returns the first key/value pair if available.
 func (it *ItemIterator) First() {
-	wEntries, topicHss, topicOffsets, fanout := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
+	pEntries, topicHss, topicOffsets := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
 	for i, topicHash := range topicHss {
+		var fanout bool
+		var wEntries []winEntry
 		if it.query.winEntries, fanout = it.db.timeWindow.ilookup(topicHash, it.query.Limit); fanout {
+			if len(pEntries) > i {
+				it.query.winEntries = append(it.query.winEntries, pEntries[i]...)
+			}
+		}
+		if uint32(len(it.query.winEntries)) < it.query.Limit {
+			limit := it.query.Limit - uint32(len(it.query.winEntries))
+			wEntries, _ = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(it.query.winEntries), limit)
 			it.query.winEntries = append(it.query.winEntries, wEntries...)
 		}
-		if fanout {
-			limit := it.query.Limit - uint32(len(wEntries))
-			wEntries, _ = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(wEntries), limit)
-			it.query.winEntries = append(it.query.winEntries, wEntries...)
-		}
-	}
-	if len(it.query.winEntries) > int(it.query.Limit) {
-		it.query.winEntries = it.query.winEntries[len(it.query.winEntries)-int(it.query.Limit):]
 	}
 	if len(it.query.winEntries) == 0 || it.next >= 1 {
 		return
