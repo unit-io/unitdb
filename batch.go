@@ -288,7 +288,7 @@ func (b *Batch) commit(l int, data []byte) error {
 	defer func() {
 		<-b.db.writeLockC
 	}()
-	_, err := b.db.commit(l, data)
+	err := b.db.commit(l, data)
 	if err1 := <-err; err1 != nil {
 		logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
 	}
@@ -318,11 +318,11 @@ func (b *Batch) Abort() {
 
 // Reset resets the batch.
 func (b *Batch) Reset() {
-	b.buffer.Reset()
 	b.entryCount = 0
 	b.size = 0
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
+	b.buffer.Reset()
 }
 
 func (b *Batch) uniq() []batchIndex {

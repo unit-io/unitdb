@@ -86,6 +86,9 @@ func (h *windowHandle) read() error {
 }
 
 func (h *windowHandle) write() error {
+	if h.entryIdx == 0 {
+		return nil
+	}
 	buf, err := h.MarshalBinary()
 	if err != nil {
 		return err
@@ -93,6 +96,14 @@ func (h *windowHandle) write() error {
 	_, err = h.file.WriteAt(buf, h.offset)
 
 	return err
+}
+
+func (h *windowHandle) append(we winEntry) error {
+	h.winEntries[h.entryIdx-1] = we
+	if h.entryIdx == seqsPerWindowBlock {
+		return h.write()
+	}
+	return nil
 }
 
 // A "thread" safe timeWindows.
@@ -471,12 +482,8 @@ func (wb *timeWindowBucket) write(b *windowHandle, we timeWindowEntry) (off int6
 		wb.nextTimeWindowIdx()
 	}
 
-	b.winEntries[b.entryIdx] = winEntry{
-		seq: we.Seq(),
-	}
 	b.entryIdx++
-
-	if err := b.write(); err != nil {
+	if err := b.append(winEntry{seq: we.Seq()}); err != nil {
 		return 0, err
 	}
 	return off, nil

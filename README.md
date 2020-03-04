@@ -12,9 +12,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 
 [unitdb](https://github.com/unit-io/unitdb) repo is forked from tracedb for more advanced use case for timeseries database. Keep watch on [unitdb](https://github.com/unit-io/unitdb)
 
-# WARNING: This is Alpha software and not intended for use until a stable release.
-First stable release is coming out soon, so keep watch on this repo.
-
 # Key characteristics
 - 100% Go.
 - Optimized for fast lookups and bulk inserts.
@@ -342,7 +339,6 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 
 ### Statistics
 The tracedb keeps a running metrics of internal operations it performs. To get tracedb metrics use DB.Varz() function.
-The tracedb can perform hyper scale writes, but performance starts degrading due to hardware limitation if writing over 5 millions entries within span of 10 secs. The tracedb will support distribution in upcoming release.
 
 ```
 

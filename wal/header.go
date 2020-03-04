@@ -13,7 +13,8 @@ var (
 type logInfo struct {
 	status     uint16
 	entryCount uint32
-	seq        uint64
+	seq        uint64 // log sequence
+	upperSeq   uint64 // db sequence
 	size       int64
 	offset     int64
 

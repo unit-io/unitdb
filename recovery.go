@@ -118,12 +118,12 @@ func (db *DB) recoverWindowBlocks() error {
 			if !ok {
 				return true, errors.New("recovery.recoverWindowBlocks error: unbale to get topic offset from trie")
 			}
-			tb, err := db.timeWindow.getWindowBlockHandle(h, off)
+			wb, err := db.timeWindow.getWindowBlockHandle(h, off)
 			if err != nil {
 				return true, err
 			}
-			for _, te := range t {
-				newOff, err := db.timeWindow.write(&tb, te)
+			for _, we := range t {
+				newOff, err := db.timeWindow.write(&wb, we)
 				if err != nil {
 					return true, err
 				}
@@ -136,8 +136,11 @@ func (db *DB) recoverWindowBlocks() error {
 			if err != nil {
 				return true, err
 			}
+			if err := wb.write(); err != nil {
+				return true, err
+			}
 			if err := db.timeWindow.Sync(); err != nil {
-				return false, err
+				return true, err
 			}
 		}
 		return false, nil
@@ -150,23 +153,23 @@ func (db *DB) recoverLog() error {
 	defer func() {
 		db.closeW.Done()
 	}()
-	seqs, err := db.wal.Scan()
+	seqs, upperSeqs, err := db.wal.Scan()
 	if err != nil {
 		return err
 	}
-	if err := db.extendBlocks(); err != nil {
-		return err
-	}
-	for db.wal.Blocks() > db.blockIndex {
-		if _, err := db.newBlock(); err != nil {
-			return err
+	for i, s := range seqs {
+		nBlocks := uint32(upperSeqs[i] / entriesPerBlock)
+		for nBlocks > db.blockIndex {
+			if _, err := db.newBlock(); err != nil {
+				return err
+			}
 		}
-	}
-	for _, s := range seqs {
 		it, err := db.wal.Read(s)
 		if err != nil {
 			return err
 		}
+		var off int64
+		var b blockHandle
 		for {
 			logData, ok := it.Next()
 			if !ok {
@@ -178,10 +181,17 @@ func (db *DB) recoverLog() error {
 				return err
 			}
 			startBlockIdx := startBlockIndex(logEntry.seq)
-			off := blockOffset(startBlockIdx)
-			b := &blockHandle{file: db.index, offset: off}
-			if err := b.read(); err != nil {
-				return err
+			newOff := blockOffset(startBlockIdx)
+			if newOff != off {
+				off = newOff
+				// write previous block
+				if err := b.write(); err != nil {
+					return err
+				}
+				b = blockHandle{file: db.index, offset: newOff}
+				if err := b.read(); err != nil {
+					return err
+				}
 			}
 			entryIdx := 0
 			for i := 0; i < entriesPerBlock; i++ {
@@ -225,12 +235,15 @@ func (db *DB) recoverLog() error {
 			}
 			db.meter.Puts.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
-			b.entries[b.entryIdx] = logEntry
 			b.entryIdx++
-			if err := b.write(); err != nil {
+			if err := b.append(logEntry); err != nil {
 				return err
 			}
 			db.filter.Append(logEntry.seq)
+		}
+		// write any pending entries
+		if err := b.write(); err != nil {
+			return err
 		}
 		if err := db.recoverWindowBlocks(); err != nil {
 			return err

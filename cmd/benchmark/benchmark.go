@@ -84,83 +84,84 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
+
 	forceGC()
 
-	start := time.Now()
-	eg := &errgroup.Group{}
+	func(retry int) error {
+		r := 1
+		for range time.Tick(100 * time.Millisecond) {
+			start := time.Now()
+			eg := &errgroup.Group{}
 
-	func(concurrent int) error {
-		i := 1
-		for {
-			db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-				opts := tracedb.DefaultBatchOptions
-				opts.AllowDuplicates = true
-				opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
-				b.SetOptions(opts)
-				for k := 0; k < batchSize; k++ {
-					b.Put(vals[k])
-					// if k%500000 == 0 {
-					// 	b.Write()
-					// }
+			func(concurrent int) error {
+				i := 1
+				for {
+					db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+						opts := tracedb.DefaultBatchOptions
+						opts.AllowDuplicates = true
+						opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
+						b.SetOptions(opts)
+						for k := 0; k < batchSize; k++ {
+							b.Put(vals[k])
+							// if k%500000 == 0 {
+							// 	b.Write()
+							// }
+						}
+						return b.Write()
+					})
+					if i >= concurrent {
+						return nil
+					}
+					i++
 				}
-				return b.Write()
-				// eg.Go(func() error {
-				// 	<-completed // it signals batch has completed and fully committed to db
-				// 	return nil
-				// })
-				// return nil
-			})
-			if i >= concurrent {
-				return nil
-			}
-			i++
-		}
-	}(concurrency)
+			}(concurrency)
 
-	err = eg.Wait()
-	if err != nil {
-		return err
-	}
-
-	endsecs := time.Since(start).Seconds()
-	totalalsecs := endsecs
-	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-
-	sz, err := db.FileSize()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Fie size: %s\n", byteSize(sz))
-	printStats(db)
-
-	forceGC()
-
-	start = time.Now()
-	func(concurrent int) error {
-		i := 1
-		for {
-			topic := append(topics[i-1], []byte("?last=1m")...)
-			_, err := db.Get(&tracedb.Query{Topic: topic})
+			err = eg.Wait()
 			if err != nil {
 				return err
 			}
-			if i >= concurrent {
+
+			endsecs := time.Since(start).Seconds()
+			totalalsecs := endsecs
+			fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+
+			sz, err := db.FileSize()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Fie size: %s\n", byteSize(sz))
+			printStats(db)
+
+			// forceGC()
+
+			start = time.Now()
+
+			for i := 0; i < concurrency; i++ {
+				topic := append(topics[i], []byte("?last=1m")...)
+				_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
+				if err != nil {
+					return err
+				}
+			}
+
+			endsecs = time.Since(start).Seconds()
+			totalalsecs += endsecs
+			fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+			fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
+			sz, err = db.FileSize()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("File size: %s\n", byteSize(sz))
+			printStats(db)
+			if r >= retry {
 				return nil
 			}
-			i++
+			r++
 		}
-	}(concurrency)
+		return nil
+	}(10)
 
-	endsecs = time.Since(start).Seconds()
-	totalalsecs += endsecs
-	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-	fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
-	sz, err = db.FileSize()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("File size: %s\n", byteSize(sz))
-	printStats(db)
 	return db.Close()
 }
 
@@ -222,20 +223,14 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	forceGC()
 
 	start = time.Now()
-	func(concurrent int) error {
-		i := 1
-		for {
-			topic := append(topics[i-1], []byte("?last=1m")...)
-			_, err := db.Get(&tracedb.Query{Topic: topic})
-			if err != nil {
-				return err
-			}
-			if i >= concurrent {
-				return nil
-			}
-			i++
+
+	for i := 0; i < concurrency; i++ {
+		topic := append(topics[i], []byte("?last=1m")...)
+		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
+		if err != nil {
+			return err
 		}
-	}(concurrency)
+	}
 
 	endsecs = time.Since(start).Seconds()
 	totalalsecs += endsecs
@@ -311,11 +306,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 					}
 				}
 				return b.Write()
-				// eg.Go(func() error {
-				// 	<-completed // it signals batch has completed and fully committed to db
-				// 	return nil
-				// })
-				// return nil
 			})
 			if i >= concurrent {
 				return nil
@@ -342,26 +332,15 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 
 	start = time.Now()
-	func(concurrent int) error {
-		i := 1
-		for {
-			eg.Go(func() error {
-				for contract := range keys {
-					for _, k := range keys[contract] {
-						_, err := db.Get(&tracedb.Query{Topic: k, Contract: contract})
-						if err != nil {
-							return err
-						}
-					}
-				}
-				return nil
-			})
-			if i >= concurrent {
-				return nil
+
+	for contract := range keys {
+		for _, k := range keys[contract] {
+			_, err := db.Get(&tracedb.Query{Topic: k, Contract: contract})
+			if err != nil {
+				return err
 			}
-			i++
 		}
-	}(concurrency)
+	}
 
 	err = eg.Wait()
 	if err != nil {

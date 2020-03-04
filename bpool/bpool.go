@@ -17,16 +17,13 @@ type Buffer struct {
 }
 
 // Get returns buffer if any in pool or create a new buffer
-func (pool *BufferPool) Get() *Buffer {
-	var buf *Buffer
+func (pool *BufferPool) Get() (buf *Buffer) {
 	select {
 	case buf = <-pool.buf:
 	default:
+		buf = &Buffer{}
 	}
-	if buf == nil {
-		buf = &Buffer{internal: buffer{maxSize: pool.targetSize}}
-	}
-	return buf
+	return
 }
 
 // Put reset the buffer and put it to the pool
@@ -98,7 +95,7 @@ func NewBufferPool(size int64) *BufferPool {
 }
 
 func (pool *BufferPool) drain() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ticker.C:

@@ -61,22 +61,22 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.BackgroundSyncInterval = 1 * time.Second
 	}
 	if opts.CacheCap == 0 {
-		opts.CacheCap = 100
+		opts.CacheCap = 500
 	}
 	if opts.TinyBatchSize == 0 {
-		opts.TinyBatchSize = 100
+		opts.TinyBatchSize = 500
 	}
 	if opts.TinyBatchWriteInterval == 0 {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
 	}
 	if opts.BufferSize == 0 {
-		opts.BufferSize = 1 << 33 // maximum size of memdb (8GB).
+		opts.BufferSize = 1 << 30 // maximum size of a buffer in bufferpool (1GB).
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 33 // maximum size of memdb (8GB).
+		opts.MemdbSize = 1 << 30 // maximum size of memdb (4GB).
 	}
 	if opts.LogSize == 0 {
-		opts.LogSize = 1 << 33 // maximum size of memdb (8GB).
+		opts.LogSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
 	}
 	if opts.MinimumFreeBlocksSize == 0 {
 		opts.MinimumFreeBlocksSize = 1 << 24 // minimum size of (16MB)

@@ -17,7 +17,7 @@ const (
 
 	drainInterval         = 1 * time.Second
 	memShrinkFactor       = 0.7
-	dataTableShrinkFactor = 0.2 // shirnker try to free 20% of total memdb size
+	dataTableShrinkFactor = 0.33 // shirnker try to free 20% of total memdb size
 )
 
 // A "thread" safe map of type seq:offset.
@@ -35,7 +35,7 @@ type concurrentCache struct {
 func newCache(memSize int64) blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		m[i] = &concurrentCache{data: dataTable{maxSize: memSize}, cache: make(map[uint64]int64)}
+		m[i] = &concurrentCache{data: dataTable{maxSize: (memSize / nShards) * 2}, cache: make(map[uint64]int64)}
 	}
 	return m
 }

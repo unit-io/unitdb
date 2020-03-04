@@ -80,7 +80,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 }
 
 // writeLog writes log by setting correct header and status
-func (w *Writer) writeLog(seq uint64) error {
+func (w *Writer) writeLog(seq, upperSeq uint64) error {
 	defer close(w.writeCompleted)
 	defer w.wal.bufPool.Put(w.buffer)
 
@@ -96,6 +96,7 @@ func (w *Writer) writeLog(seq uint64) error {
 		status:     logStatusWritten,
 		entryCount: w.entryCount,
 		seq:        seq,
+		upperSeq:   upperSeq,
 		size:       int64(w.logSize),
 		offset:     int64(off),
 	}
@@ -119,7 +120,7 @@ func (w *Writer) writeLog(seq uint64) error {
 // SignalInitWrite will signal to the WAL that log append has
 // completed, and that the WAL can safely write log and being
 // applied atomically.
-func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
+func (w *Writer) SignalInitWrite(seq, upperSeq uint64) <-chan error {
 	done := make(chan error, 1)
 	if w.writeComplete || w.releaseComplete {
 		done <- errors.New("misuse of log write - call each of the signaling methods exactly ones, in serial, in order")
@@ -129,7 +130,7 @@ func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
 	defer w.wal.wg.Done()
 	// Write the log non-blocking
 	go func() {
-		done <- w.writeLog(seq)
+		done <- w.writeLog(seq, upperSeq)
 	}()
 	return done
 }

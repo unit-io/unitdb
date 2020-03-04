@@ -7,9 +7,8 @@ import (
 
 type (
 	buffer struct {
-		buf     []byte
-		maxSize int64
-		size    int64
+		buf  []byte
+		size int64
 	}
 )
 
@@ -35,7 +34,8 @@ func (b *buffer) bytes() ([]byte, error) {
 
 func (b *buffer) reset() (ok bool) {
 	atomic.StoreInt64(&b.size, 0)
-	b.buf = b.buf[:0]
+	// b.buf = b.buf[:0]
+	b.buf = nil
 	return true
 }
 

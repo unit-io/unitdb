@@ -52,7 +52,7 @@ const (
 	// MaxSeq is the maximum number of seq supported.
 	MaxSeq = uint64(1<<56 - 1)
 	// Maximum number of records to return
-	maxResults = 1000000
+	maxResults = 100000
 )
 
 type (
@@ -450,17 +450,20 @@ func (db *DB) Sync() error {
 		// db.meter.TimeSeries.AddTime(time.Since(start))
 	}()
 
-	seqs, err := db.wal.Scan()
-	if err != nil {
-		return err
-	}
-	if len(seqs) == 0 {
-		return nil
-	}
-
-	err = db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+		// var m runtime.MemStats
+		// runtime.ReadMemStats(&m)
+		// log.Println(float64(m.Sys) / 1024 / 1024)
+		// log.Println(float64(m.HeapAlloc) / 1024 / 1024)
+		seqs, upperSeqs, err := db.wal.Scan()
+		if err != nil {
+			return true, err
+		}
+		if len(seqs) == 0 {
+			return true, nil
+		}
 		if err := db.extendBlocks(); err != nil {
-			return false, err
+			return true, err
 		}
 
 		var wEntry winEntry
@@ -473,7 +476,8 @@ func (db *DB) Sync() error {
 			if err != nil {
 				return true, err
 			}
-			var b *blockHandle
+			var off int64
+			var b blockHandle
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
@@ -482,12 +486,12 @@ func (db *DB) Sync() error {
 				if ok := db.trie.add(h, wEntry); !ok {
 					return true, errors.New("db:Sync: unbale to add entry to trie")
 				}
-				newOff, err := db.timeWindow.write(&wb, we)
+				wOff, err := db.timeWindow.write(&wb, we)
 				if err != nil {
 					return true, err
 				}
-				if newOff > topicOff {
-					if ok := db.trie.setOffset(h, newOff); !ok {
+				if wOff > topicOff {
+					if ok := db.trie.setOffset(h, wOff); !ok {
 						return true, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
 					}
 				}
@@ -502,10 +506,14 @@ func (db *DB) Sync() error {
 				}
 
 				startTimeIdx := startBlockIndex(e.seq)
-				off := blockOffset(startTimeIdx)
-				if off != newOff {
-					newOff = off
-					b = &blockHandle{file: db.index, offset: off}
+				newOff := blockOffset(startTimeIdx)
+				if newOff != off {
+					off = newOff
+					// write previous block
+					if err := b.write(); err != nil {
+						return true, err
+					}
+					b = blockHandle{file: db.index, offset: newOff}
 					if err := b.read(); err != nil {
 						return true, err
 					}
@@ -527,38 +535,42 @@ func (db *DB) Sync() error {
 				}
 
 				db.meter.InBytes.Inc(int64(e.valueSize))
-				b.entries[b.entryIdx] = entry{
-					seq:       e.seq,
-					topicSize: e.topicSize,
-					valueSize: e.valueSize,
-					mOffset:   e.mOffset,
-					expiresAt: e.expiresAt,
-				}
+
 				b.entryIdx++
-				if err := b.write(); err != nil {
+				if err := b.append(e); err != nil {
 					return true, err
 				}
 
 				db.filter.Append(e.seq)
 				db.meter.InMsgs.Inc(1)
 			}
-		}
-		db.mem.Free(wEntry.contract, wEntry.seq)
-		return false, nil
-	})
-	if err := db.timeWindow.Sync(); err != nil {
-		return err
-	}
-	if err := db.sync(); err != nil {
-		return err
-	}
-	if err == nil {
-		for _, s := range seqs {
-			if err := db.wal.SignalLogApplied(s); err != nil {
-				return err
+
+			// write any pending entries
+			if err := b.write(); err != nil {
+				return true, err
+			}
+
+			if err := wb.write(); err != nil {
+				return true, err
 			}
 		}
-	} else {
+		if err := db.timeWindow.Sync(); err != nil {
+			return false, err
+		}
+		if err := db.sync(); err != nil {
+			return false, err
+		}
+		db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+		for i, upperSeq := range upperSeqs {
+			if wEntry.seq > upperSeq {
+				if err := db.wal.SignalLogApplied(seqs[i]); err != nil {
+					return false, err
+				}
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
 		// run db recovery if an error occur with the db sync
 		if err := db.recoverLog(); err != nil {
 			// if unable to recover db then close db
@@ -1094,9 +1106,7 @@ func (db *DB) tinyCommit() error {
 	}
 
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
-	logSeq := db.wal.NextSeq()
-	db.wal.SetBlocks(db.blocks())
-	if err := <-logWriter.SignalInitWrite(logSeq); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.getSeq()); err != nil {
 		return err
 	}
 	db.tinyBatch.reset()
@@ -1105,11 +1115,11 @@ func (db *DB) tinyCommit() error {
 }
 
 // commit commits batches to write ahead log
-func (db *DB) commit(l int, data []byte) (uint64, <-chan error) {
+func (db *DB) commit(l int, data []byte) <-chan error {
 	done := make(chan error, 1)
 	if err := db.ok(); err != nil {
 		done <- err
-		return 0, done
+		return done
 	}
 	db.closeW.Add(1)
 	defer db.closeW.Done()
@@ -1117,7 +1127,7 @@ func (db *DB) commit(l int, data []byte) (uint64, <-chan error) {
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		done <- err
-		return 0, done
+		return done
 	}
 
 	offset := uint32(0)
@@ -1125,15 +1135,13 @@ func (db *DB) commit(l int, data []byte) (uint64, <-chan error) {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
 		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			done <- err
-			return 0, done
+			return done
 		}
 		offset += dataLen
 	}
 
 	db.meter.Puts.Inc(int64(l))
-	logSeq := db.wal.NextSeq()
-	db.wal.SetBlocks(db.blocks())
-	return logSeq, logWriter.SignalInitWrite(logSeq)
+	return logWriter.SignalInitWrite(db.wal.NextSeq(), db.getSeq())
 }
 
 // Delete sets entry for deletion.

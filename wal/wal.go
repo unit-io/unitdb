@@ -193,17 +193,18 @@ func (wal *WAL) put(log logInfo) error {
 }
 
 // Scan provides list of sequences written to the log but not yet fully applied
-func (wal *WAL) Scan() (seqs []uint64, err error) {
+func (wal *WAL) Scan() (seqs, upperSeqs []uint64, err error) {
 	l := wal.Count()
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
 	for i := int64(0); i < l; i++ {
 		if wal.logs[i].status == logStatusWritten {
 			seqs = append(seqs, wal.logs[i].seq)
+			upperSeqs = append(upperSeqs, wal.logs[i].upperSeq)
 		}
 	}
 
-	return seqs, nil
+	return seqs, upperSeqs, nil
 }
 
 // Reader reader is a simple iterator over log data

@@ -131,10 +131,21 @@ func (h *blockHandle) read() error {
 }
 
 func (h *blockHandle) write() error {
+	if h.entryIdx == 0 {
+		return nil
+	}
 	buf, err := h.MarshalBinary()
 	if err != nil {
 		return err
 	}
 	_, err = h.file.WriteAt(buf, h.offset)
 	return err
+}
+
+func (h *blockHandle) append(e entry) error {
+	h.entries[h.entryIdx-1] = e
+	if h.entryIdx == entriesPerBlock {
+		return h.write()
+	}
+	return nil
 }
