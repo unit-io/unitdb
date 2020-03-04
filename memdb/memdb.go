@@ -35,12 +35,12 @@ type concurrentCache struct {
 func newCache(memSize int64) blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		m[i] = &concurrentCache{data: dataTable{maxSize: (memSize / nShards) * 2}, cache: make(map[uint64]int64)}
+		m[i] = &concurrentCache{data: dataTable{}, cache: make(map[uint64]int64)}
 	}
 	return m
 }
 
-// DB represents the topic->key-value storage.
+// DB represents the block cache storage.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	targetSize int64

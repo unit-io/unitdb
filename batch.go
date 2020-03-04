@@ -47,7 +47,7 @@ type (
 
 	batchIndex struct {
 		delFlag   bool
-		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records to db
+		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records into DB
 		topicSize uint16
 		offset    int64
 	}
@@ -238,9 +238,6 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			b.db.delete(seq)
 			continue
 		}
-		// if ok := b.db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); !ok {
-		// 	return errBadRequest
-		// }
 		b.db.timeWindow.add(topicHash, we)
 
 		memseq := b.db.cacheID ^ seq
@@ -251,7 +248,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	return nil
 }
 
-// Write starts writing entries into db. it returns an error to the batch if any
+// Write starts writing entries into DB. It returns an error if batch write fails.
 func (b *Batch) Write() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
@@ -295,8 +292,8 @@ func (b *Batch) commit(l int, data []byte) error {
 	return nil
 }
 
-// Commit commits changes to the db. In batch operation commit is manages and client progress is not allowed to call commit.
-// On Commit complete batch operation signal to the cliend program if the batch is fully commmited to db.
+// Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
+// On Commit complete batch operation signal to the cliend if the batch is fully commmited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	defer close(b.commitComplete)

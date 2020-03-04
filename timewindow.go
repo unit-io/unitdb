@@ -18,13 +18,13 @@ const (
 type (
 	winEntry struct {
 		contract uint64
-		seq      uint64 //seq specific to time block entries
+		seq      uint64
 	}
 	winBlock struct {
 		contract   uint64
 		topicHash  uint64
 		winEntries [seqsPerWindowBlock]winEntry
-		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie (to iterate entries in reverse order)
+		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order)
 		entryIdx   uint16
 	}
 )
@@ -47,7 +47,7 @@ func (e winEntry) Seq() uint64 {
 	return e.seq
 }
 
-// MarshalBinary serliazed time block into binary data
+// MarshalBinary serliazed window block into binary data
 func (b winBlock) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, blockSize)
 	data := buf
@@ -63,7 +63,7 @@ func (b winBlock) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
-// UnmarshalBinary dserliazed time block from binary data
+// UnmarshalBinary dserliazed window block from binary data
 func (b *winBlock) UnmarshalBinary(data []byte) error {
 	for i := 0; i < seqsPerWindowBlock; i++ {
 		_ = data[8] // bounds check hint to compiler; see golang.org/issue/14808
@@ -77,31 +77,32 @@ func (b *winBlock) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (h *windowHandle) read() error {
-	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
+func (wh *windowHandle) read() error {
+	buf, err := wh.file.Slice(wh.offset, wh.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-	return h.UnmarshalBinary(buf)
+	return wh.UnmarshalBinary(buf)
 }
 
-func (h *windowHandle) write() error {
-	if h.entryIdx == 0 {
+func (wh *windowHandle) write() error {
+	if wh.entryIdx == 0 {
 		return nil
 	}
-	buf, err := h.MarshalBinary()
+	buf, err := wh.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	_, err = h.file.WriteAt(buf, h.offset)
+	_, err = wh.file.WriteAt(buf, wh.offset)
 
 	return err
 }
 
-func (h *windowHandle) append(we winEntry) error {
-	h.winEntries[h.entryIdx-1] = we
-	if h.entryIdx == seqsPerWindowBlock {
-		return h.write()
+func (wh *windowHandle) append(we winEntry) error {
+	wh.winEntries[wh.entryIdx] = we
+	wh.entryIdx++
+	if wh.entryIdx == seqsPerWindowBlock {
+		return wh.write()
 	}
 	return nil
 }
@@ -164,7 +165,7 @@ type (
 		sync.RWMutex
 		file
 		*timeWindows
-		timeWindowIdx      int32
+		windowIdx          int32
 		earliestExpiryHash int64
 		opts               *timeOptions
 	}
@@ -191,19 +192,19 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 }
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
-	l := &timeWindowBucket{file: f, timeWindowIdx: -1}
+	l := &timeWindowBucket{file: f, windowIdx: -1}
 	l.timeWindows = newTimeWindows()
 	l.opts = opts.copyWithDefaults()
 	return l
 }
 
-// newBlock adds new block to windowBlock and returns block offset
+// newBlock adds new window block to timeWindowBucket and returns block offset
 func (wb *timeWindowBucket) newBlock() (int64, error) {
 	off, err := wb.extend(blockSize)
 	if err != nil {
 		return off, err
 	}
-	wb.nextTimeWindowIdx()
+	wb.nextWindowIndex()
 	return off, err
 }
 
@@ -246,7 +247,7 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 	return expiredEntries
 }
 
-// addExpiry adds expiry for first winBlock. Entries expires in future is not added yet to expiry window
+// addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window
 func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
 	timeExpiry := int64(time.Unix(int64(e.time()), 0).Truncate(wb.opts.expDurationType).Add(1 * wb.opts.expDurationType).Unix())
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
@@ -309,7 +310,7 @@ func (w *timeWindow) unFreeze() error {
 	return nil
 }
 
-// foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to timewindow files
+// foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to window file
 // it takes timewindow snapshot to iterate and deletes blocks from timewindow
 func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
@@ -342,10 +343,10 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 	return nil
 }
 
-// foreachwinBlock iterates winBlocks on init db to store topic hash and last offset of topic in a timeWindow file into trie.
+// foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
 func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
-	nwinBlocks := wb.getTimeWindowIdx()
+	nwinBlocks := wb.windowIndex()
 	for winBlockIdx < nwinBlocks {
 		off := winBlockOffset(winBlockIdx)
 		b := windowHandle{file: wb.file, offset: off}
@@ -363,8 +364,8 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 	return nil
 }
 
-// getwinBlockHandle reads winBlock from timewindow file for windowIdx (file num) and a topic.
-// If offset is zero then its a new topic so it create a new winBlock to the end of timewindow file
+// getWindowBlockHandle reads winBlock from window file.
+// If offset is zero then its a new topic, so it creates a new winBlock to the end of window file
 func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (windowHandle, error) {
 	var err error
 	if off == 0 {
@@ -382,7 +383,7 @@ func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (w
 	return b, nil
 }
 
-// ilookup lookups window entries timeWindowBucket and not yet sync to db
+// ilookup lookups window entries from timeWindowBucket. These entries are not yet sync to DB
 func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry, fanout bool) {
 	winEntries = make([]winEntry, 0)
 	// get windows shard
@@ -410,12 +411,11 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 		}
 	}
 	ws.mu.RUnlock()
-	// if uint32(len(winEntries)) > limit {
-	// 	return winEntries, false
-	// }
+
 	return winEntries, len(winEntries) < int(limit)
 }
 
+// lookup lookups window entries from window file.
 func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit uint32) (winEntries []winEntry, nextOff int64) {
 	winEntries = make([]winEntry, 0)
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
@@ -455,12 +455,11 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	return winEntries, nextOff
 }
 
-// write writes timewidnow entries into timewindow files
-func (wb *timeWindowBucket) write(b *windowHandle, we timeWindowEntry) (off int64, err error) {
+// write writes widnow entries into window file
+func (wb *timeWindowBucket) write(wh *windowHandle, we timeWindowEntry) (off int64, err error) {
 	entryIdx := 0
-	// e := we.(winEntry)
 	for i := 0; i < seqsPerWindowBlock; i++ {
-		entry := b.winEntries[i]
+		entry := wh.winEntries[i]
 		if entry.seq == we.Seq() { //record exist in db
 			entryIdx = -1
 			break
@@ -469,36 +468,35 @@ func (wb *timeWindowBucket) write(b *windowHandle, we timeWindowEntry) (off int6
 	if entryIdx == -1 {
 		return 0, nil
 	}
-	if b.entryIdx == seqsPerWindowBlock {
+	if wh.entryIdx == seqsPerWindowBlock {
 		off, err = wb.newBlock()
 		if err != nil {
 			return 0, err
 		}
-		topicHash := b.topicHash
-		next := b.offset
-		*b = windowHandle{file: wb.file, offset: off}
-		b.topicHash = topicHash
-		b.next = next
-		wb.nextTimeWindowIdx()
+		topicHash := wh.topicHash
+		next := wh.offset
+		*wh = windowHandle{file: wb.file, offset: off}
+		wh.topicHash = topicHash
+		wh.next = next
+		wb.nextWindowIndex()
 	}
 
-	b.entryIdx++
-	if err := b.append(winEntry{seq: we.Seq()}); err != nil {
+	if err := wh.append(winEntry{seq: we.Seq()}); err != nil {
 		return 0, err
 	}
 	return off, nil
 }
 
-func (wb *timeWindowBucket) getTimeWindowIdx() int32 {
-	return wb.timeWindowIdx
+func (wb *timeWindowBucket) windowIndex() int32 {
+	return wb.windowIdx
 }
 
-func (wb *timeWindowBucket) setTimeWindowIdx(timeWindowIdx int32) error {
-	wb.timeWindowIdx = timeWindowIdx
+func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
+	wb.windowIdx = windowIdx
 	return nil
 }
 
-func (wb *timeWindowBucket) nextTimeWindowIdx() int32 {
-	wb.timeWindowIdx++
-	return wb.timeWindowIdx
+func (wb *timeWindowBucket) nextWindowIndex() int32 {
+	wb.windowIdx++
+	return wb.windowIdx
 }

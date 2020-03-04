@@ -18,7 +18,7 @@ func (f *Filter) Append(h uint64) {
 	f.filterBlock.Append(h)
 }
 
-// Test tests entry in bloom filter. it return if entry difinately does not exist or entry maybe existing in db
+// Test tests entry in bloom filter. It returns false if entry definately does not exist or entry maybe existing in DB
 func (f *Filter) Test(h uint64) bool {
 	/// Test filter block for presence
 	fltr, _ := f.getFilterBlock(true)
@@ -28,7 +28,7 @@ func (f *Filter) Test(h uint64) bool {
 	return true
 }
 
-// Close finalizes the SST being written.
+// Close finalizes writing filter to file.
 func (f *Filter) close() error {
 	f.writeFilterBlock()
 	if err := f.Close(); err != nil {
@@ -37,7 +37,7 @@ func (f *Filter) close() error {
 	return nil
 }
 
-// writeFilterBlock writes the filter block and returns a blockHandle pointing to it.
+// writeFilterBlock writes the filter block.
 func (f *Filter) writeFilterBlock() error {
 	d := f.filterBlock.Finish()
 	if _, err := f.WriteAt(d, 0); err != nil {

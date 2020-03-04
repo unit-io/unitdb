@@ -25,12 +25,6 @@ const (
 	version = 1 // file format version
 )
 
-const (
-	stateInvalid = iota
-	stateClean
-	stateDirty
-)
-
 type (
 	freeBlock struct {
 		offset     int64
@@ -48,9 +42,6 @@ type (
 
 		// nextSeq is recoved sequence
 		seq uint64
-
-		// db blocks
-		nBlocks uint32
 
 		// count is total logs in wal
 		count int64
@@ -112,10 +103,9 @@ func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
 
 func (wal *WAL) writeHeader() error {
 	h := header{
-		signature:     signature,
-		version:       version,
-		upperSequence: atomic.LoadUint64(&wal.seq),
-		nBlocks:       atomic.LoadUint32(&wal.nBlocks),
+		signature: signature,
+		version:   version,
+		seq:       atomic.LoadUint64(&wal.seq),
 		freeBlock: freeBlock{
 			offset:     wal.logFile.fb.offset,
 			size:       wal.logFile.fb.size,
@@ -131,8 +121,7 @@ func (wal *WAL) readHeader() error {
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
 	}
-	wal.seq = h.upperSequence
-	wal.nBlocks = h.nBlocks
+	wal.seq = h.seq
 	wal.logFile.fb = h.freeBlock
 	return nil
 }
@@ -193,18 +182,18 @@ func (wal *WAL) put(log logInfo) error {
 }
 
 // Scan provides list of sequences written to the log but not yet fully applied
-func (wal *WAL) Scan() (seqs, upperSeqs []uint64, err error) {
+func (wal *WAL) Scan() (logSeqs, upperSeqs []uint64, err error) {
 	l := wal.Count()
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
 	for i := int64(0); i < l; i++ {
 		if wal.logs[i].status == logStatusWritten {
-			seqs = append(seqs, wal.logs[i].seq)
+			logSeqs = append(logSeqs, wal.logs[i].seq)
 			upperSeqs = append(upperSeqs, wal.logs[i].upperSeq)
 		}
 	}
 
-	return seqs, upperSeqs, nil
+	return logSeqs, upperSeqs, nil
 }
 
 // Reader reader is a simple iterator over log data
@@ -234,7 +223,7 @@ func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	return nil, errors.New("wal read error: log for seq not found")
 }
 
-// Next it returns netx record from the log data iterator of false if iteration is done
+// Next it returns next record from the log data iterator or false if iteration is done
 func (r *Reader) Next() ([]byte, bool) {
 	if r.entryCount == 0 {
 		return nil, false
@@ -247,7 +236,7 @@ func (r *Reader) Next() ([]byte, bool) {
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
-func (wal *WAL) SignalLogApplied(seq uint64) error {
+func (wal *WAL) SignalLogApplied(logSeq uint64) error {
 	wal.mu.Lock()
 	wal.wg.Add(1)
 	defer func() {
@@ -262,7 +251,7 @@ func (wal *WAL) SignalLogApplied(seq uint64) error {
 	l := len(wal.logs)
 	idx := 0
 	for i := 0; i < l; i++ {
-		if wal.logs[i].seq == seq {
+		if wal.logs[i].seq == logSeq {
 			idx = i
 			wal.logs[i].status = logStatusApplied
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
@@ -299,7 +288,7 @@ func (wal *WAL) Count() int64 {
 	return atomic.LoadInt64(&wal.count)
 }
 
-// Count count returns total number logs in wal
+// incount increament log counter
 func (wal *WAL) incount() int64 {
 	return atomic.AddInt64(&wal.count, 1)
 }
@@ -307,20 +296,6 @@ func (wal *WAL) incount() int64 {
 // NextSeq next sequence to use in log write function
 func (wal *WAL) NextSeq() uint64 {
 	return atomic.AddUint64(&wal.seq, 1)
-}
-
-// SetBlocks sets total blocks in db
-func (wal *WAL) SetBlocks(nblocks uint32) {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
-	if wal.nBlocks < nblocks {
-		wal.nBlocks = nblocks
-	}
-}
-
-// Blocks gets total blocks in db
-func (wal *WAL) Blocks() uint32 {
-	return atomic.LoadUint32(&wal.nBlocks)
 }
 
 //Sync syncs log entries to disk

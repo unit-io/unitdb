@@ -16,7 +16,7 @@ type mutex struct {
 	consistent *hash.Consistent
 }
 
-// newMutex creates mutex to lock/unlock contract and specific topic prefix.
+// newMutex creates mutex to lock/unlock contract.
 func newMutex() mutex {
 	mu := mutex{
 		internal:   make([]*sync.RWMutex, nMutex),

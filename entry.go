@@ -1,6 +1,6 @@
 package tracedb
 
-// Entry represents a entry which has to be forwarded or stored.
+// Entry represents an entry which is stored into DB.
 type Entry struct {
 	contract    uint64
 	seq         uint64

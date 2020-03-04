@@ -16,26 +16,25 @@ import (
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
 	"github.com/unit-io/tracedb/fs"
-	"github.com/unit-io/tracedb/hash"
 	"github.com/unit-io/tracedb/message"
 	"github.com/unit-io/tracedb/wal"
 )
 
 const (
-	entriesPerBlock    = 150 // (4096 i.e blocksize/26 i.e entry slot size)
-	seqsPerWindowBlock = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. timeentry size)
+	entriesPerBlock    = 150 // (4096 i.e blocksize/26 i.e entry size)
+	seqsPerWindowBlock = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
-	windowPostfix = ".summary"
+	windowPostfix = ".win"
 	logPostfix    = ".log"
 	lockPostfix   = ".lock"
 	idSize        = 24
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
-	// maxExpDur expired keys are deleted from db after durType*maxExpDur.
+	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
@@ -57,15 +56,13 @@ const (
 
 type (
 	dbInfo struct {
-		encryption    uint8
-		seq           uint64
-		count         int64
-		nBlocks       uint32
-		blockIndex    uint32
-		timeWindowIdx int32
-		freeblockOff  int64
-		cacheID       uint64
-		hashSeed      uint32
+		encryption   uint8
+		seq          uint64
+		count        int64
+		blockIndex   int32
+		windowIndex  int32
+		freeblockOff int64
+		cacheID      uint64
 	}
 
 	// DB represents the message storage for topic->keys-values.
@@ -150,7 +147,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		expiryLockC: make(chan struct{}, 1),
 		freeslots:   newFreeSlots(),
 		dbInfo: dbInfo{
-			nBlocks:      1,
+			blockIndex:   -1,
 			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
@@ -180,11 +177,9 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 		// memdb blockcache id
 		db.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
-		seed, err := hash.RandSeed()
 		if err != nil {
 			return nil, err
 		}
-		db.hashSeed = seed
 		if _, err = db.index.extend(headerSize + blockSize); err != nil {
 			return nil, err
 		}
@@ -267,7 +262,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	return db, nil
 }
 
-func blockOffset(idx uint32) int64 {
+func blockOffset(idx int32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
@@ -318,15 +313,13 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 		signature: signature,
 		version:   version,
 		dbInfo: dbInfo{
-			encryption:    db.encryption,
-			seq:           atomic.LoadUint64(&db.seq),
-			count:         atomic.LoadInt64(&db.count),
-			nBlocks:       atomic.LoadUint32(&db.nBlocks),
-			blockIndex:    db.blockIndex,
-			timeWindowIdx: db.timeWindow.getTimeWindowIdx(),
-			freeblockOff:  db.freeblockOff,
-			cacheID:       db.cacheID,
-			hashSeed:      db.hashSeed,
+			encryption:   db.encryption,
+			seq:          atomic.LoadUint64(&db.seq),
+			count:        atomic.LoadInt64(&db.count),
+			blockIndex:   db.blocks(),
+			windowIndex:  db.timeWindow.windowIndex(),
+			freeblockOff: db.freeblockOff,
+			cacheID:      db.cacheID,
 		},
 	}
 	return db.index.writeMarshalableAt(h, 0)
@@ -341,7 +334,7 @@ func (db *DB) readHeader(readFreeList bool) error {
 	// 	return errCorrupted
 	// }
 	db.dbInfo = h.dbInfo
-	db.timeWindow.setTimeWindowIdx(db.dbInfo.timeWindowIdx)
+	db.timeWindow.setWindowIndex(db.dbInfo.windowIndex)
 	if readFreeList {
 		if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
 			return err
@@ -351,7 +344,7 @@ func (db *DB) readHeader(readFreeList bool) error {
 	return nil
 }
 
-// initLoad loads topic and offset from timewindow files
+// loadTopicHash loads topic and offset from window file
 func (db *DB) loadTopicHash() error {
 	err := db.timeWindow.foreachWindowBlock(func(curb windowHandle) (bool, error) {
 		b := &curb
@@ -364,8 +357,8 @@ func (db *DB) loadTopicHash() error {
 				}
 				seq := b.winEntries[b.entryIdx-1].seq
 				off := blockOffset(startBlockIndex(seq))
-				lb := blockHandle{file: db.index, offset: off}
-				if err := lb.read(); err != nil {
+				bh := blockHandle{file: db.index, offset: off}
+				if err := bh.read(); err != nil {
 					if err == io.EOF {
 						return false, nil
 					}
@@ -373,7 +366,7 @@ func (db *DB) loadTopicHash() error {
 				}
 				entryIdx := -1
 				for i := 0; i < entriesPerBlock; i++ {
-					e := lb.entries[i]
+					e := bh.entries[i]
 					if e.seq == seq { //record exist in db
 						entryIdx = i
 						break
@@ -382,7 +375,7 @@ func (db *DB) loadTopicHash() error {
 				if entryIdx == -1 {
 					return false, nil
 				}
-				e := lb.entries[entryIdx]
+				e := bh.entries[entryIdx]
 				t, err := db.data.readTopic(e)
 				if err != nil {
 					return true, err
@@ -404,7 +397,7 @@ func (db *DB) loadTopicHash() error {
 	return err
 }
 
-// loadTrie loads topics to the trie for current time block. It loads recent messages seq per cache cap defined in the Options
+// loadTrie loads window entry to the trie. It loads recent window entry of size cache cap.
 func (db *DB) loadTrie() error {
 	it := &TopicIterator{db: db}
 	for {
@@ -439,9 +432,12 @@ func (db *DB) sync() error {
 	return nil
 }
 
+// Sync syncs entries into DB. Sync happens synchronously.
+// Sync write window entries into summary file and write index, and data to respective index and data files.
+// In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
 	// start := time.Now()
-	// write to db happens synchronously
+	// Sync happens synchronously
 	db.syncLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {
@@ -477,7 +473,7 @@ func (db *DB) Sync() error {
 				return true, err
 			}
 			var off int64
-			var b blockHandle
+			var bh blockHandle
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
@@ -500,28 +496,28 @@ func (db *DB) Sync() error {
 				if err != nil {
 					return true, err
 				}
-				e := entry{}
-				if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				memEntry := entry{}
+				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
 					return true, err
 				}
 
-				startTimeIdx := startBlockIndex(e.seq)
+				startTimeIdx := startBlockIndex(memEntry.seq)
 				newOff := blockOffset(startTimeIdx)
 				if newOff != off {
 					off = newOff
 					// write previous block
-					if err := b.write(); err != nil {
+					if err := bh.write(); err != nil {
 						return true, err
 					}
-					b = blockHandle{file: db.index, offset: newOff}
-					if err := b.read(); err != nil {
+					bh = blockHandle{file: db.index, offset: newOff}
+					if err := bh.read(); err != nil {
 						return true, err
 					}
 				}
 				entryIdx := 0
 				for i := 0; i < entriesPerBlock; i++ {
-					ie := b.entries[i]
-					if ie.seq == e.seq { //record exist in db
+					e := bh.entries[i]
+					if e.seq == memEntry.seq { //record exist in db
 						entryIdx = -1
 						break
 					}
@@ -530,23 +526,21 @@ func (db *DB) Sync() error {
 					continue
 				}
 				db.incount()
-				if e.mOffset, err = db.data.write(memdata[entrySize:]); err != nil {
+				if memEntry.msgOffset, err = db.data.write(memdata[entrySize:]); err != nil {
+					return true, err
+				}
+				db.meter.InBytes.Inc(int64(memEntry.valueSize))
+
+				if err := bh.append(memEntry); err != nil {
 					return true, err
 				}
 
-				db.meter.InBytes.Inc(int64(e.valueSize))
-
-				b.entryIdx++
-				if err := b.append(e); err != nil {
-					return true, err
-				}
-
-				db.filter.Append(e.seq)
+				db.filter.Append(memEntry.seq)
 				db.meter.InMsgs.Inc(1)
 			}
 
 			// write any pending entries
-			if err := b.write(); err != nil {
+			if err := bh.write(); err != nil {
 				return true, err
 			}
 
@@ -603,7 +597,7 @@ func (db *DB) ExpireOldEntries() {
 		contract := message.Contract(topic.Parts)
 		db.trie.remove(topic.GetHash(contract), expiredEntry.(winEntry))
 		db.freeslots.free(e.seq)
-		db.data.free(e.mSize(), e.mOffset)
+		db.data.free(e.mSize(), e.msgOffset)
 		db.decount()
 	}
 }
@@ -657,12 +651,8 @@ func (db *DB) Close() error {
 	return err
 }
 
-func startBlockIndex(seq uint64) uint32 {
-	return uint32(float64(seq-1) / float64(entriesPerBlock))
-}
-
-func (db *DB) hash(data []byte) uint32 {
-	return hash.WithSalt(data, db.hashSeed)
+func startBlockIndex(seq uint64) int32 {
+	return int32(float64(seq-1) / float64(entriesPerBlock))
 }
 
 func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
@@ -676,13 +666,13 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 	}
 
 	off := blockOffset(startBlockIndex(seq))
-	b := blockHandle{file: db.index.FileManager, offset: off}
-	if err := b.read(); err != nil {
+	bh := blockHandle{file: db.index.FileManager, offset: off}
+	if err := bh.read(); err != nil {
 		return entry{}, err
 	}
 
 	for i := 0; i < entriesPerBlock; i++ {
-		e := b.entries[i]
+		e := bh.entries[i]
 		if e.seq == seq {
 			return e, nil
 		}
@@ -785,17 +775,16 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 						// if id is expired it does not return an error but continue the iteration
 						return nil
 					}
-					var id message.ID
 					id, val, err := db.data.readMessage(e)
 					if err != nil {
 						return err
 					}
-					id = message.ID(id)
-					if !id.EvalPrefix(q.contract, q.cutoff) {
+					msgId := message.ID(id)
+					if !msgId.EvalPrefix(q.contract, q.cutoff) {
 						return nil
 					}
 
-					if id.IsEncrypted() {
+					if msgId.IsEncrypted() {
 						val, err = db.mac.Decrypt(nil, val)
 						if err != nil {
 							return err
@@ -896,22 +885,20 @@ func (db *DB) NewContract() (uint32, error) {
 }
 
 // NewID generates new ID that is later used to put entry or delete entry.
-// New entry is later stored in first time block. ID generated using NewID expires after maxBlockDur.
 func (db *DB) NewID() []byte {
 	return message.NewID(db.nextSeq(), false)
 }
 
-// newBlock adds new block to db table and return block offset
+// newBlock adds new block to DB and it returns block offset
 func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
-	db.addblock()
-	db.blockIndex++
+	db.addBlock()
 	return off, err
 }
 
-// extendBlocks adds new blocks to db table for the batch write
+// extendBlocks adds new blocks to DB
 func (db *DB) extendBlocks() error {
-	nBlocks := uint32(float64(db.getSeq()) / float64(entriesPerBlock))
+	nBlocks := int32(float64(db.Seq()) / float64(entriesPerBlock))
 	for nBlocks > db.blockIndex {
 		if _, err := db.newBlock(); err != nil {
 			return err
@@ -935,7 +922,6 @@ func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 	topic.AddContract(e.Contract)
 	// In case of ttl, add ttl to the msg and store to the db
 	if ttl, ok := topic.TTL(); ok {
-		//1410065408 10 sec
 		return topic, ttl, nil
 	}
 	return topic, 0, nil
@@ -972,14 +958,14 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 	return nil
 }
 
-// Put puts entry to db. It uses default Contract to put entry into db.
+// Put puts entry into DB. It uses default Contract to put entry into DB.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (db *DB) Put(topic, value []byte) error {
 	return db.PutEntry(NewEntry(topic, value))
 }
 
-// PutEntry puts entry to the db, if contract is not specifies then it uses master contract.
+// PutEntry puts entry into the DB, if Contract is not specified then it uses master Contract.
 // It is safe to modify the contents of the argument after PutEntry returns but not
 // before.
 func (db *DB) PutEntry(e *Entry) error {
@@ -1048,7 +1034,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	return nil
 }
 
-// packentry marshal entry along with message data
+// packEntry marshal entry and message data
 func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.Count() == MaxKeys {
 		return nil, errFull
@@ -1106,7 +1092,7 @@ func (db *DB) tinyCommit() error {
 	}
 
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
-	if err := <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.getSeq()); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq()); err != nil {
 		return err
 	}
 	db.tinyBatch.reset()
@@ -1141,7 +1127,7 @@ func (db *DB) commit(l int, data []byte) <-chan error {
 	}
 
 	db.meter.Puts.Inc(int64(l))
-	return logWriter.SignalInitWrite(db.wal.NextSeq(), db.getSeq())
+	return logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq())
 }
 
 // Delete sets entry for deletion.
@@ -1151,7 +1137,7 @@ func (db *DB) Delete(id, topic []byte) error {
 	return db.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
-// DeleteEntry delets an entry from db. you must provide an ID to delete an entry.
+// DeleteEntry delets an entry from DB. you must provide an ID to delete an entry.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
@@ -1206,14 +1192,14 @@ func (db *DB) delete(seq uint64) error {
 	db.meter.Dels.Inc(1)
 	startBlockIdx := startBlockIndex(seq)
 	off := blockOffset(startBlockIdx)
-	b := &blockHandle{file: db.index, offset: off}
-	if err := b.read(); err != nil {
+	bh := &blockHandle{file: db.index, offset: off}
+	if err := bh.read(); err != nil {
 		return err
 	}
 	entryIdx := -1
 	for i := 0; i < entriesPerBlock; i++ {
-		e := b.entries[i]
-		if seq == e.seq {
+		e := bh.entries[i]
+		if e.seq == seq {
 			entryIdx = i
 			break
 		}
@@ -1222,14 +1208,14 @@ func (db *DB) delete(seq uint64) error {
 		return nil // no entry in db to delete
 	}
 
-	e := b.entries[entryIdx]
-	b.del(entryIdx)
-	b.entryIdx--
-	if err := b.write(); err != nil {
+	e := bh.entries[entryIdx]
+	bh.del(entryIdx)
+	bh.entryIdx--
+	if err := bh.write(); err != nil {
 		return err
 	}
 	db.freeslots.free(e.seq)
-	db.data.free(e.mSize(), e.mOffset)
+	db.data.free(e.mSize(), e.msgOffset)
 	db.decount()
 	if db.syncWrites {
 		return db.sync()
@@ -1253,7 +1239,7 @@ func (db *DB) FileSize() (int64, error) {
 	return is.Size() + ds.Size(), nil
 }
 
-func (db *DB) getSeq() uint64 {
+func (db *DB) Seq() uint64 {
 	return atomic.LoadUint64(&db.seq)
 }
 
@@ -1266,14 +1252,14 @@ func (db *DB) Count() int64 {
 	return atomic.LoadInt64(&db.count)
 }
 
-// Count returns the number of items in the DB.
-func (db *DB) blocks() uint32 {
-	return atomic.LoadUint32(&db.nBlocks)
+// blocks returns the total blocks in the DB.
+func (db *DB) blocks() int32 {
+	return atomic.LoadInt32(&db.blockIndex)
 }
 
-// Count returns the number of items in the DB.
-func (db *DB) addblock() uint32 {
-	return atomic.AddUint32(&db.nBlocks, 1)
+// addBlock adds new block to the DB.
+func (db *DB) addBlock() int32 {
+	return atomic.AddInt32(&db.blockIndex, 1)
 }
 
 func (db *DB) incount() int64 {

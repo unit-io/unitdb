@@ -4,7 +4,6 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/unit-io/tracedb/fs"
 	"github.com/unit-io/tracedb/message"
 )
 
@@ -27,18 +26,13 @@ func truncateFiles(db *DB) error {
 		return err
 	}
 
-	if db.data.Type() == "MemoryMap" {
-		if err := db.data.FileManager.(*fs.OSFile).Mmap(db.data.size); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func getUsedBlocks(db *DB) (int64, []userdblock, error) {
 	var itemCount int64
 	var usedBlocks []userdblock
-	for blockIdx := uint32(0); blockIdx < db.nBlocks; blockIdx++ {
+	for blockIdx := int32(0); blockIdx < db.blockIndex; blockIdx++ {
 		off := blockOffset(blockIdx)
 		b := blockHandle{file: db.index.FileManager, offset: off}
 		if err := b.read(); err != nil {
@@ -46,11 +40,11 @@ func getUsedBlocks(db *DB) (int64, []userdblock, error) {
 		}
 		for i := 0; i < entriesPerBlock; i++ {
 			e := b.entries[i]
-			if e.mOffset == 0 {
+			if e.msgOffset == 0 {
 				continue
 			}
 			itemCount++
-			usedBlocks = append(usedBlocks, userdblock{size: align512(e.mSize()), offset: e.mOffset})
+			usedBlocks = append(usedBlocks, userdblock{size: align512(e.mSize()), offset: e.msgOffset})
 		}
 		if b.next != 0 {
 			usedBlocks = append(usedBlocks, userdblock{size: blockSize, offset: int64(b.next)})
@@ -96,7 +90,6 @@ func (db *DB) recover() error {
 	}
 
 	// Recover header.
-	db.nBlocks = uint32((db.index.size - int64(headerSize)) / int64(blockSize))
 	itemCount, usedBlocks, err := getUsedBlocks(db)
 	if err != nil {
 		return err
@@ -153,12 +146,12 @@ func (db *DB) recoverLog() error {
 	defer func() {
 		db.closeW.Done()
 	}()
-	seqs, upperSeqs, err := db.wal.Scan()
+	logSeqs, upperSeqs, err := db.wal.Scan()
 	if err != nil {
 		return err
 	}
-	for i, s := range seqs {
-		nBlocks := uint32(upperSeqs[i] / entriesPerBlock)
+	for i, s := range logSeqs {
+		nBlocks := int32(upperSeqs[i] / entriesPerBlock)
 		for nBlocks > db.blockIndex {
 			if _, err := db.newBlock(); err != nil {
 				return err
@@ -205,9 +198,9 @@ func (db *DB) recoverLog() error {
 				continue
 			}
 			db.incount()
-			moffset := logEntry.mSize()
-			m := data[:moffset]
-			if logEntry.mOffset, err = db.data.write(m); err != nil {
+			msgOffset := logEntry.mSize()
+			m := data[:msgOffset]
+			if logEntry.msgOffset, err = db.data.write(m); err != nil {
 				return err
 			}
 			t, err := db.data.readTopic(logEntry)
@@ -235,7 +228,6 @@ func (db *DB) recoverLog() error {
 			}
 			db.meter.Puts.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
-			b.entryIdx++
 			if err := b.append(logEntry); err != nil {
 				return err
 			}

@@ -20,7 +20,7 @@ const (
 	TopicAnySeparator         = '*'
 	TopicChildrenAllSeparator = "..."
 	TopicSeparator            = '.'   // The separator character.
-	MaxMessageSize            = 65536 // Maximum message size allowed from/to the peer.
+	MaxMessageSize            = 65536 // Maximum message size allowed.
 	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
 )
 
@@ -181,7 +181,7 @@ func (t *Topic) Last() (time.Time, uint32, bool) {
 	return zeroTime, 0, ok
 }
 
-// Converts the time to Unix Time with validation.
+// toUnix converts the time to Unix Time with validation.
 func toUnix(t int64) time.Time {
 	if t == 0 {
 		return zeroTime
@@ -190,7 +190,7 @@ func toUnix(t int64) time.Time {
 	return time.Unix(t, 0)
 }
 
-// getOptUint retrieves a Uint option
+// getOption retrieves a Uint option
 func (t *Topic) getOption(name string) (string, uint32, bool) {
 	for i := 0; i < len(t.Options); i++ {
 		if t.Options[i].Key == name {

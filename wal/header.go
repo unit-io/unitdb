@@ -43,10 +43,9 @@ func (l *logInfo) UnmarshalBinary(data []byte) error {
 }
 
 type header struct {
-	signature     [8]byte
-	version       uint32
-	upperSequence uint64
-	nBlocks       uint32
+	signature [8]byte
+	version   uint32
+	seq       uint64
 	freeBlock
 	_ [256]byte
 }
@@ -60,12 +59,11 @@ func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:8], h.signature[:])
 	binary.LittleEndian.PutUint32(buf[8:12], h.version)
-	binary.LittleEndian.PutUint64(buf[12:20], h.upperSequence)
-	binary.LittleEndian.PutUint32(buf[20:24], h.nBlocks)
-	binary.LittleEndian.PutUint64(buf[24:32], uint64(h.freeBlock.size))
-	binary.LittleEndian.PutUint64(buf[32:40], uint64(h.freeBlock.offset))
-	binary.LittleEndian.PutUint64(buf[40:48], uint64(h.freeBlock.currSize))
-	binary.LittleEndian.PutUint64(buf[48:56], uint64(h.freeBlock.currOffset))
+	binary.LittleEndian.PutUint64(buf[12:20], h.seq)
+	binary.LittleEndian.PutUint64(buf[20:28], uint64(h.freeBlock.size))
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(h.freeBlock.offset))
+	binary.LittleEndian.PutUint64(buf[36:44], uint64(h.freeBlock.currSize))
+	binary.LittleEndian.PutUint64(buf[44:52], uint64(h.freeBlock.currOffset))
 	return buf, nil
 }
 
@@ -73,11 +71,10 @@ func (h header) MarshalBinary() ([]byte, error) {
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:8])
 	h.version = binary.LittleEndian.Uint32(data[8:12])
-	h.upperSequence = binary.LittleEndian.Uint64(data[12:20])
-	h.nBlocks = binary.LittleEndian.Uint32(data[20:24])
-	h.freeBlock.size = int64(binary.LittleEndian.Uint64(data[24:32]))
-	h.freeBlock.offset = int64(binary.LittleEndian.Uint64(data[32:40]))
-	h.freeBlock.currSize = int64(binary.LittleEndian.Uint64(data[40:48]))
-	h.freeBlock.currOffset = int64(binary.LittleEndian.Uint64(data[48:56]))
+	h.seq = binary.LittleEndian.Uint64(data[12:20])
+	h.freeBlock.size = int64(binary.LittleEndian.Uint64(data[20:28]))
+	h.freeBlock.offset = int64(binary.LittleEndian.Uint64(data[28:36]))
+	h.freeBlock.currSize = int64(binary.LittleEndian.Uint64(data[36:44]))
+	h.freeBlock.currOffset = int64(binary.LittleEndian.Uint64(data[44:52]))
 	return nil
 }

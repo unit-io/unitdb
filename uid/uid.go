@@ -1,6 +1,7 @@
 package uid
 
 import (
+	"encoding/binary"
 	"math"
 	"math/rand"
 	"sync/atomic"
@@ -36,6 +37,10 @@ func NewUnique() uint32 {
 	random.Read(b)
 	u := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(0)
 	return u
+}
+
+func Time(id []byte) int64 {
+	return int64(math.MaxUint32-binary.LittleEndian.Uint32(id)) + Offset
 }
 
 // NewID generates a new, process-wide unique ID.

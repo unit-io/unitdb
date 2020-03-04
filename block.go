@@ -12,7 +12,7 @@ type entry struct {
 	topicSize uint16
 	valueSize uint32
 	expiresAt uint32
-	mOffset   int64
+	msgOffset int64
 
 	topicOffset int64
 	cacheBlock  []byte
@@ -42,8 +42,7 @@ func (e entry) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
 	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
 	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
-	binary.LittleEndian.PutUint64(buf[18:26], uint64(e.mOffset))
-	binary.LittleEndian.PutUint64(buf[26:34], uint64(e.topicOffset))
+	binary.LittleEndian.PutUint64(buf[18:26], uint64(e.topicOffset))
 	return data, nil
 }
 
@@ -53,8 +52,7 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
 	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
 	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
-	e.mOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
-	e.topicOffset = int64(binary.LittleEndian.Uint64(data[26:34]))
+	e.topicOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
 	return nil
 }
 
@@ -71,9 +69,8 @@ type blockHandle struct {
 }
 
 const (
-	entrySize            = 34
-	entrySlotSize        = 26
-	blockSize     uint32 = 4096
+	entrySize        = 26
+	blockSize uint32 = 4096
 )
 
 func align512(n uint32) uint32 {
@@ -90,24 +87,24 @@ func (b block) MarshalBinary() ([]byte, error) {
 		binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
 		binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
 		binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
-		binary.LittleEndian.PutUint64(buf[18:26], uint64(e.mOffset))
-		buf = buf[entrySlotSize:]
+		binary.LittleEndian.PutUint64(buf[18:26], uint64(e.msgOffset))
+		buf = buf[entrySize:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
 	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
 	return data, nil
 }
 
-// UnmarshalBinary dserliazed entries block from binary data
+// UnmarshalBinary deserliazed entries block from binary data
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerBlock; i++ {
-		_ = data[entrySlotSize] // bounds check hint to compiler; see golang.org/issue/14808
+		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
 		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
 		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[8:10])
 		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[10:14])
 		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[14:18])
-		b.entries[i].mOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
-		data = data[entrySlotSize:]
+		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
+		data = data[entrySize:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
 	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
@@ -122,30 +119,31 @@ func (b *block) del(entryIdx int) {
 	b.entries[i] = entry{}
 }
 
-func (h *blockHandle) read() error {
-	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
+func (bh *blockHandle) read() error {
+	buf, err := bh.file.Slice(bh.offset, bh.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-	return h.UnmarshalBinary(buf)
+	return bh.UnmarshalBinary(buf)
 }
 
-func (h *blockHandle) write() error {
-	if h.entryIdx == 0 {
+func (bh *blockHandle) write() error {
+	if bh.entryIdx == 0 {
 		return nil
 	}
-	buf, err := h.MarshalBinary()
+	buf, err := bh.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	_, err = h.file.WriteAt(buf, h.offset)
+	_, err = bh.file.WriteAt(buf, bh.offset)
 	return err
 }
 
-func (h *blockHandle) append(e entry) error {
-	h.entries[h.entryIdx-1] = e
-	if h.entryIdx == entriesPerBlock {
-		return h.write()
+func (bh *blockHandle) append(e entry) error {
+	bh.entries[bh.entryIdx] = e
+	bh.entryIdx++
+	if bh.entryIdx == entriesPerBlock {
+		return bh.write()
 	}
 	return nil
 }

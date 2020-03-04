@@ -81,7 +81,7 @@ func (b *buffer) Size() int64 {
 	return atomic.LoadInt64(&b.size)
 }
 
-// incSize increases buffer size to allocate buffer
+// incSize increases buffer size to allocate more buffer
 func (b *buffer) incSize(size int64) int64 {
 	return atomic.AddInt64(&b.size, size)
 }

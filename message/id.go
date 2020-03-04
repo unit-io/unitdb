@@ -79,15 +79,10 @@ func (id ID) Seq() uint64 {
 	return uint64(num >> 8)
 }
 
-// Time gets the time of the id, adjusted.
-func (id ID) Time() int64 {
-	return int64(math.MaxUint32-binary.LittleEndian.Uint32(id[0:4])) + uid.Offset
-}
-
 // EvalPrefix matches the prefix with the cutoff time.
 func (id ID) EvalPrefix(contract uint64, cutoff int64) bool {
 	if cutoff > 0 {
-		return binary.LittleEndian.Uint64(id[fixed:]) == contract && id.Time() >= cutoff
+		return binary.LittleEndian.Uint64(id[fixed:]) == contract && uid.Time(id[0:4]) >= cutoff
 	}
 	return binary.LittleEndian.Uint64(id[fixed:]) == contract
 }

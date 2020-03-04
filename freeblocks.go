@@ -9,7 +9,7 @@ import (
 )
 
 // A "thread" safe freeslot.
-// To avoid lock bottlenecks slots are dived to several (nShards).
+// To avoid lock bottlenecks slots are divided into several shards (nShards).
 // type freeslots []*freeslot
 
 type freeslots struct {
@@ -72,7 +72,7 @@ func (fs *freeslot) len() int {
 }
 
 // A "thread" safe freeblocks.
-// To avoid lock bottlenecks slots are dived to several (nShards).
+// To avoid lock bottlenecks slots are divided into several shards (nShards).
 // type freeblocks []*freeblock
 type freeblocks struct {
 	blocks                []*shard

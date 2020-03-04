@@ -7,7 +7,7 @@ import (
 
 const (
 	maxPoolSize = 2048
-	// maxBufferSize value for maximum memory use for the buffer.
+	// maxBufferSize value to limit maximum memory for the buffer.
 	maxBufferSize = (int64(1) << 34) - 1
 )
 
@@ -16,7 +16,7 @@ type Buffer struct {
 	sync.RWMutex // Read Write mutex, guards access to internal buffer.
 }
 
-// Get returns buffer if any in pool or create a new buffer
+// Get returns buffer if any in the pool or creates a new buffer
 func (pool *BufferPool) Get() (buf *Buffer) {
 	select {
 	case buf = <-pool.buf:
@@ -26,7 +26,7 @@ func (pool *BufferPool) Get() (buf *Buffer) {
 	return
 }
 
-// Put reset the buffer and put it to the pool
+// Put resets the buffer and put it to the pool
 func (pool *BufferPool) Put(buf *Buffer) {
 	buf.internal.reset()
 	select {
@@ -35,7 +35,7 @@ func (pool *BufferPool) Put(buf *Buffer) {
 	}
 }
 
-// Write writes to buffer
+// Write writes to the buffer
 func (buf *Buffer) Write(p []byte) (int, error) {
 	buf.Lock()
 	defer buf.Unlock()
@@ -78,7 +78,7 @@ type BufferPool struct {
 	buf        chan *Buffer
 }
 
-// NewBufferPool creates a new buffer pool. Minimum memroy size is 1GB
+// NewBufferPool creates a new buffer pool.
 func NewBufferPool(size int64) *BufferPool {
 	if size > maxBufferSize {
 		size = maxBufferSize

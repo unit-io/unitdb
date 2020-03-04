@@ -10,49 +10,49 @@ const (
 	nul = 0x0
 )
 
-// winEntries represents a time entry set which can contain only unique values.
+// winEntries represents a window entry set which can contain only unique values.
 type winEntries []winEntry
 
-// new returns time entry set of given cap.
+// new returns window entry set of given cap.
 func newWinEntries(cap uint32) winEntries {
 	return make([]winEntry, 0, cap)
 }
 
-// extend extends the cap of time entry set.
-func (ts *winEntries) extend(cap uint32) {
-	if cap < ts.len() {
+// extend extends the cap of window entry set.
+func (ww *winEntries) extend(cap uint32) {
+	if cap < ww.len() {
 		return
 	}
-	l := cap - ts.len()
-	*ts = append(*ts, make([]winEntry, l)...)
+	l := cap - ww.len()
+	*ww = append(*ww, make([]winEntry, l)...)
 }
 
-// shrink shrinks the cap of seq set.
-func (ts *winEntries) shrink(cap uint32) {
-	newts := make([]winEntry, 0, ts.len())
-	copy(newts, *ts)
-	*ts = newts
+// shrink shrinks the cap of window entry set.
+func (ww *winEntries) shrink(cap uint32) {
+	new := make([]winEntry, 0, ww.len())
+	copy(new, *ww)
+	*ww = new
 }
 
 // addUnique adds a seq to the set.
-func (ts *winEntries) addUnique(value winEntry) (added bool) {
-	if ts.contains(value) == false {
-		*ts = append(*ts, value)
+func (ww *winEntries) addUnique(value winEntry) (added bool) {
+	if ww.contains(value) == false {
+		*ww = append(*ww, value)
 		added = true
 	}
 	return
 }
 
-// remove a seq from the set.
-func (ts *winEntries) remove(value winEntry) (removed bool) {
-	for i, v := range *ts {
+// remove a window entry from the set.
+func (ww *winEntries) remove(value winEntry) (removed bool) {
+	for i, v := range *ww {
 		// if bytes.Equal(v, value) {
 		if v == value {
-			a := *ts
+			a := *ww
 			a[i] = a[len(a)-1]
 			//a[len(a)-1] = nil
 			a = a[:len(a)-1]
-			*ts = a
+			*ww = a
 			removed = true
 			return
 		}
@@ -60,9 +60,9 @@ func (ts *winEntries) remove(value winEntry) (removed bool) {
 	return
 }
 
-// contains checks whether a seq is in the set.
-func (ts *winEntries) contains(value winEntry) bool {
-	for _, v := range *ts {
+// contains checks whether a window entry is in the set.
+func (ww *winEntries) contains(value winEntry) bool {
+	for _, v := range *ww {
 		// if bytes.Equal(v, value) {
 		// 	return true
 		// }
@@ -73,9 +73,9 @@ func (ts *winEntries) contains(value winEntry) bool {
 	return false
 }
 
-// len length of seq set.
-func (ts *winEntries) len() uint32 {
-	return uint32(len(*ts))
+// len length of window entry set.
+func (ww *winEntries) len() uint32 {
+	return uint32(len(*ww))
 }
 
 type key struct {
@@ -87,7 +87,7 @@ type part struct {
 	k         key
 	depth     uint8
 	cap       uint32
-	ts        winEntries
+	ww        winEntries
 	parent    *part
 	children  map[key]*part
 	offset    int64
@@ -100,24 +100,24 @@ func (p *part) orphan() {
 	}
 
 	delete(p.parent.children, p.k)
-	if len(p.parent.ts) == 0 && len(p.parent.children) == 0 {
+	if len(p.parent.ww) == 0 && len(p.parent.children) == 0 {
 		p.parent.orphan()
 	}
 }
 
 // partTrie represents an efficient collection of Trie with lookup capability.
 type partTrie struct {
-	summary map[uint64]*part // summary is map of topichash to part
+	summary map[uint64]*part // summary is map of topichash to node of tree.
 	root    *part            // The root node of the tree.
 }
 
-// newPartTrie creates a new matcher for the Trie.
+// newPartTrie creates a new part Trie.
 func newPartTrie(cacheCap uint32) *partTrie {
 	return &partTrie{
 		summary: make(map[uint64]*part),
 		root: &part{
 			cap:      cacheCap,
-			ts:       newWinEntries(cacheCap),
+			ww:       newWinEntries(cacheCap),
 			children: make(map[key]*part),
 		},
 	}
@@ -146,7 +146,7 @@ func (t *trie) Count() int {
 	return len(t.partTrie.summary)
 }
 
-// add adds a message seq to topic trie.
+// add adds a topic into trie.
 func (t *trie) addTopic(contract uint64, topicHash uint64, parts []message.Part, depth uint8) (added bool) {
 	// Get mutex
 	mu := t.getMutex(contract)
@@ -168,7 +168,7 @@ func (t *trie) addTopic(contract uint64, topicHash uint64, parts []message.Part,
 			child = &part{
 				k:         k,
 				cap:       t.partTrie.root.cap,
-				ts:        newWinEntries(t.partTrie.root.cap),
+				ww:        newWinEntries(t.partTrie.root.cap),
 				parent:    curr,
 				children:  make(map[key]*part),
 				topicHash: topicHash,
@@ -187,7 +187,7 @@ func (t *trie) addTopic(contract uint64, topicHash uint64, parts []message.Part,
 	return
 }
 
-// add adds a message seq to topic trie.
+// add adds a window entry into topic trie.
 func (t *trie) add(topicHash uint64, we winEntry) (added bool) {
 	// Get mutex
 	mu := t.getMutex(we.contract)
@@ -199,15 +199,15 @@ func (t *trie) add(topicHash uint64, we winEntry) (added bool) {
 	if !ok {
 		return false
 	}
-	if curr.ts.len() >= curr.cap {
-		curr.ts = curr.ts[1:] // remove first if capacity has reached
+	if curr.ww.len() >= curr.cap {
+		curr.ww = curr.ww[1:] // remove first if capacity has reached
 	}
-	curr.ts = append(curr.ts, we)
+	curr.ww = append(curr.ww, we)
 	added = true
 	return
 }
 
-// remove removes a message seq from topic trie
+// remove removes a window entry from topic trie
 func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
 	mu := t.getMutex(we.contract)
 	mu.Lock()
@@ -218,25 +218,25 @@ func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
 	if !ok {
 		return false
 	}
-	// Remove a message seq and decrement the counter
-	if ok := curr.ts.remove(we); ok {
+	// Remove a widnow entry and decrement the counter
+	if ok := curr.ww.remove(we); ok {
 		removed = true
 		// adjust cap of the seq set
-		if curr.ts.len() > t.partTrie.root.cap {
-			curr.cap = curr.ts.len()
-			curr.ts.shrink(curr.cap)
+		if curr.ww.len() > t.partTrie.root.cap {
+			curr.cap = curr.ww.len()
+			curr.ww.shrink(curr.cap)
 		}
 	}
 	// Remove orphans
 	t.Lock()
 	defer t.Unlock()
-	if len(curr.ts) == 0 && len(curr.children) == 0 {
+	if len(curr.ww) == 0 && len(curr.children) == 0 {
 		curr.orphan()
 	}
 	return
 }
 
-// lookup returns seq set for given topic.
+// lookup returns window entry set for given topic.
 func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (tss []winEntries, topicHss []uint64, offs []int64) {
 	t.RLock()
 	mu := t.getMutex(contract)
@@ -250,24 +250,24 @@ func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (tss 
 	return tss, topicHss, offs
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, tss *[]winEntries, topicHss *[]uint64, offs *[]int64, part *part, limit uint32) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, ww *[]winEntries, topicHss *[]uint64, offs *[]int64, part *part, limit uint32) {
 	l := limit
-	// Add seq set from the current branch
+	// Add window entry set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
 		*topicHss = append(*topicHss, part.topicHash)
 		*offs = append(*offs, part.offset)
-		if part.ts.len() > 0 {
-			if uint32(part.ts.len()) < l {
-				l = uint32(part.ts.len())
+		if part.ww.len() > 0 {
+			if uint32(part.ww.len()) < l {
+				l = uint32(part.ww.len())
 			}
-			*tss = append(*tss, part.ts[uint32(part.ts.len())-l:]) // begin from end to get recent entries
+			*ww = append(*ww, part.ww[uint32(part.ww.len())-l:]) // begin from end to get recent entries
 			// set new limit
 			l = limit - l
 			// on lookup cap increased to 2 folds of current cap of the set
-			if part.ts.len() > limit {
+			if part.ww.len() > limit {
 				if part.cap < 2*limit {
 					part.cap = 2 * limit
-					part.ts.extend(part.cap)
+					part.ww.extend(part.cap)
 				}
 			}
 		}
@@ -278,7 +278,7 @@ func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, tss *
 		// Go through the exact match branch
 		for k, p := range part.children {
 			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, tss, topicHss, offs, p, l)
+				t.ilookup(contract, parts[k.wildchars+1:], depth, ww, topicHss, offs, p, l)
 			}
 		}
 	}

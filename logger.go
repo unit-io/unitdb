@@ -7,10 +7,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Logger is the logger to use in application.
+// Logger is logger to use in application.
 var logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
 
-// Info logs the conn or sub/unsub action with a tag.
+// Info logs the action with a tag.
 func Info(context, action string) {
 	logger.Info().Str("context", context).Msg(action)
 }

@@ -4,7 +4,7 @@ import (
 	"os"
 )
 
-// IOFile is file system based stor for db
+// IOFile is file system based store for DB
 type IOFile struct {
 	*os.File
 }
@@ -29,7 +29,7 @@ func (fs *iofs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, e
 	return createLockFile(name, perm)
 }
 
-// State provides db state and size of file
+// State provides DB state and size of the file
 func (fs *iofs) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
@@ -44,7 +44,20 @@ type fslockfile struct {
 	name string
 }
 
-// Unlock unlocks db lock file while closing db
+type oslockfile struct {
+	File
+	path string
+}
+
+// Unlock unlocks DB lock file while closing DB
+func (f *oslockfile) Unlock() error {
+	if err := os.Remove(f.path); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// Unlock unlocks DB lock file while closing DB
 func (f *fslockfile) Unlock() error {
 	if err := f.Close(); err != nil {
 		return err
@@ -64,7 +77,7 @@ func (f *IOFile) Slice(start int64, end int64) ([]byte, error) {
 	return buf, err
 }
 
-// Close closes file on db close
+// Close closes file on DB close
 func (f *IOFile) Close() error {
 	return f.File.Close()
 }
@@ -79,7 +92,7 @@ func (f *IOFile) WriteAt(p []byte, off int64) (int, error) {
 	return f.File.WriteAt(p, off)
 }
 
-// Sync flush the changes to file to disk
+// Sync flush the changes from file to disk
 func (f *IOFile) Sync() error {
 	if err := f.File.Sync(); err != nil {
 		return err

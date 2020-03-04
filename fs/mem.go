@@ -27,7 +27,7 @@ func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager,
 	return f, nil
 }
 
-// CreateLockFile to create lock file for db
+// CreateLockFile to create lock file for DB
 func (fs *memfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
 	f, err := fs.OpenFile(name, 0, perm)
 	if err != nil {
@@ -36,7 +36,7 @@ func (fs *memfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, 
 	return &memlockfile{f, name}, false, nil
 }
 
-// State provides db state and size of file
+// State provides DB state and size of file
 func (fs *memfs) Stat(name string) (os.FileInfo, error) {
 	if f, ok := fs.files[name]; ok {
 		return f, nil
@@ -58,7 +58,7 @@ type memlockfile struct {
 	name string
 }
 
-// Unlock unlocks db lock file while closing db
+// Unlock unlocks DB lock file while closing DB
 func (f *memlockfile) Unlock() error {
 	if err := f.Close(); err != nil {
 		return err
@@ -79,7 +79,7 @@ func (m *MemFile) Type() string {
 	return "Mem"
 }
 
-// Close closes memtable on db close
+// Close closes memtable on DB close
 func (m *MemFile) Close() error {
 	if m.closed {
 		return os.ErrClosed
@@ -118,7 +118,7 @@ func (m *MemFile) WriteAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-// Stat provides db state and size of memtable
+// Stat provides DB state and size of memtable
 func (m *MemFile) Stat() (os.FileInfo, error) {
 	if m.closed {
 		return m, os.ErrClosed
@@ -186,7 +186,3 @@ func (m *MemFile) Slice(start int64, end int64) ([]byte, error) {
 	}
 	return m.buf[start:end], nil
 }
-
-// func (m *memfile) Mmap(size int64) error {
-// 	return nil
-// }

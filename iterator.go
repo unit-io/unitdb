@@ -20,14 +20,14 @@ type Item struct {
 type Query struct {
 	Topic      []byte         // The topic of the message
 	Contract   uint32         // The contract is used as prefix in the message Id
-	parts      []message.Part // parts represents a subscription ID which contains a contract and a list of hashes for various parts of the topic.
+	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 	contract   uint64
-	cutoff     int64 // The end of the time window.
+	cutoff     int64 // time limit check on message Ids.
 	winEntries []winEntry
 	Limit      uint32 // The maximum number of elements to return.
 }
 
-// ItemIterator is an iterator over DB key/value pairs. It iterates the items in an unspecified order.
+// ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
 	db          *DB
 	mu          sync.Mutex
@@ -65,17 +65,17 @@ func (it *ItemIterator) Next() {
 					// if id is expired it does not return an error but continue the iteration
 					return nil
 				}
-				pid, val, err := it.db.data.readMessage(e)
+				id, val, err := it.db.data.readMessage(e)
 				if err != nil {
 					return err
 				}
-				id := message.ID(pid)
-				if !id.EvalPrefix(it.query.contract, it.query.cutoff) {
+				msgId := message.ID(id)
+				if !msgId.EvalPrefix(it.query.contract, it.query.cutoff) {
 					it.invalidKeys++
 					return nil
 				}
 
-				if id.IsEncrypted() {
+				if msgId.IsEncrypted() {
 					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {
 						return err
@@ -108,7 +108,7 @@ func (it *ItemIterator) Next() {
 	}
 }
 
-// First returns the first key/value pair if available.
+// First is similar to init. It query and loads window entries from trie/timeWindoBucket or summary file if available.
 func (it *ItemIterator) First() {
 	pEntries, topicHss, topicOffsets := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
 	for i, topicHash := range topicHss {
@@ -131,7 +131,7 @@ func (it *ItemIterator) First() {
 	it.Next()
 }
 
-// Item returns pointer to the current key-value pair.
+// Item returns pointer to the current item.
 // This item is only valid until it.Next() gets called.
 func (it *ItemIterator) Item() *Item {
 	return it.item
@@ -154,14 +154,14 @@ func (it *ItemIterator) Error() error {
 	return it.item.err
 }
 
-// Topic returns the topic of the current key/value pair, or nil if done. The caller
+// Topic returns the topic of the current item, or nil if done. The caller
 // should not modify the contents of the returned slice, and its contents may
 // change on the next call to Next.
 func (item *Item) Topic() []byte {
 	return item.topic
 }
 
-// Value returns the value of the current key/value pair, or nil if done. The
+// Value returns the value of the current item, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (item *Item) Value() []byte {

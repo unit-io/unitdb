@@ -14,28 +14,28 @@ type Topic struct {
 	err      error
 }
 
-// TopicIterator is an iterator over DB key/value pairs. It iterates the Topics in an unspecified order.
+// TopicIterator is an iterator over DB topic->key/value pairs. It iterates the Topics in an unspecified order.
 type TopicIterator struct {
-	db           *DB
-	topic        *Topic
-	queue        []*Topic
-	nextBlockIdx uint32
+	db             *DB
+	topic          *Topic
+	queue          []*Topic
+	nextBlockIndex int32
 }
 
-// Next returns the next key/value pair if available, otherwise it returns ErrIterationDone error.
+// Next returns the next key/value pair if available.
 func (it *TopicIterator) Next() {
 	it.topic = nil
 	if len(it.queue) == 0 {
-		for it.nextBlockIdx < it.db.blocks() {
+		for it.nextBlockIndex < it.db.blocks() {
 			err := func() error {
-				off := blockOffset(it.nextBlockIdx)
+				off := blockOffset(it.nextBlockIndex)
 				b := blockHandle{file: it.db.index.FileManager, offset: off}
 				if err := b.read(); err != nil {
 					return err
 				}
 				for i := 0; i < entriesPerBlock; i++ {
 					e := b.entries[i]
-					if e.mOffset == 0 {
+					if e.msgOffset == 0 {
 						continue
 					}
 
@@ -64,7 +64,7 @@ func (it *TopicIterator) Next() {
 			if err != nil {
 				it.queue = append(it.queue, &Topic{err: err})
 			}
-			it.nextBlockIdx++
+			it.nextBlockIndex++
 			if len(it.queue) > 0 {
 				break
 			}
@@ -90,13 +90,13 @@ func (it *TopicIterator) Error() error {
 	return it.topic.err
 }
 
-// Topic returns pointer to the current key-value pair.
+// Topic returns pointer to the current topic.
 // This Topic is only valid until it.Next() gets called.
 func (it *TopicIterator) Topic() *Topic {
 	return it.topic
 }
 
-// Contract returns contract of the parts, or nil if done. The
+// Contract returns contract of the topic, or nil if done. The
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (Topic *Topic) Contract() uint64 {

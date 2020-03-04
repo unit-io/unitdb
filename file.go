@@ -36,9 +36,6 @@ func (f *file) extend(size uint32) (int64, error) {
 	}
 	f.size += int64(size)
 
-	if f.FileManager.Type() == "MemoryMap" {
-		return off, f.FileManager.(*fs.OSFile).Mmap(f.size)
-	}
 	return off, nil
 }
 
@@ -48,9 +45,7 @@ func (f *file) append(data []byte) (int64, error) {
 		return 0, err
 	}
 	f.size += int64(len(data))
-	if f.FileManager.Type() == "MemoryMap" {
-		return off, f.FileManager.(*fs.OSFile).Mmap(f.size)
-	}
+
 	return off, nil
 }
 

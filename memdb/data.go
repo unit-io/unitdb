@@ -3,10 +3,9 @@ package memdb
 import "errors"
 
 type dataTable struct {
-	buf     []byte
-	size    int64
-	maxSize int64
-	closed  bool
+	buf    []byte
+	size   int64
+	closed bool
 }
 
 func (t *dataTable) append(data []byte) (int64, error) {

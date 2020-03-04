@@ -9,7 +9,7 @@ func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[:idSize], e.cacheBlock[e.topicSize+idSize:], nil
 	}
-	message, err := t.Slice(e.mOffset, e.mOffset+int64(e.mSize()))
+	message, err := t.Slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -20,14 +20,14 @@ func (t *dataTable) readId(e entry) ([]byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[:idSize], nil
 	}
-	return t.Slice(e.mOffset, e.mOffset+int64(idSize))
+	return t.Slice(e.msgOffset, e.msgOffset+int64(idSize))
 }
 
 func (t *dataTable) readTopic(e entry) ([]byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[idSize : e.topicSize+idSize], nil
 	}
-	return t.Slice(e.mOffset+int64(idSize), e.mOffset+int64(e.topicSize)+int64(idSize))
+	return t.Slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
 }
 
 func (t *dataTable) free(size uint32, off int64) {
