@@ -77,10 +77,11 @@ type (
 		syncLockC   chan struct{}
 		expiryLockC chan struct{}
 		// consistent     *hash.Consistent
-		filter     Filter
-		index      file
-		data       dataTable
-		lock       fs.LockFile
+		filter Filter
+		lock   fs.LockFile
+		index  file
+		data   dataTable
+		// lock       fs.LockFile
 		wal        *wal.WAL
 		syncWrites bool
 		freeslots  freeslots
@@ -106,19 +107,19 @@ type (
 // Open opens or creates a new DB.
 func Open(path string, opts *Options) (*DB, error) {
 	opts = opts.copyWithDefaults()
-	// fileFlag := os.O_CREATE | os.O_RDWR
 	fs := opts.FileSystem
-	fileMode := os.FileMode(0666)
-	lock, needsRecovery, err := fs.CreateLockFile(path+lockPostfix, fileMode)
+	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
 		if err == os.ErrExist {
 			err = errLocked
 		}
 		return nil, err
 	}
-
 	index, err := newFile(fs, path+indexPostfix)
 	if err != nil {
+		if err == os.ErrExist {
+			err = errLocked
+		}
 		return nil, err
 	}
 	data, err := newFile(fs, path+dataPostfix)
@@ -135,12 +136,13 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	db := &DB{
-		mutex:       newMutex(),
-		index:       index,
-		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
-		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
-		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
-		lock:        lock,
+		mutex:      newMutex(),
+		lock:       lock,
+		index:      index,
+		data:       dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
+		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
+		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
+		// lock:        lock,
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
@@ -190,7 +192,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			return nil, err
 		}
 	} else {
-		if err := db.readHeader(!needsRecovery); err != nil {
+		if err := db.readHeader(); err != nil {
 			if err := index.Close(); err != nil {
 				logger.Error().Err(err).Str("context", "db.Open")
 			}
@@ -205,12 +207,6 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 
 	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
-
-	if needsRecovery {
-		if err := db.recover(); err != nil {
-			return nil, err
-		}
-	}
 
 	if err := db.loadTopicHash(); err != nil {
 		return nil, err
@@ -325,7 +321,7 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 	return db.index.writeMarshalableAt(h, 0)
 }
 
-func (db *DB) readHeader(readFreeList bool) error {
+func (db *DB) readHeader() error {
 	h := &header{}
 	if err := db.index.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
@@ -335,10 +331,8 @@ func (db *DB) readHeader(readFreeList bool) error {
 	// }
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIndex)
-	if readFreeList {
-		if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
-			return err
-		}
+	if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
+		return err
 	}
 	db.dbInfo.freeblockOff = -1
 	return nil
@@ -622,19 +616,21 @@ func (db *DB) Close() error {
 	if err := db.writeHeader(true); err != nil {
 		return err
 	}
+	if err := db.timeWindow.Close(); err != nil {
+		return err
+	}
 	if err := db.data.Close(); err != nil {
 		return err
 	}
 	if err := db.index.Close(); err != nil {
 		return err
 	}
-	if err := db.lock.Unlock(); err != nil {
-		return err
-	}
 	if err := db.filter.close(); err != nil {
 		return err
 	}
-
+	if err := db.lock.Unlock(); err != nil {
+		return err
+	}
 	// close memdb
 	db.mem.Close()
 

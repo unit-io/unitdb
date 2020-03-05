@@ -25,8 +25,8 @@ func (fs *iofs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, 
 }
 
 // CreateLockFile to create lock file for db
-func (fs *iofs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
-	return createLockFile(name, perm)
+func (fs *iofs) CreateLockFile(name string) (LockFile, error) {
+	return newLockFile(name)
 }
 
 // State provides DB state and size of the file
@@ -37,32 +37,6 @@ func (fs *iofs) Stat(name string) (os.FileInfo, error) {
 // Remove removes the file
 func (fs *iofs) Remove(name string) error {
 	return os.Remove(name)
-}
-
-type fslockfile struct {
-	File
-	name string
-}
-
-type oslockfile struct {
-	File
-	path string
-}
-
-// Unlock unlocks DB lock file while closing DB
-func (f *oslockfile) Unlock() error {
-	if err := os.Remove(f.path); err != nil {
-		return err
-	}
-	return f.Close()
-}
-
-// Unlock unlocks DB lock file while closing DB
-func (f *fslockfile) Unlock() error {
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return FileIO.Remove(f.name)
 }
 
 // Type indicate type of filesystem

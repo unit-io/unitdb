@@ -101,7 +101,6 @@ func TestLogApplied(t *testing.T) {
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
-
 	wal, needRecovery, err := newTestWal("test.db", false)
 	if !needRecovery || err != nil {
 		t.Fatal(err)

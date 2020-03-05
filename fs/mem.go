@@ -27,15 +27,6 @@ func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager,
 	return f, nil
 }
 
-// CreateLockFile to create lock file for DB
-func (fs *memfs) CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
-	f, err := fs.OpenFile(name, 0, perm)
-	if err != nil {
-		return nil, false, err
-	}
-	return &memlockfile{f, name}, false, nil
-}
-
 // State provides DB state and size of file
 func (fs *memfs) Stat(name string) (os.FileInfo, error) {
 	if f, ok := fs.files[name]; ok {
@@ -51,19 +42,6 @@ func (fs *memfs) Remove(name string) error {
 		return nil
 	}
 	return os.ErrNotExist
-}
-
-type memlockfile struct {
-	File
-	name string
-}
-
-// Unlock unlocks DB lock file while closing DB
-func (f *memlockfile) Unlock() error {
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return Mem.Remove(f.name)
 }
 
 // MemFile mem file is used to write buffer to memory store

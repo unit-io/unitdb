@@ -7,20 +7,35 @@ import (
 	"syscall"
 )
 
-func createLockFile(name string, perm os.FileMode) (LockFile, bool, error) {
-	acquiredExisting := false
-	if _, err := os.Stat(name); err == nil {
-		acquiredExisting = true
+type unixFileLock struct {
+	f *os.File
+}
+
+func (fl *unixFileLock) Unlock() error {
+	if err := os.Remove(f.name); err != nil {
+		return err
 	}
-	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, perm)
-	if err != nil {
-		return nil, false, err
-	}
+	return f.Close()
+}
+
+func lockFile(f *os.File) error {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if err == syscall.EWOULDBLOCK {
 			err = os.ErrExist
 		}
-		return nil, false, err
+		return err
 	}
-	return &oslockfile{f, name}, acquiredExisting, nil
+	return nil
+}
+
+func newLockFile(name string) (LockFile, error) {
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0444)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockfile(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &unixFileLock{f}, nil
 }

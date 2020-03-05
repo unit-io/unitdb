@@ -63,7 +63,7 @@ type (
 	}
 )
 
-func newWal(opts Options) (wal *WAL, needRecovery bool, err error) {
+func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
 		opts:    opts,

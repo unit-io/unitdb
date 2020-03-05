@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/unit-io/tracedb/fs"
 	"github.com/unit-io/tracedb/hash"
 )
 
@@ -31,7 +32,7 @@ type (
 
 type windowHandle struct {
 	winBlock
-	file   file
+	file   fs.FileManager
 	offset int64
 }
 

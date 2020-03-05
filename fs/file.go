@@ -31,7 +31,7 @@ type LockFile interface {
 // FileSystem represents a virtual file system.
 type FileSystem interface {
 	OpenFile(name string, flag int, perm os.FileMode) (FileManager, error)
-	CreateLockFile(name string, perm os.FileMode) (LockFile, bool, error)
+	CreateLockFile(name string) (LockFile, error)
 	Stat(name string) (os.FileInfo, error)
 	Remove(name string) error
 }
