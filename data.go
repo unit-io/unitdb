@@ -31,12 +31,12 @@ func (t *dataTable) readTopic(e entry) ([]byte, error) {
 }
 
 func (t *dataTable) free(size uint32, off int64) {
-	size = align512(size)
+	size = align(size)
 	t.fb.free(off, size)
 }
 
 func (t *dataTable) write(data []byte) (off int64, err error) {
-	dataLen := align512(uint32(len(data)))
+	dataLen := align(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
 	off = t.fb.allocate(dataLen)
@@ -44,6 +44,7 @@ func (t *dataTable) write(data []byte) (off int64, err error) {
 		if _, err = t.WriteAt(buf, off); err != nil {
 			return 0, err
 		}
+		return off, errLeasedBlock
 	} else {
 		off, err = t.append(buf)
 	}

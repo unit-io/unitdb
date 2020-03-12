@@ -33,7 +33,7 @@ func (it *TopicIterator) Next() {
 				if err := b.read(); err != nil {
 					return err
 				}
-				for i := 0; i < entriesPerBlock; i++ {
+				for i := 0; i < entriesPerIndexBlock; i++ {
 					e := b.entries[i]
 					if e.msgOffset == 0 {
 						continue
@@ -96,14 +96,14 @@ func (it *TopicIterator) Topic() *Topic {
 	return it.topic
 }
 
-// Contract returns contract of the topic, or nil if done. The
+// Contract returns contract of the topic, or nil if done.
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (Topic *Topic) Contract() uint64 {
 	return Topic.contract
 }
 
-// Hash returns topic hash, or nil if done. The
+// Hash returns topic hash, or nil if done.
 // caller should not modify the contents of the returned slice, and its contents
 // may change on the next call to Next.
 func (Topic *Topic) Hash() uint64 {

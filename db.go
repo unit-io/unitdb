@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
 	"github.com/unit-io/tracedb/fs"
@@ -21,8 +22,8 @@ import (
 )
 
 const (
-	entriesPerBlock    = 150 // (4096 i.e blocksize/26 i.e entry size)
-	seqsPerWindowBlock = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
+	entriesPerIndexBlock = 150 // (4096 i.e blocksize/26 i.e entry size)
+	seqsPerWindowBlock   = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
 	indexPostfix  = ".index"
@@ -50,6 +51,7 @@ const (
 
 	// MaxSeq is the maximum number of seq supported.
 	MaxSeq = uint64(1<<56 - 1)
+
 	// Maximum number of records to return
 	maxResults = 100000
 )
@@ -136,13 +138,12 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	db := &DB{
-		mutex:      newMutex(),
-		lock:       lock,
-		index:      index,
-		data:       dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
-		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
-		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
-		// lock:        lock,
+		mutex:       newMutex(),
+		lock:        lock,
+		index:       index,
+		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
+		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
+		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
@@ -359,7 +360,7 @@ func (db *DB) loadTopicHash() error {
 					return true, err
 				}
 				entryIdx := -1
-				for i := 0; i < entriesPerBlock; i++ {
+				for i := 0; i < entriesPerIndexBlock; i++ {
 					e := bh.entries[i]
 					if e.seq == seq { //record exist in db
 						entryIdx = i
@@ -445,15 +446,23 @@ func (db *DB) Sync() error {
 		// runtime.ReadMemStats(&m)
 		// log.Println(float64(m.Sys) / 1024 / 1024)
 		// log.Println(float64(m.HeapAlloc) / 1024 / 1024)
+		blockIdx := db.blocks()
+		idxBlockOff := int64(0)
+		dataBlockOff := int64(0)
+		bufPool := bpool.NewBufferPool(1 << 33)
+		rawIndex := bufPool.Get()
+		rawData := bufPool.Get()
+		defer func() {
+			bufPool.Put(rawData)
+			bufPool.Put(rawIndex)
+		}()
+		var idxBlocks []blockHandle
 		seqs, upperSeqs, err := db.wal.Scan()
 		if err != nil {
 			return true, err
 		}
 		if len(seqs) == 0 {
 			return true, nil
-		}
-		if err := db.extendBlocks(); err != nil {
-			return true, err
 		}
 
 		var wEntry winEntry
@@ -462,28 +471,18 @@ func (db *DB) Sync() error {
 			if !ok {
 				return true, errors.New("db.Sync: timeWindow sync error: unbale to get topic offset from trie")
 			}
-			wb, err := db.timeWindow.getWindowBlockHandle(h, topicOff)
+			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
 				return true, err
 			}
+			if ok := db.trie.setOffset(h, wOff); !ok {
+				return true, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
+			}
 			var off int64
-			var bh blockHandle
+			var bh, leasedBh blockHandle
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
-				}
-				wEntry = we.(winEntry)
-				if ok := db.trie.add(h, wEntry); !ok {
-					return true, errors.New("db:Sync: unbale to add entry to trie")
-				}
-				wOff, err := db.timeWindow.write(&wb, we)
-				if err != nil {
-					return true, err
-				}
-				if wOff > topicOff {
-					if ok := db.trie.setOffset(h, wOff); !ok {
-						return true, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
-					}
 				}
 				mseq := db.cacheID ^ wEntry.seq
 				memdata, err := db.mem.Get(wEntry.contract, mseq)
@@ -494,55 +493,73 @@ func (db *DB) Sync() error {
 				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
 					return true, err
 				}
-
-				startTimeIdx := startBlockIndex(memEntry.seq)
-				newOff := blockOffset(startTimeIdx)
-				if newOff != off {
-					off = newOff
-					// write previous block
-					if err := bh.write(); err != nil {
-						return true, err
+				startBlockIdx := startBlockIndex(wEntry.seq)
+				newOff := blockOffset(startBlockIdx)
+				bh = blockHandle{file: db.index, offset: newOff}
+				// any seq less than current db count is leased seq
+				if startBlockIdx < blockIdx {
+					if newOff != off {
+						off = newOff
+						// write previous block
+						if err := leasedBh.write(); err != nil {
+							return true, err
+						}
+						if err := bh.read(); err != nil {
+							return true, err
+						}
 					}
-					bh = blockHandle{file: db.index, offset: newOff}
-					if err := bh.read(); err != nil {
-						return true, err
+					entryIdx := 0
+					for i := 0; i < entriesPerIndexBlock; i++ {
+						e := bh.entries[i]
+						if e.seq == wEntry.seq { //record exist in db
+							entryIdx = -1
+							break
+						}
 					}
-				}
-				entryIdx := 0
-				for i := 0; i < entriesPerBlock; i++ {
-					e := bh.entries[i]
-					if e.seq == memEntry.seq { //record exist in db
-						entryIdx = -1
-						break
+					if entryIdx == -1 {
+						continue
 					}
-				}
-				if entryIdx == -1 {
-					continue
+					leasedBh = blockHandle{file: db.index, offset: bh.offset}
+				} else {
+					if idxBlockOff == 0 {
+						idxBlockOff = newOff
+					}
+					idxBlocks = append(idxBlocks, bh)
 				}
 				db.incount()
 				if memEntry.msgOffset, err = db.data.write(memdata[entrySize:]); err != nil {
-					return true, err
+					if err != errLeasedBlock {
+						return true, err
+					}
+				} else {
+					if dataBlockOff == 0 {
+						dataBlockOff = memEntry.msgOffset
+					}
+					rawData.Write(memdata[entrySize:])
 				}
-				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 
-				if err := bh.append(memEntry); err != nil {
-					return true, err
-				}
+				bh.entries[bh.entryIdx] = memEntry
+				bh.entryIdx++
 
-				db.filter.Append(memEntry.seq)
+				db.filter.Append(wEntry.seq)
 				db.meter.InMsgs.Inc(1)
+				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 			}
-
 			// write any pending entries
-			if err := bh.write(); err != nil {
-				return true, err
-			}
-
-			if err := wb.write(); err != nil {
+			if err := leasedBh.write(); err != nil {
 				return true, err
 			}
 		}
-		if err := db.timeWindow.Sync(); err != nil {
+		if err := db.extendBlocks(); err != nil {
+			return true, err
+		}
+		for _, idxBlock := range idxBlocks {
+			rawIndex.Write(idxBlock.MarshalBinary())
+		}
+		if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
+			return false, err
+		}
+		if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
 			return false, err
 		}
 		if err := db.sync(); err != nil {
@@ -648,7 +665,7 @@ func (db *DB) Close() error {
 }
 
 func startBlockIndex(seq uint64) int32 {
-	return int32(float64(seq-1) / float64(entriesPerBlock))
+	return int32(float64(seq-1) / float64(entriesPerIndexBlock))
 }
 
 func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
@@ -667,7 +684,7 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 		return entry{}, err
 	}
 
-	for i := 0; i < entriesPerBlock; i++ {
+	for i := 0; i < entriesPerIndexBlock; i++ {
 		e := bh.entries[i]
 		if e.seq == seq {
 			return e, nil
@@ -809,7 +826,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				q.winEntries = append(q.winEntries, wEntries...)
 			}
 
-			if len(items) >= int(q.Limit) || uint32(cap(q.winEntries)) == limit {
+			if expiryCount == 0 || len(items) >= int(q.Limit) || uint32(cap(q.winEntries)) == limit {
 				break
 			}
 
@@ -894,7 +911,7 @@ func (db *DB) newBlock() (int64, error) {
 
 // extendBlocks adds new blocks to DB
 func (db *DB) extendBlocks() error {
-	nBlocks := int32(float64(db.Seq()) / float64(entriesPerBlock))
+	nBlocks := int32(float64(db.Seq()) / float64(entriesPerIndexBlock))
 	for nBlocks > db.blockIndex {
 		if _, err := db.newBlock(); err != nil {
 			return err
@@ -1193,7 +1210,7 @@ func (db *DB) delete(seq uint64) error {
 		return err
 	}
 	entryIdx := -1
-	for i := 0; i < entriesPerBlock; i++ {
+	for i := 0; i < entriesPerIndexBlock; i++ {
 		e := bh.entries[i]
 		if e.seq == seq {
 			entryIdx = i

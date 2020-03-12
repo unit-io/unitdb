@@ -6,7 +6,7 @@ import (
 
 var (
 	signature     = [8]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b', '\xfd'}
-	logHeaderSize = 30
+	logHeaderSize = 38
 	headerSize    uint32
 )
 
@@ -18,7 +18,7 @@ type logInfo struct {
 	size       int64
 	offset     int64
 
-	_ [30]byte
+	_ [38]byte
 }
 
 // MarshalBinary serialized logInfo into binary data
@@ -27,8 +27,9 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint16(buf[:2], l.status)
 	binary.LittleEndian.PutUint32(buf[2:6], l.entryCount)
 	binary.LittleEndian.PutUint64(buf[6:14], l.seq)
-	binary.LittleEndian.PutUint64(buf[14:22], uint64(l.size))
-	binary.LittleEndian.PutUint64(buf[22:30], uint64(l.offset))
+	binary.LittleEndian.PutUint64(buf[14:22], l.upperSeq)
+	binary.LittleEndian.PutUint64(buf[22:30], uint64(l.size))
+	binary.LittleEndian.PutUint64(buf[30:38], uint64(l.offset))
 	return buf, nil
 }
 
@@ -37,8 +38,9 @@ func (l *logInfo) UnmarshalBinary(data []byte) error {
 	l.status = binary.LittleEndian.Uint16(data[:2])
 	l.entryCount = binary.LittleEndian.Uint32(data[2:6])
 	l.seq = binary.LittleEndian.Uint64(data[6:14])
-	l.size = int64(binary.LittleEndian.Uint64(data[14:22]))
-	l.offset = int64(binary.LittleEndian.Uint64(data[22:30]))
+	l.upperSeq = binary.LittleEndian.Uint64(data[14:22])
+	l.size = int64(binary.LittleEndian.Uint64(data[22:30]))
+	l.offset = int64(binary.LittleEndian.Uint64(data[30:38]))
 	return nil
 }
 
@@ -51,7 +53,7 @@ type header struct {
 }
 
 func init() {
-	headerSize = uint32(align512(int64(binary.Size(logInfo{}))))
+	headerSize = uint32(align(int64(binary.Size(logInfo{}))))
 }
 
 // MarshalBinary serialized header into binary data

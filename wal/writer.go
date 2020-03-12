@@ -87,7 +87,7 @@ func (w *Writer) writeLog(logSeq, upperSeq uint64) error {
 	if w.logSize == 0 {
 		return nil
 	}
-	dataLen := align512(w.logSize + int64(logHeaderSize))
+	dataLen := align(w.logSize + int64(logHeaderSize))
 	off, err := w.wal.logFile.allocate(uint32(dataLen))
 	if off < int64(headerSize) || err != nil {
 		return err
@@ -135,6 +135,6 @@ func (w *Writer) SignalInitWrite(logSeq, upperSeq uint64) <-chan error {
 	return done
 }
 
-func align512(n int64) int64 {
-	return (n + 511) &^ 511
+func align(n int64) int64 {
+	return (n + 4095) &^ 4095
 }

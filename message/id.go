@@ -1,10 +1,10 @@
 package message
 
 import (
+	"encoding/binary"
 	"math"
 	"sync/atomic"
 
-	"github.com/kelindar/binary"
 	"github.com/unit-io/tracedb/uid"
 )
 

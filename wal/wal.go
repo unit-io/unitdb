@@ -144,7 +144,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			wal.incount()
 			wal.logs = append(wal.logs, *l)
 		}
-		offset = l.offset + align512(l.size+int64(logHeaderSize))
+		offset = l.offset + align(l.size+int64(logHeaderSize))
 		if offset == wal.logFile.fb.currOffset {
 			offset += wal.logFile.fb.currSize
 		}
@@ -155,7 +155,7 @@ func (wal *WAL) recoverLogHeaders() error {
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
-	wal.logFile.size = align512(wal.logFile.size)
+	wal.logFile.size = align(wal.logFile.size)
 	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
 		return err
 	}
@@ -170,9 +170,10 @@ func (wal *WAL) put(log logInfo) error {
 	for i := int64(0); i < l; i++ {
 		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
-			wal.logs[i].entryCount = log.entryCount
-			wal.logs[i].seq = log.seq
-			wal.logs[i].size = log.size
+			// wal.logs[i].entryCount = log.entryCount
+			// wal.logs[i].seq = log.seq
+			// wal.logs[i].upperSeq = log.upperSeq
+			// wal.logs[i].size = log.size
 			return nil
 		}
 	}
@@ -262,15 +263,15 @@ func (wal *WAL) SignalLogApplied(logSeq uint64) error {
 			continue
 		}
 		if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == wal.logs[i].offset {
-			wal.logFile.fb.currSize += align512(wal.logs[i].size + int64(logHeaderSize))
+			wal.logFile.fb.currSize += align(wal.logs[i].size + int64(logHeaderSize))
 		} else {
 			if wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
-				wal.logFile.fb.size += align512(wal.logs[i].size + int64(logHeaderSize))
+				wal.logFile.fb.size += align(wal.logs[i].size + int64(logHeaderSize))
 			}
 			// reset current free block
 			if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size == wal.logFile.fb.currOffset {
 				wal.logFile.fb.currOffset = wal.logFile.fb.offset
-				wal.logFile.fb.currSize += align512(wal.logFile.fb.size)
+				wal.logFile.fb.currSize += align(wal.logFile.fb.size)
 				wal.logFile.fb.size = 0
 			}
 		}

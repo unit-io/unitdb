@@ -263,9 +263,9 @@ func (fb *freeblocks) read(f file, off int64) error {
 			}
 			buf = buf[12:]
 		}
-		offset += int64((4 + 8) * n)
+		offset += int64(12 * n)
 	}
-	fb.free(off, align512(4+(4+8)*size))
+	fb.free(off, align(4+size*12))
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (fb *freeblocks) write(f file) (int64, error) {
 	var buf []byte
 	for i := 0; i < nShards; i++ {
 		shard := fb.blocks[i]
-		marshaledSize += align512(shard.binarySize())
+		marshaledSize += align(shard.binarySize())
 		data, err := shard.MarshalBinary()
 		buf = append(buf, data...)
 		if err != nil {

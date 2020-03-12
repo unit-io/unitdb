@@ -57,7 +57,7 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 }
 
 type block struct {
-	entries  [entriesPerBlock]entry
+	entries  [entriesPerIndexBlock]entry
 	next     uint32
 	entryIdx uint16
 }
@@ -73,15 +73,15 @@ const (
 	blockSize uint32 = 4096
 )
 
-func align512(n uint32) uint32 {
-	return (n + 511) &^ 511
+func align(n uint32) uint32 {
+	return (n + 4095) &^ 4095
 }
 
 // MarshalBinary serliazed entries block into binary data
-func (b block) MarshalBinary() ([]byte, error) {
+func (b block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
-	for i := 0; i < entriesPerBlock; i++ {
+	for i := 0; i < entriesPerIndexBlock; i++ {
 		e := b.entries[i]
 		binary.LittleEndian.PutUint64(buf[:8], e.seq)
 		binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
@@ -92,12 +92,12 @@ func (b block) MarshalBinary() ([]byte, error) {
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
 	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
-	return data, nil
+	return data
 }
 
 // UnmarshalBinary deserliazed entries block from binary data
 func (b *block) UnmarshalBinary(data []byte) error {
-	for i := 0; i < entriesPerBlock; i++ {
+	for i := 0; i < entriesPerIndexBlock; i++ {
 		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
 		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
 		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[8:10])
@@ -113,7 +113,7 @@ func (b *block) UnmarshalBinary(data []byte) error {
 
 func (b *block) del(entryIdx int) {
 	i := entryIdx
-	for ; i < entriesPerBlock-1; i++ {
+	for ; i < entriesPerIndexBlock-1; i++ {
 		b.entries[i] = b.entries[i+1]
 	}
 	b.entries[i] = entry{}
@@ -131,18 +131,15 @@ func (bh *blockHandle) write() error {
 	if bh.entryIdx == 0 {
 		return nil
 	}
-	buf, err := bh.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	_, err = bh.file.WriteAt(buf, bh.offset)
+	buf := bh.MarshalBinary()
+	_, err := bh.file.WriteAt(buf, bh.offset)
 	return err
 }
 
 func (bh *blockHandle) append(e entry) error {
 	bh.entries[bh.entryIdx] = e
 	bh.entryIdx++
-	if bh.entryIdx == entriesPerBlock {
+	if bh.entryIdx == entriesPerIndexBlock {
 		return bh.write()
 	}
 	return nil

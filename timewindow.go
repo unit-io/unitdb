@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/hash"
 )
 
@@ -30,16 +30,6 @@ type (
 	}
 )
 
-type windowHandle struct {
-	winBlock
-	file   fs.FileManager
-	offset int64
-}
-
-func winBlockOffset(idx int32) int64 {
-	return (int64(blockSize) * int64(idx))
-}
-
 func (e winEntry) time() uint32 {
 	return 0
 }
@@ -49,7 +39,7 @@ func (e winEntry) Seq() uint64 {
 }
 
 // MarshalBinary serliazed window block into binary data
-func (b winBlock) MarshalBinary() ([]byte, error) {
+func (b winBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 	for i := 0; i < seqsPerWindowBlock; i++ {
@@ -61,7 +51,7 @@ func (b winBlock) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[8:16], b.topicHash)
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(b.next))
 	binary.LittleEndian.PutUint16(buf[24:26], b.entryIdx)
-	return data, nil
+	return data
 }
 
 // UnmarshalBinary dserliazed window block from binary data
@@ -78,6 +68,16 @@ func (b *winBlock) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+type windowHandle struct {
+	winBlock
+	file
+	offset int64
+}
+
+func winBlockOffset(idx int32) int64 {
+	return (int64(blockSize) * int64(idx))
+}
+
 func (wh *windowHandle) read() error {
 	buf, err := wh.file.Slice(wh.offset, wh.offset+int64(blockSize))
 	if err != nil {
@@ -90,22 +90,10 @@ func (wh *windowHandle) write() error {
 	if wh.entryIdx == 0 {
 		return nil
 	}
-	buf, err := wh.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	_, err = wh.file.WriteAt(buf, wh.offset)
+	buf := wh.MarshalBinary()
+	_, err := wh.file.WriteAt(buf, wh.offset)
 
 	return err
-}
-
-func (wh *windowHandle) append(we winEntry) error {
-	wh.winEntries[wh.entryIdx] = we
-	wh.entryIdx++
-	if wh.entryIdx == seqsPerWindowBlock {
-		return wh.write()
-	}
-	return nil
 }
 
 // A "thread" safe timeWindows.
@@ -365,25 +353,6 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 	return nil
 }
 
-// getWindowBlockHandle reads winBlock from window file.
-// If offset is zero then its a new topic, so it creates a new winBlock to the end of window file
-func (wb *timeWindowBucket) getWindowBlockHandle(topicHash uint64, off int64) (windowHandle, error) {
-	var err error
-	if off == 0 {
-		if off, err = wb.newBlock(); err != nil {
-			return windowHandle{}, err
-		}
-	}
-	b := windowHandle{file: wb.file, offset: off}
-	if err := b.read(); err != nil {
-		return b, err
-	}
-	if b.topicHash == 0 {
-		b.topicHash = topicHash
-	}
-	return b, nil
-}
-
 // ilookup lookups window entries from timeWindowBucket. These entries are not yet sync to DB
 func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry, fanout bool) {
 	winEntries = make([]winEntry, 0)
@@ -456,36 +425,74 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	return winEntries, nextOff
 }
 
-// write writes widnow entries into window file
-func (wb *timeWindowBucket) write(wh *windowHandle, we timeWindowEntry) (off int64, err error) {
-	entryIdx := 0
-	for i := 0; i < seqsPerWindowBlock; i++ {
-		entry := wh.winEntries[i]
-		if entry.seq == we.Seq() { //record exist in db
-			entryIdx = -1
-			break
+// sync syncs window entries to window file
+func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
+	// startIdx := 0
+	blockOff := int64(0)
+	bufPool := bpool.NewBufferPool(1 << 33)
+	buf := bufPool.Get()
+	defer bufPool.Put(buf)
+	var blocks []windowHandle
+	wh := windowHandle{file: wb.file, offset: off}
+	if off == 0 {
+		if blockOff, err = wb.newBlock(); err != nil {
+			return off, err
 		}
-	}
-	if entryIdx == -1 {
-		return 0, nil
-	}
-	if wh.entryIdx == seqsPerWindowBlock {
-		off, err = wb.newBlock()
-		if err != nil {
-			return 0, err
-		}
-		topicHash := wh.topicHash
-		next := wh.offset
-		*wh = windowHandle{file: wb.file, offset: off}
+		wh.offset = blockOff
 		wh.topicHash = topicHash
-		wh.next = next
-		wb.nextWindowIndex()
+	} else {
+		if err := wh.read(); err != nil {
+			return off, err
+		}
 	}
+	for _, we := range wEntries {
+		if we.Seq() == 0 {
+			continue
+		}
+		entryIdx := 0
+		for i := 0; i < seqsPerWindowBlock; i++ {
+			e := wh.winEntries[i]
+			if e.seq == we.Seq() { //record exist in db
+				entryIdx = -1
+				break
+			}
+		}
+		if entryIdx == -1 {
+			return 0, nil
+		}
+		if wh.entryIdx == seqsPerWindowBlock {
+			off, err = wb.newBlock()
+			if err != nil {
+				return 0, err
+			}
+			if blockOff == 0 {
+				blockOff = off
+				if err := wh.write(); err != nil {
+					return 0, err
+				}
+			}
+			topicHash := wh.topicHash
+			next := wh.offset
+			wh = windowHandle{file: wb.file, offset: off}
+			wh.topicHash = topicHash
+			wh.next = next
 
-	if err := wh.append(winEntry{seq: we.Seq()}); err != nil {
+			blocks = append(blocks, wh)
+		}
+		wh.winEntries[wh.entryIdx] = winEntry{seq: we.Seq()}
+		wh.entryIdx++
+	}
+	// write any pending entries
+	if err := wh.write(); err != nil {
 		return 0, err
 	}
-	return off, nil
+	for _, block := range blocks {
+		buf.Write(block.MarshalBinary())
+	}
+	if _, err := wb.file.WriteAt(buf.Bytes(), blockOff); err != nil {
+		return 0, err
+	}
+	return wh.offset, wb.Sync()
 }
 
 func (wb *timeWindowBucket) windowIndex() int32 {
