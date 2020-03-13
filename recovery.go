@@ -176,7 +176,7 @@ func (db *DB) recoverLog() error {
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
-		if rawData.Size() > db.opts.LogSize {
+		if rawData.Size() > db.opts.BufferSize {
 			if err := write(); err != nil {
 				return err
 			}

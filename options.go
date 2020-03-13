@@ -70,10 +70,10 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
 	}
 	if opts.BufferSize == 0 {
-		opts.BufferSize = 1 << 30 // maximum size of a buffer in bufferpool (1GB).
+		opts.BufferSize = 1 << 33 // maximum size of a buffer in bufferpool (8GB).
 	}
 	if opts.MemdbSize == 0 {
-		opts.MemdbSize = 1 << 33 // maximum size of memdb (4GB).
+		opts.MemdbSize = 1 << 32 // maximum size of memdb (4GB).
 	}
 	if opts.LogSize == 0 {
 		opts.LogSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).

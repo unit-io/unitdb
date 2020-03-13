@@ -12,10 +12,10 @@ type unixFileLock struct {
 }
 
 func (fl *unixFileLock) Unlock() error {
-	if err := os.Remove(f.name); err != nil {
+	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
-	return f.Close()
+	return fl.Close()
 }
 
 func lockFile(f *os.File) error {
