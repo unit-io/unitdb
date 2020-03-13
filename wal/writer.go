@@ -136,5 +136,5 @@ func (w *Writer) SignalInitWrite(logSeq, upperSeq uint64) <-chan error {
 }
 
 func align(n int64) int64 {
-	return (n + 4095) &^ 4095
+	return (n + 511) &^ 511
 }

@@ -359,6 +359,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 	// get windows shard
 	ws := wb.getWindows(topicHash)
 	ws.mu.RLock()
+	defer ws.mu.RUnlock()
 	var l uint32
 	wEntries := ws.friezedEntries[topicHash]
 	if len(wEntries) > 0 {
@@ -380,7 +381,6 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 			winEntries = append(winEntries, we.(winEntry))
 		}
 	}
-	ws.mu.RUnlock()
 
 	return winEntries, len(winEntries) < int(limit)
 }
@@ -481,10 +481,6 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 		}
 		wh.winEntries[wh.entryIdx] = winEntry{seq: we.Seq()}
 		wh.entryIdx++
-	}
-	// write any pending entries
-	if err := wh.write(); err != nil {
-		return 0, err
 	}
 	for _, block := range blocks {
 		buf.Write(block.MarshalBinary())

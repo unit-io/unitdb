@@ -161,9 +161,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		closeC: make(chan struct{}),
 	}
 
-	db.filter.cache = db.mem
-	db.filter.cacheID = db.cacheID
-
 	if index.size == 0 {
 		if data.size != 0 {
 			if err := index.Close(); err != nil {
@@ -209,6 +206,14 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
+	//initbatchdb
+	if err = db.initbatchdb(opts); err != nil {
+		return nil, err
+	}
+
+	db.filter.cache = db.mem
+	db.filter.cacheID = db.cacheID
+
 	if err := db.loadTopicHash(); err != nil {
 		return nil, err
 	}
@@ -241,11 +246,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		db.encryption = 1
 	}
 
-	//initbatchdb
-	if err = db.initbatchdb(opts); err != nil {
-		return nil, err
-	}
-
 	// loadTrie loads topic into trie on opening an existing database file.
 	if err := db.loadTrie(); err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
-		db.startExpirer(time.Minute, maxExpDur)
+		// db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
 }
@@ -446,6 +446,15 @@ func (db *DB) Sync() error {
 		// runtime.ReadMemStats(&m)
 		// log.Println(float64(m.Sys) / 1024 / 1024)
 		// log.Println(float64(m.HeapAlloc) / 1024 / 1024)
+		seqs, upperSeqs, err := db.wal.Scan()
+		if err != nil {
+			return true, err
+		}
+		if len(seqs) == 0 {
+			return true, nil
+		}
+
+		var idxBlocks []blockHandle
 		blockIdx := db.blocks()
 		idxBlockOff := int64(0)
 		dataBlockOff := int64(0)
@@ -456,13 +465,28 @@ func (db *DB) Sync() error {
 			bufPool.Put(rawData)
 			bufPool.Put(rawIndex)
 		}()
-		var idxBlocks []blockHandle
-		seqs, upperSeqs, err := db.wal.Scan()
-		if err != nil {
-			return true, err
-		}
-		if len(seqs) == 0 {
-			return true, nil
+
+		write := func() error {
+			if err := db.extendBlocks(); err != nil {
+				return err
+			}
+			for _, idxBlock := range idxBlocks {
+				rawIndex.Write(idxBlock.MarshalBinary())
+			}
+			if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
+				return err
+			}
+			if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
+				return err
+			}
+
+			// reset blocks
+			idxBlockOff = int64(0)
+			dataBlockOff = int64(0)
+			idxBlocks = idxBlocks[:0]
+			bufPool.Put(rawIndex)
+			bufPool.Put(rawData)
+			return nil
 		}
 
 		var wEntry winEntry
@@ -484,6 +508,7 @@ func (db *DB) Sync() error {
 				if we.Seq() == 0 {
 					continue
 				}
+				wEntry = we.(winEntry)
 				mseq := db.cacheID ^ wEntry.seq
 				memdata, err := db.mem.Get(wEntry.contract, mseq)
 				if err != nil {
@@ -549,27 +574,26 @@ func (db *DB) Sync() error {
 			if err := leasedBh.write(); err != nil {
 				return true, err
 			}
+
+			if rawData.Size() > db.opts.LogSize {
+				if err := write(); err != nil {
+					return true, err
+				}
+			}
 		}
-		if err := db.extendBlocks(); err != nil {
+
+		if err := write(); err != nil {
 			return true, err
 		}
-		for _, idxBlock := range idxBlocks {
-			rawIndex.Write(idxBlock.MarshalBinary())
-		}
-		if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
-			return false, err
-		}
-		if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
-			return false, err
-		}
+
 		if err := db.sync(); err != nil {
-			return false, err
+			return true, err
 		}
 		db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		for i, upperSeq := range upperSeqs {
 			if wEntry.seq > upperSeq {
 				if err := db.wal.SignalLogApplied(seqs[i]); err != nil {
-					return false, err
+					return true, err
 				}
 			}
 		}
@@ -679,7 +703,7 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 	}
 
 	off := blockOffset(startBlockIndex(seq))
-	bh := blockHandle{file: db.index.FileManager, offset: off}
+	bh := blockHandle{file: db.index, offset: off}
 	if err := bh.read(); err != nil {
 		return entry{}, err
 	}
@@ -729,10 +753,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
-		if q.Limit == 0 && limit == 0 {
-			q.Limit = maxResults // Maximum number of records to return
-		}
-		if limit > q.Limit {
+		switch {
+		case (q.Limit == 0 && limit == 0) || q.Limit > maxResults || limit > maxResults:
+			q.Limit = maxResults
+		case limit > q.Limit:
 			q.Limit = limit
 		}
 	}
@@ -877,10 +901,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	// In case of ttl, include it to the query
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
-		if q.Limit == 0 && limit == 0 {
-			q.Limit = maxResults // Maximum number of records to return
-		}
-		if limit > q.Limit {
+		switch {
+		case (q.Limit == 0 && limit == 0) || q.Limit > maxResults || limit > maxResults:
+			q.Limit = maxResults
+		case limit > q.Limit:
 			q.Limit = limit
 		}
 	}

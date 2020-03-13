@@ -93,7 +93,6 @@ func TestSimple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifyMsgsAndClose()
 }
 
 func TestBatch(t *testing.T) {
@@ -221,9 +220,6 @@ func TestBatchGroup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 

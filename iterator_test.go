@@ -16,9 +16,6 @@ func TestIteratorEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestIterator(t *testing.T) {
@@ -74,9 +71,5 @@ func TestIterator(t *testing.T) {
 
 	if i != 255 {
 		t.Fatalf("expected 255 records; got %d", i)
-	}
-
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
 	}
 }

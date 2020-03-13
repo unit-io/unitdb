@@ -74,7 +74,7 @@ const (
 )
 
 func align(n uint32) uint32 {
-	return (n + 4095) &^ 4095
+	return (n + 511) &^ 511
 }
 
 // MarshalBinary serliazed entries block into binary data
@@ -134,13 +134,4 @@ func (bh *blockHandle) write() error {
 	buf := bh.MarshalBinary()
 	_, err := bh.file.WriteAt(buf, bh.offset)
 	return err
-}
-
-func (bh *blockHandle) append(e entry) error {
-	bh.entries[bh.entryIdx] = e
-	bh.entryIdx++
-	if bh.entryIdx == entriesPerIndexBlock {
-		return bh.write()
-	}
-	return nil
 }

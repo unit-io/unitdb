@@ -29,7 +29,7 @@ func (it *TopicIterator) Next() {
 		for it.nextBlockIndex < it.db.blocks() {
 			err := func() error {
 				off := blockOffset(it.nextBlockIndex)
-				b := blockHandle{file: it.db.index.FileManager, offset: off}
+				b := blockHandle{file: it.db.index, offset: off}
 				if err := b.read(); err != nil {
 					return err
 				}

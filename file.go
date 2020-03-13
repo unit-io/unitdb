@@ -39,11 +39,8 @@ func (f *file) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-func (f *file) append(data []byte) (int64, error) {
+func (f *file) allocate(data []byte) (int64, error) {
 	off := f.size
-	// if _, err := f.WriteAt(data, off); err != nil {
-	// 	return 0, err
-	// }
 	f.size += int64(len(data))
 
 	return off, nil

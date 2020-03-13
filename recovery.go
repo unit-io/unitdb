@@ -38,6 +38,8 @@ func (db *DB) recoverLog() error {
 	if err != nil {
 		return err
 	}
+
+	var idxBlocks []blockHandle
 	blockIdx := db.blocks()
 	idxBlockOff := int64(0)
 	dataBlockOff := int64(0)
@@ -48,7 +50,35 @@ func (db *DB) recoverLog() error {
 		bufPool.Put(rawData)
 		bufPool.Put(rawIndex)
 	}()
-	var idxBlocks []blockHandle
+
+	write := func() error {
+		for _, upperSeq := range upperSeqs {
+			nBlocks := int32(upperSeq / entriesPerIndexBlock)
+			for nBlocks > db.blockIndex {
+				if _, err := db.newBlock(); err != nil {
+					return err
+				}
+			}
+		}
+		for _, idxBlock := range idxBlocks {
+			rawIndex.Write(idxBlock.MarshalBinary())
+		}
+		if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
+			return err
+		}
+		if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
+			return err
+		}
+
+		// reset blocks
+		idxBlockOff = int64(0)
+		dataBlockOff = int64(0)
+		idxBlocks = idxBlocks[:0]
+		bufPool.Put(rawIndex)
+		bufPool.Put(rawData)
+		return nil
+	}
+
 	var off int64
 	var bh, leasedBh blockHandle
 	for _, s := range logSeqs {
@@ -146,6 +176,11 @@ func (db *DB) recoverLog() error {
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
+		if rawData.Size() > db.opts.LogSize {
+			if err := write(); err != nil {
+				return err
+			}
+		}
 	}
 
 	// write any pending entries
@@ -155,23 +190,11 @@ func (db *DB) recoverLog() error {
 	if err := db.recoverWindowBlocks(); err != nil {
 		return err
 	}
-	for _, upperSeq := range upperSeqs {
-		nBlocks := int32(upperSeq / entriesPerIndexBlock)
-		for nBlocks > db.blockIndex {
-			if _, err := db.newBlock(); err != nil {
-				return err
-			}
-		}
-	}
-	for _, idxBlock := range idxBlocks {
-		rawIndex.Write(idxBlock.MarshalBinary())
-	}
-	if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
+
+	if err := write(); err != nil {
 		return err
 	}
-	if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
-		return err
-	}
+
 	if err := db.sync(); err != nil {
 		return err
 	}

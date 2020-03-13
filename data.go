@@ -46,7 +46,7 @@ func (t *dataTable) write(data []byte) (off int64, err error) {
 		}
 		return off, errLeasedBlock
 	} else {
-		off, err = t.append(buf)
+		off, err = t.allocate(buf)
 	}
 	return off, err
 }
