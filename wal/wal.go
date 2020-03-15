@@ -170,10 +170,10 @@ func (wal *WAL) put(log logInfo) error {
 	for i := int64(0); i < l; i++ {
 		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
-			// wal.logs[i].entryCount = log.entryCount
-			// wal.logs[i].seq = log.seq
-			// wal.logs[i].upperSeq = log.upperSeq
-			// wal.logs[i].size = log.size
+			wal.logs[i].entryCount = log.entryCount
+			wal.logs[i].seq = log.seq
+			wal.logs[i].upperSeq = log.upperSeq
+			wal.logs[i].size = log.size
 			return nil
 		}
 	}
@@ -224,7 +224,7 @@ func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	return nil, errors.New("wal read error: log for seq not found")
 }
 
-// Next it returns next record from the log data iterator or false if iteration is done
+// Next returns next record from the log data iterator or false if iteration is done
 func (r *Reader) Next() ([]byte, bool) {
 	if r.entryCount == 0 {
 		return nil, false
@@ -236,8 +236,35 @@ func (r *Reader) Next() ([]byte, bool) {
 	return logData[4:dataLen], true
 }
 
+func (wal *WAL) logMerge(idx int) error {
+	l := len(wal.logs)
+	for i := idx; i < l; i++ {
+		if wal.logs[i].status != logStatusApplied {
+			continue
+		}
+		// fmt.Println("wal.logMerge: before merge freeblocks ", wal.logFile.fb)
+		if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == wal.logs[i].offset {
+			wal.logFile.fb.currSize += align(wal.logs[i].size + int64(logHeaderSize))
+		} else {
+			if wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
+				wal.logFile.fb.size += align(wal.logs[i].size + int64(logHeaderSize))
+			}
+			// reset current free block
+			if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size >= wal.logFile.fb.currOffset {
+				wal.logFile.fb.currOffset = wal.logFile.fb.offset
+				wal.logFile.fb.currSize += align(wal.logFile.fb.size)
+				wal.logFile.fb.size = 0
+				// fmt.Println("wal.SignalLogApplied: off, size ", wal.logFile.fb.currOffset, wal.logFile.fb.currSize)
+			}
+		}
+	}
+
+	wal.writeHeader()
+	return wal.Sync()
+}
+
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
-func (wal *WAL) SignalLogApplied(logSeq uint64) error {
+func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	wal.mu.Lock()
 	wal.wg.Add(1)
 	defer func() {
@@ -250,37 +277,16 @@ func (wal *WAL) SignalLogApplied(logSeq uint64) error {
 		return wal.logs[i].offset < wal.logs[j].offset
 	})
 	l := len(wal.logs)
-	idx := 0
 	for i := 0; i < l; i++ {
-		if wal.logs[i].seq == logSeq {
-			idx = i
+		if wal.logs[i].upperSeq <= upperSeq {
 			wal.logs[i].status = logStatusApplied
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
-		}
-	}
-	for i := idx; i < l; i++ {
-		if wal.logs[i].status != logStatusApplied {
-			continue
-		}
-		if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == wal.logs[i].offset {
-			wal.logFile.fb.currSize += align(wal.logs[i].size + int64(logHeaderSize))
-		} else {
-			if wal.logFile.fb.offset+wal.logFile.fb.size == wal.logs[i].offset {
-				wal.logFile.fb.size += align(wal.logs[i].size + int64(logHeaderSize))
-			}
-			// reset current free block
-			if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size == wal.logFile.fb.currOffset {
-				wal.logFile.fb.currOffset = wal.logFile.fb.offset
-				wal.logFile.fb.currSize += align(wal.logFile.fb.size)
-				wal.logFile.fb.size = 0
+			if err := wal.logMerge(i); err != nil {
+				return err
 			}
 		}
 	}
 
-	wal.writeHeader()
-	if err := wal.Sync(); err != nil {
-		return err
-	}
 	return nil
 }
 

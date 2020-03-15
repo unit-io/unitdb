@@ -8,14 +8,15 @@ import (
 )
 
 type unixFileLock struct {
-	f *os.File
+	f    *os.File
+	name string
 }
 
 func (fl *unixFileLock) Unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
-	return fl.Close()
+	return fl.f.Close()
 }
 
 func lockFile(f *os.File) error {
@@ -37,5 +38,5 @@ func newLockFile(name string) (LockFile, error) {
 		f.Close()
 		return nil, err
 	}
-	return &unixFileLock{f}, nil
+	return &unixFileLock{f, name}, nil
 }

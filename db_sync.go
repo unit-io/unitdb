@@ -71,29 +71,34 @@ func (db *DB) Sync() error {
 		// db.meter.TimeSeries.AddTime(time.Since(start))
 	}()
 
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+	// var bufPool *bpool.BufferPool
+	bufSize := int64(1 << 27)
+	// db.once.Do(func() {
+	// 	bufPool = bpool.NewBufferPool(bufSize)
+	// })
+
+	// defer db.once.Reset()
+
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, uint64, error) {
 		// var m runtime.MemStats
 		// runtime.ReadMemStats(&m)
 		// log.Println(float64(m.Sys) / 1024 / 1024)
 		// log.Println(float64(m.HeapAlloc) / 1024 / 1024)
-		seqs, upperSeqs, err := db.wal.Scan()
-		if err != nil {
-			return true, err
-		}
-		if len(seqs) == 0 {
-			return true, nil
-		}
 
-		var idxBlocks []blockHandle
+		var (
+			rawIndex, rawData *bpool.Buffer
+			idxBlocks         []blockHandle
+		)
 		blockIdx := db.blocks()
+
 		idxBlockOff := int64(0)
 		dataBlockOff := int64(0)
-		bufPool := bpool.NewBufferPool(1 << 33)
-		rawIndex := bufPool.Get()
-		rawData := bufPool.Get()
+
+		rawIndex = db.bufPool.Get()
+		rawData = db.bufPool.Get()
 		defer func() {
-			bufPool.Put(rawData)
-			bufPool.Put(rawIndex)
+			db.bufPool.Put(rawData)
+			db.bufPool.Put(rawIndex)
 		}()
 
 		write := func() error {
@@ -114,8 +119,8 @@ func (db *DB) Sync() error {
 			idxBlockOff = int64(0)
 			dataBlockOff = int64(0)
 			idxBlocks = idxBlocks[:0]
-			bufPool.Put(rawIndex)
-			bufPool.Put(rawData)
+			rawIndex.Reset()
+			rawData.Reset()
 			return nil
 		}
 
@@ -123,14 +128,14 @@ func (db *DB) Sync() error {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, errors.New("db.Sync: timeWindow sync error: unbale to get topic offset from trie")
+				return true, wEntry.seq, errors.New("db.Sync: timeWindow sync error: unbale to get topic offset from trie")
 			}
 			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
-				return true, err
+				return true, wEntry.seq, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
+				return true, wEntry.seq, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
 			}
 			var off int64
 			var bh, leasedBh blockHandle
@@ -142,11 +147,12 @@ func (db *DB) Sync() error {
 				mseq := db.cacheID ^ wEntry.seq
 				memdata, err := db.mem.Get(wEntry.contract, mseq)
 				if err != nil {
-					return true, err
+					return true, wEntry.seq, err
 				}
 				memEntry := entry{}
 				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
-					return true, err
+					fmt.Println("db.Sync: mem entry read error ", err)
+					return true, wEntry.seq, err
 				}
 				startBlockIdx := startBlockIndex(wEntry.seq)
 				newOff := blockOffset(startBlockIdx)
@@ -157,10 +163,10 @@ func (db *DB) Sync() error {
 						off = newOff
 						// write previous block
 						if err := leasedBh.write(); err != nil {
-							return true, err
+							return true, wEntry.seq, err
 						}
 						if err := bh.read(); err != nil {
-							return true, err
+							return true, wEntry.seq, err
 						}
 					}
 					entryIdx := 0
@@ -184,7 +190,7 @@ func (db *DB) Sync() error {
 				db.incount()
 				if memEntry.msgOffset, err = db.data.write(memdata[entrySize:]); err != nil {
 					if err != errLeasedBlock {
-						return true, err
+						return true, wEntry.seq, err
 					}
 				} else {
 					if dataBlockOff == 0 {
@@ -200,34 +206,41 @@ func (db *DB) Sync() error {
 				db.meter.InMsgs.Inc(1)
 				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 			}
+
+			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+
 			// write any pending entries
 			if err := leasedBh.write(); err != nil {
-				return true, err
+				return true, wEntry.seq, err
 			}
 
-			if rawData.Size() > db.opts.BufferSize {
+			if rawData.Size() > bufSize {
 				if err := write(); err != nil {
-					return true, err
+					return true, wEntry.seq, err
+				}
+
+				if err := db.sync(); err != nil {
+					return true, wEntry.seq, err
+				}
+
+				if err := db.wal.SignalLogApplied(wEntry.seq); err != nil {
+					return true, wEntry.seq, err
 				}
 			}
 		}
 
 		if err := write(); err != nil {
-			return true, err
+			return true, wEntry.seq, err
 		}
 
 		if err := db.sync(); err != nil {
-			return true, err
+			return true, wEntry.seq, err
 		}
-		db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
-		for i, upperSeq := range upperSeqs {
-			if wEntry.seq > upperSeq {
-				if err := db.wal.SignalLogApplied(seqs[i]); err != nil {
-					return true, err
-				}
-			}
+
+		if err := db.wal.SignalLogApplied(wEntry.seq); err != nil {
+			return true, wEntry.seq, err
 		}
-		return false, nil
+		return false, wEntry.seq, nil
 	})
 	if err != nil {
 		// run db recovery if an error occur with the db sync

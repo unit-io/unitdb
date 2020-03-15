@@ -39,7 +39,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Non-blocking batch operation](#Non-blocking-batch-operation)
  * [Iterating over items](#Iterating-over-items)
  + [Advanced](#Advanced)
-   - [Writing batch chunk](#Writing-batch-chunk)
    - [Topic isolation in batch operation](#Topic-isolation-in-batch-operation)
    - [Message encryption](#Message-encryption)
    - [Batch group](#Batch-group)
@@ -231,34 +230,6 @@ func print(topic []byte, db *tracedb.DB) {
 ```
 
 ### Advanced
-
-#### Writing batch chunk
-Batch operation support writing chunk for large batch. It is safe to use Batch.Write() function multiple times within a batch operation.
-
-As duplicate values are removed in a batch write operation, so specify batch option "AllowDuplicates" to keep duplicate values.
-
-```
-	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		opts := tracedb.DefaultBatchOptions
-		opts.Topic = []byte("unit8.b.*?ttl=1h")
-		opts.AllowDuplicates = true
-		b.SetOptions(opts)
-		t := time.Now()
-		for j := 0; j < 250; j++ {
-			b.Put(t.MarshalText())
-			if j%100 == 0 {
-				if err := b.Write(); err != nil {
-					return err
-				}
-			}
-		}
-		if err := b.Write(); err != nil {
-			return err
-		}
-		return nil
-	})
-
-```
 
 #### Topic isolation in batch operation
 Topic isolation can be achieved using Contract while putting messages into tracedb and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using Batch.PutEntry() function.

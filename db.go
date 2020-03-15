@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
 	"github.com/unit-io/tracedb/fs"
@@ -22,7 +23,7 @@ import (
 
 const (
 	entriesPerIndexBlock = 150 // (4096 i.e blocksize/26 i.e entry size)
-	seqsPerWindowBlock   = 500 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
+	seqsPerWindowBlock   = 508 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
 	indexPostfix  = ".index"
@@ -88,6 +89,7 @@ type (
 		freeslots  freeslots
 		dbInfo
 		timeWindow *timeWindowBucket
+		once       Once
 
 		//batchdb
 		*batchdb
@@ -296,7 +298,7 @@ func (db *DB) readHeader() error {
 	// 	return errCorrupted
 	// }
 	db.dbInfo = h.dbInfo
-	db.timeWindow.setWindowIndex(db.dbInfo.windowIndex)
+	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIndex)
 	if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
 		return err
 	}
@@ -877,38 +879,34 @@ func (db *DB) tinyCommit() error {
 		return err
 	}
 	db.tinyBatch.reset()
-	db.bufPool.Put(db.tinyBatch.buffer)
 	return nil
 }
 
 // commit commits batches to write ahead log
-func (db *DB) commit(l int, data []byte) <-chan error {
-	done := make(chan error, 1)
+func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	if err := db.ok(); err != nil {
-		done <- err
-		return done
+		return err
 	}
 	db.closeW.Add(1)
 	defer db.closeW.Done()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
-		done <- err
-		return done
+		return err
 	}
 
 	offset := uint32(0)
+	data := buf.Bytes()
 	for i := 0; i < l; i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
 		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
-			done <- err
-			return done
+			return err
 		}
 		offset += dataLen
 	}
 
 	db.meter.Puts.Inc(int64(l))
-	return logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq())
+	return <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq())
 }
 
 // Delete sets entry for deletion.

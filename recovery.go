@@ -4,26 +4,27 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/unit-io/tracedb/bpool"
 	"github.com/unit-io/tracedb/message"
 )
 
 func (db *DB) recoverWindowBlocks() error {
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, uint64, error) {
+		var readSeq uint64
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, errors.New("recovery.recoverWindowBlocks error: unbale to get topic offset from trie")
+				return true, readSeq, errors.New("recovery.recoverWindowBlocks error: unbale to get topic offset from trie")
 			}
 			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
-				return true, err
+				return true, readSeq, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
+				return true, readSeq, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
 			}
+			readSeq = wEntries[len(wEntries)-1].Seq()
 		}
-		return false, nil
+		return false, readSeq, nil
 	})
 	return err
 }
@@ -41,14 +42,15 @@ func (db *DB) recoverLog() error {
 
 	var idxBlocks []blockHandle
 	blockIdx := db.blocks()
+
+	bufSize := int64(1 << 30)
 	idxBlockOff := int64(0)
 	dataBlockOff := int64(0)
-	bufPool := bpool.NewBufferPool(1 << 33)
-	rawIndex := bufPool.Get()
-	rawData := bufPool.Get()
+	rawIndex := db.bufPool.Get()
+	rawData := db.bufPool.Get()
 	defer func() {
-		bufPool.Put(rawData)
-		bufPool.Put(rawIndex)
+		db.bufPool.Put(rawData)
+		db.bufPool.Put(rawIndex)
 	}()
 
 	write := func() error {
@@ -74,13 +76,14 @@ func (db *DB) recoverLog() error {
 		idxBlockOff = int64(0)
 		dataBlockOff = int64(0)
 		idxBlocks = idxBlocks[:0]
-		bufPool.Put(rawIndex)
-		bufPool.Put(rawData)
+		rawIndex.Reset()
+		rawData.Reset()
 		return nil
 	}
 
 	var off int64
 	var bh, leasedBh blockHandle
+	logEntry := entry{}
 	for _, s := range logSeqs {
 		it, err := db.wal.Read(s)
 		if err != nil {
@@ -92,7 +95,6 @@ func (db *DB) recoverLog() error {
 				break
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
-			logEntry := entry{}
 			if err := logEntry.UnmarshalBinary(entryData); err != nil {
 				return err
 			}
@@ -147,10 +149,6 @@ func (db *DB) recoverLog() error {
 
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
-			// t, err := db.data.readTopic(logEntry)
-			// if err != nil {
-			// 	return err
-			// }
 			topic := new(message.Topic)
 			err = topic.Unmarshal(t)
 			if err != nil {
@@ -176,8 +174,16 @@ func (db *DB) recoverLog() error {
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
-		if rawData.Size() > db.opts.BufferSize {
+		if rawData.Size() > bufSize {
 			if err := write(); err != nil {
+				return err
+			}
+
+			if err := db.sync(); err != nil {
+				return err
+			}
+
+			if err := db.wal.SignalLogApplied(logEntry.seq); err != nil {
 				return err
 			}
 		}
@@ -199,13 +205,13 @@ func (db *DB) recoverLog() error {
 		return err
 	}
 
-	for i, upperSeq := range upperSeqs {
-		if db.Seq() > upperSeq {
-			if err := db.wal.SignalLogApplied(logSeqs[i]); err != nil {
-				return err
-			}
-		}
+	// for i, upperSeq := range upperSeqs {
+	// 	if db.Seq() > upperSeq {
+	if err := db.wal.SignalLogApplied(logEntry.seq); err != nil {
+		return err
 	}
+	// 	}
+	// }
 
 	return err
 }

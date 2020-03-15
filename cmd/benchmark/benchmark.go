@@ -103,9 +103,6 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 						b.SetOptions(opts)
 						for k := 0; k < batchSize; k++ {
 							b.Put(vals[k])
-							// if k%500000 == 0 {
-							// 	b.Write()
-							// }
 						}
 						return b.Write()
 					})
@@ -122,38 +119,13 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 			}
 
 			endsecs := time.Since(start).Seconds()
-			totalalsecs := endsecs
-			fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+			fmt.Printf("Put: %d %.3f sec, %d ops/sec\n", r, endsecs, int(float64(numKeys)/endsecs))
 
 			sz, err := db.FileSize()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Fie size: %s\n", byteSize(sz))
-			printStats(db)
-
-			// forceGC()
-
-			start = time.Now()
-
-			for i := 0; i < concurrency; i++ {
-				topic := append(topics[i], []byte("?last=1m")...)
-				_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
-				if err != nil {
-					return err
-				}
-			}
-
-			endsecs = time.Since(start).Seconds()
-			totalalsecs += endsecs
-			fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-			fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
-			sz, err = db.FileSize()
-			if err != nil {
-				return err
-			}
 			fmt.Printf("File size: %s\n", byteSize(sz))
-			printStats(db)
 			if r >= retry {
 				return nil
 			}
@@ -166,6 +138,89 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 }
 
 func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
+	batchSize := numKeys / concurrency
+	dbpath := path.Join(dir, "bench_tracedb")
+	db, err := tracedb.Open(dbpath, nil)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Number of keys: %d\n", numKeys)
+	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
+	fmt.Printf("Concurrency: %d\n", concurrency)
+	fmt.Printf("Running tracedb benchmark...\n")
+
+	topics := generateTopics(concurrency, minKS, maxKS)
+	vals := generateVals(numKeys, minVS, maxVS)
+
+	forceGC()
+
+	start := time.Now()
+	eg := &errgroup.Group{}
+
+	func(concurrent int) error {
+		i := 1
+		for {
+			db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
+				opts := tracedb.DefaultBatchOptions
+				opts.AllowDuplicates = true
+				opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
+				b.SetOptions(opts)
+				for k := 0; k < batchSize; k++ {
+					b.Put(vals[k])
+				}
+				return b.Write()
+			})
+			if i >= concurrent {
+				return nil
+			}
+			i++
+		}
+	}(concurrency)
+
+	err = eg.Wait()
+	if err != nil {
+		return err
+	}
+
+	endsecs := time.Since(start).Seconds()
+	totalalsecs := endsecs
+	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+
+	sz, err := db.FileSize()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("File size: %s\n", byteSize(sz))
+	printStats(db)
+
+	forceGC()
+
+	start = time.Now()
+
+	for i := 0; i < concurrency; i++ {
+		topic := append(topics[i], []byte("?last=1m")...)
+		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
+		if err != nil {
+			return err
+		}
+	}
+
+	endsecs = time.Since(start).Seconds()
+	totalalsecs += endsecs
+	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+	fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
+	sz, err = db.FileSize()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("File size: %s\n", byteSize(sz))
+	printStats(db)
+
+	return db.Close()
+}
+
+func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)
@@ -268,7 +323,7 @@ func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]
 	return keys
 }
 
-func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int, progress bool) error {
+func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int, progress bool) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)
@@ -300,9 +355,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1m")...)
 						b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
-						// if j%50000 == 0 {
-						// 	b.Write()
-						// }
 					}
 				}
 				return b.Write()

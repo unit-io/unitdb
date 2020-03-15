@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	winBlockSize uint32 = 4096
+	winBlockSize uint32 = 512
 )
 
 type (
@@ -154,6 +154,8 @@ type (
 		sync.RWMutex
 		file
 		*timeWindows
+		readSeq            uint64
+		writeSeq           uint64
 		windowIdx          int32
 		earliestExpiryHash int64
 		opts               *timeOptions
@@ -277,6 +279,7 @@ func (wb *timeWindowBucket) add(topicHash uint64, e timeWindowEntry) error {
 	} else {
 		ws.entries[topicHash] = []timeWindowEntry{e}
 	}
+	wb.incSeq()
 	return nil
 }
 
@@ -301,7 +304,10 @@ func (w *timeWindow) unFreeze() error {
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to window file
 // it takes timewindow snapshot to iterate and deletes blocks from timewindow
-func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
+func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (stop bool, readSeq uint64, err1 error)) (err error) {
+	if wb.seq()-wb.readSeq < seqsPerWindowBlock {
+		return nil
+	}
 	for i := 0; i < nShards; i++ {
 		ws := wb.timeWindows.windows[i]
 		ws.mu.RLock()
@@ -313,7 +319,8 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 			wEntries[h] = entries
 		}
 		ws.mu.RUnlock()
-		if stop, err1 := f(wEntries); stop || err1 != nil {
+		stop, readSeq, err1 := f(wEntries)
+		if stop || err1 != nil {
 			err = err1
 			if freeze {
 				ws.mu.Lock()
@@ -328,6 +335,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 			ws.unFreeze()
 			ws.mu.Unlock()
 		}
+		wb.readSeq = readSeq
 	}
 	return nil
 }
@@ -491,11 +499,20 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 	return wh.offset, wb.Sync()
 }
 
+func (wb *timeWindowBucket) seq() uint64 {
+	return atomic.LoadUint64(&wb.writeSeq)
+}
+
+func (wb *timeWindowBucket) incSeq() uint64 {
+	return atomic.AddUint64(&wb.writeSeq, 1)
+}
+
 func (wb *timeWindowBucket) windowIndex() int32 {
 	return wb.windowIdx
 }
 
-func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
+func (wb *timeWindowBucket) setWindowIndex(seq uint64, windowIdx int32) error {
+	wb.writeSeq = seq
 	wb.windowIdx = windowIdx
 	return nil
 }

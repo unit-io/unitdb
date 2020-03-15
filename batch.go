@@ -270,25 +270,6 @@ func (b *Batch) Write() error {
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
-	buf := b.db.bufPool.Get()
-	buf.Write(b.buffer.Bytes())
-	go func(l int, data []byte) error {
-		defer b.db.bufPool.Put(buf)
-		return b.commit(l, data)
-	}(b.Len(), buf.Bytes())
-	b.Reset()
-	return nil
-}
-
-func (b *Batch) commit(l int, data []byte) error {
-	b.db.writeLockC <- struct{}{}
-	defer func() {
-		<-b.db.writeLockC
-	}()
-	err := b.db.commit(l, data)
-	if err1 := <-err; err1 != nil {
-		logger.Error().Err(err1).Str("context", "commit").Msgf("Error committing batch")
-	}
 	return nil
 }
 
@@ -296,13 +277,14 @@ func (b *Batch) commit(l int, data []byte) error {
 // On Commit complete batch operation signal to the cliend if the batch is fully commmited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
-	defer close(b.commitComplete)
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
-	buf := b.db.bufPool.Get()
-	buf.Write(b.buffer.Bytes())
-	return b.commit(b.Len(), buf.Bytes())
+	defer close(b.commitComplete)
+	if err := b.db.commit(b.Len(), b.buffer); err != nil {
+		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
+	}
+	return nil
 }
 
 //Abort abort is a batch cleanup operation on batch complete
