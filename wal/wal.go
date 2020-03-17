@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 )
 
 const (
@@ -200,7 +200,7 @@ func (wal *WAL) Scan() (logSeqs, upperSeqs []uint64, err error) {
 // Reader reader is a simple iterator over log data
 type Reader struct {
 	entryCount  uint32
-	logData     []byte
+	logData     *bpool.Buffer
 	blockOffset int64
 }
 
@@ -209,6 +209,7 @@ func (wal *WAL) Read(seq uint64) (*Reader, error) {
 	l := wal.Count()
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
+	r := &Reader{logData: wal.bufPool.Get(), blockOffset: 0}
 	for i := int64(0); i < l; i++ {
 		if wal.logs[i].seq == seq && wal.logs[i].entryCount > 0 {
 			ul := wal.logs[i]
@@ -216,11 +217,12 @@ func (wal *WAL) Read(seq uint64) (*Reader, error) {
 			if err != nil {
 				return nil, err
 			}
-
-			return &Reader{entryCount: wal.logs[i].entryCount, logData: data, blockOffset: 0}, nil
+			r.logData.Write(data)
+			r.entryCount = wal.logs[i].entryCount
+			return r, nil
 		}
 	}
-
+	wal.bufPool.Put(r.logData)
 	return nil, errors.New("wal read error: log for seq not found")
 }
 
@@ -230,7 +232,7 @@ func (r *Reader) Next() ([]byte, bool) {
 		return nil, false
 	}
 	r.entryCount--
-	logData := r.logData[r.blockOffset:]
+	logData := r.logData.Bytes()[r.blockOffset:]
 	dataLen := binary.LittleEndian.Uint32(logData[0:4])
 	r.blockOffset += int64(dataLen)
 	return logData[4:dataLen], true
@@ -278,7 +280,7 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	})
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		if wal.logs[i].upperSeq <= upperSeq {
+		if wal.logs[i].status == logStatusWritten && wal.logs[i].upperSeq <= upperSeq {
 			wal.logs[i].status = logStatusApplied
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 			if err := wal.logMerge(i); err != nil {

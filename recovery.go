@@ -43,7 +43,7 @@ func (db *DB) recoverLog() error {
 	var idxBlocks []blockHandle
 	blockIdx := db.blocks()
 
-	bufSize := int64(1 << 30)
+	bufSize := int64(1 << 27)
 	idxBlockOff := int64(0)
 	dataBlockOff := int64(0)
 	rawIndex := db.bufPool.Get()
@@ -175,6 +175,10 @@ func (db *DB) recoverLog() error {
 		}
 
 		if rawData.Size() > bufSize {
+			if err := db.recoverWindowBlocks(); err != nil {
+				return err
+			}
+
 			if err := write(); err != nil {
 				return err
 			}
@@ -205,13 +209,9 @@ func (db *DB) recoverLog() error {
 		return err
 	}
 
-	// for i, upperSeq := range upperSeqs {
-	// 	if db.Seq() > upperSeq {
 	if err := db.wal.SignalLogApplied(logEntry.seq); err != nil {
 		return err
 	}
-	// 	}
-	// }
 
 	return err
 }

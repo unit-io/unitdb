@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/hash"
 )
 

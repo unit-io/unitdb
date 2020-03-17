@@ -70,7 +70,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
 	}
 	if opts.BufferSize == 0 {
-		opts.BufferSize = 1 << 30 // maximum size of a buffer in bufferpool (1GB).
+		opts.BufferSize = 1 << 27 // maximum size of a buffer in bufferpool (128MB).
 	}
 	if opts.MemdbSize == 0 {
 		opts.MemdbSize = 1 << 31 // maximum size of memdb (2GB).

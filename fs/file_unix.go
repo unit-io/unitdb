@@ -34,7 +34,7 @@ func newLockFile(name string) (LockFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := lockfile(f); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
 		return nil, err
 	}

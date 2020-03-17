@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/crypto"
 	fltr "github.com/unit-io/tracedb/filter"
 	"github.com/unit-io/tracedb/fs"

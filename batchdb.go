@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/memdb"
 	"github.com/unit-io/tracedb/uid"
 	"golang.org/x/sync/errgroup"

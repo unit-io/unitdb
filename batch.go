@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/hash"
 	"github.com/unit-io/tracedb/message"
 	"github.com/unit-io/tracedb/uid"

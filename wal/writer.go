@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/unit-io/tracedb/bpool"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/uid"
 )
 
