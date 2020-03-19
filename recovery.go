@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 
+	_ "net/http/pprof"
+
 	"github.com/unit-io/tracedb/message"
+	"github.com/unit-io/tracedb/wal"
 )
 
 func (db *DB) recoverWindowBlocks() error {
@@ -30,15 +33,13 @@ func (db *DB) recoverWindowBlocks() error {
 }
 
 func (db *DB) recoverLog() error {
+	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
+	// defer p.Stop()
 	db.closeW.Add(1)
 	defer func() {
 		db.closeW.Done()
 	}()
 	fmt.Println("db.recoverLog: start recovery")
-	logSeqs, upperSeqs, err := db.wal.Scan()
-	if err != nil {
-		return err
-	}
 
 	var idxBlocks []blockHandle
 	blockIdx := db.blocks()
@@ -54,16 +55,22 @@ func (db *DB) recoverLog() error {
 	}()
 
 	write := func() error {
-		for _, upperSeq := range upperSeqs {
-			nBlocks := int32(upperSeq / entriesPerIndexBlock)
-			for nBlocks > db.blockIndex {
-				if _, err := db.newBlock(); err != nil {
-					return err
-				}
+		nBlocks := int32(float64(db.wal.Seq()) / float64(entriesPerIndexBlock))
+		for nBlocks > db.blocks() {
+			if _, err := db.newBlock(); err != nil {
+				return err
 			}
 		}
 		for _, idxBlock := range idxBlocks {
-			rawIndex.Write(idxBlock.MarshalBinary())
+			switch {
+			case idxBlock.entryIdx == 0:
+			case idxBlock.leased:
+				if err := idxBlock.write(); err != nil {
+					return err
+				}
+			default:
+				rawIndex.Write(idxBlock.MarshalBinary())
+			}
 		}
 		if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
 			return err
@@ -81,22 +88,18 @@ func (db *DB) recoverLog() error {
 		return nil
 	}
 
-	var off int64
-	var bh, leasedBh blockHandle
 	logEntry := entry{}
-	for _, s := range logSeqs {
-		it, err := db.wal.Read(s)
-		if err != nil {
-			return err
-		}
+	err := db.wal.Read(func(r *wal.Reader) (bool, error) {
+		var off int64
+		var bh, leasedBh blockHandle
 		for {
-			logData, ok := it.Next()
+			logData, ok := r.Next()
 			if !ok {
 				break
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
 			if err := logEntry.UnmarshalBinary(entryData); err != nil {
-				return err
+				return true, err
 			}
 			startBlockIdx := startBlockIndex(logEntry.seq)
 			newOff := blockOffset(startBlockIdx)
@@ -107,10 +110,10 @@ func (db *DB) recoverLog() error {
 					off = newOff
 					// write previous block
 					if err := leasedBh.write(); err != nil {
-						return err
+						return true, err
 					}
 					if err := bh.read(); err != nil {
-						return err
+						return true, err
 					}
 				}
 				entryIdx := 0
@@ -124,20 +127,17 @@ func (db *DB) recoverLog() error {
 				if entryIdx == -1 {
 					continue
 				}
+				bh.leased = true
 				leasedBh = blockHandle{file: db.index, offset: bh.offset}
-			} else {
-				if idxBlockOff == 0 {
-					idxBlockOff = newOff
-				}
-				idxBlocks = append(idxBlocks, bh)
 			}
 			db.incount()
 			msgOffset := logEntry.mSize()
 			m := data[:msgOffset]
-			if logEntry.msgOffset, err = db.data.write(m); err != nil {
+			if msgOffset, err := db.data.write(m); err != nil {
 				if err != errLeasedBlock {
-					return err
+					return true, err
 				}
+				logEntry.msgOffset = msgOffset
 			} else {
 				if dataBlockOff == 0 {
 					dataBlockOff = logEntry.msgOffset
@@ -147,12 +147,17 @@ func (db *DB) recoverLog() error {
 			bh.entries[bh.entryIdx] = logEntry
 			bh.entryIdx++
 
+			if bh.entryIdx == entriesPerIndexBlock {
+				if idxBlockOff == 0 {
+					idxBlockOff = newOff
+				}
+				idxBlocks = append(idxBlocks, bh)
+			}
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
 			topic := new(message.Topic)
-			err = topic.Unmarshal(t)
-			if err != nil {
-				return err
+			if err := topic.Unmarshal(t); err != nil {
+				return true, err
 			}
 			contract := message.Contract(topic.Parts)
 			topicHash := topic.GetHash(contract)
@@ -164,7 +169,7 @@ func (db *DB) recoverLog() error {
 			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
 				if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); ok {
 					if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
-						return errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
+						return true, errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
 					}
 				}
 			}
@@ -174,29 +179,28 @@ func (db *DB) recoverLog() error {
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
+		idxBlocks = append(idxBlocks, bh)
+
 		if rawData.Size() > bufSize {
 			if err := db.recoverWindowBlocks(); err != nil {
-				return err
+				return false, err
 			}
 
 			if err := write(); err != nil {
-				return err
+				return false, err
 			}
 
 			if err := db.sync(); err != nil {
-				return err
-			}
-
-			if err := db.wal.SignalLogApplied(logEntry.seq); err != nil {
-				return err
+				return false, err
 			}
 		}
-	}
 
-	// write any pending entries
-	if err := leasedBh.write(); err != nil {
+		return false, nil
+	})
+	if err != nil {
 		return err
 	}
+
 	if err := db.recoverWindowBlocks(); err != nil {
 		return err
 	}

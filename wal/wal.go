@@ -40,7 +40,7 @@ type (
 		wg sync.WaitGroup
 		mu sync.RWMutex
 
-		// nextSeq is recoved sequence
+		// DB seq successfully written to the logfile in wal
 		seq uint64
 
 		// count is total logs in wal
@@ -60,6 +60,7 @@ type (
 	Options struct {
 		Path       string
 		TargetSize int64
+		BufferSize int64
 	}
 )
 
@@ -133,12 +134,10 @@ func (wal *WAL) recoverLogHeaders() error {
 		if err := wal.logFile.readUnmarshalableAt(l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
+				wal.seq = l.seq
 				return nil
 			}
 			return err
-		}
-		if l.seq == 0 || l.seq > wal.seq {
-			break
 		}
 		if l.status == logStatusWritten {
 			wal.incount()
@@ -149,6 +148,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			offset += wal.logFile.fb.currSize
 		}
 	}
+	wal.seq = l.seq
 	return nil
 }
 
@@ -172,7 +172,6 @@ func (wal *WAL) put(log logInfo) error {
 			wal.logs[i].status = log.status
 			wal.logs[i].entryCount = log.entryCount
 			wal.logs[i].seq = log.seq
-			wal.logs[i].upperSeq = log.upperSeq
 			wal.logs[i].size = log.size
 			return nil
 		}
@@ -182,48 +181,83 @@ func (wal *WAL) put(log logInfo) error {
 	return nil
 }
 
-// Scan provides list of sequences written to the log but not yet fully applied
-func (wal *WAL) Scan() (logSeqs, upperSeqs []uint64, err error) {
-	l := wal.Count()
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-	for i := int64(0); i < l; i++ {
-		if wal.logs[i].status == logStatusWritten {
-			logSeqs = append(logSeqs, wal.logs[i].seq)
-			upperSeqs = append(upperSeqs, wal.logs[i].upperSeq)
-		}
+func (wal *WAL) defrag() []logInfo {
+	l := len(wal.logs)
+	var merged []logInfo
+	currOff := wal.logs[0].offset
+	currSize := wal.logs[0].size
+
+	merge := func(i int) {
+		merged = append(merged, logInfo{
+			size:   currSize,
+			offset: currOff,
+		})
+		currOff = wal.logs[i].offset
+		currSize = wal.logs[i].size
 	}
 
-	return logSeqs, upperSeqs, nil
+	for i := 1; i < l; i++ {
+		if wal.logs[i].status == logStatusApplied {
+			wal.logs = append(wal.logs[:i], wal.logs[i+1:]...)
+		}
+		// fmt.Println("wal.logMerge: before merge freeblocks ", wal.logFile.fb)
+		if currOff+align(currSize+int64(logHeaderSize)) == wal.logs[i].offset {
+			currSize += align(wal.logs[i].size + int64(logHeaderSize))
+			if currSize > wal.opts.BufferSize {
+				merge(i)
+			}
+		} else {
+			merge(i)
+		}
+	}
+	merge(0)
+	return merged
 }
 
 // Reader reader is a simple iterator over log data
 type Reader struct {
 	entryCount  uint32
-	logData     *bpool.Buffer
+	logData     []byte
 	blockOffset int64
 }
 
-// Read reads log for the given seq and returns Reader iterator
-func (wal *WAL) Read(seq uint64) (*Reader, error) {
-	l := wal.Count()
+// Read reads log written to the WAL but fully applied. It returns Reader iterator
+func (wal *WAL) Read(f func(*Reader) (bool, error)) (err error) {
+	// func (wal *WAL) Read() (*Reader, error) {
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
-	r := &Reader{logData: wal.bufPool.Get(), blockOffset: 0}
-	for i := int64(0); i < l; i++ {
-		if wal.logs[i].seq == seq && wal.logs[i].entryCount > 0 {
+	mergedLogs := wal.defrag()
+	idx := 0
+	l := len(wal.logs)
+	buffer := wal.bufPool.Get()
+	defer wal.bufPool.Put(buffer)
+	for _, log := range mergedLogs {
+		buffer.Reset()
+		offset := int64(logHeaderSize)
+		if _, err := buffer.Extend(log.size); err != nil {
+			return err
+		}
+		if _, err := wal.logFile.readAt(buffer.Internal(), log.offset); err != nil {
+			return err
+		}
+		for i := idx; i < l; i++ {
 			ul := wal.logs[i]
-			data, err := wal.logFile.readRaw(ul.offset+int64(logHeaderSize), int64(ul.size))
+			data, err := buffer.Slice(offset, offset+ul.size)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			r.logData.Write(data)
-			r.entryCount = wal.logs[i].entryCount
-			return r, nil
+			r := &Reader{entryCount: ul.entryCount, logData: data, blockOffset: 0}
+			offset += align(ul.size + int64(logHeaderSize))
+			if stop, err := f(r); stop || err != nil {
+				return err
+			}
+			if log.size <= offset {
+				idx = i
+				break
+			}
 		}
 	}
-	wal.bufPool.Put(r.logData)
-	return nil, errors.New("wal read error: log for seq not found")
+	return nil
 }
 
 // Next returns next record from the log data iterator or false if iteration is done
@@ -232,7 +266,7 @@ func (r *Reader) Next() ([]byte, bool) {
 		return nil, false
 	}
 	r.entryCount--
-	logData := r.logData.Bytes()[r.blockOffset:]
+	logData := r.logData[r.blockOffset:]
 	dataLen := binary.LittleEndian.Uint32(logData[0:4])
 	r.blockOffset += int64(dataLen)
 	return logData[4:dataLen], true
@@ -244,7 +278,6 @@ func (wal *WAL) logMerge(idx int) error {
 		if wal.logs[i].status != logStatusApplied {
 			continue
 		}
-		// fmt.Println("wal.logMerge: before merge freeblocks ", wal.logFile.fb)
 		if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == wal.logs[i].offset {
 			wal.logFile.fb.currSize += align(wal.logs[i].size + int64(logHeaderSize))
 		} else {
@@ -256,7 +289,6 @@ func (wal *WAL) logMerge(idx int) error {
 				wal.logFile.fb.currOffset = wal.logFile.fb.offset
 				wal.logFile.fb.currSize += align(wal.logFile.fb.size)
 				wal.logFile.fb.size = 0
-				// fmt.Println("wal.SignalLogApplied: off, size ", wal.logFile.fb.currOffset, wal.logFile.fb.currSize)
 			}
 		}
 	}
@@ -280,7 +312,7 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	})
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusWritten && wal.logs[i].upperSeq <= upperSeq {
+		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= upperSeq {
 			wal.logs[i].status = logStatusApplied
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 			if err := wal.logMerge(i); err != nil {
@@ -292,19 +324,19 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	return nil
 }
 
+// Seq returns upper DB sequence successfully written to the logfile in wal
+func (wal *WAL) Seq() uint64 {
+	return atomic.LoadUint64(&wal.seq)
+}
+
 // Count count returns total number logs in wal
 func (wal *WAL) Count() int64 {
 	return atomic.LoadInt64(&wal.count)
 }
 
-// incount increament log counter
+// incount increment log counter
 func (wal *WAL) incount() int64 {
 	return atomic.AddInt64(&wal.count, 1)
-}
-
-// NextSeq next sequence to use in log write function
-func (wal *WAL) NextSeq() uint64 {
-	return atomic.AddUint64(&wal.seq, 1)
 }
 
 //Sync syncs log entries to disk

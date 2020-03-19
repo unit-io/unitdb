@@ -33,6 +33,9 @@ func (it *TopicIterator) Next() {
 				if err := b.read(); err != nil {
 					return err
 				}
+				if b.entryIdx == 0 {
+					return nil
+				}
 				for i := 0; i < entriesPerIndexBlock; i++ {
 					e := b.entries[i]
 					if e.msgOffset == 0 {

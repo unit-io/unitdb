@@ -66,6 +66,8 @@ type blockHandle struct {
 	block
 	file   fs.FileManager
 	offset int64
+
+	leased bool
 }
 
 const (

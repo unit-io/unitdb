@@ -19,15 +19,9 @@ func TestEmptyLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer wal.Close()
-	seqs, upperSeqs, err := wal.Scan()
-	if err != nil {
+	seq := wal.Seq()
+	if seq != 0 {
 		t.Fatal(err)
-	}
-	if len(seqs) != 0 {
-		t.Fatalf("Write ahead log non-empty, seqs %d", seqs)
-	}
-	if len(upperSeqs) != 0 {
-		t.Fatalf("Write ahead log non-empty, seqs %d", seqs)
 	}
 }
 
@@ -58,7 +52,7 @@ func TestRecovery(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(wal.NextSeq(), 255); err != nil {
+	if err := <-logWriter.SignalInitWrite(255); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,7 +88,7 @@ func TestLogApplied(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(wal.NextSeq(), 255); err != nil {
+	if err := <-logWriter.SignalInitWrite(255); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,32 +100,18 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seqs, upperSeqs, err := wal.Scan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(seqs) == 0 {
-		t.Fatalf("Write ahead log is empty, seqs %d", seqs)
-	}
-	if len(upperSeqs) == 0 {
-		t.Fatalf("Write ahead log is empty, seqs %d", seqs)
-	}
-
-	for _, s := range seqs {
-		it, err := wal.Read(s)
-		if err != nil {
+	err = wal.Read(func(r *Reader) (bool, error) {
+		for {
+			_, ok := r.Next()
+			if !ok {
+				break
+			}
+		}
+		if err := wal.SignalLogApplied(255); err != nil {
 			t.Fatal(err)
 		}
-
-		_, ok := it.Next()
-		if !ok {
-			break
-		}
-
-		if err := wal.SignalLogApplied(s); err != nil {
-			t.Fatal(err)
-		}
-	}
+		return false, nil
+	})
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +145,7 @@ func TestSimple(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(wal.NextSeq(), 255); err != nil {
+	if err := <-logWriter.SignalInitWrite(255); err != nil {
 		t.Fatal(err)
 	}
 }

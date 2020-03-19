@@ -71,13 +71,7 @@ func (db *DB) Sync() error {
 		// db.meter.TimeSeries.AddTime(time.Since(start))
 	}()
 
-	// var bufPool *bpool.BufferPool
 	bufSize := int64(1 << 27)
-	// db.once.Do(func() {
-	// 	bufPool = bpool.NewBufferPool(bufSize)
-	// })
-
-	// defer db.once.Reset()
 
 	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, uint64, error) {
 		// var m runtime.MemStats
@@ -106,7 +100,15 @@ func (db *DB) Sync() error {
 				return err
 			}
 			for _, idxBlock := range idxBlocks {
-				rawIndex.Write(idxBlock.MarshalBinary())
+				switch {
+				case idxBlock.entryIdx == 0:
+				case idxBlock.leased:
+					if err := idxBlock.write(); err != nil {
+						return err
+					}
+				default:
+					rawIndex.Write(idxBlock.MarshalBinary())
+				}
 			}
 			if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
 				return err
@@ -180,12 +182,8 @@ func (db *DB) Sync() error {
 					if entryIdx == -1 {
 						continue
 					}
+					bh.leased = true
 					leasedBh = blockHandle{file: db.index, offset: bh.offset}
-				} else {
-					if idxBlockOff == 0 {
-						idxBlockOff = newOff
-					}
-					idxBlocks = append(idxBlocks, bh)
 				}
 				db.incount()
 				if memEntry.msgOffset, err = db.data.write(memdata[entrySize:]); err != nil {
@@ -201,7 +199,12 @@ func (db *DB) Sync() error {
 
 				bh.entries[bh.entryIdx] = memEntry
 				bh.entryIdx++
-
+				if bh.entryIdx == entriesPerIndexBlock {
+					if idxBlockOff == 0 {
+						idxBlockOff = newOff
+					}
+					idxBlocks = append(idxBlocks, bh)
+				}
 				db.filter.Append(wEntry.seq)
 				db.meter.InMsgs.Inc(1)
 				db.meter.InBytes.Inc(int64(memEntry.valueSize))
@@ -209,10 +212,7 @@ func (db *DB) Sync() error {
 
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 
-			// write any pending entries
-			if err := leasedBh.write(); err != nil {
-				return true, wEntry.seq, err
-			}
+			idxBlocks = append(idxBlocks, bh)
 
 			if rawData.Size() > bufSize {
 				if err := write(); err != nil {

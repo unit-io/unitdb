@@ -219,7 +219,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 
-	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize}
+	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
@@ -682,7 +682,7 @@ func (db *DB) newBlock() (int64, error) {
 // extendBlocks adds new blocks to DB
 func (db *DB) extendBlocks() error {
 	nBlocks := int32(float64(db.Seq()) / float64(entriesPerIndexBlock))
-	for nBlocks > db.blockIndex {
+	for nBlocks > db.blocks() {
 		if _, err := db.newBlock(); err != nil {
 			return err
 		}
@@ -875,7 +875,7 @@ func (db *DB) tinyCommit() error {
 	}
 
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
-	if err := <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq()); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.Seq()); err != nil {
 		return err
 	}
 	db.tinyBatch.reset()
@@ -906,7 +906,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	}
 
 	db.meter.Puts.Inc(int64(l))
-	return <-logWriter.SignalInitWrite(db.wal.NextSeq(), db.Seq())
+	return <-logWriter.SignalInitWrite(db.Seq())
 }
 
 // Delete sets entry for deletion.
