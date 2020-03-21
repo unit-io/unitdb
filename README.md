@@ -4,11 +4,11 @@
   <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
-# tracedb: blazing fast timeseries database for IoT and real-time messaging application
+# tracedb: blazing fast timeseries database for IoT and real-time messaging applications
 
-tracedb is blazing fast timeseries database for IoT, realtime messaging  application. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
+tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 
-Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is perfect timeseries data store for applications such as internet of things and internet connected devices.
+Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is a perfect timeseries database for applications such as internet of things and internet connected devices.
 
 [unitdb](https://github.com/unit-io/unitdb) repo is forked from tracedb for more advanced use case for timeseries database. Keep watch on [unitdb](https://github.com/unit-io/unitdb)
 
@@ -20,7 +20,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 # Planned
-- Documentation - document the technical atchitecture, technical design and advanced usage guides.
+- Documentation - document the technical architecture, technical design and advanced usage guides.
 
 ## Table of Contents
  * [Quick Start](#Quick-Start)
@@ -28,7 +28,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
  * [Opening a database](#Opening-a-database)
  + [Writing to a database](#Writing-to-a-database)
    - [Store a message](#Store-a-message)
-   - [Writing to wildcard topics](#Writing-to-wildcard-topics)
    - [Specify ttl](#Specify-ttl)
    - [Read messages](#Read-messages)
    - [Deleting a message](#Deleting-a-message)
@@ -39,6 +38,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
    - [Non-blocking batch operation](#Non-blocking-batch-operation)
  * [Iterating over items](#Iterating-over-items)
  + [Advanced](#Advanced)
+   - [Writing to wildcard topics](#Writing-to-wildcard-topics)
    - [Topic isolation in batch operation](#Topic-isolation-in-batch-operation)
    - [Message encryption](#Message-encryption)
    - [Batch group](#Batch-group)
@@ -56,22 +56,24 @@ To build tracedb from source code use go get command.
 To open or create a new database, use the tracedb.Open() function:
 
 ```
-package main
 
-import (
-	"log"
+	package main
 
-	"github.com/unit-io/tracedb"
-)
+	import (
+		"log"
 
-func main() {
-    db, err := tracedb.Open("tracedb.example", nil)
-    if err != nil {
-        log.Fatal(err)
-        return
-    }	
-    defer db.Close()
-}
+		"github.com/unit-io/tracedb"
+	)
+
+	func main() {
+		db, err := tracedb.Open("tracedb.example", nil)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}	
+		defer db.Close()
+	}
+
 ```
 
 ### Writing to a database
@@ -81,21 +83,13 @@ Use DB.Put() to store message to a topic or use DB.PutEntry() to store message e
 
 ```
 
-	err := db.Put([]byte("unit8.b.b1"), []byte("msg.b.b1.1"))
+	topic := []byte("unit8.b.b1")
+	msg := []byte("msg.b.b1.1")
+	db.Put(topic, msg)
 
-	err := db.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"),[]byte("msg.b.b1.2")))
-
-```
-
-#### Writing to wildcard topics
-tracedb supports wrting to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
-
-```
-	b.PutEntry(tracedb.NewEntry([]byte("unit8.*.b11"), []byte("msg.*.b11.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...1")))
-	b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
+	or
+	
+	db.PutEntry(tracedb.NewEntry(topic, msg))
 
 ```
 
@@ -104,23 +98,27 @@ Specify ttl parameter to a topic while storing messages to expire it after speci
 Note, DB.Get() or DB.Items() function does not fetch expired messages. 
 
 ```
-	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1?ttl=1h"), []byte("msg.b.b1.1")))
+	topic := []byte("unit8.b.b1?ttl=1h")
+	msg := []byte("msg.b.b1.1")
+	b.PutEntry(tracedb.NewEntry(topic, msg))
 
 ```
 
 #### Read messages
-Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messsages from tracedb stored in last 1 hour, or "last=100" to gets last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrives messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to gets last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieves messages from a topic with a limit.
 
 ```
 
-	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=100")})
+	var err error
+	var msg [][]byte
+	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=100")})
     ....
-	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h", Limit: 100}))
+	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h", Limit: 100}))
 
 ```
 
 #### Deleting a message
-Deleting a message in tracedb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() fucntion.
+Deleting a message in tracedb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function.
 
 ```
 
@@ -157,7 +155,7 @@ Topic isolation can be achieved using Contract while putting messages into trace
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into tracedb or bulk delete records from tracedb. Batch operation also speeds up reading data if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of runnig batches concurrently.
+Use batch operation to bulk insert records into tracedb or bulk delete records from tracedb. Batch operation also speeds up reading data if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of running batches concurrently.
 
 #### Writing to a batch
 Use Batch.Put() to write to a single topic in a batch. To write to single topic in a batch specify topic in batch options.
@@ -182,8 +180,8 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 
     // Writing to multiple topics in a batch
     err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b11.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("msg.b.b11.2")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.1")))
+		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("msg.b.b11.1")))
 		err := b.Write()
 		return err
     })
@@ -208,15 +206,16 @@ All batch operations are non-blocking so client program can decide to wait for c
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrives values and use last parameter to specify duration or specify number of recent messages to retreive from the topic. for example, "last=1h" retrieves messsages from tracedb stored in last 1 hour, or "last=100" to retreives last 100 messages from the tracedb:
+Specify topic to retrieves values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the tracedb:
 
 ```
-func print(topic []byte, db *tracedb.DB) {
-	// topic -> "unit8.b.b1?last=1h"
-	it, err := db.Items(&tracedb.Query{Topic: topic})
-	if err != nil {
-		log.Fatal(err)
-		return
+
+	func print(topic []byte, db *tracedb.DB) {
+		// topic -> "unit8.b.b1?last=1h"
+		it, err := db.Items(&tracedb.Query{Topic: topic})
+		if err != nil {
+			log.Fatal(err)
+			return
 	}
 	for it.First(); it.Valid(); it.Next() {
 		err := it.Error()
@@ -227,9 +226,22 @@ func print(topic []byte, db *tracedb.DB) {
 		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
 }
+
 ```
 
 ### Advanced
+
+#### Writing to wildcard topics
+tracedb supports writing to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
+
+```
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.*.b1"), []byte("msg.*.b1.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...1")))
+	b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
+	b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
+
+```
 
 #### Topic isolation in batch operation
 Topic isolation can be achieved using Contract while putting messages into tracedb and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using Batch.PutEntry() function.
@@ -264,7 +276,7 @@ Topic isolation can be achieved using Contract while putting messages into trace
 ```
 
 #### Message encryption
-Set encyrption flag in batch options to encrypt all messages in a batch. 
+Set encryption flag in batch options to encrypt all messages in a batch. 
 
 Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter. 
 

@@ -25,7 +25,7 @@ func (b *Generator) Finish() []byte {
 	return b.filter.Bytes()
 }
 
-// Block filter blocks is a blook filter block
+// Block filter blocks is a block filter block
 type Block struct {
 	filter *Filter
 }

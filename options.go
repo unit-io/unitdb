@@ -23,7 +23,7 @@ type Options struct {
 	// Encryption Key
 	EncryptionKey []byte
 
-	// Cache cacpity is number of seq to cache per topic in a seq set of a topic
+	// Cache capacity is number of seq to cache per topic in a seq set of a topic
 	CacheCap int64
 
 	//Tiny Batch Size to group tiny batches and write into db on tiny batch interval

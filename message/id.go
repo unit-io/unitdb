@@ -61,13 +61,13 @@ func NewID(seq uint64, encrypted bool) ID {
 	return id
 }
 
-// SetEncryption sets an encyption on ID
+// SetEncryption sets an encryption on ID
 func (id ID) SetEncryption() {
 	eBit := 1
 	id[16] = byte(eBit)
 }
 
-// IsEncrypted return if an encyption is set on ID
+// IsEncrypted return if an encryption is set on ID
 func (id ID) IsEncrypted() bool {
 	num := binary.LittleEndian.Uint64(id[8:16])
 	return num&0xff != 0

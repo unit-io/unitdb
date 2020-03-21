@@ -38,7 +38,7 @@ func (e winEntry) Seq() uint64 {
 	return e.seq
 }
 
-// MarshalBinary serliazed window block into binary data
+// MarshalBinary serialized window block into binary data
 func (b winBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
@@ -54,7 +54,7 @@ func (b winBlock) MarshalBinary() []byte {
 	return data
 }
 
-// UnmarshalBinary dserliazed window block from binary data
+// UnmarshalBinary de-serialized window block from binary data
 func (b *winBlock) UnmarshalBinary(data []byte) error {
 	for i := 0; i < seqsPerWindowBlock; i++ {
 		_ = data[8] // bounds check hint to compiler; see golang.org/issue/14808
@@ -190,13 +190,21 @@ func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 }
 
 // newBlock adds new window block to timeWindowBucket and returns block offset
-func (wb *timeWindowBucket) newBlock() (int64, error) {
-	off, err := wb.extend(blockSize)
-	if err != nil {
-		return off, err
+func (wb *timeWindowBucket) newBlock() int64 {
+	// off, err := wb.extend(blockSize)
+	// if err != nil {
+	// 	return off, err
+	// }
+	wb.windowIdx++
+	return int64(blockSize * uint32(wb.windowIdx))
+}
+
+// extendBlocks adds new window blocks to timeWindowBucket
+func (wb *timeWindowBucket) extendBlocks(n uint32) error {
+	if _, err := wb.extend(blockSize * n); err != nil {
+		return err
 	}
-	wb.nextWindowIndex()
-	return off, err
+	return nil
 }
 
 func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
@@ -343,8 +351,8 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
 func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
-	nwinBlocks := wb.windowIndex()
-	for winBlockIdx < nwinBlocks {
+	nWinBlocks := wb.windowIndex()
+	for winBlockIdx < nWinBlocks {
 		off := winBlockOffset(winBlockIdx)
 		b := windowHandle{file: wb.file, offset: off}
 		if err := b.read(); err != nil {
@@ -375,7 +383,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 		if uint32(len(wEntries)) < limit {
 			l = uint32(len(wEntries))
 		}
-		for _, we := range wEntries[uint32(len(wEntries))-l:] { // most recent enrties are appended to the end so get the entries from end
+		for _, we := range wEntries[uint32(len(wEntries))-l:] { // most recent entries are appended to the end so get the entries from end
 			winEntries = append(winEntries, we.(winEntry))
 		}
 	}
@@ -436,16 +444,15 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 // sync syncs window entries to window file
 func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
 	// startIdx := 0
+	bufSize := int64(1 << 27)
 	blockOff := int64(0)
-	bufPool := bpool.NewBufferPool(1 << 33)
+	bufPool := bpool.NewBufferPool(bufSize, nil)
 	buf := bufPool.Get()
 	defer bufPool.Put(buf)
 	var blocks []windowHandle
 	wh := windowHandle{file: wb.file, offset: off}
 	if off == 0 {
-		if blockOff, err = wb.newBlock(); err != nil {
-			return off, err
-		}
+		blockOff = wb.newBlock()
 		wh.offset = blockOff
 		wh.topicHash = topicHash
 	} else {
@@ -469,10 +476,7 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 			return 0, nil
 		}
 		if wh.entryIdx == seqsPerWindowBlock {
-			off, err = wb.newBlock()
-			if err != nil {
-				return 0, err
-			}
+			off = wb.newBlock()
 			if blockOff == 0 {
 				blockOff = off
 				if err := wh.write(); err != nil {
@@ -490,8 +494,12 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 		wh.winEntries[wh.entryIdx] = winEntry{seq: we.Seq()}
 		wh.entryIdx++
 	}
+
 	for _, block := range blocks {
 		buf.Write(block.MarshalBinary())
+	}
+	if err := wb.extendBlocks(uint32(len(blocks))); err != nil {
+		return 0, err
 	}
 	if _, err := wb.file.WriteAt(buf.Bytes(), blockOff); err != nil {
 		return 0, err

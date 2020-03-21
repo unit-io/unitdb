@@ -16,14 +16,14 @@ func (db *DB) recoverWindowBlocks() error {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, readSeq, errors.New("recovery.recoverWindowBlocks error: unbale to get topic offset from trie")
+				return true, readSeq, errors.New("recovery.recoverWindowBlocks error: unable to get topic offset from trie")
 			}
 			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
 				return true, readSeq, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, readSeq, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
+				return true, readSeq, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
 			readSeq = wEntries[len(wEntries)-1].Seq()
 		}

@@ -17,11 +17,11 @@ const (
 
 	drainInterval         = 1 * time.Second
 	memShrinkFactor       = 0.7
-	dataTableShrinkFactor = 0.33 // shirnker try to free 20% of total memdb size
+	dataTableShrinkFactor = 0.33 // shrinker try to free 20% of total memdb size
 )
 
 // A "thread" safe map of type seq:offset.
-// To avoid lock bottlenecks this map is dived to several (SHARD_COUNT) map shards.
+// To avoid lock bottlenecks this map is divided into several (nShards) map shards.
 type blockCache []*concurrentCache
 
 type concurrentCache struct {

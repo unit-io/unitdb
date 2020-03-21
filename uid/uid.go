@@ -24,7 +24,7 @@ var (
 // LID represents a process-wide unique ID.
 type LID uint64
 
-// NewApoch creats an appoch to generate uniue id
+// NewApoch creates an appoch to generate unique id
 func NewApoch() uint32 {
 	now := uint32(time.Now().Unix() - Offset)
 	return math.MaxUint32 - now

@@ -12,7 +12,7 @@ import (
 
 var zeroTime = time.Unix(0, 0)
 
-// Varous constant on Topic
+// Various constant on Topic
 const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
@@ -85,7 +85,7 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 	return uint64(h)<<32 + contract
 }
 
-// Marshal seriliazes topic to binay
+// Marshal serializes topic to binary
 func (t *Topic) Marshal() []byte {
 	// preallocate buffer of appropriate size
 	var size int
@@ -108,7 +108,7 @@ func (t *Topic) Marshal() []byte {
 	return buf
 }
 
-// Unmarshal deseriliazes topic from binary data
+// Unmarshal de-serializes topic from binary data
 func (t *Topic) Unmarshal(data []byte) error {
 	buf := bytes.NewBuffer(data)
 

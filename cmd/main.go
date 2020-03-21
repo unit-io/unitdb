@@ -90,12 +90,6 @@ func main() {
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
 				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1h"), Payload: p})
-
-				// db.DeleteEntry(&tracedb.Entry{
-				// 	ID:       messageId,
-				// 	Topic:    []byte("unit8.b.*"),
-				// 	Contract: contract,
-				// })
 			}
 			if err != nil {
 				log.Printf("Error update1: %s", err)
@@ -128,11 +122,6 @@ func main() {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put(p)
-					// if j%100 == 0 {
-					// 	if err := b.Write(); err != nil {
-					// 		return err
-					// 	}
-					// }
 				}
 				if err := b.Write(); err != nil {
 					return err

@@ -64,7 +64,7 @@ func (db *DB) initbatchdb(opts *Options) error {
 	bdb := &batchdb{
 		// batchDB
 		opts:        opts,
-		bufPool:     bpool.NewBufferPool(opts.BufferSize),
+		bufPool:     bpool.NewBufferPool(opts.BufferSize, nil),
 		tinyBatch:   &tinyBatch{Id: uid.NewLID()},
 		batchQueue:  make(chan *Batch, 100),
 		commitQueue: make(chan *Batch, 1),
@@ -119,7 +119,7 @@ func (db *DB) NewBatchGroup() *BatchGroup {
 }
 
 // Add adds a function to the Group.
-// The function will be exectuted in its own goroutine when Run is called.
+// The function will be executed in its own goroutine when Run is called.
 // Add must be called before Run.
 func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
 	g.fn = append(g.fn, fn)

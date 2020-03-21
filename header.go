@@ -35,7 +35,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalBinary deserializes header from binary data
+// UnmarshalBinary de-serializes header from binary data
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:7])
 	h.encryption = data[7]

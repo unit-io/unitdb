@@ -18,7 +18,7 @@ func (f *Filter) Append(h uint64) {
 	f.filterBlock.Append(h)
 }
 
-// Test tests entry in bloom filter. It returns false if entry definately does not exist or entry maybe existing in DB
+// Test tests entry in bloom filter. It returns false if entry definitely does not exist or entry maybe existing in DB
 func (f *Filter) Test(h uint64) bool {
 	/// Test filter block for presence
 	fltr, _ := f.getFilterBlock(true)

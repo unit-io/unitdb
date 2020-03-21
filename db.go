@@ -97,7 +97,7 @@ type (
 		trie *trie
 		// The db start time
 		start time.Time
-		// The metircs to measure timeseries on message events
+		// The metrics to measure timeseries on message events
 		meter *Meter
 		// Close.
 		closeW sync.WaitGroup
@@ -394,7 +394,7 @@ func (db *DB) Close() error {
 	db.commitLockC <- struct{}{}
 	db.syncLockC <- struct{}{}
 
-	// Wait for all gorotines to exit.
+	// Wait for all goroutines to exit.
 	db.closeW.Wait()
 
 	if err := db.writeHeader(true); err != nil {
@@ -512,7 +512,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	defer mu.RUnlock()
 	// lookups are performed in following order
 	// ilookup lookups in memory entries from timeWindow those are not yet sync
-	// trie lookup lookups in memory entries from trie as trie cachse recent entries at the time of timeWindow sync
+	// trie lookup lookups in memory entries from trie as trie cache recent entries at the time of timeWindow sync
 	// lookup lookups persisted entries if fanout is true
 	// lookup gets most recent entries without need for sorting. This is an art and not technological solution:)
 	pEntries, topicHss, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
@@ -682,11 +682,14 @@ func (db *DB) newBlock() (int64, error) {
 // extendBlocks adds new blocks to DB
 func (db *DB) extendBlocks() error {
 	nBlocks := int32(float64(db.Seq()) / float64(entriesPerIndexBlock))
-	for nBlocks > db.blocks() {
-		if _, err := db.newBlock(); err != nil {
-			return err
-		}
+	if nBlocks <= db.blocks() {
+		return nil
 	}
+	nBlocksNew := nBlocks - db.blocks()
+	if _, err := db.index.extend(uint32(nBlocksNew) * blockSize); err != nil {
+		return err
+	}
+	atomic.AddInt32(&db.blockIndex, nBlocksNew)
 	return nil
 }
 
@@ -916,7 +919,7 @@ func (db *DB) Delete(id, topic []byte) error {
 	return db.DeleteEntry(&Entry{ID: id, Topic: topic})
 }
 
-// DeleteEntry delets an entry from DB. you must provide an ID to delete an entry.
+// DeleteEntry deletes an entry from DB. you must provide an ID to delete an entry.
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {

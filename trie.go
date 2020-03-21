@@ -218,7 +218,7 @@ func (t *trie) remove(topicHash uint64, we winEntry) (removed bool) {
 	if !ok {
 		return false
 	}
-	// Remove a widnow entry and decrement the counter
+	// Remove a windnow entry and decrement the counter
 	if ok := curr.ww.remove(we); ok {
 		removed = true
 		// adjust cap of the seq set

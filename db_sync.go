@@ -130,14 +130,14 @@ func (db *DB) Sync() error {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, wEntry.seq, errors.New("db.Sync: timeWindow sync error: unbale to get topic offset from trie")
+				return true, wEntry.seq, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
 			}
 			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
 				return true, wEntry.seq, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, wEntry.seq, errors.New("db:Sync: timeWindow sync error: unbale to set topic offset in trie")
+				return true, wEntry.seq, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
 			var off int64
 			var bh, leasedBh blockHandle

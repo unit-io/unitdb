@@ -108,7 +108,7 @@ func (it *ItemIterator) Next() {
 	}
 }
 
-// First is similar to init. It query and loads window entries from trie/timeWindoBucket or summary file if available.
+// First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
 	pEntries, topicHss, topicOffsets := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
 	for i, topicHash := range topicHss {

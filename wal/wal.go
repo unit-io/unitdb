@@ -43,15 +43,12 @@ type (
 		// DB seq successfully written to the logfile in wal
 		seq uint64
 
-		// count is total logs in wal
-		count int64
-
-		opts Options
 		logs []logInfo
 
 		bufPool *bpool.BufferPool
 		logFile file
 
+		opts   Options
 		closed uint32
 	}
 
@@ -68,7 +65,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	// Create a new WAL.
 	wal = &WAL{
 		opts:    opts,
-		bufPool: bpool.NewBufferPool(opts.TargetSize),
+		bufPool: bpool.NewBufferPool(opts.TargetSize, nil),
 	}
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
@@ -134,13 +131,15 @@ func (wal *WAL) recoverLogHeaders() error {
 		if err := wal.logFile.readUnmarshalableAt(l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
-				wal.seq = l.seq
 				return nil
 			}
 			return err
 		}
+		if l.version == 0 || l.status > logStatusApplied {
+			// fmt.Println("wal.recoverLogHeader: logInfo ", l)
+			return nil
+		}
 		if l.status == logStatusWritten {
-			wal.incount()
 			wal.logs = append(wal.logs, *l)
 		}
 		offset = l.offset + align(l.size+int64(logHeaderSize))
@@ -148,8 +147,6 @@ func (wal *WAL) recoverLogHeaders() error {
 			offset += wal.logFile.fb.currSize
 		}
 	}
-	wal.seq = l.seq
-	return nil
 }
 
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks
@@ -164,10 +161,13 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
-	l := wal.Count()
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
-	for i := int64(0); i < l; i++ {
+	l := len(wal.logs)
+	if wal.seq < log.seq {
+		wal.seq = log.seq
+	}
+	for i := 0; i < l; i++ {
 		if wal.logs[i].offset == log.offset {
 			wal.logs[i].status = log.status
 			wal.logs[i].entryCount = log.entryCount
@@ -176,7 +176,7 @@ func (wal *WAL) put(log logInfo) error {
 			return nil
 		}
 	}
-	wal.incount()
+	log.version = version
 	wal.logs = append(wal.logs, log)
 	return nil
 }
@@ -198,9 +198,8 @@ func (wal *WAL) defrag() []logInfo {
 
 	for i := 1; i < l; i++ {
 		if wal.logs[i].status == logStatusApplied {
-			wal.logs = append(wal.logs[:i], wal.logs[i+1:]...)
+			continue
 		}
-		// fmt.Println("wal.logMerge: before merge freeblocks ", wal.logFile.fb)
 		if currOff+align(currSize+int64(logHeaderSize)) == wal.logs[i].offset {
 			currSize += align(wal.logs[i].size + int64(logHeaderSize))
 			if currSize > wal.opts.BufferSize {
@@ -327,16 +326,6 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 // Seq returns upper DB sequence successfully written to the logfile in wal
 func (wal *WAL) Seq() uint64 {
 	return atomic.LoadUint64(&wal.seq)
-}
-
-// Count count returns total number logs in wal
-func (wal *WAL) Count() int64 {
-	return atomic.LoadInt64(&wal.count)
-}
-
-// incount increment log counter
-func (wal *WAL) incount() int64 {
-	return atomic.AddInt64(&wal.count, 1)
 }
 
 //Sync syncs log entries to disk

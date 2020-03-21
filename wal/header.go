@@ -6,38 +6,41 @@ import (
 
 var (
 	signature     = [8]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b', '\xfd'}
-	logHeaderSize = 38
+	logHeaderSize = 32
 	headerSize    uint32
 )
 
 type logInfo struct {
+	version    uint16
 	status     uint16
 	entryCount uint32
 	seq        uint64 // log sequence
 	size       int64
 	offset     int64
 
-	_ [30]byte
+	_ [32]byte
 }
 
 // MarshalBinary serialized logInfo into binary data
 func (l logInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
-	binary.LittleEndian.PutUint16(buf[:2], l.status)
-	binary.LittleEndian.PutUint32(buf[2:6], l.entryCount)
-	binary.LittleEndian.PutUint64(buf[6:14], l.seq)
-	binary.LittleEndian.PutUint64(buf[14:22], uint64(l.size))
-	binary.LittleEndian.PutUint64(buf[22:30], uint64(l.offset))
+	binary.LittleEndian.PutUint16(buf[:2], l.version)
+	binary.LittleEndian.PutUint16(buf[:4], l.status)
+	binary.LittleEndian.PutUint32(buf[4:8], l.entryCount)
+	binary.LittleEndian.PutUint64(buf[8:16], l.seq)
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(l.size))
+	binary.LittleEndian.PutUint64(buf[24:32], uint64(l.offset))
 	return buf, nil
 }
 
 // UnmarshalBinary deserialized logInfo from binary data
 func (l *logInfo) UnmarshalBinary(data []byte) error {
-	l.status = binary.LittleEndian.Uint16(data[:2])
-	l.entryCount = binary.LittleEndian.Uint32(data[2:6])
-	l.seq = binary.LittleEndian.Uint64(data[6:14])
-	l.size = int64(binary.LittleEndian.Uint64(data[14:22]))
-	l.offset = int64(binary.LittleEndian.Uint64(data[22:30]))
+	l.version = binary.LittleEndian.Uint16(data[:2])
+	l.status = binary.LittleEndian.Uint16(data[:4])
+	l.entryCount = binary.LittleEndian.Uint32(data[4:8])
+	l.seq = binary.LittleEndian.Uint64(data[8:16])
+	l.size = int64(binary.LittleEndian.Uint64(data[16:24]))
+	l.offset = int64(binary.LittleEndian.Uint64(data[24:32]))
 	return nil
 }
 

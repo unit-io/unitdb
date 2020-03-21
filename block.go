@@ -34,7 +34,7 @@ func (e entry) mSize() uint32 {
 	return idSize + uint32(e.topicSize) + e.valueSize
 }
 
-// MarshalBinary serliazed entry into binary data
+// MarshalBinary serialized entry into binary data
 func (e entry) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
@@ -46,7 +46,7 @@ func (e entry) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
-// MarshalBinary deserliazed entry from binary data
+// MarshalBinary de-serialized entry from binary data
 func (e *entry) UnmarshalBinary(data []byte) error {
 	e.seq = binary.LittleEndian.Uint64(data[:8])
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
@@ -79,7 +79,7 @@ func align(n uint32) uint32 {
 	return (n + 511) &^ 511
 }
 
-// MarshalBinary serliazed entries block into binary data
+// MarshalBinary serialized entries block into binary data
 func (b block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
@@ -97,7 +97,7 @@ func (b block) MarshalBinary() []byte {
 	return data
 }
 
-// UnmarshalBinary deserliazed entries block from binary data
+// UnmarshalBinary de-serialized entries block from binary data
 func (b *block) UnmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerIndexBlock; i++ {
 		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
