@@ -210,10 +210,10 @@ func (wal *WAL) defrag() []logInfo {
 		}
 		if currOff+currSize == wal.logs[i].offset {
 			currSize += align(wal.logs[i].size + int64(logHeaderSize))
-			if currSize > wal.opts.BufferSize {
-				merge(i + 1)
-				i++
-			}
+			// if currSize > wal.opts.BufferSize {
+			// 	merge(i + 1)
+			// 	i++
+			// }
 		} else {
 			merge(i)
 		}
