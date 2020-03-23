@@ -72,6 +72,8 @@ type windowHandle struct {
 	winBlock
 	file
 	offset int64
+
+	leased bool
 }
 
 func winBlockOffset(idx int32) int64 {
@@ -447,18 +449,19 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 	bufSize := int64(1 << 27)
 	blockOff := int64(0)
 	bufPool := bpool.NewBufferPool(bufSize, nil)
-	buf := bufPool.Get()
-	defer bufPool.Put(buf)
+	rawWindow := bufPool.Get()
+	defer bufPool.Put(rawWindow)
 	var blocks []windowHandle
-	wh := windowHandle{file: wb.file, offset: off}
+	w := windowHandle{file: wb.file, offset: off}
 	if off == 0 {
 		blockOff = wb.newBlock()
-		wh.offset = blockOff
-		wh.topicHash = topicHash
+		w.offset = blockOff
+		w.topicHash = topicHash
 	} else {
-		if err := wh.read(); err != nil {
+		if err := w.read(); err != nil {
 			return off, err
 		}
+		w.leased = true
 	}
 	for _, we := range wEntries {
 		if we.Seq() == 0 {
@@ -466,45 +469,57 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 		}
 		entryIdx := 0
 		for i := 0; i < seqsPerWindowBlock; i++ {
-			e := wh.winEntries[i]
+			e := w.winEntries[i]
 			if e.seq == we.Seq() { //record exist in db
 				entryIdx = -1
 				break
 			}
 		}
 		if entryIdx == -1 {
-			return 0, nil
+			continue
 		}
-		if wh.entryIdx == seqsPerWindowBlock {
+		if w.entryIdx == seqsPerWindowBlock {
 			off = wb.newBlock()
 			if blockOff == 0 {
 				blockOff = off
-				if err := wh.write(); err != nil {
+				if err := w.write(); err != nil {
 					return 0, err
 				}
 			}
-			topicHash := wh.topicHash
-			next := wh.offset
-			wh = windowHandle{file: wb.file, offset: off}
-			wh.topicHash = topicHash
-			wh.next = next
+			topicHash := w.topicHash
+			next := w.offset
+			w = windowHandle{file: wb.file, offset: off}
+			w.topicHash = topicHash
+			w.next = next
 
-			blocks = append(blocks, wh)
+			blocks = append(blocks, w)
 		}
-		wh.winEntries[wh.entryIdx] = winEntry{seq: we.Seq()}
-		wh.entryIdx++
+		w.winEntries[w.entryIdx] = winEntry{seq: we.Seq()}
+		w.entryIdx++
 	}
 
+	nBlocks := uint32(0)
+	blocks = append(blocks, w)
 	for _, block := range blocks {
-		buf.Write(block.MarshalBinary())
+		switch {
+		case block.entryIdx == 0:
+		case block.leased:
+			if err := block.write(); err != nil {
+				return 0, err
+			}
+		default:
+			nBlocks++
+			rawWindow.Write(block.MarshalBinary())
+		}
+		// fmt.Println("timeWindow.sync: block", block.entryIdx, block.winEntries[:block.entryIdx])
 	}
-	if err := wb.extendBlocks(uint32(len(blocks))); err != nil {
+	if err := wb.extendBlocks(nBlocks); err != nil {
 		return 0, err
 	}
-	if _, err := wb.file.WriteAt(buf.Bytes(), blockOff); err != nil {
+	if _, err := wb.file.WriteAt(rawWindow.Bytes(), blockOff); err != nil {
 		return 0, err
 	}
-	return wh.offset, wb.Sync()
+	return w.offset, wb.Sync()
 }
 
 func (wb *timeWindowBucket) seq() uint64 {

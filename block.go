@@ -79,6 +79,10 @@ func align(n uint32) uint32 {
 	return (n + 511) &^ 511
 }
 
+func align4096(n uint32) uint32 {
+	return (n + 4095) &^ 4095
+}
+
 // MarshalBinary serialized entries block into binary data
 func (b block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)

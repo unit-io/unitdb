@@ -1,16 +1,16 @@
-# tracedb [![GoDoc](https://godoc.org/github.com/unit-io/tracedb?status.svg)](https://godoc.org/github.com/unit-io/tracedb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/tracedb)](https://goreportcard.com/report/github.com/unit-io/tracedb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/tracedb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/tracedb?branch=master)
+# tracedb [![GoDoc](https://godoc.org/github.com/unit-io/tracedb?status.svg)](https://pkg.go.dev/github.com/unit-io/tracedb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/tracedb)](https://goreportcard.com/report/github.com/unit-io/tracedb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/tracedb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/tracedb?branch=master)
 
 <p align="left">
   <img src="tracedb.png" width="70" alt="Trace" title="tracedb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
-# tracedb: blazing fast timeseries database for IoT and real-time messaging applications
+# tracedb: blazing fast time-series database for IoT and real-time messaging applications
 
-tracedb is blazing fast timeseries database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
+tracedb is blazing fast time-series database for IoT, realtime messaging  applications. Access tracedb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/trace) application.
 
-Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is a perfect timeseries database for applications such as internet of things and internet connected devices.
+Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
-[unitdb](https://github.com/unit-io/unitdb) repo is forked from tracedb for more advanced use case for timeseries database. Keep watch on [unitdb](https://github.com/unit-io/unitdb)
+[unitdb](https://github.com/unit-io/unitdb) repo is forked from tracedb for more advanced use case for time-series database. Keep watch on [unitdb](https://github.com/unit-io/unitdb)
 
 # Key characteristics
 - 100% Go.

@@ -181,7 +181,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err = db.index.extend(headerSize + blockSize); err != nil {
+		if _, err = db.index.extend(headerSize); err != nil {
 			return nil, err
 		}
 		if _, err = db.data.extend(headerSize); err != nil {
@@ -308,19 +308,19 @@ func (db *DB) readHeader() error {
 
 // loadTopicHash loads topic and offset from window file
 func (db *DB) loadTopicHash() error {
-	err := db.timeWindow.foreachWindowBlock(func(curb windowHandle) (bool, error) {
-		b := &curb
-		pOff := b.offset
-		sOff, ok := db.trie.getOffset(b.topicHash)
-		if !ok || sOff < pOff {
-			if ok := db.trie.setOffset(b.topicHash, pOff); !ok {
-				if b.entryIdx == 0 {
+	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
+		w := &curw
+		wOff := w.offset
+		sOff, ok := db.trie.getOffset(w.topicHash)
+		if !ok || sOff < wOff {
+			if ok := db.trie.setOffset(w.topicHash, wOff); !ok {
+				if w.entryIdx == 0 {
 					return false, nil
 				}
-				seq := b.winEntries[b.entryIdx-1].seq
+				seq := w.winEntries[w.entryIdx-1].seq
 				off := blockOffset(startBlockIndex(seq))
-				bh := blockHandle{file: db.index, offset: off}
-				if err := bh.read(); err != nil {
+				b := blockHandle{file: db.index, offset: off}
+				if err := b.read(); err != nil {
 					if err == io.EOF {
 						return false, nil
 					}
@@ -328,7 +328,7 @@ func (db *DB) loadTopicHash() error {
 				}
 				entryIdx := -1
 				for i := 0; i < entriesPerIndexBlock; i++ {
-					e := bh.entries[i]
+					e := b.entries[i]
 					if e.seq == seq { //record exist in db
 						entryIdx = i
 						break
@@ -337,7 +337,7 @@ func (db *DB) loadTopicHash() error {
 				if entryIdx == -1 {
 					return false, nil
 				}
-				e := bh.entries[entryIdx]
+				e := b.entries[entryIdx]
 				t, err := db.data.readTopic(e)
 				if err != nil {
 					return true, err
@@ -347,8 +347,8 @@ func (db *DB) loadTopicHash() error {
 				if err != nil {
 					return true, err
 				}
-				if ok := db.trie.addTopic(message.Contract(topic.Parts), b.topicHash, topic.Parts, topic.Depth); ok {
-					if ok := db.trie.setOffset(b.topicHash, pOff); !ok {
+				if ok := db.trie.addTopic(message.Contract(topic.Parts), w.topicHash, topic.Parts, topic.Depth); ok {
+					if ok := db.trie.setOffset(w.topicHash, wOff); !ok {
 						return true, errors.New("topic_trie loading error: unable to set topic offset to topic trie")
 					}
 				}
@@ -686,11 +686,9 @@ func (db *DB) extendBlocks() error {
 		return nil
 	}
 	nBlocksNew := nBlocks - db.blocks()
-	if _, err := db.index.extend(uint32(nBlocksNew) * blockSize); err != nil {
-		return err
-	}
+	_, err := db.index.extend(uint32(nBlocksNew) * blockSize)
 	atomic.AddInt32(&db.blockIndex, nBlocksNew)
-	return nil
+	return err
 }
 
 func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {

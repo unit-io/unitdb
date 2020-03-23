@@ -35,7 +35,7 @@ func (t *dataTable) free(size uint32, off int64) {
 	t.fb.free(off, size)
 }
 
-func (t *dataTable) write(data []byte) (off int64, err error) {
+func (t *dataTable) writeMessage(data []byte) (off int64, err error) {
 	dataLen := align(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
@@ -46,7 +46,7 @@ func (t *dataTable) write(data []byte) (off int64, err error) {
 		}
 		return off, errLeasedBlock
 	} else {
-		off, err = t.allocate(buf)
+		off, err = t.append(buf)
 	}
 	return off, err
 }

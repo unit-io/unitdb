@@ -238,7 +238,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for range time.Tick(1 * time.Second) {
+		for range time.Tick(4 * time.Second) {
 			print([]byte("unit8.b1?last=20"), db)
 			print([]byte("unit8.b.b1?last=20"), db)
 			print([]byte("unit8.b.b11?last=20"), db)

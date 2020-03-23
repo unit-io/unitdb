@@ -30,7 +30,7 @@ func lockFile(f *os.File) error {
 }
 
 func newLockFile(name string) (LockFile, error) {
-	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0444)
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, err
 	}

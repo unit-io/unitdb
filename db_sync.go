@@ -3,6 +3,7 @@ package tracedb
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -72,61 +73,40 @@ func (db *DB) Sync() error {
 	}()
 
 	bufSize := int64(1 << 27)
+	off := int64(-1)
+	var (
+		upperSeq uint64
+		wEntry   winEntry
+		b        blockHandle
+		rawData  *bpool.Buffer
+	)
+	rawData = db.bufPool.Get()
+	defer func() {
+		db.bufPool.Put(rawData)
+	}()
+
+	if err := db.extendBlocks(); err != nil {
+		return err
+	}
+
+	write := func() error {
+		if _, err := db.data.write(rawData.Bytes()); err != nil {
+			return err
+		}
+		// reset blocks
+		rawData.Reset()
+		return nil
+	}
 
 	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, uint64, error) {
 		// var m runtime.MemStats
 		// runtime.ReadMemStats(&m)
 		// log.Println(float64(m.Sys) / 1024 / 1024)
 		// log.Println(float64(m.HeapAlloc) / 1024 / 1024)
-
-		var (
-			rawIndex, rawData *bpool.Buffer
-			idxBlocks         []blockHandle
-		)
-		blockIdx := db.blocks()
-
-		idxBlockOff := int64(0)
-		dataBlockOff := int64(0)
-
-		rawIndex = db.bufPool.Get()
-		rawData = db.bufPool.Get()
-		defer func() {
-			db.bufPool.Put(rawData)
-			db.bufPool.Put(rawIndex)
-		}()
-
-		write := func() error {
-			if err := db.extendBlocks(); err != nil {
-				return err
-			}
-			for _, idxBlock := range idxBlocks {
-				switch {
-				case idxBlock.entryIdx == 0:
-				case idxBlock.leased:
-					if err := idxBlock.write(); err != nil {
-						return err
-					}
-				default:
-					rawIndex.Write(idxBlock.MarshalBinary())
-				}
-			}
-			if _, err := db.index.WriteAt(rawIndex.Bytes(), idxBlockOff); err != nil {
-				return err
-			}
-			if _, err := db.data.WriteAt(rawData.Bytes(), dataBlockOff); err != nil {
-				return err
-			}
-
-			// reset blocks
-			idxBlockOff = int64(0)
-			dataBlockOff = int64(0)
-			idxBlocks = idxBlocks[:0]
-			rawIndex.Reset()
-			rawData.Reset()
-			return nil
+		if len(windowEntries) == 0 {
+			return false, 0, nil
 		}
 
-		var wEntry winEntry
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
@@ -139,13 +119,14 @@ func (db *DB) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, wEntry.seq, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			var off int64
-			var bh, leasedBh blockHandle
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
 				}
 				wEntry = we.(winEntry)
+				if ok := db.trie.add(h, wEntry); !ok {
+					return true, wEntry.seq, errors.New("db:Sync: unable to add entry to trie")
+				}
 				mseq := db.cacheID ^ wEntry.seq
 				memdata, err := db.mem.Get(wEntry.contract, mseq)
 				if err != nil {
@@ -153,66 +134,68 @@ func (db *DB) Sync() error {
 				}
 				memEntry := entry{}
 				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
-					fmt.Println("db.Sync: mem entry read error ", err)
 					return true, wEntry.seq, err
 				}
 				startBlockIdx := startBlockIndex(wEntry.seq)
 				newOff := blockOffset(startBlockIdx)
-				bh = blockHandle{file: db.index, offset: newOff}
-				// any seq less than current db count is leased seq
-				if startBlockIdx < blockIdx {
-					if newOff != off {
-						off = newOff
-						// write previous block
-						if err := leasedBh.write(); err != nil {
-							return true, wEntry.seq, err
-						}
-						if err := bh.read(); err != nil {
-							return true, wEntry.seq, err
-						}
+				if off != newOff {
+					off = newOff
+					// write previous block
+					if err := b.write(); err != nil {
+						return true, wEntry.seq, err
 					}
-					entryIdx := 0
-					for i := 0; i < entriesPerIndexBlock; i++ {
-						e := bh.entries[i]
-						if e.seq == wEntry.seq { //record exist in db
-							entryIdx = -1
-							break
-						}
+					b = blockHandle{file: db.index, offset: newOff}
+					if err := b.read(); err != nil {
+						return true, wEntry.seq, err
 					}
-					if entryIdx == -1 {
-						continue
+				}
+				entryIdx := 0
+				for i := 0; i < int(b.entryIdx); i++ {
+					e := b.entries[i]
+					if e.seq == wEntry.seq { //record exist in db
+						entryIdx = -1
+						break
 					}
-					bh.leased = true
-					leasedBh = blockHandle{file: db.index, offset: bh.offset}
+				}
+				if entryIdx == -1 {
+					continue
 				}
 				db.incount()
-				if memEntry.msgOffset, err = db.data.write(memdata[entrySize:]); err != nil {
+				if memEntry.msgOffset, err = db.data.writeMessage(memdata[entrySize:]); err != nil {
 					if err != errLeasedBlock {
 						return true, wEntry.seq, err
 					}
 				} else {
-					if dataBlockOff == 0 {
-						dataBlockOff = memEntry.msgOffset
+					dataLen := align(uint32(len(memdata[entrySize:])))
+					if off, err := rawData.Extend(int64(dataLen)); err == nil {
+						_, err = rawData.WriteAt(memdata[entrySize:], off)
 					}
-					rawData.Write(memdata[entrySize:])
+					if err != nil {
+						return true, wEntry.seq, err
+					}
+				}
+				b.entries[b.entryIdx] = memEntry
+				b.entryIdx++
+
+				if b.entryIdx == entriesPerIndexBlock {
+					if err := b.write(); err != nil {
+						return true, wEntry.seq, err
+					}
 				}
 
-				bh.entries[bh.entryIdx] = memEntry
-				bh.entryIdx++
-				if bh.entryIdx == entriesPerIndexBlock {
-					if idxBlockOff == 0 {
-						idxBlockOff = newOff
-					}
-					idxBlocks = append(idxBlocks, bh)
-				}
 				db.filter.Append(wEntry.seq)
 				db.meter.InMsgs.Inc(1)
 				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 			}
 
-			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+			if upperSeq < wEntry.seq {
+				upperSeq = wEntry.seq
+			}
 
-			idxBlocks = append(idxBlocks, bh)
+			// write any pending block
+			if err := b.write(); err != nil {
+				return true, wEntry.seq, err
+			}
 
 			if rawData.Size() > bufSize {
 				if err := write(); err != nil {
@@ -223,25 +206,28 @@ func (db *DB) Sync() error {
 					return true, wEntry.seq, err
 				}
 
-				if err := db.wal.SignalLogApplied(wEntry.seq); err != nil {
+				if err := db.wal.SignalLogApplied(upperSeq); err != nil {
 					return true, wEntry.seq, err
 				}
 			}
+
+			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
 
-		if err := write(); err != nil {
-			return true, wEntry.seq, err
-		}
-
-		if err := db.sync(); err != nil {
-			return true, wEntry.seq, err
-		}
-
-		if err := db.wal.SignalLogApplied(wEntry.seq); err != nil {
-			return true, wEntry.seq, err
-		}
 		return false, wEntry.seq, nil
 	})
+
+	if err := write(); err != nil {
+		return err
+	}
+
+	if err := db.sync(); err != nil {
+		return err
+	}
+
+	if err := db.wal.SignalLogApplied(upperSeq); err != nil {
+		return err
+	}
 	if err != nil {
 		// run db recovery if an error occur with the db sync
 		if err := db.recoverLog(); err != nil {
@@ -278,4 +264,26 @@ func (db *DB) ExpireOldEntries() {
 		db.data.free(e.mSize(), e.msgOffset)
 		db.decount()
 	}
+}
+
+func uniqueBlocks(blocks []*blockHandle) ([]*blockHandle, error) {
+	if len(blocks) == 0 {
+		return blocks, nil
+	}
+	sort.Slice(blocks[:], func(i, j int) bool {
+		return blocks[i].offset < blocks[j].offset
+	})
+	j := 0
+	for i := 1; i < len(blocks); i++ {
+		if blocks[j].offset == blocks[i].offset {
+			continue
+		}
+		j++
+		// preserve the original data
+		// in[i], in[j] = in[j], in[i]
+		// only set what is required
+		blocks[j] = blocks[i]
+	}
+
+	return blocks[:j+1], nil
 }
