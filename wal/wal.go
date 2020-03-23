@@ -11,11 +11,14 @@ import (
 	"github.com/unit-io/bpool"
 )
 
+// LogStatus represents the state of log, written to applied
+type LogStatus uint16
+
 const (
 	// logStatusWritten indicates that the log has been written,
 	// but not completed. During recovery, logs with this status
 	// should be loaded and their updates should be provided to the user.
-	logStatusWritten = iota
+	logStatusWritten LogStatus = iota
 
 	// logStatusApplied indicates that the logs has been written and
 	// applied. Logs with this status can be ignored during recovery,
@@ -135,7 +138,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
-		if l.version == 0 || l.status > logStatusApplied {
+		if l.status > logStatusApplied {
 			// fmt.Println("wal.recoverLogHeader: logInfo ", l)
 			return nil
 		}
@@ -164,6 +167,7 @@ func (wal *WAL) put(log logInfo) error {
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 	l := len(wal.logs)
+	log.version = version
 	if wal.seq < log.seq {
 		wal.seq = log.seq
 	}
@@ -176,16 +180,20 @@ func (wal *WAL) put(log logInfo) error {
 			return nil
 		}
 	}
-	log.version = version
 	wal.logs = append(wal.logs, log)
 	return nil
 }
 
 func (wal *WAL) defrag() []logInfo {
 	l := len(wal.logs)
+	// sort wal logs by offset so that adjacent free blocks can be merged
+	sort.Slice(wal.logs[:], func(i, j int) bool {
+		return wal.logs[i].offset < wal.logs[j].offset
+	})
+
 	var merged []logInfo
 	currOff := wal.logs[0].offset
-	currSize := wal.logs[0].size
+	currSize := align(wal.logs[0].size + int64(logHeaderSize))
 
 	merge := func(i int) {
 		merged = append(merged, logInfo{
@@ -193,17 +201,18 @@ func (wal *WAL) defrag() []logInfo {
 			offset: currOff,
 		})
 		currOff = wal.logs[i].offset
-		currSize = wal.logs[i].size
+		currSize = align(wal.logs[i].size + int64(logHeaderSize))
 	}
 
 	for i := 1; i < l; i++ {
 		if wal.logs[i].status == logStatusApplied {
 			continue
 		}
-		if currOff+align(currSize+int64(logHeaderSize)) == wal.logs[i].offset {
+		if currOff+currSize == wal.logs[i].offset {
 			currSize += align(wal.logs[i].size + int64(logHeaderSize))
 			if currSize > wal.opts.BufferSize {
-				merge(i)
+				merge(i + 1)
+				i++
 			}
 		} else {
 			merge(i)
@@ -291,9 +300,7 @@ func (wal *WAL) logMerge(idx int) error {
 			}
 		}
 	}
-
-	wal.writeHeader()
-	return wal.Sync()
+	return nil
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
@@ -317,10 +324,11 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 			if err := wal.logMerge(i); err != nil {
 				return err
 			}
+
+			// fmt.Println("wal.SignalLogApplied: upperSeq, log ", upperSeq, wal.logs[i])
 		}
 	}
-
-	return nil
+	return wal.writeHeader()
 }
 
 // Seq returns upper DB sequence successfully written to the logfile in wal
@@ -340,16 +348,14 @@ func (wal *WAL) Close() error {
 	if !wal.setClosed() {
 		return errors.New("wal is closed")
 	}
-	defer wal.logFile.Close()
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
 
-	return wal.logFile.Sync()
+	return wal.logFile.Close()
 }
 
 // Set closed flag; return true if not already closed.
 func (wal *WAL) setClosed() bool {
-	// TODO fixe issue with newWal code
 	if wal == nil {
 		return false
 	}

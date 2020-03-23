@@ -3,6 +3,8 @@ package tracedb
 type dataTable struct {
 	file
 	fb freeblocks
+
+	offset int64
 }
 
 func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
@@ -35,6 +37,16 @@ func (t *dataTable) free(size uint32, off int64) {
 	t.fb.free(off, size)
 }
 
+func (t *dataTable) extend(size uint32) (int64, error) {
+	off := t.offset
+	if _, err := t.file.extend(size); err != nil {
+		return 0, err
+	}
+	t.offset += int64(size)
+
+	return off, nil
+}
+
 func (t *dataTable) writeMessage(data []byte) (off int64, err error) {
 	dataLen := align(uint32(len(data)))
 	buf := make([]byte, dataLen)
@@ -46,7 +58,16 @@ func (t *dataTable) writeMessage(data []byte) (off int64, err error) {
 		}
 		return off, errLeasedBlock
 	} else {
-		off, err = t.append(buf)
+		off = t.offset
+		t.offset += int64(dataLen)
 	}
 	return off, err
+}
+
+func (t *dataTable) write(data []byte) (int64, error) {
+	off := t.offset
+	if _, err := t.file.write(data); err != nil {
+		return 0, err
+	}
+	return off, nil
 }

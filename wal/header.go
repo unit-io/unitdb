@@ -12,7 +12,7 @@ var (
 
 type logInfo struct {
 	version    uint16
-	status     uint16
+	status     LogStatus
 	entryCount uint32
 	seq        uint64 // log sequence
 	size       int64
@@ -25,7 +25,7 @@ type logInfo struct {
 func (l logInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
 	binary.LittleEndian.PutUint16(buf[:2], l.version)
-	binary.LittleEndian.PutUint16(buf[:4], l.status)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(l.status))
 	binary.LittleEndian.PutUint32(buf[4:8], l.entryCount)
 	binary.LittleEndian.PutUint64(buf[8:16], l.seq)
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(l.size))
@@ -36,7 +36,7 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary deserialized logInfo from binary data
 func (l *logInfo) UnmarshalBinary(data []byte) error {
 	l.version = binary.LittleEndian.Uint16(data[:2])
-	l.status = binary.LittleEndian.Uint16(data[:4])
+	l.status = LogStatus(binary.LittleEndian.Uint16(data[2:4]))
 	l.entryCount = binary.LittleEndian.Uint32(data[4:8])
 	l.seq = binary.LittleEndian.Uint64(data[8:16])
 	l.size = int64(binary.LittleEndian.Uint64(data[16:24]))

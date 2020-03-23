@@ -72,7 +72,7 @@ func main() {
 		Contract: contract,
 	})
 
-	printWithContract([]byte("unit1?last=2m"), contract, db)
+	// printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
@@ -80,7 +80,7 @@ func main() {
 		Contract: contract,
 	})
 
-	printWithContract([]byte("unit1?last=2m"), contract, db)
+	// printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	func(retry int) {
 		i := 1
@@ -106,8 +106,8 @@ func main() {
 		log.Printf("%s ", msg)
 	}
 
-	print([]byte("unit8.c.c1?last=30m"), db)
-	print([]byte("unit8.c.c11?last=30m"), db)
+	// print([]byte("unit8.c.c1?last=30m"), db)
+	// print([]byte("unit8.c.c11?last=30m"), db)
 
 	time.Sleep(100 * time.Millisecond)
 	func(retry int) {
@@ -144,8 +144,8 @@ func main() {
 		}
 	}(1)
 
-	print([]byte("unit8.b.b1?last=30m"), db)
-	print([]byte("unit8.b.b11?last=30m"), db)
+	// print([]byte("unit8.b.b1?last=30m"), db)
+	// print([]byte("unit8.b.b11?last=30m"), db)
 
 	messageId = db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
@@ -238,7 +238,7 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		for range time.Tick(4 * time.Second) {
+		for range time.Tick(3 * time.Second) {
 			print([]byte("unit8.b1?last=20"), db)
 			print([]byte("unit8.b.b1?last=20"), db)
 			print([]byte("unit8.b.b11?last=20"), db)

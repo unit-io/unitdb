@@ -142,7 +142,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		mutex:       newMutex(),
 		lock:        lock,
 		index:       index,
-		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
+		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize), offset: data.Size()},
 		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
 		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
@@ -247,11 +247,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		db.encryption = 1
 	}
 
-	// loadTrie loads topic into trie on opening an existing database file.
-	if err := db.loadTrie(); err != nil {
-		return nil, err
-	}
-
 	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
@@ -267,7 +262,7 @@ func blockOffset(idx int32) int64 {
 func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
 		db.data.fb.defrag()
-		freeblockOff, err := db.data.fb.write(db.data.file)
+		freeblockOff, err := db.data.fb.write(db.data)
 		if err != nil {
 			return err
 		}
@@ -357,27 +352,6 @@ func (db *DB) loadTopicHash() error {
 		return false, nil
 	})
 	return err
-}
-
-// loadTrie loads window entry to the trie. It loads recent window entry of size cache cap.
-func (db *DB) loadTrie() error {
-	it := &TopicIterator{db: db}
-	for {
-		it.Next()
-		if !it.Valid() {
-			return nil
-		}
-		err := it.Error()
-		if err != nil {
-			logger.Error().Err(err).Str("context", "db.loadTrie")
-			return err
-		}
-		we := winEntry{
-			contract: it.Topic().Contract(),
-			seq:      it.Topic().Seq(),
-		}
-		db.trie.add(it.Topic().Hash(), we)
-	}
 }
 
 // Close closes the DB.
@@ -888,8 +862,14 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
+
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
-	defer db.closeW.Done()
+	defer func() {
+		db.closeW.Done()
+		<-db.writeLockC
+	}()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {

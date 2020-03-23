@@ -269,7 +269,7 @@ func (fb *freeblocks) read(f file, off int64) error {
 	return nil
 }
 
-func (fb *freeblocks) write(f file) (int64, error) {
+func (fb *freeblocks) write(t dataTable) (int64, error) {
 	if len(fb.blocks) == 0 {
 		return -1, nil
 	}
@@ -284,10 +284,10 @@ func (fb *freeblocks) write(f file) (int64, error) {
 			return -1, err
 		}
 	}
-	off, err := f.extend(marshaledSize)
+	off, err := t.extend(marshaledSize)
 	if err != nil {
 		return -1, err
 	}
-	_, err = f.WriteAt(buf, off)
+	_, err = t.WriteAt(buf, off)
 	return off, err
 }

@@ -35,7 +35,7 @@ func (wal *WAL) NewWriter() (writer Writer, err error) {
 		Id: uid.NewLID(),
 		// startSeq:       wal.seq,
 		wal:            wal,
-		writeCompleted: make(chan struct{}),
+		writeCompleted: make(chan struct{}, 1),
 	}
 
 	writer.buffer = wal.bufPool.Get()
@@ -81,8 +81,13 @@ func (w *Writer) Append(data []byte) <-chan error {
 
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog(seq uint64) error {
-	defer close(w.writeCompleted)
-	defer w.wal.bufPool.Put(w.buffer)
+	w.writeCompleted <- struct{}{}
+	w.wal.wg.Add(1)
+	defer func() {
+		w.wal.wg.Done()
+		<-w.writeCompleted
+		w.wal.bufPool.Put(w.buffer)
+	}()
 
 	if w.logSize == 0 {
 		return nil
@@ -125,8 +130,7 @@ func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
 		done <- errors.New("misuse of log write - call each of the signaling methods exactly ones, in serial, in order")
 		return done
 	}
-	w.wal.wg.Add(1)
-	defer w.wal.wg.Done()
+
 	// Write the log non-blocking
 	go func() {
 		done <- w.writeLog(seq)

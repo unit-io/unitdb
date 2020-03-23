@@ -119,6 +119,9 @@ func (db *DB) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, wEntry.seq, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
+			sort.Slice(wEntries[:], func(i, j int) bool {
+				return wEntries[i].Seq() < wEntries[j].Seq()
+			})
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
@@ -174,13 +177,8 @@ func (db *DB) Sync() error {
 						return true, wEntry.seq, err
 					}
 				}
-				b.entries[b.entryIdx] = memEntry
-				b.entryIdx++
-
-				if b.entryIdx == entriesPerIndexBlock {
-					if err := b.write(); err != nil {
-						return true, wEntry.seq, err
-					}
+				if err := b.append(memEntry); err != nil {
+					return true, wEntry.seq, err
 				}
 
 				db.filter.Append(wEntry.seq)

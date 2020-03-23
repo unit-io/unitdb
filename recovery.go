@@ -89,11 +89,11 @@ func (db *DB) recoverLog() error {
 				off = newOff
 				// write previous block
 				if err := b.write(); err != nil {
-					return false, err
+					return true, err
 				}
 				b = blockHandle{file: db.index, offset: newOff}
 				if err := b.read(); err != nil {
-					return false, err
+					return true, err
 				}
 			}
 
@@ -117,15 +117,18 @@ func (db *DB) recoverLog() error {
 				}
 				logEntry.msgOffset = msgOffset
 			} else {
-				rawData.Write(m)
-			}
-			b.entries[b.entryIdx] = logEntry
-			b.entryIdx++
-			if b.entryIdx == entriesPerIndexBlock {
-				if err := b.write(); err != nil {
-					return false, err
+				dataLen := align(uint32(len(m)))
+				if off, err := rawData.Extend(int64(dataLen)); err == nil {
+					_, err = rawData.WriteAt(m, off)
+				}
+				if err != nil {
+					return true, err
 				}
 			}
+			if err := b.append(logEntry); err != nil {
+				return true, err
+			}
+
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
 			topic := new(message.Topic)
@@ -138,9 +141,6 @@ func (db *DB) recoverLog() error {
 				contract: contract,
 				seq:      logEntry.seq,
 			}
-			if ok := db.trie.add(topicHash, we); !ok {
-				return true, errors.New("recovery.recoverLog: unable to add entry to trie")
-			}
 			db.timeWindow.add(topicHash, we)
 			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
 				if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); ok {
@@ -149,7 +149,9 @@ func (db *DB) recoverLog() error {
 					}
 				}
 			}
-
+			if ok := db.trie.add(topicHash, we); !ok {
+				return true, errors.New("recovery.recoverLog: unable to add entry to trie")
+			}
 			db.filter.Append(logEntry.seq)
 			db.meter.Puts.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
@@ -161,20 +163,20 @@ func (db *DB) recoverLog() error {
 
 		// write any pending block
 		if err := b.write(); err != nil {
-			return false, err
+			return true, err
 		}
 
 		if rawData.Size() > bufSize {
 			if err := db.recoverWindowBlocks(); err != nil {
-				return false, err
+				return true, err
 			}
 
 			if err := write(); err != nil {
-				return false, err
+				return true, err
 			}
 
 			if err := db.sync(); err != nil {
-				return false, err
+				return true, err
 			}
 		}
 

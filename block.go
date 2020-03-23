@@ -141,3 +141,15 @@ func (bh *blockHandle) write() error {
 	_, err := bh.file.WriteAt(buf, bh.offset)
 	return err
 }
+
+func (bh *blockHandle) append(e entry) error {
+	bh.entries[bh.entryIdx] = e
+	bh.entryIdx++
+
+	if bh.entryIdx == entriesPerIndexBlock {
+		if err := bh.write(); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -9,8 +9,7 @@ import (
 
 type file struct {
 	fs.FileManager
-	size   int64
-	offset int64
+	size int64
 }
 
 func newFile(fs fs.FileSystem, name string) (file, error) {
@@ -27,7 +26,6 @@ func newFile(fs fs.FileSystem, name string) (file, error) {
 		return f, err
 	}
 	f.size = stat.Size()
-	f.offset = stat.Size()
 	return f, err
 }
 
@@ -38,12 +36,6 @@ func (f *file) extend(size uint32) (int64, error) {
 	}
 	f.size += int64(size)
 
-	return off, nil
-}
-
-func (f *file) append(data []byte) (int64, error) {
-	off := f.offset
-	f.offset += int64(len(data))
 	return off, nil
 }
 
@@ -71,4 +63,9 @@ func (f *file) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, of
 		return err
 	}
 	return m.UnmarshalBinary(buf)
+}
+
+func (f *file) Size() int64 {
+	stat, _ := f.Stat()
+	return stat.Size()
 }

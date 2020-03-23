@@ -6,7 +6,7 @@ import (
 )
 
 func newTestWal(path string, del bool) (*WAL, bool, error) {
-	logOpts := Options{Path: path + ".log", TargetSize: 1 << 30}
+	logOpts := Options{Path: path + ".log", TargetSize: 1 << 27, BufferSize: 1 << 20}
 	if del {
 		os.Remove(logOpts.Path)
 	}
@@ -107,11 +107,17 @@ func TestLogApplied(t *testing.T) {
 				break
 			}
 		}
-		if err := wal.SignalLogApplied(255); err != nil {
-			t.Fatal(err)
-		}
+
 		return false, nil
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wal.SignalLogApplied(255); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ func open(path string, opts *Options) (*DB, error) {
 	os.Remove(path + dataPostfix)
 	os.Remove(path + logPostfix)
 	os.Remove(path + lockPostfix)
+	os.Remove(path + windowPostfix)
 	os.Remove(path + filterPostfix)
 	return Open(path, opts)
 }
@@ -83,6 +84,7 @@ func TestSimple(t *testing.T) {
 		// if !reflect.DeepEqual(vals, v) {
 		// 	t.Fatalf("expected %v; got %v", vals, v)
 		// }
+
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -101,6 +103,7 @@ func TestBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
