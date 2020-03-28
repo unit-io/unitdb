@@ -3,6 +3,7 @@ package wal
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -25,7 +26,8 @@ const (
 	// and their associated blocks can be reclaimed.
 	logStatusApplied
 
-	version = 1 // file format version
+	DefaultBufferSize = 1 << 27
+	version           = 1 // file format version
 )
 
 type (
@@ -66,6 +68,9 @@ type (
 
 func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	// Create a new WAL.
+	if opts.BufferSize == 0 {
+		opts.BufferSize = DefaultBufferSize
+	}
 	wal = &WAL{
 		opts:    opts,
 		bufPool: bpool.NewBufferPool(opts.TargetSize, nil),
@@ -138,8 +143,8 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
-		if l.status > logStatusApplied {
-			// fmt.Println("wal.recoverLogHeader: logInfo ", l)
+		if l.offset < 0 || l.status > logStatusApplied {
+			fmt.Println("wal.recoverLogHeader: logInfo ", l)
 			return nil
 		}
 		if l.status == logStatusWritten {
@@ -184,44 +189,6 @@ func (wal *WAL) put(log logInfo) error {
 	return nil
 }
 
-func (wal *WAL) defrag() []logInfo {
-	l := len(wal.logs)
-	// sort wal logs by offset so that adjacent free blocks can be merged
-	sort.Slice(wal.logs[:], func(i, j int) bool {
-		return wal.logs[i].offset < wal.logs[j].offset
-	})
-
-	var merged []logInfo
-	currOff := wal.logs[0].offset
-	currSize := align(wal.logs[0].size + int64(logHeaderSize))
-
-	merge := func(i int) {
-		merged = append(merged, logInfo{
-			size:   currSize,
-			offset: currOff,
-		})
-		currOff = wal.logs[i].offset
-		currSize = align(wal.logs[i].size + int64(logHeaderSize))
-	}
-
-	for i := 1; i < l; i++ {
-		if wal.logs[i].status == logStatusApplied {
-			continue
-		}
-		if currOff+currSize == wal.logs[i].offset {
-			currSize += align(wal.logs[i].size + int64(logHeaderSize))
-			// if currSize > wal.opts.BufferSize {
-			// 	merge(i + 1)
-			// 	i++
-			// }
-		} else {
-			merge(i)
-		}
-	}
-	merge(0)
-	return merged
-}
-
 // Reader reader is a simple iterator over log data
 type Reader struct {
 	entryCount  uint32
@@ -230,42 +197,64 @@ type Reader struct {
 }
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator
-func (wal *WAL) Read(f func(*Reader) (bool, error)) (err error) {
+func (wal *WAL) Read(f func(uint64, *Reader) (bool, error)) (err error) {
 	// func (wal *WAL) Read() (*Reader, error) {
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
-	mergedLogs := wal.defrag()
+	// mergedLogs := wal.defrag()
 	idx := 0
 	l := len(wal.logs)
+	bufSize := wal.opts.BufferSize
+	fileOff := wal.logs[0].offset
+	size := wal.logFile.Size() - fileOff
 	buffer := wal.bufPool.Get()
 	defer wal.bufPool.Put(buffer)
-	for _, log := range mergedLogs {
+	// for _, log := range mergedLogs {
+
+	for {
 		buffer.Reset()
 		offset := int64(logHeaderSize)
-		if _, err := buffer.Extend(log.size); err != nil {
+		if size <= wal.opts.BufferSize {
+			bufSize = size
+		}
+		if _, err := buffer.Extend(bufSize); err != nil {
 			return err
 		}
-		if _, err := wal.logFile.readAt(buffer.Internal(), log.offset); err != nil {
+		if _, err := wal.logFile.readAt(buffer.Internal(), fileOff); err != nil {
 			return err
 		}
 		for i := idx; i < l; i++ {
 			ul := wal.logs[i]
+			if ul.offset == wal.logFile.fb.currOffset+wal.logFile.fb.currSize && ul.offset != fileOff {
+				offset += wal.logFile.fb.currSize
+			}
+			if bufSize-offset < ul.size {
+				fileOff = ul.offset
+				size = wal.logFile.Size() - ul.offset
+				break
+			}
 			data, err := buffer.Slice(offset, offset+ul.size)
 			if err != nil {
 				return err
 			}
 			r := &Reader{entryCount: ul.entryCount, logData: data, blockOffset: 0}
-			offset += align(ul.size + int64(logHeaderSize))
-			if stop, err := f(r); stop || err != nil {
+			if stop, err := f(ul.seq, r); stop || err != nil {
 				return err
 			}
-			if log.size <= offset {
-				idx = i
-				break
-			}
+			offset += align(ul.size + int64(logHeaderSize))
+
+			idx++
+		}
+		if idx == l {
+			break
 		}
 	}
 	return nil
+}
+
+// Count returns entry count in the current reader
+func (r *Reader) Count() uint32 {
+	return r.entryCount
 }
 
 // Next returns next record from the log data iterator or false if iteration is done
@@ -280,8 +269,7 @@ func (r *Reader) Next() ([]byte, bool) {
 	return logData[4:dataLen], true
 }
 
-func (wal *WAL) logMerge(idx int) error {
-	l := len(wal.logs)
+func (wal *WAL) logMerge(idx, l int) error {
 	for i := idx; i < l; i++ {
 		if wal.logs[i].status != logStatusApplied {
 			continue
@@ -321,7 +309,7 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= upperSeq {
 			wal.logs[i].status = logStatusApplied
 			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
-			if err := wal.logMerge(i); err != nil {
+			if err := wal.logMerge(i, l); err != nil {
 				return err
 			}
 

@@ -267,9 +267,6 @@ func (b *Batch) Write() error {
 	if err != nil {
 		return err
 	}
-	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
-		return nil
-	}
 	return nil
 }
 
@@ -280,7 +277,10 @@ func (b *Batch) Commit() error {
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
 		return nil
 	}
-	defer close(b.commitComplete)
+	defer func() {
+		close(b.commitComplete)
+		b.Abort()
+	}()
 	if err := b.db.commit(b.Len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 	}
@@ -290,7 +290,7 @@ func (b *Batch) Commit() error {
 //Abort abort is a batch cleanup operation on batch complete
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
-	b.Reset()
+	// b.Reset()
 	b.db.bufPool.Put(b.buffer)
 	b.db = nil
 }
@@ -301,7 +301,7 @@ func (b *Batch) Reset() {
 	b.size = 0
 	b.index = b.index[:0]
 	b.pendingWrites = b.pendingWrites[:0]
-	b.buffer.Reset()
+	// b.buffer.Reset()
 }
 
 func (b *Batch) uniq() []batchIndex {

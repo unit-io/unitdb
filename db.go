@@ -142,7 +142,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		mutex:       newMutex(),
 		lock:        lock,
 		index:       index,
-		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize), offset: data.Size()},
+		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
 		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
 		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
@@ -253,10 +253,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		// db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
-}
-
-func blockOffset(idx int32) int64 {
-	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
 func (db *DB) writeHeader(writeFreeList bool) error {
@@ -406,10 +402,6 @@ func (db *DB) Close() error {
 	db.meter.UnregisterAll()
 
 	return err
-}
-
-func startBlockIndex(seq uint64) int32 {
-	return int32(float64(seq-1) / float64(entriesPerIndexBlock))
 }
 
 func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
@@ -934,48 +926,33 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		contract: contract,
 		seq:      message.ID(id).Seq(),
 	}
-	if ok := db.trie.remove(topic.GetHash(contract), we); ok {
-		err := db.delete(message.ID(id).Seq())
-		if err != nil {
-			return err
-		}
+	db.trie.remove(topic.GetHash(contract), we)
+	if err := db.delete(message.ID(id).Seq()); err != nil {
+		return err
 	}
 	return nil
 }
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(seq uint64) error {
-	/// Test filter block for the message id presence
-	if !db.filter.Test(seq) {
-		return nil
-	}
+	//// Test filter block for the message id presence
+	// if !db.filter.Test(seq) {
+	// 	return nil
+	// }
 	db.meter.Dels.Inc(1)
-	startBlockIdx := startBlockIndex(seq)
-	off := blockOffset(startBlockIdx)
-	bh := &blockHandle{file: db.index, offset: off}
-	if err := bh.read(); err != nil {
+	blockIdx := startBlockIndex(seq)
+	if blockIdx > db.blocks() {
+		return nil // no record to delete
+	}
+	blockWriter := newBlockWriter(db.index, blockOffset(blockIdx))
+	e, err := blockWriter.del(seq)
+	if err != nil {
 		return err
 	}
-	entryIdx := -1
-	for i := 0; i < entriesPerIndexBlock; i++ {
-		e := bh.entries[i]
-		if e.seq == seq {
-			entryIdx = i
-			break
-		}
+	db.freeslots.free(seq)
+	if e.msgOffset != 0 {
+		db.data.free(e.mSize(), e.msgOffset)
 	}
-	if entryIdx == -1 {
-		return nil // no entry in db to delete
-	}
-
-	e := bh.entries[entryIdx]
-	bh.del(entryIdx)
-	bh.entryIdx--
-	if err := bh.write(); err != nil {
-		return err
-	}
-	db.freeslots.free(e.seq)
-	db.data.free(e.mSize(), e.msgOffset)
 	db.decount()
 	if db.syncWrites {
 		return db.sync()

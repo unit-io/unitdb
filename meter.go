@@ -15,6 +15,8 @@ type Meter struct {
 	TimeSeries metrics.TimeSeries
 	Gets       metrics.Counter
 	Puts       metrics.Counter
+	Syncs      metrics.Counter
+	Recovers   metrics.Counter
 	Dels       metrics.Counter
 	InMsgs     metrics.Counter
 	OutMsgs    metrics.Counter
@@ -30,6 +32,8 @@ func NewMeter() *Meter {
 		TimeSeries: metrics.GetOrRegisterTimeSeries("timeseries_ns", Metrics),
 		Gets:       metrics.NewCounter(),
 		Puts:       metrics.NewCounter(),
+		Syncs:      metrics.NewCounter(),
+		Recovers:   metrics.NewCounter(),
 		Dels:       metrics.NewCounter(),
 		InMsgs:     metrics.NewCounter(),
 		OutMsgs:    metrics.NewCounter(),
@@ -40,6 +44,8 @@ func NewMeter() *Meter {
 	c.TimeSeries.Time(func() {})
 	Metrics.GetOrRegister("Gets", c.Gets)
 	Metrics.GetOrRegister("Puts", c.Puts)
+	Metrics.GetOrRegister("Syncs", c.Syncs)
+	Metrics.GetOrRegister("Recovers", c.Recovers)
 	Metrics.GetOrRegister("Dels", c.Dels)
 	Metrics.GetOrRegister("InMsgs", c.InMsgs)
 	Metrics.GetOrRegister("OutMsgs", c.OutMsgs)
@@ -59,8 +65,13 @@ type Varz struct {
 	Start    time.Time `json:"start"`
 	Now      time.Time `json:"now"`
 	Uptime   string    `json:"uptime"`
-	Gets     int64     `json:"Gets"`
-	Puts     int64     `json:"Puts"`
+	Seq      int64     `json:"seq"`
+	Count    int64     `json:"count"`
+	Blocks   int64     `json:"blocks"`
+	Gets     int64     `json:"gets"`
+	Puts     int64     `json:"puts"`
+	Syncs    int64     `json:"syncs"`
+	Recovers int64     `json:"recovers"`
 	Dels     int64     `json:"Dels"`
 	InMsgs   int64     `json:"in_msgs"`
 	OutMsgs  int64     `json:"out_msgs"`
@@ -112,8 +123,13 @@ func (db *DB) Varz() (*Varz, error) {
 	v := &Varz{Start: db.start}
 	v.Now = time.Now()
 	v.Uptime = uptime(time.Since(db.start))
+	v.Seq = int64(db.seq)
+	v.Count = int64(db.Count())
+	v.Blocks = int64(db.blocks())
 	v.Gets = db.meter.Gets.Count()
 	v.Puts = db.meter.Puts.Count()
+	v.Syncs = db.meter.Syncs.Count()
+	v.Recovers = db.meter.Recovers.Count()
 	v.Dels = db.meter.Dels.Count()
 	v.InMsgs = db.meter.InMsgs.Count()
 	v.OutMsgs = db.meter.OutMsgs.Count()

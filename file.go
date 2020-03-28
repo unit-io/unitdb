@@ -4,12 +4,15 @@ import (
 	"encoding"
 	"os"
 
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/fs"
 )
 
 type file struct {
 	fs.FileManager
-	size int64
+
+	bufPool *bpool.BufferPool
+	size    int64
 }
 
 func newFile(fs fs.FileSystem, name string) (file, error) {
@@ -21,6 +24,7 @@ func newFile(fs fs.FileSystem, name string) (file, error) {
 		return f, err
 	}
 	f.FileManager = fi
+	f.bufPool = bpool.NewBufferPool(1<<27, nil)
 	stat, err := fi.Stat()
 	if err != nil {
 		return f, err
@@ -39,13 +43,13 @@ func (f *file) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-func (f *file) write(data []byte) (int64, error) {
+func (f *file) write(data []byte) (int, error) {
 	off := f.size
 	if _, err := f.WriteAt(data, off); err != nil {
 		return 0, err
 	}
 	f.size += int64(len(data))
-	return off, nil
+	return len(data), nil
 }
 
 func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {

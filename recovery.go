@@ -6,29 +6,26 @@ import (
 
 	_ "net/http/pprof"
 
-	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/message"
 	"github.com/unit-io/tracedb/wal"
 )
 
 func (db *DB) recoverWindowBlocks() error {
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, uint64, error) {
-		var readSeq uint64
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, readSeq, errors.New("recovery.recoverWindowBlocks error: unable to get topic offset from trie")
+				return true, errors.New("recovery.recoverWindowBlocks error: unable to get topic offset from trie")
 			}
 			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
 			if err != nil {
-				return true, readSeq, err
+				return true, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, readSeq, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
+				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			readSeq = wEntries[len(wEntries)-1].Seq()
 		}
-		return false, readSeq, nil
+		return false, nil
 	})
 	return err
 }
@@ -42,39 +39,22 @@ func (db *DB) recoverLog() error {
 	}()
 	fmt.Println("db.recoverLog: start recovery")
 
-	off := int64(-1)
+	blockIdx := db.blocks()
 	var (
 		upperSeq uint64
 		logEntry entry
-		b        blockHandle
-		rawData  *bpool.Buffer
 	)
 
-	bufSize := int64(1 << 27)
-	rawData = db.bufPool.Get()
+	blockWriter := newBlockWriter(db.index, blockOffset(blockIdx))
+	dataWriter := newDataWriter(&db.data)
 	defer func() {
-		db.bufPool.Put(rawData)
+		blockWriter.close()
+		dataWriter.close()
 	}()
 
-	nBlocks := int32(float64(db.wal.Seq()) / float64(entriesPerIndexBlock))
-	for nBlocks > db.blocks() {
-		if _, err := db.newBlock(); err != nil {
-			return err
-		}
-	}
-
-	write := func() error {
-		if _, err := db.data.write(rawData.Bytes()); err != nil {
-			return err
-		}
-
-		// reset blocks
-		rawData.Reset()
-		return nil
-	}
-
-	err := db.wal.Read(func(r *wal.Reader) (bool, error) {
-		for {
+	err := db.wal.Read(func(upperSeq uint64, r *wal.Reader) (ok bool, err error) {
+		l := r.Count()
+		for i := uint32(0); i < l; i++ {
 			logData, ok := r.Next()
 			if !ok {
 				break
@@ -83,51 +63,13 @@ func (db *DB) recoverLog() error {
 			if err := logEntry.UnmarshalBinary(entryData); err != nil {
 				return true, err
 			}
-			startBlockIdx := startBlockIndex(logEntry.seq)
-			newOff := blockOffset(startBlockIdx)
-			if off != newOff {
-				off = newOff
-				// write previous block
-				if err := b.write(); err != nil {
-					return true, err
-				}
-				b = blockHandle{file: db.index, offset: newOff}
-				if err := b.read(); err != nil {
-					return true, err
-				}
-			}
-
-			entryIdx := 0
-			for i := 0; i < entriesPerIndexBlock; i++ {
-				e := b.entries[i]
-				if e.seq == logEntry.seq { //record exist in db
-					entryIdx = -1
-					break
-				}
-			}
-			if entryIdx == -1 {
-				continue
-			}
-			db.incount()
+			db.meter.Recovers.Inc(1)
 			msgOffset := logEntry.mSize()
 			m := data[:msgOffset]
-			if msgOffset, err := db.data.writeMessage(m); err != nil {
-				if err != errLeasedBlock {
-					return true, err
-				}
-				logEntry.msgOffset = msgOffset
-			} else {
-				dataLen := align(uint32(len(m)))
-				if off, err := rawData.Extend(int64(dataLen)); err == nil {
-					_, err = rawData.WriteAt(m, off)
-				}
-				if err != nil {
-					return true, err
-				}
-			}
-			if err := b.append(logEntry); err != nil {
+			if logEntry.msgOffset, err = dataWriter.writeMessage(m); err != nil {
 				return true, err
 			}
+			blockWriter.append(logEntry, blockIdx > startBlockIndex(logEntry.seq))
 
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
@@ -153,7 +95,8 @@ func (db *DB) recoverLog() error {
 				return true, errors.New("recovery.recoverLog: unable to add entry to trie")
 			}
 			db.filter.Append(logEntry.seq)
-			db.meter.Puts.Inc(1)
+			db.incount()
+			db.meter.InMsgs.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
@@ -161,23 +104,26 @@ func (db *DB) recoverLog() error {
 			upperSeq = logEntry.seq
 		}
 
-		// write any pending block
-		if err := b.write(); err != nil {
+		if err := db.recoverWindowBlocks(); err != nil {
 			return true, err
 		}
 
-		if rawData.Size() > bufSize {
-			if err := db.recoverWindowBlocks(); err != nil {
-				return true, err
+		nBlocks := int32(upperSeq / entriesPerIndexBlock)
+		for nBlocks > db.blocks() {
+			if _, err := db.newBlock(); err != nil {
+				return false, err
 			}
+		}
 
-			if err := write(); err != nil {
-				return true, err
-			}
+		if err := blockWriter.write(); err != nil {
+			return true, err
+		}
+		if _, err := dataWriter.write(); err != nil {
+			return true, err
+		}
 
-			if err := db.sync(); err != nil {
-				return true, err
-			}
+		if err := db.sync(); err != nil {
+			return true, err
 		}
 
 		return false, nil
@@ -185,22 +131,8 @@ func (db *DB) recoverLog() error {
 	if err != nil {
 		return err
 	}
-
-	if err := db.recoverWindowBlocks(); err != nil {
-		return err
-	}
-
-	if err := write(); err != nil {
-		return err
-	}
-
-	if err := db.sync(); err != nil {
-		return err
-	}
-
 	if err := db.wal.SignalLogApplied(upperSeq); err != nil {
 		return err
 	}
-
-	return err
+	return nil
 }

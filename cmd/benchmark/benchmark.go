@@ -91,7 +91,6 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 		r := 1
 		for range time.Tick(100 * time.Millisecond) {
 			start := time.Now()
-			eg := &errgroup.Group{}
 
 			func(concurrent int) error {
 				i := 1
@@ -104,7 +103,10 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 						for k := 0; k < batchSize; k++ {
 							b.Put(vals[k])
 						}
-						return b.Write()
+						if err := b.Write(); err != nil {
+							return err
+						}
+						return nil
 					})
 					if i >= concurrent {
 						return nil
@@ -112,11 +114,6 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 					i++
 				}
 			}(concurrency)
-
-			err = eg.Wait()
-			if err != nil {
-				return err
-			}
 
 			endsecs := time.Since(start).Seconds()
 			fmt.Printf("Put: %d %.3f sec, %d ops/sec\n", r, endsecs, int(float64(numKeys)/endsecs))
@@ -133,6 +130,23 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 		}
 		return nil
 	}(10)
+
+	printStats(db)
+	if err := db.Close(); err != nil {
+		return err
+	}
+
+	db, err = tracedb.Open(dbpath, nil)
+	if err != nil {
+		return err
+	}
+
+	sz, err := db.FileSize()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("File size: %s\n", byteSize(sz))
+	printStats(db)
 
 	return db.Close()
 }

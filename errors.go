@@ -14,7 +14,6 @@ var (
 	errMsgExpired          = errors.New("Message has expired")
 	errValueTooLarge       = errors.New("value is too large")
 	errFull                = errors.New("database is full")
-	errLeasedBlock         = errors.New("data block is leased block")
 	errCorrupted           = errors.New("database is corrupted")
 	errLocked              = errors.New("database is locked")
 	errClosed              = errors.New("database is closed")

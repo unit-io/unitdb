@@ -1,10 +1,27 @@
 package tracedb
 
-type dataTable struct {
-	file
-	fb freeblocks
+import (
+	"github.com/unit-io/bpool"
+)
 
-	offset int64
+type (
+	dataTable struct {
+		file
+		fb freeblocks
+
+		offset int64
+	}
+
+	dataWriter struct {
+		*dataTable
+		buffer *bpool.Buffer
+
+		writeComplete bool
+	}
+)
+
+func newDataWriter(dt *dataTable) *dataWriter {
+	return &dataWriter{dataTable: dt, buffer: dt.bufPool.Get()}
 }
 
 func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
@@ -37,37 +54,60 @@ func (t *dataTable) free(size uint32, off int64) {
 	t.fb.free(off, size)
 }
 
-func (t *dataTable) extend(size uint32) (int64, error) {
-	off := t.offset
-	if _, err := t.file.extend(size); err != nil {
+func (dw *dataWriter) extend(size uint32) (int64, error) {
+	off := dw.offset
+	if _, err := dw.file.extend(size); err != nil {
 		return 0, err
 	}
-	t.offset += int64(size)
+	dw.offset += int64(size)
 
 	return off, nil
 }
 
-func (t *dataTable) writeMessage(data []byte) (off int64, err error) {
+func (dw *dataWriter) writeMessage(data []byte) (off int64, err error) {
 	dataLen := align(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
-	off = t.fb.allocate(dataLen)
+	off = dw.fb.allocate(dataLen)
 	if off != -1 {
-		if _, err = t.WriteAt(buf, off); err != nil {
+		if _, err = dw.file.WriteAt(buf, off); err != nil {
 			return 0, err
 		}
-		return off, errLeasedBlock
 	} else {
-		off = t.offset
-		t.offset += int64(dataLen)
+		off = dw.offset
+		if _, err := dw.append(data); err != nil {
+			return 0, err
+		}
+		dw.offset += int64(dataLen)
 	}
 	return off, err
 }
 
-func (t *dataTable) write(data []byte) (int64, error) {
-	off := t.offset
-	if _, err := t.file.write(data); err != nil {
+func (dw *dataWriter) append(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	dataLen := align(uint32(len(data)))
+	off, err := dw.buffer.Extend(int64(dataLen))
+	if err != nil {
 		return 0, err
 	}
-	return off, nil
+	return dw.buffer.WriteAt(data, off)
+}
+
+func (dw *dataWriter) write() (int, error) {
+	defer dw.buffer.Reset()
+
+	n, err := dw.file.write(dw.buffer.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	dw.writeComplete = true
+	return n, err
+}
+
+func (dw *dataWriter) close() error {
+	dw.bufPool.Put(dw.buffer)
+	return nil
 }
