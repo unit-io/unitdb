@@ -75,6 +75,7 @@ func TestLogApplied(t *testing.T) {
 	var i byte
 	var n uint8 = 255
 
+	var upperSeq uint64
 	logWriter, err := wal.NewWriter()
 	if err != nil {
 		t.Fatal(err)
@@ -100,21 +101,21 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = wal.Read(func(r *Reader) (bool, error) {
+	err = wal.Read(func(upSeq uint64, r *Reader) (bool, error) {
 		for {
 			_, ok := r.Next()
 			if !ok {
 				break
 			}
 		}
-
+		upperSeq = upSeq
 		return false, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := wal.SignalLogApplied(255); err != nil {
+	if err := wal.SignalLogApplied(upperSeq); err != nil {
 		t.Fatal(err)
 	}
 
