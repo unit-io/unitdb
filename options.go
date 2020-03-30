@@ -79,7 +79,7 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.LogSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
 	}
 	if opts.MinimumFreeBlocksSize == 0 {
-		opts.MinimumFreeBlocksSize = 1 << 24 // minimum size of (16MB)
+		opts.MinimumFreeBlocksSize = 1 << 27 // minimum size of (128MB)
 	}
 	if opts.EncryptionKey == nil {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")

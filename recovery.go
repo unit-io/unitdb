@@ -11,7 +11,7 @@ import (
 )
 
 func (db *DB) recoverWindowBlocks() error {
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
@@ -45,14 +45,17 @@ func (db *DB) recoverLog() error {
 		logEntry entry
 	)
 
-	blockWriter := newBlockWriter(db.index, blockOffset(blockIdx))
-	dataWriter := newDataWriter(&db.data)
+	block := db.bufPool.Get()
+	data := db.bufPool.Get()
+
+	blockWriter := newBlockWriter(db.index, block, blockOffset(blockIdx))
+	dataWriter := newDataWriter(&db.data, data)
 	defer func() {
-		blockWriter.close()
-		dataWriter.close()
+		db.bufPool.Put(block)
+		db.bufPool.Put(data)
 	}()
 
-	err := db.wal.Read(func(upperSeq uint64, r *wal.Reader) (ok bool, err error) {
+	err := db.wal.Read(func(upperSeq uint64, last bool, r *wal.Reader) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok := r.Next()
@@ -69,7 +72,7 @@ func (db *DB) recoverLog() error {
 			if logEntry.msgOffset, err = dataWriter.writeMessage(m); err != nil {
 				return true, err
 			}
-			blockWriter.append(logEntry, blockIdx > startBlockIndex(logEntry.seq))
+			blockWriter.append(logEntry, startBlockIndex(logEntry.seq) < blockIdx)
 
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
@@ -84,16 +87,16 @@ func (db *DB) recoverLog() error {
 				seq:      logEntry.seq,
 			}
 			db.timeWindow.add(topicHash, we)
-			if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
-				if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); ok {
-					if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
-						return true, errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
-					}
-				}
-			}
-			if ok := db.trie.add(topicHash, we); !ok {
-				return true, errors.New("recovery.recoverLog: unable to add entry to trie")
-			}
+			// if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
+			// 	if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); ok {
+			// 		if ok := db.trie.setOffset(topicHash, logEntry.topicOffset); !ok {
+			// 			return true, errors.New("recovery.recoverLog error: unable to set topic offset to topic trie")
+			// 		}
+			// 	}
+			// }
+			// if ok := db.trie.add(topicHash, we); !ok {
+			// 	return true, errors.New("recovery.recoverLog: unable to add entry to trie")
+			// }
 			db.filter.Append(logEntry.seq)
 			db.incount()
 			db.meter.InMsgs.Inc(1)
@@ -104,26 +107,28 @@ func (db *DB) recoverLog() error {
 			upperSeq = logEntry.seq
 		}
 
-		if err := db.recoverWindowBlocks(); err != nil {
-			return true, err
-		}
-
-		nBlocks := int32(upperSeq / entriesPerIndexBlock)
-		for nBlocks > db.blocks() {
-			if _, err := db.newBlock(); err != nil {
-				return false, err
+		if last || data.Size() > db.opts.BufferSize {
+			if err := db.recoverWindowBlocks(); err != nil {
+				return true, err
 			}
-		}
 
-		if err := blockWriter.write(); err != nil {
-			return true, err
-		}
-		if _, err := dataWriter.write(); err != nil {
-			return true, err
-		}
+			nBlocks := blockWriter.Count()
+			for i := 0; i < nBlocks; i++ {
+				if _, err := db.newBlock(); err != nil {
+					return false, err
+				}
+			}
 
-		if err := db.sync(); err != nil {
-			return true, err
+			if err := blockWriter.write(); err != nil {
+				return true, err
+			}
+			if _, err := dataWriter.write(); err != nil {
+				return true, err
+			}
+
+			if err := db.sync(); err != nil {
+				return true, err
+			}
 		}
 
 		return false, nil

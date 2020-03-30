@@ -311,7 +311,7 @@ func (w *timeWindow) unFreeze() error {
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to window file
 // it takes timewindow snapshot to iterate and deletes blocks from timewindow
-func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
+func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
 		ws := wb.timeWindows.windows[i]
 		ws.mu.RLock()
@@ -323,7 +323,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 			wEntries[h] = entries
 		}
 		ws.mu.RUnlock()
-		stop, err1 := f(wEntries)
+		stop, err1 := f(i == nShards, wEntries)
 		if stop || err1 != nil {
 			err = err1
 			if freeze {

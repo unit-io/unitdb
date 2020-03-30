@@ -79,14 +79,12 @@ type (
 		syncLockC   chan struct{}
 		expiryLockC chan struct{}
 		// consistent     *hash.Consistent
-		filter Filter
-		lock   fs.LockFile
-		index  file
-		data   dataTable
-		// lock       fs.LockFile
+		filter     Filter
+		lock       fs.LockFile
+		index      file
+		data       dataTable
 		wal        *wal.WAL
 		syncWrites bool
-		freeslots  freeslots
 		dbInfo
 		timeWindow *timeWindowBucket
 		once       Once
@@ -142,14 +140,13 @@ func Open(path string, opts *Options) (*DB, error) {
 		mutex:       newMutex(),
 		lock:        lock,
 		index:       index,
-		data:        dataTable{file: data, fb: newFreeBlocks(opts.MinimumFreeBlocksSize)},
+		data:        dataTable{file: data, lease: newLease(opts.MinimumFreeBlocksSize), offset: data.Size()},
 		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
 		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
 		expiryLockC: make(chan struct{}, 1),
-		freeslots:   newFreeSlots(),
 		dbInfo: dbInfo{
 			blockIndex:   -1,
 			freeblockOff: -1,
@@ -257,8 +254,8 @@ func Open(path string, opts *Options) (*DB, error) {
 
 func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
-		db.data.fb.defrag()
-		freeblockOff, err := db.data.fb.write(db.data)
+		db.data.lease.defrag()
+		freeblockOff, err := db.data.lease.write(db.data)
 		if err != nil {
 			return err
 		}
@@ -290,8 +287,8 @@ func (db *DB) readHeader() error {
 	// }
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIndex)
-	if err := db.data.fb.read(db.data.file, db.dbInfo.freeblockOff); err != nil {
-		return err
+	if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
+		return nil
 	}
 	db.dbInfo.freeblockOff = -1
 	return nil
@@ -694,7 +691,7 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 		id.AddContract(e.contract)
 		seq = id.Seq()
 	} else {
-		ok, seq = db.freeslots.get(e.contract)
+		ok, seq = db.data.lease.getSlot(e.contract)
 		if !ok {
 			seq = db.nextSeq()
 		}
@@ -795,7 +792,7 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
 
-		topicOffset: e.topicOffset,
+		// topicOffset: e.topicOffset,
 	}
 	data, _ := e1.MarshalBinary()
 	mLen := idSize + len(e.topic) + len(e.val)
@@ -936,23 +933,20 @@ func (db *DB) DeleteEntry(e *Entry) error {
 // delete deletes the given key from the DB.
 func (db *DB) delete(seq uint64) error {
 	//// Test filter block for the message id presence
-	// if !db.filter.Test(seq) {
-	// 	return nil
-	// }
+	if !db.filter.Test(seq) {
+		return nil
+	}
 	db.meter.Dels.Inc(1)
 	blockIdx := startBlockIndex(seq)
 	if blockIdx > db.blocks() {
 		return nil // no record to delete
 	}
-	blockWriter := newBlockWriter(db.index, blockOffset(blockIdx))
+	blockWriter := newBlockWriter(db.index, nil, blockOffset(blockIdx))
 	e, err := blockWriter.del(seq)
 	if err != nil {
 		return err
 	}
-	db.freeslots.free(seq)
-	if e.msgOffset != 0 {
-		db.data.free(e.mSize(), e.msgOffset)
-	}
+	db.data.free(e)
 	db.decount()
 	if db.syncWrites {
 		return db.sync()

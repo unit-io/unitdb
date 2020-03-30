@@ -7,7 +7,7 @@ import (
 type (
 	dataTable struct {
 		file
-		fb freeblocks
+		lease lease
 
 		offset int64
 	}
@@ -20,46 +20,46 @@ type (
 	}
 )
 
-func newDataWriter(dt *dataTable) *dataWriter {
-	return &dataWriter{dataTable: dt, buffer: dt.bufPool.Get()}
+func newDataWriter(dt *dataTable, buf *bpool.Buffer) *dataWriter {
+	return &dataWriter{dataTable: dt, buffer: buf}
 }
 
-func (t *dataTable) readMessage(e entry) ([]byte, []byte, error) {
+func (dt *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[:idSize], e.cacheBlock[e.topicSize+idSize:], nil
 	}
-	message, err := t.Slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
+	message, err := dt.Slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
 	return message[:idSize], message[e.topicSize+idSize:], nil
 }
 
-func (t *dataTable) readId(e entry) ([]byte, error) {
+func (dt *dataTable) readId(e entry) ([]byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[:idSize], nil
 	}
-	return t.Slice(e.msgOffset, e.msgOffset+int64(idSize))
+	return dt.Slice(e.msgOffset, e.msgOffset+int64(idSize))
 }
 
-func (t *dataTable) readTopic(e entry) ([]byte, error) {
+func (dt *dataTable) readTopic(e entry) ([]byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[idSize : e.topicSize+idSize], nil
 	}
-	return t.Slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
+	return dt.Slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
 }
 
-func (t *dataTable) free(size uint32, off int64) {
-	size = align(size)
-	t.fb.free(off, size)
+func (dt *dataTable) free(e entry) {
+	size := align(e.mSize())
+	dt.lease.free(e.seq, e.msgOffset, size)
 }
 
-func (dw *dataWriter) extend(size uint32) (int64, error) {
-	off := dw.offset
-	if _, err := dw.file.extend(size); err != nil {
+func (dt *dataTable) extend(size uint32) (int64, error) {
+	off := dt.offset
+	if _, err := dt.file.extend(size); err != nil {
 		return 0, err
 	}
-	dw.offset += int64(size)
+	dt.offset += int64(size)
 
 	return off, nil
 }
@@ -68,7 +68,7 @@ func (dw *dataWriter) writeMessage(data []byte) (off int64, err error) {
 	dataLen := align(uint32(len(data)))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
-	off = dw.fb.allocate(dataLen)
+	off = dw.lease.allocate(dataLen)
 	if off != -1 {
 		if _, err = dw.file.WriteAt(buf, off); err != nil {
 			return 0, err
@@ -78,7 +78,6 @@ func (dw *dataWriter) writeMessage(data []byte) (off int64, err error) {
 		if _, err := dw.append(data); err != nil {
 			return 0, err
 		}
-		dw.offset += int64(dataLen)
 	}
 	return off, err
 }
@@ -93,6 +92,7 @@ func (dw *dataWriter) append(data []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	dw.offset += int64(dataLen)
 	return dw.buffer.WriteAt(data, off)
 }
 
@@ -105,9 +105,4 @@ func (dw *dataWriter) write() (int, error) {
 	}
 	dw.writeComplete = true
 	return n, err
-}
-
-func (dw *dataWriter) close() error {
-	dw.bufPool.Put(dw.buffer)
-	return nil
 }

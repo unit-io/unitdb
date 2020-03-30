@@ -101,7 +101,7 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = wal.Read(func(upSeq uint64, r *Reader) (bool, error) {
+	err = wal.Read(func(upSeq uint64, last bool, r *Reader) (bool, error) {
 		for {
 			_, ok := r.Next()
 			if !ok {

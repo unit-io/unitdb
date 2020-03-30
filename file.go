@@ -4,15 +4,13 @@ import (
 	"encoding"
 	"os"
 
-	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/fs"
 )
 
 type file struct {
 	fs.FileManager
 
-	bufPool *bpool.BufferPool
-	size    int64
+	size int64
 }
 
 func newFile(fs fs.FileSystem, name string) (file, error) {
@@ -24,7 +22,6 @@ func newFile(fs fs.FileSystem, name string) (file, error) {
 		return f, err
 	}
 	f.FileManager = fi
-	f.bufPool = bpool.NewBufferPool(1<<27, nil)
 	stat, err := fi.Stat()
 	if err != nil {
 		return f, err

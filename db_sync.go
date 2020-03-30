@@ -76,19 +76,16 @@ func (db *DB) Sync() error {
 		upperSeq uint64
 		wEntry   winEntry
 	)
+	block := db.bufPool.Get()
+	data := db.bufPool.Get()
 
-	blockWriter := newBlockWriter(db.index, blockOffset(blockIdx))
-	dataWriter := newDataWriter(&db.data)
+	blockWriter := newBlockWriter(db.index, block, blockOffset(blockIdx))
+	dataWriter := newDataWriter(&db.data, data)
 	defer func() {
-		blockWriter.close()
-		dataWriter.close()
+		db.bufPool.Put(block)
+		db.bufPool.Put(data)
 	}()
-
-	if err := db.extendBlocks(); err != nil {
-		return err
-	}
-
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		if len(windowEntries) == 0 {
 			return false, nil
 		}
@@ -127,7 +124,7 @@ func (db *DB) Sync() error {
 				if memEntry.msgOffset, err = dataWriter.writeMessage(memdata[entrySize:]); err != nil {
 					return true, err
 				}
-				blockWriter.append(memEntry, blockIdx > startBlockIndex(memEntry.seq))
+				blockWriter.append(memEntry, startBlockIndex(memEntry.seq) < blockIdx)
 
 				db.filter.Append(wEntry.seq)
 				db.incount()
@@ -139,19 +136,27 @@ func (db *DB) Sync() error {
 				upperSeq = wEntry.seq
 			}
 
-			if err := blockWriter.write(); err != nil {
-				return true, err
-			}
-			if _, err := dataWriter.write(); err != nil {
-				return true, err
-			}
+			if last || data.Size() > db.opts.BufferSize {
+				nBlocks := blockWriter.Count()
+				for i := 0; i < nBlocks; i++ {
+					if _, err := db.newBlock(); err != nil {
+						return false, err
+					}
+				}
+				if err := blockWriter.write(); err != nil {
+					return true, err
+				}
+				if _, err := dataWriter.write(); err != nil {
+					return true, err
+				}
 
-			if err := db.sync(); err != nil {
-				return true, err
-			}
+				if err := db.sync(); err != nil {
+					return true, err
+				}
 
-			if err := db.wal.SignalLogApplied(upperSeq); err != nil {
-				return true, err
+				if err := db.wal.SignalLogApplied(upperSeq); err != nil {
+					return true, err
+				}
 			}
 
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
@@ -192,8 +197,7 @@ func (db *DB) ExpireOldEntries() {
 		topic.Unmarshal(etopic)
 		contract := message.Contract(topic.Parts)
 		db.trie.remove(topic.GetHash(contract), expiredEntry.(winEntry))
-		db.freeslots.free(e.seq)
-		db.data.free(e.mSize(), e.msgOffset)
+		db.data.free(e)
 		db.decount()
 	}
 }
