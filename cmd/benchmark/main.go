@@ -52,7 +52,7 @@ func main() {
 			}
 			i++
 		}
-	}(1)
+	}(7)
 
 	func(retry int) {
 		i := 1
