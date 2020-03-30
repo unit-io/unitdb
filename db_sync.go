@@ -3,24 +3,72 @@ package tracedb
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/message"
 )
 
+type (
+	internal struct {
+		startBlockIdx int32
+		upperSeq      uint64
+		lastSyncSeq   uint64
+		syncStatusOk  bool
+
+		rawBlock *bpool.Buffer
+		rawData  *bpool.Buffer
+	}
+	syncHandle struct {
+		internal
+		*DB
+
+		blockWriter *blockWriter
+		dataWriter  *dataWriter
+	}
+)
+
+func (db *syncHandle) startSync() bool {
+	if db.lastSyncSeq == db.Seq() {
+		db.syncStatusOk = false
+		return false
+	}
+	db.startBlockIdx = db.blocks()
+	db.lastSyncSeq = db.Seq()
+
+	db.rawBlock = db.bufPool.Get()
+	db.rawData = db.bufPool.Get()
+
+	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
+	db.dataWriter = newDataWriter(&db.data, db.rawData)
+	db.syncStatusOk = true
+
+	return true
+}
+
+func (db *syncHandle) finish() error {
+	if !db.syncStatusOk {
+		return nil
+	}
+
+	db.bufPool.Put(db.rawBlock)
+	db.bufPool.Put(db.rawData)
+	return nil
+}
+
 func (db *DB) startSyncer(interval time.Duration) {
-	logsyncTicker := time.NewTicker(interval)
+	syncTicker := time.NewTicker(interval)
+	syncHandle := syncHandle{DB: db, internal: internal{}}
 	go func() {
 		defer func() {
-			logsyncTicker.Stop()
+			syncTicker.Stop()
 		}()
 		for {
 			select {
 			case <-db.closeC:
 				return
-			case <-logsyncTicker.C:
-				if err := db.Sync(); err != nil {
+			case <-syncTicker.C:
+				if err := syncHandle.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
 				}
 			}
@@ -60,7 +108,7 @@ func (db *DB) sync() error {
 // Sync syncs entries into DB. Sync happens synchronously.
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
-func (db *DB) Sync() error {
+func (db *syncHandle) Sync() error {
 	// start := time.Now()
 	// Sync happens synchronously
 	db.syncLockC <- struct{}{}
@@ -71,25 +119,15 @@ func (db *DB) Sync() error {
 		// db.meter.TimeSeries.AddTime(time.Since(start))
 	}()
 
-	blockIdx := db.blocks()
-	var (
-		upperSeq uint64
-		wEntry   winEntry
-	)
-	block := db.bufPool.Get()
-	data := db.bufPool.Get()
-
-	blockWriter := newBlockWriter(db.index, block, blockOffset(blockIdx))
-	dataWriter := newDataWriter(&db.data, data)
+	if ok := db.startSync(); !ok {
+		return nil
+	}
 	defer func() {
-		db.bufPool.Put(block)
-		db.bufPool.Put(data)
+		db.finish()
 	}()
-	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
-		if len(windowEntries) == 0 {
-			return false, nil
-		}
 
+	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
+		var wEntry winEntry
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
@@ -102,9 +140,7 @@ func (db *DB) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			sort.Slice(wEntries[:], func(i, j int) bool {
-				return wEntries[i].Seq() < wEntries[j].Seq()
-			})
+
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
@@ -121,10 +157,10 @@ func (db *DB) Sync() error {
 				}
 
 				db.meter.Syncs.Inc(1)
-				if memEntry.msgOffset, err = dataWriter.writeMessage(memdata[entrySize:]); err != nil {
+				if memEntry.msgOffset, err = db.dataWriter.writeMessage(memdata[entrySize:]); err != nil {
 					return true, err
 				}
-				blockWriter.append(memEntry, startBlockIndex(memEntry.seq) < blockIdx)
+				db.blockWriter.append(memEntry, startBlockIndex(memEntry.seq) <= db.startBlockIdx)
 
 				db.filter.Append(wEntry.seq)
 				db.incount()
@@ -132,34 +168,34 @@ func (db *DB) Sync() error {
 				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 			}
 
-			if upperSeq < wEntry.seq {
-				upperSeq = wEntry.seq
-			}
-
-			if last || data.Size() > db.opts.BufferSize {
-				nBlocks := blockWriter.Count()
-				for i := 0; i < nBlocks; i++ {
-					if _, err := db.newBlock(); err != nil {
-						return false, err
-					}
-				}
-				if err := blockWriter.write(); err != nil {
-					return true, err
-				}
-				if _, err := dataWriter.write(); err != nil {
-					return true, err
-				}
-
-				if err := db.sync(); err != nil {
-					return true, err
-				}
-
-				if err := db.wal.SignalLogApplied(upperSeq); err != nil {
-					return true, err
-				}
+			if db.upperSeq < wEntry.seq {
+				db.upperSeq = wEntry.seq
 			}
 
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+		}
+
+		if last || db.rawData.Size() > db.opts.BufferSize {
+			nBlocks := db.blockWriter.Count()
+			for i := 0; i < nBlocks; i++ {
+				if _, err := db.newBlock(); err != nil {
+					return false, err
+				}
+			}
+			if err := db.blockWriter.write(); err != nil {
+				return true, err
+			}
+			if _, err := db.dataWriter.write(); err != nil {
+				return true, err
+			}
+
+			if err := db.sync(); err != nil {
+				return true, err
+			}
+
+			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+				return true, err
+			}
 		}
 
 		return false, nil
@@ -167,7 +203,7 @@ func (db *DB) Sync() error {
 
 	if err != nil {
 		// run db recovery if an error occur with the db sync
-		if err := db.recoverLog(); err != nil {
+		if err := db.startRecovery(); err != nil {
 			// if unable to recover db then close db
 			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
 		}

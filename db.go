@@ -204,6 +204,17 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
+	// Create a new MAC from the key.
+	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+		return nil, err
+	}
+
+	// set encryption flag to encrypt messages
+	db.encryption = 0
+	if opts.Encryption {
+		db.encryption = 1
+	}
+
 	//initbatchdb
 	if err = db.initbatchdb(opts); err != nil {
 		return nil, err
@@ -211,10 +222,6 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	db.filter.cache = db.mem
 	db.filter.cacheID = db.cacheID
-
-	if err := db.loadTopicHash(); err != nil {
-		return nil, err
-	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
@@ -233,15 +240,8 @@ func Open(path string, opts *Options) (*DB, error) {
 		}
 	}
 
-	// Create a new MAC from the key.
-	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+	if err := db.loadTopicHash(); err != nil {
 		return nil, err
-	}
-
-	// set ecnryption flag to encrypt messages
-	db.encryption = 0
-	if opts.Encryption {
-		db.encryption = 1
 	}
 
 	db.startSyncer(opts.BackgroundSyncInterval)
@@ -941,7 +941,7 @@ func (db *DB) delete(seq uint64) error {
 	if blockIdx > db.blocks() {
 		return nil // no record to delete
 	}
-	blockWriter := newBlockWriter(db.index, nil, blockOffset(blockIdx))
+	blockWriter := newBlockWriter(&db.index, nil)
 	e, err := blockWriter.del(seq)
 	if err != nil {
 		return err

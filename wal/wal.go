@@ -251,7 +251,7 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 				return err
 			}
 			r := &Reader{entryCount: ul.entryCount, logData: data, blockOffset: 0}
-			if stop, err := f(ul.seq, idx == l, r); stop || err != nil {
+			if stop, err := f(ul.seq, idx == l-1, r); stop || err != nil {
 				return err
 			}
 			offset += align(ul.size + int64(logHeaderSize))

@@ -323,7 +323,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w m
 			wEntries[h] = entries
 		}
 		ws.mu.RUnlock()
-		stop, err1 := f(i == nShards, wEntries)
+		stop, err1 := f(i == nShards-1, wEntries)
 		if stop || err1 != nil {
 			err = err1
 			if freeze {

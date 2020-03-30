@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"encoding/binary"
+	"sort"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -43,15 +44,15 @@ type (
 	blockWriter struct {
 		blocks map[int32]block // map[blockIdx]block
 
-		file
+		*file
 		buffer *bpool.Buffer
-		offset int64
-		count  int // non-leased block count
+		// offset int64
+		count int // non-leased block count
 	}
 )
 
-func newBlockWriter(f file, buf *bpool.Buffer, off int64) *blockWriter {
-	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf, offset: off}
+func newBlockWriter(f *file, buf *bpool.Buffer) *blockWriter {
+	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf}
 }
 
 func (e entry) time() uint32 {
@@ -181,34 +182,47 @@ func (bw *blockWriter) del(seq uint64) (entry, error) {
 }
 
 func (bw *blockWriter) append(e entry, leased bool) error {
-	var b block
-	var ok bool
-	b.leased = leased
 	blockIdx := startBlockIndex(e.seq)
-	b, ok = bw.blocks[blockIdx]
-	if !ok && !leased {
-		bw.count++
+	if b, ok := bw.blocks[blockIdx]; ok {
+		b.pendingWrites = append(b.pendingWrites, e)
+		bw.blocks[blockIdx] = b
+	} else {
+		bw.blocks[blockIdx] = block{pendingWrites: []entry{e}, leased: leased}
+		if !leased {
+			bw.count++
+		}
 	}
-	b.pendingWrites = append(b.pendingWrites, e)
-	b.entryIdx++
-	bw.blocks[blockIdx] = b
 	return nil
 }
 
 func (bw *blockWriter) write() error {
 	defer bw.buffer.Reset()
-	for blockIdx, b := range bw.blocks {
+
+	// sort blocks by blockIdx
+	var blockOff int64
+	var idx []int
+	var blocks []block
+	for i := range bw.blocks {
+		idx = append(idx, int(i))
+	}
+	sort.Ints(idx)
+
+	for i := range idx {
+		blocks = append(blocks, bw.blocks[int32(i)])
+	}
+
+	for blockIdx, b := range blocks {
 		if b.leased {
-			off := blockOffset(blockIdx)
+			off := blockOffset(int32(blockIdx))
 			bh := blockHandle{file: bw.file, offset: off}
 			if err := bh.read(); err != nil {
 				return err
 			}
-			for _, entry := range b.pendingWrites {
+			for _, pendEntry := range b.pendingWrites {
 				entryIdx := 0
 				for i := 0; i < int(bh.entryIdx); i++ {
 					e := bh.entries[i]
-					if e.seq == entry.seq { //record exist in db
+					if e.seq == pendEntry.seq { //record exist in db
 						entryIdx = -1
 						break
 					}
@@ -216,7 +230,7 @@ func (bw *blockWriter) write() error {
 				if entryIdx == -1 {
 					continue
 				}
-				bh.entries[bh.entryIdx] = entry
+				bh.entries[bh.entryIdx] = pendEntry
 				bh.entryIdx++
 			}
 			buf := bh.MarshalBinary()
@@ -224,10 +238,28 @@ func (bw *blockWriter) write() error {
 				return err
 			}
 		} else {
+			if blockOff == 0 {
+				blockOff = blockOffset(int32(blockIdx))
+			}
+			for _, pendEntry := range b.pendingWrites {
+				entryIdx := 0
+				for i := 0; i < int(b.entryIdx); i++ {
+					e := b.entries[i]
+					if e.seq == pendEntry.seq { //record exist in db
+						entryIdx = -1
+						break
+					}
+				}
+				if entryIdx == -1 {
+					continue
+				}
+				b.entries[b.entryIdx] = pendEntry
+				b.entryIdx++
+			}
 			bw.buffer.Write(b.MarshalBinary())
 		}
 	}
-	if _, err := bw.WriteAt(bw.buffer.Bytes(), bw.offset); err != nil {
+	if _, err := bw.WriteAt(bw.buffer.Bytes(), blockOff); err != nil {
 		return err
 	}
 	return nil
