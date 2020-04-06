@@ -67,20 +67,20 @@ func main() {
 		}
 	}(1)
 
-	if err := benchmark3(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-	}
+	// if err := benchmark3(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
+	// 	fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	// }
 
-	func(retry int) {
-		i := 1
-		for range time.Tick(1000 * time.Millisecond) {
-			if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
-				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-			}
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
+	// func(retry int) {
+	// 	i := 1
+	// 	for range time.Tick(1000 * time.Millisecond) {
+	// 		if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
+	// 			fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	// 		}
+	// 		if i >= retry {
+	// 			return
+	// 		}
+	// 		i++
+	// 	}
+	// }(1)
 }

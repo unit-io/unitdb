@@ -102,7 +102,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	if b.Len() < 100000 {
+	if db.bufPool.Backoff() {
 		return b.Commit()
 	}
 	go b.Commit()

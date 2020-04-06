@@ -251,7 +251,8 @@ func (l *lease) read(dt dataTable, off int64) error {
 		}
 		offset += int64(12 * n)
 	}
-	l.freeBlock(off, align(4+size*12))
+	// l.freeBlock(off, align(4+size*12))
+	l.freeBlock(off, 4+size*12)
 	return nil
 }
 
@@ -263,7 +264,8 @@ func (l *lease) write(dt dataTable) (int64, error) {
 	var buf []byte
 	for i := 0; i < nShards; i++ {
 		fbs := l.blocks[i]
-		marshaledSize += align(fbs.binarySize())
+		// marshaledSize += align(fbs.binarySize())
+		marshaledSize += fbs.binarySize()
 		data, err := fbs.MarshalBinary()
 		buf = append(buf, data...)
 		if err != nil {

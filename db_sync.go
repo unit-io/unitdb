@@ -11,10 +11,9 @@ import (
 
 type (
 	internal struct {
-		startBlockIdx int32
-		upperSeq      uint64
-		lastSyncSeq   uint64
-		syncStatusOk  bool
+		upperSeq     uint64
+		lastSyncSeq  uint64
+		syncStatusOk bool
 
 		rawBlock *bpool.Buffer
 		rawData  *bpool.Buffer
@@ -33,7 +32,6 @@ func (db *syncHandle) startSync() bool {
 		db.syncStatusOk = false
 		return false
 	}
-	db.startBlockIdx = db.blocks()
 	db.lastSyncSeq = db.Seq()
 
 	db.rawBlock = db.bufPool.Get()
@@ -140,7 +138,6 @@ func (db *syncHandle) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
@@ -156,14 +153,20 @@ func (db *syncHandle) Sync() error {
 					return true, err
 				}
 
-				db.meter.Syncs.Inc(1)
 				if memEntry.msgOffset, err = db.dataWriter.writeMessage(memdata[entrySize:]); err != nil {
 					return true, err
 				}
-				db.blockWriter.append(memEntry, startBlockIndex(memEntry.seq) <= db.startBlockIdx)
+				exists, err := db.blockWriter.append(memEntry, startBlockIndex(memEntry.seq) <= db.blocks())
+				if err != nil {
+					return true, err
+				}
+				if exists {
+					continue
+				}
 
 				db.filter.Append(wEntry.seq)
 				db.incount()
+				db.meter.Syncs.Inc(1)
 				db.meter.InMsgs.Inc(1)
 				db.meter.InBytes.Inc(int64(memEntry.valueSize))
 			}
@@ -172,10 +175,32 @@ func (db *syncHandle) Sync() error {
 				db.upperSeq = wEntry.seq
 			}
 
+			// if db.rawData.Size() > db.opts.BufferSize {
+			nBlocks := db.blockWriter.Count()
+			for i := 0; i < nBlocks; i++ {
+				if _, err := db.newBlock(); err != nil {
+					return true, err
+				}
+			}
+			if err := db.blockWriter.write(); err != nil {
+				return true, err
+			}
+			if _, err := db.dataWriter.write(); err != nil {
+				return true, err
+			}
+			if err := db.sync(); err != nil {
+				return true, err
+			}
+
+			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+				return true, err
+			}
+			// }
+
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
 
-		if last || db.rawData.Size() > db.opts.BufferSize {
+		if last {
 			nBlocks := db.blockWriter.Count()
 			for i := 0; i < nBlocks; i++ {
 				if _, err := db.newBlock(); err != nil {
@@ -188,11 +213,9 @@ func (db *syncHandle) Sync() error {
 			if _, err := db.dataWriter.write(); err != nil {
 				return true, err
 			}
-
 			if err := db.sync(); err != nil {
 				return true, err
 			}
-
 			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 				return true, err
 			}

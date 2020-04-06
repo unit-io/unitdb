@@ -53,7 +53,8 @@ type header struct {
 }
 
 func init() {
-	headerSize = uint32(align(int64(binary.Size(logInfo{}))))
+	// headerSize = uint32(align(int64(binary.Size(logInfo{}))))
+	headerSize = uint32(binary.Size(logInfo{}))
 }
 
 // MarshalBinary serialized header into binary data

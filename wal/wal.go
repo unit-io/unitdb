@@ -27,6 +27,10 @@ const (
 	// and their associated blocks can be reclaimed.
 	logStatusApplied
 
+	// logStatusReleased indicates that the logs has been applied and merged with freeblocks.
+	// Logs with this status are removed from the WAL.
+	logStatusReleased
+
 	DefaultBufferSize = 1 << 27
 	version           = 1 // file format version
 )
@@ -152,8 +156,8 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			return err
 		}
-		if l.offset < 0 || l.status > logStatusApplied {
-			fmt.Println("wal.recoverLogHeader: logInfo ", l)
+		if l.offset < 0 || l.status > logStatusReleased {
+			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.fb, l)
 			return nil
 		}
 		if ok, err := wal.logMerge(l); !ok {
@@ -162,14 +166,16 @@ func (wal *WAL) recoverLogHeaders() error {
 			}
 			wal.logs = append(wal.logs, l)
 		}
-		offset = l.offset + align(l.size+int64(logHeaderSize))
+		// offset = l.offset + align(l.size+int64(logHeaderSize))
+		offset = l.offset + l.size + int64(logHeaderSize)
 	}
 }
 
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
-	wal.logFile.size = align(wal.logFile.size)
+	// wal.logFile.size = align(wal.logFile.size)
+	wal.logFile.size = wal.logFile.size
 	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
 		return err
 	}
@@ -254,7 +260,11 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 			if stop, err := f(ul.seq, idx == l-1, r); stop || err != nil {
 				return err
 			}
-			offset += align(ul.size + int64(logHeaderSize))
+			if err := wal.signalLogApplied(i); err != nil {
+				return err
+			}
+			// offset += align(ul.size + int64(logHeaderSize))
+			offset += ul.size + int64(logHeaderSize)
 
 			idx++
 		}
@@ -282,25 +292,43 @@ func (r *Reader) Next() ([]byte, bool) {
 	return logData[4:dataLen], true
 }
 
-func (wal *WAL) logMerge(log logInfo) (merged bool, err error) {
-	if log.status != logStatusApplied {
+func (wal *WAL) logMerge(log logInfo) (released bool, err error) {
+	if log.status == logStatusWritten {
 		return false, nil
 	}
 	if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == log.offset {
-		wal.logFile.fb.currSize += align(log.size + int64(logHeaderSize))
+		released = true
+		// wal.logFile.fb.currSize += align(log.size + int64(logHeaderSize))
+		wal.logFile.fb.currSize += log.size + int64(logHeaderSize)
 	} else {
 		if wal.logFile.fb.offset+wal.logFile.fb.size == log.offset {
-			wal.logFile.fb.size += align(log.size + int64(logHeaderSize))
+			released = true
+			// wal.logFile.fb.size += align(log.size + int64(logHeaderSize))
+			wal.logFile.fb.size += log.size + int64(logHeaderSize)
 		}
 		// reset current free block
 		if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size >= wal.logFile.fb.currOffset {
 			wal.logFile.fb.currOffset = wal.logFile.fb.offset
-			wal.logFile.fb.currSize += align(wal.logFile.fb.size)
+			// wal.logFile.fb.currSize += align(wal.logFile.fb.size)
+			wal.logFile.fb.currSize += wal.logFile.fb.size
 			wal.logFile.fb.size = 0
 		}
 	}
 	// fmt.Println("wal.logMerge: fb ", wal.logFile.fb)
-	return true, nil
+	return released, nil
+}
+
+func (wal *WAL) signalLogApplied(i int) error {
+	wal.logs[i].status = logStatusApplied
+	released, err := wal.logMerge(wal.logs[i])
+	if err != nil {
+		return err
+	}
+	if released {
+		wal.logs[i].status = logStatusReleased
+	}
+	wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
+	return nil
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
@@ -319,11 +347,9 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
 		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= upperSeq {
-			wal.logs[i].status = logStatusApplied
-			if _, err := wal.logMerge(wal.logs[i]); err != nil {
+			if err := wal.signalLogApplied(i); err != nil {
 				return err
 			}
-			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 		}
 	}
 	return wal.writeHeader()
@@ -387,12 +413,12 @@ func (wal *WAL) defrag() error {
 	})
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		ok, err := wal.logMerge(wal.logs[i])
+		released, err := wal.logMerge(wal.logs[i])
 		if err != nil {
 			return err
 		}
-		if ok {
-			wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
+		if released {
+			wal.logs[i].status = logStatusReleased
 		}
 	}
 

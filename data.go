@@ -50,7 +50,8 @@ func (dt *dataTable) readTopic(e entry) ([]byte, error) {
 }
 
 func (dt *dataTable) free(e entry) {
-	size := align(e.mSize())
+	// size := align(e.mSize())
+	size := e.mSize()
 	dt.lease.free(e.seq, e.msgOffset, size)
 }
 
@@ -65,7 +66,8 @@ func (dt *dataTable) extend(size uint32) (int64, error) {
 }
 
 func (dw *dataWriter) writeMessage(data []byte) (off int64, err error) {
-	dataLen := align(uint32(len(data)))
+	// dataLen := align(uint32(len(data)))
+	dataLen := uint32(len(data))
 	buf := make([]byte, dataLen)
 	copy(buf, data)
 	off = dw.lease.allocate(dataLen)
@@ -87,7 +89,8 @@ func (dw *dataWriter) append(data []byte) (int, error) {
 		return 0, nil
 	}
 
-	dataLen := align(uint32(len(data)))
+	// dataLen := align(uint32(len(data)))
+	dataLen := len(data)
 	off, err := dw.buffer.Extend(int64(dataLen))
 	if err != nil {
 		return 0, err

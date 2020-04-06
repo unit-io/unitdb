@@ -58,14 +58,18 @@ func (db *syncHandle) startRecovery() error {
 			if err := logEntry.UnmarshalBinary(entryData); err != nil {
 				return true, err
 			}
-			db.meter.Recovers.Inc(1)
 			msgOffset := logEntry.mSize()
 			m := data[:msgOffset]
 			if logEntry.msgOffset, err = db.dataWriter.writeMessage(m); err != nil {
 				return true, err
 			}
-			db.blockWriter.append(logEntry, startBlockIndex(logEntry.seq) <= db.startBlockIdx)
-
+			exists, err := db.blockWriter.append(logEntry, startBlockIndex(logEntry.seq) <= db.blocks())
+			if err != nil {
+				return true, err
+			}
+			if exists {
+				continue
+			}
 			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
 			topic := new(message.Topic)
@@ -84,6 +88,7 @@ func (db *syncHandle) startRecovery() error {
 			}
 			db.filter.Append(logEntry.seq)
 			db.incount()
+			db.meter.Recovers.Inc(1)
 			db.meter.InMsgs.Inc(1)
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
@@ -93,14 +98,10 @@ func (db *syncHandle) startRecovery() error {
 		}
 
 		if last || db.rawData.Size() > db.opts.BufferSize {
-			if err := db.recoverWindowBlocks(); err != nil {
-				return true, err
-			}
-
 			nBlocks := db.blockWriter.Count()
 			for i := 0; i < nBlocks; i++ {
 				if _, err := db.newBlock(); err != nil {
-					return false, err
+					return true, err
 				}
 			}
 
@@ -110,7 +111,9 @@ func (db *syncHandle) startRecovery() error {
 			if _, err := db.dataWriter.write(); err != nil {
 				return true, err
 			}
-
+			if err := db.recoverWindowBlocks(); err != nil {
+				return true, err
+			}
 			if err := db.sync(); err != nil {
 				return true, err
 			}
@@ -128,6 +131,12 @@ func (db *syncHandle) startRecovery() error {
 }
 
 func (db *DB) recoverLog() error {
+	// Sync happens synchronously
+	db.syncLockC <- struct{}{}
+	defer func() {
+		<-db.syncLockC
+	}()
+
 	syncHandle := syncHandle{DB: db, internal: internal{}}
 	return syncHandle.startRecovery()
 }

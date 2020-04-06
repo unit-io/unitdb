@@ -236,20 +236,20 @@ func main() {
 		return
 	}
 
-	func(retry int) {
-		i := 1
-		for range time.Tick(3 * time.Second) {
-			print([]byte("unit8.b1?last=20"), db)
-			print([]byte("unit8.b.b1?last=20"), db)
-			print([]byte("unit8.b.b11?last=20"), db)
-			print([]byte("unit8?last=10"), db)
-			print([]byte("unit9?last=10"), db)
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
+	// func(retry int) {
+	// 	i := 1
+	// 	for range time.Tick(3 * time.Second) {
+	// 		print([]byte("unit8.b1?last=20"), db)
+	// 		print([]byte("unit8.b.b1?last=20"), db)
+	// 		print([]byte("unit8.b.b11?last=20"), db)
+	// 		print([]byte("unit8?last=10"), db)
+	// 		print([]byte("unit9?last=10"), db)
+	// 		if i >= retry {
+	// 			return
+	// 		}
+	// 		i++
+	// 	}
+	// }(1)
 	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 100})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)

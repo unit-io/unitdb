@@ -129,7 +129,7 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 			r++
 		}
 		return nil
-	}(10)
+	}(7)
 
 	printStats(db)
 	if err := db.Close(); err != nil {

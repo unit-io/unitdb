@@ -450,6 +450,7 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 		blockOff = wb.newBlock()
 		w.offset = blockOff
 		w.topicHash = topicHash
+		// fmt.Println("timeWindow.sync: topicHash ", topicHash)
 	} else {
 		if err := w.read(); err != nil {
 			return off, err

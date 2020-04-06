@@ -61,8 +61,8 @@ type (
 		encryption   uint8
 		seq          uint64
 		count        int64
-		blockIndex   int32
-		windowIndex  int32
+		blockIdx     int32
+		windowIdx    int32
 		freeblockOff int64
 		cacheID      uint64
 	}
@@ -148,7 +148,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		syncLockC:   make(chan struct{}, 1),
 		expiryLockC: make(chan struct{}, 1),
 		dbInfo: dbInfo{
-			blockIndex:   -1,
+			blockIdx:     -1,
 			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
@@ -223,6 +223,10 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.filter.cache = db.mem
 	db.filter.cacheID = db.cacheID
 
+	if err := db.loadTopicHash(); err != nil {
+		return nil, err
+	}
+
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
@@ -238,10 +242,6 @@ func Open(path string, opts *Options) (*DB, error) {
 			// if unable to recover db then close db
 			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
 		}
-	}
-
-	if err := db.loadTopicHash(); err != nil {
-		return nil, err
 	}
 
 	db.startSyncer(opts.BackgroundSyncInterval)
@@ -268,8 +268,8 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 			encryption:   db.encryption,
 			seq:          atomic.LoadUint64(&db.seq),
 			count:        atomic.LoadInt64(&db.count),
-			blockIndex:   db.blocks(),
-			windowIndex:  db.timeWindow.windowIndex(),
+			blockIdx:     db.blocks(),
+			windowIdx:    db.timeWindow.windowIndex(),
 			freeblockOff: db.freeblockOff,
 			cacheID:      db.cacheID,
 		},
@@ -286,7 +286,7 @@ func (db *DB) readHeader() error {
 	// 	return errCorrupted
 	// }
 	db.dbInfo = h.dbInfo
-	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIndex)
+	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIdx)
 	if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
 		return nil
 	}
@@ -298,10 +298,9 @@ func (db *DB) readHeader() error {
 func (db *DB) loadTopicHash() error {
 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
 		w := &curw
-		wOff := w.offset
-		sOff, ok := db.trie.getOffset(w.topicHash)
-		if !ok || sOff < wOff {
-			if ok := db.trie.setOffset(w.topicHash, wOff); !ok {
+		wOff, ok := db.trie.getOffset(w.topicHash)
+		if !ok || wOff < w.offset {
+			if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
 				if w.entryIdx == 0 {
 					return false, nil
 				}
@@ -310,6 +309,7 @@ func (db *DB) loadTopicHash() error {
 				b := blockHandle{file: db.index, offset: off}
 				if err := b.read(); err != nil {
 					if err == io.EOF {
+						fmt.Println("db.loadTopicHash: eof ", w.topicHash, off, seq)
 						return false, nil
 					}
 					return true, err
@@ -323,6 +323,8 @@ func (db *DB) loadTopicHash() error {
 					}
 				}
 				if entryIdx == -1 {
+					fmt.Println("db.loadTopicHash: topicHash, off seq ", w.topicHash, off, seq)
+					// return false, errors.New("db.loadTopicHash: unable to get topic from db.")
 					return false, nil
 				}
 				e := b.entries[entryIdx]
@@ -336,8 +338,8 @@ func (db *DB) loadTopicHash() error {
 					return true, err
 				}
 				if ok := db.trie.addTopic(message.Contract(topic.Parts), w.topicHash, topic.Parts, topic.Depth); ok {
-					if ok := db.trie.setOffset(w.topicHash, wOff); !ok {
-						return true, errors.New("topic_trie loading error: unable to set topic offset to topic trie")
+					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
+						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
 					}
 				}
 			}
@@ -640,18 +642,6 @@ func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
 	db.addBlock()
 	return off, err
-}
-
-// extendBlocks adds new blocks to DB
-func (db *DB) extendBlocks() error {
-	nBlocks := int32(float64(db.Seq()) / float64(entriesPerIndexBlock))
-	if nBlocks <= db.blocks() {
-		return nil
-	}
-	nBlocksNew := nBlocks - db.blocks()
-	_, err := db.index.extend(uint32(nBlocksNew) * blockSize)
-	atomic.AddInt32(&db.blockIndex, nBlocksNew)
-	return err
 }
 
 func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
@@ -985,12 +975,12 @@ func (db *DB) Count() int64 {
 
 // blocks returns the total blocks in the DB.
 func (db *DB) blocks() int32 {
-	return atomic.LoadInt32(&db.blockIndex)
+	return atomic.LoadInt32(&db.blockIdx)
 }
 
 // addBlock adds new block to the DB.
 func (db *DB) addBlock() int32 {
-	return atomic.AddInt32(&db.blockIndex, 1)
+	return atomic.AddInt32(&db.blockIdx, 1)
 }
 
 func (db *DB) incount() int64 {
