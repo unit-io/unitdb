@@ -63,7 +63,7 @@ func (db *syncHandle) startRecovery() error {
 			if logEntry.msgOffset, err = db.dataWriter.writeMessage(m); err != nil {
 				return true, err
 			}
-			exists, err := db.blockWriter.append(logEntry, startBlockIndex(logEntry.seq) <= db.blocks())
+			exists, err := db.blockWriter.append(logEntry, db.blocks())
 			if err != nil {
 				return true, err
 			}

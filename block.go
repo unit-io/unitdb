@@ -32,11 +32,8 @@ type (
 		entries  [entriesPerIndexBlock]entry
 		next     uint32
 		entryIdx uint16
-	}
 
-	leasedBlock struct {
-		entries  []entry
-		entryIdx uint16
+		leased bool
 	}
 
 	blockHandle struct {
@@ -46,8 +43,7 @@ type (
 	}
 
 	blockWriter struct {
-		blocks map[int32]block       // map[blockIdx]block
-		leased map[int32]leasedBlock // map[blockIdx]leasedBlock
+		blocks map[int32]block // map[blockIdx]block
 
 		*file
 		buffer *bpool.Buffer
@@ -56,7 +52,7 @@ type (
 )
 
 func newBlockWriter(f *file, buf *bpool.Buffer) *blockWriter {
-	return &blockWriter{blocks: make(map[int32]block), leased: make(map[int32]leasedBlock), file: f, buffer: buf}
+	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf}
 }
 
 func (e entry) time() uint32 {
@@ -185,46 +181,38 @@ func (bw *blockWriter) del(seq uint64) (entry, error) {
 	return delEntry, nil
 }
 
-func (bw *blockWriter) append(e entry, leased bool) (exists bool, err error) {
-	blockIdx := startBlockIndex(e.seq)
-	if leased {
-		b, ok := bw.leased[blockIdx]
-		if !ok {
-			off := blockOffset(int32(blockIdx))
+func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) {
+	var b block
+	var ok bool
+	startBlockIdx := startBlockIndex(e.seq)
+	b, ok = bw.blocks[startBlockIdx]
+	if !ok {
+		if startBlockIdx <= blockIdx {
+			off := blockOffset(int32(startBlockIdx))
 			bh := blockHandle{file: bw.file, offset: off}
 			if err := bh.read(); err != nil {
 				return false, err
 			}
-			lBlock := leasedBlock{}
-			b = leasedBlock{entries: append(lBlock.entries, bh.block.entries[:bh.entryIdx]...), entryIdx: bh.entryIdx}
+			b = bh.block
+			b.leased = true
+		} else {
+			bw.count++
 		}
-		entryIdx := 0
-		for i := 0; i < int(b.entryIdx); i++ {
-			if b.entries[i].seq == e.seq { //record exist in db
-				entryIdx = -1
-				break
-			}
-		}
-		if entryIdx == -1 {
-			return true, nil
-		}
-		// fmt.Println("block.append: leased off, entryId, seq", blockOffset(int32(blockIdx)), b.entryIdx, e.seq)
-		b.entries = append(b.entries, e)
-		b.entryIdx++
-		bw.leased[blockIdx] = b
-		return false, nil
 	}
-
-	b, ok := bw.blocks[blockIdx]
-	if !ok {
-		bw.count++
+	entryIdx := 0
+	for i := 0; i < int(b.entryIdx); i++ {
+		if b.entries[i].seq == e.seq { //record exist in db
+			entryIdx = -1
+			break
+		}
 	}
-
-	// fmt.Println("block.append: off, entryId, seq", blockOffset(int32(blockIdx)), b.entryIdx, e.seq)
+	if entryIdx == -1 {
+		return true, nil
+	}
 	b.entries[b.entryIdx] = e
 	b.entryIdx++
 
-	bw.blocks[blockIdx] = b
+	bw.blocks[startBlockIdx] = b
 
 	return false, nil
 }
@@ -233,49 +221,19 @@ func (bw *blockWriter) write() error {
 	defer func() {
 		bw.count = 0
 		bw.blocks = make(map[int32]block)
-		bw.leased = make(map[int32]leasedBlock)
 		bw.buffer.Reset()
 	}()
 
-	// sort blocks by blockIdx
-	var idx []int
-	// var blocks [][]int
-	for i := range bw.blocks {
-		idx = append(idx, int(i))
-	}
-	sort.Ints(idx)
-	blocks, err := blockRange(idx)
-	if err != nil {
-		return err
-	}
-	fmt.Println("block.write: blocks ", blocks)
-	for _, idx := range blocks {
-		if len(idx) == 1 {
-			off := blockOffset(int32(idx[0]))
-			b := bw.blocks[int32(idx[0])]
-			buf := b.MarshalBinary()
-			if _, err := bw.WriteAt(buf, off); err != nil {
-				return err
-			}
+	var leasedBlocks []int32
+	for blockIdx, b := range bw.blocks {
+		if !b.leased {
 			continue
 		}
-		blockOff := blockOffset(int32(idx[0]))
-		for i := idx[0]; i <= idx[1]; i++ {
-			b := bw.blocks[int32(i)]
-			bw.buffer.Write(b.MarshalBinary())
-		}
-		if _, err := bw.WriteAt(bw.buffer.Bytes(), blockOff); err != nil {
-			return err
-		}
-	}
-
-	for blockIdx, b := range bw.leased {
 		off := blockOffset(int32(blockIdx))
 		bh := blockHandle{file: bw.file, offset: off}
 		if err := bh.read(); err != nil {
 			return err
 		}
-		// fmt.Println("block.write: blockIdx, entryIdx, count ", blockIdx, bh.entryIdx, len(b.entries))
 		for _, e := range b.entries {
 			entryIdx := 0
 			for i := 0; i < int(bh.entryIdx); i++ {
@@ -287,19 +245,45 @@ func (bw *blockWriter) write() error {
 			if entryIdx == -1 {
 				continue
 			}
-			if bh.entryIdx == entriesPerIndexBlock {
-				seqs := []uint64{}
-				for _, e := range b.entries {
-					seqs = append(seqs, e.seq)
-				}
-				fmt.Println("block.write: err ", seqs)
-			}
 			bh.entries[bh.entryIdx] = e
 			bh.entryIdx++
 		}
 
 		buf := bh.MarshalBinary()
 		if _, err := bw.WriteAt(buf, off); err != nil {
+			return err
+		}
+		leasedBlocks = append(leasedBlocks, blockIdx)
+		delete(bw.blocks, blockIdx)
+	}
+
+	// sort blocks by blockIdx
+	var idx []int
+	for i := range bw.blocks {
+		idx = append(idx, int(i))
+	}
+	sort.Ints(idx)
+	blocks, err := blockRange(idx)
+	if err != nil {
+		return err
+	}
+	for _, bIdx := range blocks {
+		if len(bIdx) == 1 {
+			off := blockOffset(int32(bIdx[0]))
+			b := bw.blocks[int32(bIdx[0])]
+			buf := b.MarshalBinary()
+			if _, err := bw.WriteAt(buf, off); err != nil {
+				return err
+			}
+			continue
+		}
+		blockOff := blockOffset(int32(bIdx[0]))
+		bw.buffer.Reset()
+		for i := bIdx[0]; i <= bIdx[1]; i++ {
+			b := bw.blocks[int32(i)]
+			bw.buffer.Write(b.MarshalBinary())
+		}
+		if _, err := bw.WriteAt(bw.buffer.Bytes(), blockOff); err != nil {
 			return err
 		}
 	}

@@ -156,7 +156,7 @@ func (db *syncHandle) Sync() error {
 				if memEntry.msgOffset, err = db.dataWriter.writeMessage(memdata[entrySize:]); err != nil {
 					return true, err
 				}
-				exists, err := db.blockWriter.append(memEntry, startBlockIndex(memEntry.seq) <= db.blocks())
+				exists, err := db.blockWriter.append(memEntry, db.blocks())
 				if err != nil {
 					return true, err
 				}
@@ -175,27 +175,27 @@ func (db *syncHandle) Sync() error {
 				db.upperSeq = wEntry.seq
 			}
 
-			// if db.rawData.Size() > db.opts.BufferSize {
-			nBlocks := db.blockWriter.Count()
-			for i := 0; i < nBlocks; i++ {
-				if _, err := db.newBlock(); err != nil {
+			if db.rawData.Size() > db.opts.BufferSize {
+				nBlocks := db.blockWriter.Count()
+				for i := 0; i < nBlocks; i++ {
+					if _, err := db.newBlock(); err != nil {
+						return true, err
+					}
+				}
+				if err := db.blockWriter.write(); err != nil {
+					return true, err
+				}
+				if _, err := db.dataWriter.write(); err != nil {
+					return true, err
+				}
+				if err := db.sync(); err != nil {
+					return true, err
+				}
+
+				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 					return true, err
 				}
 			}
-			if err := db.blockWriter.write(); err != nil {
-				return true, err
-			}
-			if _, err := db.dataWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.sync(); err != nil {
-				return true, err
-			}
-
-			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
-				return true, err
-			}
-			// }
 
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
