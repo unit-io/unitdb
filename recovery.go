@@ -10,14 +10,14 @@ import (
 	"github.com/unit-io/tracedb/wal"
 )
 
-func (db *DB) recoverWindowBlocks() error {
+func (db *syncHandle) recoverWindowBlocks() error {
 	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
 				return true, errors.New("recovery.recoverWindowBlocks error: unable to get topic offset from trie")
 			}
-			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
+			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 			if err != nil {
 				return true, err
 			}
@@ -93,6 +93,10 @@ func (db *syncHandle) startRecovery() error {
 			db.meter.InBytes.Inc(int64(logEntry.valueSize))
 		}
 
+		if err := db.recoverWindowBlocks(); err != nil {
+			return true, err
+		}
+
 		if db.upperSeq < upperSeq {
 			db.upperSeq = upperSeq
 		}
@@ -104,14 +108,13 @@ func (db *syncHandle) startRecovery() error {
 					return true, err
 				}
 			}
-
-			if err := db.blockWriter.write(); err != nil {
-				return true, err
-			}
 			if _, err := db.dataWriter.write(); err != nil {
 				return true, err
 			}
-			if err := db.recoverWindowBlocks(); err != nil {
+			if err := db.blockWriter.write(); err != nil {
+				return true, err
+			}
+			if err := db.windowWriter.write(); err != nil {
 				return true, err
 			}
 			if err := db.sync(); err != nil {

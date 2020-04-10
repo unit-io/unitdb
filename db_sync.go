@@ -15,15 +15,17 @@ type (
 		lastSyncSeq  uint64
 		syncStatusOk bool
 
-		rawBlock *bpool.Buffer
-		rawData  *bpool.Buffer
+		rawWindow *bpool.Buffer
+		rawBlock  *bpool.Buffer
+		rawData   *bpool.Buffer
 	}
 	syncHandle struct {
 		internal
 		*DB
 
-		blockWriter *blockWriter
-		dataWriter  *dataWriter
+		windowWriter *windowWriter
+		blockWriter  *blockWriter
+		dataWriter   *dataWriter
 	}
 )
 
@@ -34,9 +36,11 @@ func (db *syncHandle) startSync() bool {
 	}
 	db.lastSyncSeq = db.Seq()
 
+	db.rawWindow = db.bufPool.Get()
 	db.rawBlock = db.bufPool.Get()
 	db.rawData = db.bufPool.Get()
 
+	db.windowWriter = newWindowWriter(db.timeWindow, db.rawWindow)
 	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
 	db.dataWriter = newDataWriter(&db.data, db.rawData)
 	db.syncStatusOk = true
@@ -94,6 +98,9 @@ func (db *DB) sync() error {
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
+	if err := db.timeWindow.Sync(); err != nil {
+		return err
+	}
 	if err := db.index.Sync(); err != nil {
 		return err
 	}
@@ -131,7 +138,7 @@ func (db *syncHandle) Sync() error {
 			if !ok {
 				return true, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
 			}
-			wOff, err := db.timeWindow.sync(h, topicOff, wEntries)
+			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 			if err != nil {
 				return true, err
 			}
@@ -182,16 +189,18 @@ func (db *syncHandle) Sync() error {
 						return true, err
 					}
 				}
+				if _, err := db.dataWriter.write(); err != nil {
+					return true, err
+				}
 				if err := db.blockWriter.write(); err != nil {
 					return true, err
 				}
-				if _, err := db.dataWriter.write(); err != nil {
+				if err := db.windowWriter.write(); err != nil {
 					return true, err
 				}
 				if err := db.sync(); err != nil {
 					return true, err
 				}
-
 				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 					return true, err
 				}
@@ -200,17 +209,20 @@ func (db *syncHandle) Sync() error {
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
 
-		if last {
+		if last || db.rawData.Size() > db.opts.BufferSize {
 			nBlocks := db.blockWriter.Count()
 			for i := 0; i < nBlocks; i++ {
 				if _, err := db.newBlock(); err != nil {
 					return false, err
 				}
 			}
+			if _, err := db.dataWriter.write(); err != nil {
+				return true, err
+			}
 			if err := db.blockWriter.write(); err != nil {
 				return true, err
 			}
-			if _, err := db.dataWriter.write(); err != nil {
+			if err := db.windowWriter.write(); err != nil {
 				return true, err
 			}
 			if err := db.sync(); err != nil {

@@ -27,6 +27,8 @@ type (
 		winEntries [seqsPerWindowBlock]winEntry
 		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order)
 		entryIdx   uint16
+
+		leased bool
 	}
 )
 
@@ -72,8 +74,6 @@ type windowHandle struct {
 	winBlock
 	file
 	offset int64
-
-	leased bool
 }
 
 func winBlockOffset(idx int32) int64 {
@@ -189,12 +189,20 @@ func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	return l
 }
 
+type windowWriter struct {
+	*timeWindowBucket
+	winBlocks map[int32]winBlock // map[windowIdx]winBlock
+
+	buffer  *bpool.Buffer
+	wBlocks uint32 // non-leased window block count
+}
+
+func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
+	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf}
+}
+
 // newBlock adds new window block to timeWindowBucket and returns block offset
 func (wb *timeWindowBucket) newBlock() int64 {
-	// off, err := wb.extend(blockSize)
-	// if err != nil {
-	// 	return off, err
-	// }
 	wb.windowIdx++
 	return int64(blockSize * uint32(wb.windowIdx))
 }
@@ -436,15 +444,9 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	return winEntries, nextOff
 }
 
-// sync syncs window entries to window file
-func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
-	// startIdx := 0
-	bufSize := int64(1 << 27)
+// append appends window entries to buffer
+func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
 	blockOff := int64(0)
-	bufPool := bpool.NewBufferPool(bufSize, nil)
-	rawWindow := bufPool.Get()
-	defer bufPool.Put(rawWindow)
-	var blocks []windowHandle
 	w := windowHandle{file: wb.file, offset: off}
 	if off == 0 {
 		blockOff = wb.newBlock()
@@ -486,34 +488,73 @@ func (wb *timeWindowBucket) sync(topicHash uint64, off int64, wEntries windowEnt
 			w.topicHash = topicHash
 			w.next = next
 
-			blocks = append(blocks, w)
+			wb.winBlocks[wb.windowIdx] = w.winBlock
 		}
 		w.winEntries[w.entryIdx] = winEntry{seq: we.Seq()}
 		w.entryIdx++
 	}
 
-	nBlocks := uint32(0)
-	blocks = append(blocks, w)
-	for _, block := range blocks {
-		switch {
-		case block.entryIdx == 0:
-		case block.leased:
-			if err := block.write(); err != nil {
-				return 0, err
-			}
-		default:
-			nBlocks++
-			rawWindow.Write(block.MarshalBinary())
+	wb.winBlocks[wb.windowIdx] = w.winBlock
+	return w.offset, nil
+}
+
+func (wb *windowWriter) write() error {
+	defer func() {
+		wb.wBlocks = 0
+		wb.winBlocks = make(map[int32]winBlock)
+		wb.buffer.Reset()
+	}()
+
+	for bIdx, b := range wb.winBlocks {
+		if !b.leased {
+			continue
 		}
-		// fmt.Println("timeWindow.sync: block", block.entryIdx, block.winEntries[:block.entryIdx])
+		off := int64(blockSize * uint32(bIdx))
+		if _, err := wb.WriteAt(b.MarshalBinary(), off); err != nil {
+			return err
+		}
+		delete(wb.winBlocks, bIdx)
 	}
-	if err := wb.extendBlocks(nBlocks); err != nil {
-		return 0, err
+
+	// sort blocks by blockIdx
+	var idx []int
+	for i := range wb.winBlocks {
+		idx = append(idx, int(i))
 	}
-	if _, err := wb.file.WriteAt(rawWindow.Bytes(), blockOff); err != nil {
-		return 0, err
+	sort.Ints(idx)
+
+	winBlocks, err := blockRange(idx)
+	if err != nil {
+		return err
 	}
-	return w.offset, wb.Sync()
+	// fmt.Println("timeWindow.write: winBlocks ", winBlocks)
+	for _, bIdx := range winBlocks {
+		if len(bIdx) == 1 {
+			winIdx := int32(bIdx[0])
+			off := int64(blockSize * uint32(winIdx))
+			b := wb.winBlocks[winIdx]
+			buf := b.MarshalBinary()
+			if _, err := wb.WriteAt(buf, off); err != nil {
+				return err
+			}
+			continue
+		}
+		off := int64(blockSize * uint32(bIdx[0]))
+		wb.buffer.Reset()
+		for i := bIdx[0]; i <= bIdx[1]; i++ {
+			b := wb.winBlocks[int32(i)]
+			wb.buffer.Write(b.MarshalBinary())
+			wb.wBlocks++
+		}
+		if err := wb.extendBlocks(wb.wBlocks); err != nil {
+			return err
+		}
+		if _, err := wb.WriteAt(wb.buffer.Bytes(), off); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (wb *timeWindowBucket) windowIndex() int32 {

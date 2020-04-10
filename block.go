@@ -46,8 +46,8 @@ type (
 		blocks map[int32]block // map[blockIdx]block
 
 		*file
-		buffer *bpool.Buffer
-		count  int // non-leased block count
+		buffer  *bpool.Buffer
+		nBlocks int // non-leased block count
 	}
 )
 
@@ -90,7 +90,6 @@ func (e entry) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
 	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
 	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
-	// binary.LittleEndian.PutUint64(buf[18:26], uint64(e.topicOffset))
 	return data, nil
 }
 
@@ -100,13 +99,16 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
 	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
 	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
-	// e.topicOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
 	return nil
 }
 
-// func align(n uint32) uint32 {
-// 	return (n + 511) &^ 511
-// }
+func (b block) validation(blockIdx int32) error {
+	startBlockIdx := startBlockIndex(b.entries[0].seq)
+	if startBlockIdx != blockIdx {
+		return errors.New("block.write: validation failed")
+	}
+	return nil
+}
 
 // MarshalBinary serialized entries block into binary data
 func (b block) MarshalBinary() []byte {
@@ -196,7 +198,7 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 			b = bh.block
 			b.leased = true
 		} else {
-			bw.count++
+			bw.nBlocks++
 		}
 	}
 	entryIdx := 0
@@ -219,41 +221,23 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 
 func (bw *blockWriter) write() error {
 	defer func() {
-		bw.count = 0
+		bw.nBlocks = 0
 		bw.blocks = make(map[int32]block)
 		bw.buffer.Reset()
 	}()
 
-	var leasedBlocks []int32
 	for blockIdx, b := range bw.blocks {
 		if !b.leased {
 			continue
 		}
-		off := blockOffset(int32(blockIdx))
-		bh := blockHandle{file: bw.file, offset: off}
-		if err := bh.read(); err != nil {
+		if err := b.validation(blockIdx); err != nil {
 			return err
 		}
-		for _, e := range b.entries {
-			entryIdx := 0
-			for i := 0; i < int(bh.entryIdx); i++ {
-				if bh.entries[i].seq == e.seq { //record exist in db
-					entryIdx = -1
-					break
-				}
-			}
-			if entryIdx == -1 {
-				continue
-			}
-			bh.entries[bh.entryIdx] = e
-			bh.entryIdx++
-		}
-
-		buf := bh.MarshalBinary()
+		off := blockOffset(blockIdx)
+		buf := b.MarshalBinary()
 		if _, err := bw.WriteAt(buf, off); err != nil {
 			return err
 		}
-		leasedBlocks = append(leasedBlocks, blockIdx)
 		delete(bw.blocks, blockIdx)
 	}
 
@@ -267,10 +251,15 @@ func (bw *blockWriter) write() error {
 	if err != nil {
 		return err
 	}
+	// fmt.Println("block.write: blocks ", blocks)
 	for _, bIdx := range blocks {
 		if len(bIdx) == 1 {
-			off := blockOffset(int32(bIdx[0]))
-			b := bw.blocks[int32(bIdx[0])]
+			blockIdx := int32(bIdx[0])
+			off := blockOffset(blockIdx)
+			b := bw.blocks[blockIdx]
+			if err := b.validation(blockIdx); err != nil {
+				return err
+			}
 			buf := b.MarshalBinary()
 			if _, err := bw.WriteAt(buf, off); err != nil {
 				return err
@@ -281,6 +270,9 @@ func (bw *blockWriter) write() error {
 		bw.buffer.Reset()
 		for i := bIdx[0]; i <= bIdx[1]; i++ {
 			b := bw.blocks[int32(i)]
+			if err := b.validation(int32(i)); err != nil {
+				return err
+			}
 			bw.buffer.Write(b.MarshalBinary())
 		}
 		if _, err := bw.WriteAt(bw.buffer.Bytes(), blockOff); err != nil {
@@ -292,7 +284,7 @@ func (bw *blockWriter) write() error {
 }
 
 func (bw *blockWriter) Count() int {
-	return bw.count
+	return bw.nBlocks
 }
 
 func blockRange(idx []int) ([][]int, error) {

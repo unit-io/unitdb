@@ -251,47 +251,52 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	vals := generateVals(numKeys, minVS, maxVS)
 	forceGC()
 
-	start := time.Now()
-	eg := &errgroup.Group{}
-
-	func(concurrent int) error {
-		i := 1
-		for {
-			topic := append(topics[i-1], []byte("?ttl=1m")...)
-			eg.Go(func() error {
-				for k := 0; k < batchSize; k++ {
-					if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
+	func(retry int) error {
+		r := 1
+		for range time.Tick(100 * time.Millisecond) {
+			start := time.Now()
+			eg := &errgroup.Group{}
+			func(concurrent int) error {
+				i := 1
+				for {
+					topic := append(topics[i-1], []byte("?ttl=1m")...)
+					eg.Go(func() error {
+						for k := 0; k < batchSize; k++ {
+							if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
+								return err
+							}
+						}
 						return err
+					})
+					if i >= concurrent {
+						return nil
 					}
+					i++
 				}
+			}(concurrency)
+			err = eg.Wait()
+			if err != nil {
 				return err
-			})
-			if i >= concurrent {
+			}
+			endsecs := time.Since(start).Seconds()
+			fmt.Printf("Put: %d %.3f sec, %d ops/sec\n", r, endsecs, int(float64(numKeys)/endsecs))
+
+			sz, err := db.FileSize()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("File size: %s\n", byteSize(sz))
+			if r >= retry {
 				return nil
 			}
-			i++
+			r++
 		}
-	}(concurrency)
+		return nil
+	}(3)
 
-	err = eg.Wait()
-	if err != nil {
-		return err
-	}
-
-	endsecs := time.Since(start).Seconds()
-	totalalsecs := endsecs
-	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-
-	sz, err := db.FileSize()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
 
-	forceGC()
-
-	start = time.Now()
+	start := time.Now()
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
@@ -301,11 +306,9 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		}
 	}
 
-	endsecs = time.Since(start).Seconds()
-	totalalsecs += endsecs
+	endsecs := time.Since(start).Seconds()
 	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-	fmt.Printf("Put + Get time: %.3f sec\n", totalalsecs)
-	sz, err = db.FileSize()
+	sz, err := db.FileSize()
 	if err != nil {
 		return err
 	}
