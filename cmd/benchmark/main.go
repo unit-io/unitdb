@@ -83,4 +83,8 @@ func main() {
 			i++
 		}
 	}(1)
+
+	if err := recovery(*dir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running recovery: %v\n", err)
+	}
 }

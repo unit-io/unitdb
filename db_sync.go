@@ -14,6 +14,8 @@ type (
 		upperSeq     uint64
 		lastSyncSeq  uint64
 		syncStatusOk bool
+		inBytes      int64
+		count        int64
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
@@ -53,8 +55,18 @@ func (db *syncHandle) finish() error {
 		return nil
 	}
 
+	db.bufPool.Put(db.rawWindow)
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
+	return nil
+}
+
+func (in *internal) reset() error {
+	in.count = 0
+	in.inBytes = 0
+	in.rawWindow.Reset()
+	in.rawBlock.Reset()
+	in.rawData.Reset()
 	return nil
 }
 
@@ -172,10 +184,8 @@ func (db *syncHandle) Sync() error {
 				}
 
 				db.filter.Append(wEntry.seq)
-				db.incount()
-				db.meter.Syncs.Inc(1)
-				db.meter.InMsgs.Inc(1)
-				db.meter.InBytes.Inc(int64(memEntry.valueSize))
+				db.internal.count++
+				db.internal.inBytes += int64(memEntry.valueSize)
 			}
 
 			if db.upperSeq < wEntry.seq {
@@ -189,13 +199,13 @@ func (db *syncHandle) Sync() error {
 						return true, err
 					}
 				}
-				if _, err := db.dataWriter.write(); err != nil {
+				if err := db.windowWriter.write(); err != nil {
 					return true, err
 				}
 				if err := db.blockWriter.write(); err != nil {
 					return true, err
 				}
-				if err := db.windowWriter.write(); err != nil {
+				if _, err := db.dataWriter.write(); err != nil {
 					return true, err
 				}
 				if err := db.sync(); err != nil {
@@ -231,6 +241,13 @@ func (db *syncHandle) Sync() error {
 			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 				return true, err
 			}
+
+			db.incount(db.internal.count)
+			db.meter.Syncs.Inc(db.internal.count)
+			db.meter.InMsgs.Inc(db.internal.count)
+			db.meter.InBytes.Inc(db.internal.inBytes)
+
+			db.internal.reset()
 		}
 
 		return false, nil

@@ -427,3 +427,20 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	printStats(db)
 	return db.Close()
 }
+
+func recovery(dir string) error {
+	// open database for recovery
+	dbpath := path.Join(dir, "bench_tracedb")
+	db, err := tracedb.Open(dbpath, nil)
+	if err != nil {
+		return err
+	}
+	sz, err := db.FileSize()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("File size: %s\n", byteSize(sz))
+	printStats(db)
+
+	return db.Close()
+}

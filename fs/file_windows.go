@@ -44,10 +44,10 @@ func newLockFile(name string) (LockFile, error) {
 		return nil, err
 	}
 	fd, err := syscall.CreateFile(path,
-		syscall.GENERIC_READ,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_DELETE,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil,
-		syscall.OPEN_ALWAYS,
+		syscall.CREATE_ALWAYS,
 		syscall.FILE_ATTRIBUTE_NORMAL,
 		0)
 	if err != nil {

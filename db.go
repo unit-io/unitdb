@@ -118,16 +118,13 @@ func Open(path string, opts *Options) (*DB, error) {
 	}
 	index, err := newFile(fs, path+indexPostfix)
 	if err != nil {
-		if err == os.ErrExist {
-			err = errLocked
-		}
 		return nil, err
 	}
 	data, err := newFile(fs, path+dataPostfix)
 	if err != nil {
 		return nil, err
 	}
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur}
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: opts.BackgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -247,7 +244,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.startSyncer(opts.BackgroundSyncInterval)
 
 	if opts.BackgroundKeyExpiry {
-		// db.startExpirer(time.Minute, maxExpDur)
+		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
 }
@@ -288,9 +285,22 @@ func (db *DB) readHeader() error {
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIdx)
 	if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
-		return nil
+		return err
 	}
 	db.dbInfo.freeblockOff = -1
+	return nil
+}
+
+func (db *DB) recoverTopicHash(pendingTopics map[uint64]int64) error {
+
+	for h, off := range pendingTopics {
+		wOff, ok := db.trie.getOffset(h)
+		if !ok || wOff < off {
+			if ok := db.trie.setOffset(h, off); !ok {
+				return errors.New("db.recoverTopicHash: unable to recover topic hash, topic not found in trie.")
+			}
+		}
+	}
 	return nil
 }
 
@@ -323,6 +333,9 @@ func (db *DB) loadTopicHash() error {
 					}
 				}
 				if entryIdx == -1 {
+					if w.offset > 0 {
+						db.trie.addRecoveryOffset(w.topicHash, w.offset)
+					}
 					fmt.Println("db.loadTopicHash: topicHash, off seq ", w.topicHash, off, seq)
 					// return false, errors.New("db.loadTopicHash: unable to get topic from db.")
 					return false, nil
@@ -634,6 +647,7 @@ func (db *DB) NewContract() (uint32, error) {
 
 // NewID generates new ID that is later used to put entry or delete entry.
 func (db *DB) NewID() []byte {
+	db.meter.Leased.Inc(1)
 	return message.NewID(db.nextSeq(), false)
 }
 
@@ -667,7 +681,6 @@ func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 func (db *DB) setEntry(e *Entry, ttl int64) error {
 	//message ID is the database key
 	var id message.ID
-	var ok bool
 	var seq uint64
 	encryption := db.encryption == 1 || e.encryption
 	if ttl > 0 {
@@ -681,8 +694,10 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 		id.AddContract(e.contract)
 		seq = id.Seq()
 	} else {
-		ok, seq = db.data.lease.getSlot(e.contract)
-		if !ok {
+		if ok, s := db.data.lease.getSlot(e.contract); ok {
+			db.meter.Leased.Inc(1)
+			seq = s
+		} else {
 			seq = db.nextSeq()
 		}
 		id = message.NewID(seq, encryption)
@@ -983,8 +998,8 @@ func (db *DB) addBlock() int32 {
 	return atomic.AddInt32(&db.blockIdx, 1)
 }
 
-func (db *DB) incount() int64 {
-	return atomic.AddInt64(&db.count, 1)
+func (db *DB) incount(count int64) int64 {
+	return atomic.AddInt64(&db.count, count)
 }
 
 func (db *DB) decount() int64 {

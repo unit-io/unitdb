@@ -107,14 +107,16 @@ func (p *part) orphan() {
 
 // partTrie represents an efficient collection of Trie with lookup capability.
 type partTrie struct {
-	summary map[uint64]*part // summary is map of topichash to node of tree.
-	root    *part            // The root node of the tree.
+	summary  map[uint64]*part // summary is map of topichash to node of tree.
+	recovery map[uint64]int64 // summary is map of topichash to topic offset.
+	root     *part            // The root node of the tree.
 }
 
 // newPartTrie creates a new part Trie.
 func newPartTrie(cacheCap uint32) *partTrie {
 	return &partTrie{
-		summary: make(map[uint64]*part),
+		summary:  make(map[uint64]*part),
+		recovery: make(map[uint64]int64),
 		root: &part{
 			cap:      cacheCap,
 			ww:       newWinEntries(cacheCap),
@@ -290,7 +292,7 @@ func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	if curr, ok := t.partTrie.summary[topicHash]; ok {
 		return curr.offset, ok
 	}
-	return 0, ok
+	return off, ok
 }
 
 func (t *trie) setOffset(topicHash uint64, off int64) (ok bool) {
@@ -303,4 +305,40 @@ func (t *trie) setOffset(topicHash uint64, off int64) (ok bool) {
 		return ok
 	}
 	return false
+}
+
+func (t *trie) addRecoveryOffset(topicHash uint64, off int64) (ok bool) {
+	t.RLock()
+	defer t.RUnlock()
+	wOff, ok := t.partTrie.recovery[topicHash]
+	if !ok || wOff < off {
+		t.partTrie.recovery[topicHash] = off
+	}
+	return ok
+}
+
+func (t *trie) getRecoveryOffset(topicHash uint64) (off int64, ok bool) {
+	t.RLock()
+	defer t.RUnlock()
+	if off, ok := t.partTrie.recovery[topicHash]; ok {
+		return off, ok
+	}
+	curr, ok := t.partTrie.summary[topicHash]
+	return curr.offset, ok
+}
+
+func (t *trie) deleteRecoveryOffset(topicHash uint64) (ok bool) {
+	t.RLock()
+	defer t.RUnlock()
+	if _, ok := t.partTrie.recovery[topicHash]; ok {
+		delete(t.partTrie.recovery, topicHash)
+		return ok
+	}
+	return ok
+}
+
+func (t *trie) recoveryStatus() (ok bool) {
+	t.RLock()
+	defer t.RUnlock()
+	return t.partTrie.recovery == nil || len(t.partTrie.recovery) == 0
 }

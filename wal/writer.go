@@ -92,7 +92,6 @@ func (w *Writer) writeLog(seq uint64) error {
 	if w.logSize == 0 {
 		return nil
 	}
-	// dataLen := align(w.logSize + int64(logHeaderSize))
 	dataLen := w.logSize + int64(logHeaderSize)
 	off, err := w.wal.logFile.allocate(uint32(dataLen))
 	if off < int64(headerSize) || err != nil {
@@ -102,7 +101,7 @@ func (w *Writer) writeLog(seq uint64) error {
 		status:     logStatusWritten,
 		entryCount: w.entryCount,
 		seq:        seq,
-		size:       int64(w.logSize),
+		size:       dataLen,
 		offset:     int64(off),
 	}
 	if err := w.wal.put(h); err != nil {

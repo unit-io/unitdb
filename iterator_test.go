@@ -31,10 +31,6 @@ func TestIterator(t *testing.T) {
 	}
 	topic := []byte("unit8.test")
 
-	if db.count != 0 {
-		t.Fatal()
-	}
-
 	items := map[byte]bool{}
 	var i byte
 	// var vals, itvals [][]byte

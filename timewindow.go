@@ -147,10 +147,11 @@ type timeWindow struct {
 
 type (
 	timeOptions struct {
-		expDurationType    time.Duration
-		maxExpDurations    int
-		windowDurationType time.Duration
-		maxWindowDurations int
+		expDurationType     time.Duration
+		maxExpDurations     int
+		windowDurationType  time.Duration
+		maxWindowDurations  int
+		backgroundKeyExpiry bool
 	}
 	timeWindowBucket struct {
 		sync.RWMutex
@@ -216,6 +217,9 @@ func (wb *timeWindowBucket) extendBlocks(n uint32) error {
 }
 
 func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
+	if !wb.opts.backgroundKeyExpiry {
+		return nil
+	}
 	var expiredEntries []timeWindowEntry
 	startTime := uint32(time.Now().Unix())
 
@@ -256,6 +260,9 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 
 // addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window
 func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
+	if !wb.opts.backgroundKeyExpiry {
+		return nil
+	}
 	timeExpiry := int64(time.Unix(int64(e.time()), 0).Truncate(wb.opts.expDurationType).Add(1 * wb.opts.expDurationType).Unix())
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
 
@@ -502,7 +509,6 @@ func (wb *windowWriter) write() error {
 	defer func() {
 		wb.wBlocks = 0
 		wb.winBlocks = make(map[int32]winBlock)
-		wb.buffer.Reset()
 	}()
 
 	for bIdx, b := range wb.winBlocks {

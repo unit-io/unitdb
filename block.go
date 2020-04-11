@@ -223,7 +223,6 @@ func (bw *blockWriter) write() error {
 	defer func() {
 		bw.nBlocks = 0
 		bw.blocks = make(map[int32]block)
-		bw.buffer.Reset()
 	}()
 
 	for blockIdx, b := range bw.blocks {

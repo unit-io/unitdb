@@ -100,8 +100,6 @@ func (dw *dataWriter) append(data []byte) (int, error) {
 }
 
 func (dw *dataWriter) write() (int, error) {
-	defer dw.buffer.Reset()
-
 	n, err := dw.file.write(dw.buffer.Bytes())
 	if err != nil {
 		return 0, err

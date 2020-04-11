@@ -16,22 +16,11 @@ func open(path string, opts *Options) (*DB, error) {
 	return Open(path, opts)
 }
 
-func cleanup(path string) error {
-	os.Remove(path + indexPostfix)
-	os.Remove(path + dataPostfix)
-	os.Remove(path + logPostfix)
-	os.Remove(path + lockPostfix)
-	os.Remove(path + windowPostfix)
-	os.Remove(path + filterPostfix)
-	return nil
-}
-
 func TestSimple(t *testing.T) {
 	db, err := open("test.db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup("test.db")
 	defer db.Close()
 	var i byte
 	var n uint8 = 255
@@ -68,7 +57,8 @@ func TestSimple(t *testing.T) {
 		}
 	}
 	time.Sleep(100 * time.Millisecond)
-	if err := db.Sync(); err != nil {
+	syncHandle := syncHandle{DB: db, internal: internal{}}
+	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	if db.Count() != 255 {
@@ -114,7 +104,6 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup("test.db")
 	defer db.Close()
 
 	contract, err := db.NewContract()
@@ -131,7 +120,7 @@ func TestBatch(t *testing.T) {
 	var n uint8 = 255
 
 	verifyMsgsAndClose := func() {
-		if count := db.Count(); count != 255 {
+		if count := db.Count(); count != 510 {
 			t.Fatalf("expected 255 records; got %d", count)
 		}
 		qtopic := topic
@@ -174,7 +163,8 @@ func TestBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if err := db.Sync(); err != nil {
+	syncHandle := syncHandle{DB: db, internal: internal{}}
+	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	verifyMsgsAndClose()
@@ -185,17 +175,12 @@ func TestBatchGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup("test.db")
 	defer db.Close()
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
 	}
 	topic := []byte("unit8.test")
-
-	if db.count != 0 {
-		t.Fatal()
-	}
 
 	var i byte
 	var n uint8 = 255
@@ -226,7 +211,8 @@ func TestBatchGroup(t *testing.T) {
 
 	// wg.Wait()
 	time.Sleep(1 * time.Second)
-	if err := db.Sync(); err != nil {
+	syncHandle := syncHandle{DB: db, internal: internal{}}
+	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	// count -> 255+256+256
@@ -245,17 +231,12 @@ func TestExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup("test.db")
 	defer db.Close()
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
 	}
 	topic := []byte("unit8.test")
-
-	if db.count != 0 {
-		t.Fatal()
-	}
 
 	var i byte
 	var n uint8 = 255

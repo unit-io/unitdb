@@ -13,20 +13,27 @@ import (
 func (db *syncHandle) recoverWindowBlocks() error {
 	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
-			topicOff, ok := db.trie.getOffset(h)
+			topicOff, ok := db.trie.getRecoveryOffset(h)
 			if !ok {
-				return true, errors.New("recovery.recoverWindowBlocks error: unable to get topic offset from trie")
+				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie")
 			}
+			fmt.Println("recovery.recoverWindowBlocks: topicHash, off ", h, topicOff)
 			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 			if err != nil {
 				return true, err
 			}
 			if ok := db.trie.setOffset(h, wOff); !ok {
-				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
+				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
+			}
+			if topicOff > 0 {
+				db.trie.deleteRecoveryOffset(h)
 			}
 		}
 		return false, nil
 	})
+	// if ok := db.trie.recoveryStatus(); !ok {
+	// 	return errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to recover topics")
+	// }
 	return err
 }
 
@@ -87,10 +94,8 @@ func (db *syncHandle) startRecovery() error {
 				return true, errBadRequest
 			}
 			db.filter.Append(logEntry.seq)
-			db.incount()
-			db.meter.Recovers.Inc(1)
-			db.meter.InMsgs.Inc(1)
-			db.meter.InBytes.Inc(int64(logEntry.valueSize))
+			db.internal.count++
+			db.internal.inBytes += int64(logEntry.valueSize)
 		}
 
 		if err := db.recoverWindowBlocks(); err != nil {
@@ -108,18 +113,25 @@ func (db *syncHandle) startRecovery() error {
 					return true, err
 				}
 			}
-			if _, err := db.dataWriter.write(); err != nil {
+			if err := db.windowWriter.write(); err != nil {
 				return true, err
 			}
 			if err := db.blockWriter.write(); err != nil {
 				return true, err
 			}
-			if err := db.windowWriter.write(); err != nil {
+			if _, err := db.dataWriter.write(); err != nil {
 				return true, err
 			}
 			if err := db.sync(); err != nil {
 				return true, err
 			}
+
+			db.incount(db.internal.count)
+			db.meter.Syncs.Inc(db.internal.count)
+			db.meter.InMsgs.Inc(db.internal.count)
+			db.meter.InBytes.Inc(db.internal.inBytes)
+
+			db.internal.reset()
 		}
 
 		return false, nil

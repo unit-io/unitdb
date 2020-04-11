@@ -113,7 +113,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	go wal.startDefrag()
+	go wal.startLogReleaser()
 	return wal, len(wal.logs) != 0, nil
 }
 
@@ -143,7 +143,7 @@ func (wal *WAL) readHeader() error {
 }
 
 func (wal *WAL) recoverLogHeaders() error {
-	offset := int64(headerSize)
+	offset := int64(headerSize) + wal.logFile.fb.size
 	l := logInfo{}
 	for {
 		if offset == wal.logFile.fb.currOffset {
@@ -160,14 +160,8 @@ func (wal *WAL) recoverLogHeaders() error {
 			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.fb, l)
 			return nil
 		}
-		if ok, err := wal.logMerge(l); !ok {
-			if err != nil {
-				return err
-			}
-			wal.logs = append(wal.logs, l)
-		}
-		// offset = l.offset + align(l.size+int64(logHeaderSize))
-		offset = l.offset + l.size + int64(logHeaderSize)
+		wal.logs = append(wal.logs, l)
+		offset = l.offset + l.size
 	}
 }
 
@@ -175,12 +169,15 @@ func (wal *WAL) recoverLogHeaders() error {
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
 	// wal.logFile.size = align(wal.logFile.size)
-	wal.logFile.size = wal.logFile.size
 	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
 		return err
 	}
 
-	return wal.recoverLogHeaders()
+	if err := wal.recoverLogHeaders(); err != nil {
+		return err
+	}
+
+	return wal.releaseLogs()
 }
 
 func (wal *WAL) put(log logInfo) error {
@@ -216,7 +213,6 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 	// func (wal *WAL) Read() (*Reader, error) {
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
-	// mergedLogs := wal.defrag()
 	idx := 0
 	l := len(wal.logs)
 	bufSize := wal.opts.BufferSize
@@ -224,11 +220,10 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 	size := wal.logFile.Size() - fileOff
 	buffer := wal.bufPool.Get()
 	defer wal.bufPool.Put(buffer)
-	// for _, log := range mergedLogs {
 
 	for {
 		buffer.Reset()
-		offset := int64(logHeaderSize)
+		offset := int64(0)
 		if size <= bufSize {
 			bufSize = size
 		}
@@ -252,7 +247,7 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 				size = wal.logFile.Size() - ul.offset
 				break
 			}
-			data, err := buffer.Slice(offset, offset+ul.size)
+			data, err := buffer.Slice(offset+int64(logHeaderSize), offset+ul.size)
 			if err != nil {
 				return err
 			}
@@ -263,8 +258,7 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 			if err := wal.signalLogApplied(i); err != nil {
 				return err
 			}
-			// offset += align(ul.size + int64(logHeaderSize))
-			offset += ul.size + int64(logHeaderSize)
+			offset += ul.size
 
 			idx++
 		}
@@ -298,18 +292,15 @@ func (wal *WAL) logMerge(log logInfo) (released bool, err error) {
 	}
 	if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == log.offset {
 		released = true
-		// wal.logFile.fb.currSize += align(log.size + int64(logHeaderSize))
-		wal.logFile.fb.currSize += log.size + int64(logHeaderSize)
+		wal.logFile.fb.currSize += log.size
 	} else {
 		if wal.logFile.fb.offset+wal.logFile.fb.size == log.offset {
 			released = true
-			// wal.logFile.fb.size += align(log.size + int64(logHeaderSize))
-			wal.logFile.fb.size += log.size + int64(logHeaderSize)
+			wal.logFile.fb.size += log.size
 		}
 		// reset current free block
 		if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size >= wal.logFile.fb.currOffset {
 			wal.logFile.fb.currOffset = wal.logFile.fb.offset
-			// wal.logFile.fb.currSize += align(wal.logFile.fb.size)
 			wal.logFile.fb.currSize += wal.logFile.fb.size
 			wal.logFile.fb.size = 0
 		}
@@ -326,8 +317,9 @@ func (wal *WAL) signalLogApplied(i int) error {
 	}
 	if released {
 		wal.logs[i].status = logStatusReleased
+	} else {
+		wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 	}
-	wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 	return nil
 }
 
@@ -399,7 +391,7 @@ func (wal *WAL) ok() error {
 	return nil
 }
 
-func (wal *WAL) defrag() error {
+func (wal *WAL) releaseLogs() error {
 	wal.mu.Lock()
 	wal.wg.Add(1)
 	defer func() {
@@ -427,7 +419,7 @@ func (wal *WAL) defrag() error {
 	}
 
 	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusApplied {
+		if wal.logs[i].status == logStatusReleased {
 			// Remove log from wal
 			wal.logs = wal.logs[:i+copy(wal.logs[i:], wal.logs[i+1:])]
 			l -= 1
@@ -437,7 +429,7 @@ func (wal *WAL) defrag() error {
 	return nil
 }
 
-func (wal *WAL) startDefrag() {
+func (wal *WAL) startLogReleaser() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
@@ -447,7 +439,7 @@ func (wal *WAL) startDefrag() {
 		case <-wal.closeC:
 			return
 		case <-ticker.C:
-			wal.defrag()
+			wal.releaseLogs()
 		}
 	}
 }
