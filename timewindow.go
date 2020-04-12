@@ -195,7 +195,7 @@ type windowWriter struct {
 	winBlocks map[int32]winBlock // map[windowIdx]winBlock
 
 	buffer  *bpool.Buffer
-	wBlocks uint32 // non-leased window block count
+	nBlocks uint32 // non-leased window block count
 }
 
 func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
@@ -507,7 +507,7 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 
 func (wb *windowWriter) write() error {
 	defer func() {
-		wb.wBlocks = 0
+		wb.nBlocks = 0
 		wb.winBlocks = make(map[int32]winBlock)
 	}()
 
@@ -550,9 +550,9 @@ func (wb *windowWriter) write() error {
 		for i := bIdx[0]; i <= bIdx[1]; i++ {
 			b := wb.winBlocks[int32(i)]
 			wb.buffer.Write(b.MarshalBinary())
-			wb.wBlocks++
+			wb.nBlocks++
 		}
-		if err := wb.extendBlocks(wb.wBlocks); err != nil {
+		if err := wb.extendBlocks(wb.nBlocks); err != nil {
 			return err
 		}
 		if _, err := wb.WriteAt(wb.buffer.Bytes(), off); err != nil {
@@ -567,7 +567,7 @@ func (wb *timeWindowBucket) windowIndex() int32 {
 	return wb.windowIdx
 }
 
-func (wb *timeWindowBucket) setWindowIndex(seq uint64, windowIdx int32) error {
+func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
 	wb.windowIdx = windowIdx
 	return nil
 }

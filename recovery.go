@@ -17,7 +17,6 @@ func (db *syncHandle) recoverWindowBlocks() error {
 			if !ok {
 				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie")
 			}
-			fmt.Println("recovery.recoverWindowBlocks: topicHash, off ", h, topicOff)
 			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 			if err != nil {
 				return true, err
@@ -26,7 +25,9 @@ func (db *syncHandle) recoverWindowBlocks() error {
 				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
 			}
 			if topicOff > 0 {
-				db.trie.deleteRecoveryOffset(h)
+				if ok := db.trie.deleteRecoveryOffset(h); ok {
+					fmt.Println("recovery.recoverWindowBlocks: topicHash, off ", h, topicOff)
+				}
 			}
 		}
 		return false, nil
@@ -50,6 +51,7 @@ func (db *syncHandle) startRecovery() error {
 		return nil
 	}
 	defer func() {
+		db.internal.reset()
 		db.finish()
 	}()
 
@@ -70,7 +72,7 @@ func (db *syncHandle) startRecovery() error {
 			if logEntry.msgOffset, err = db.dataWriter.writeMessage(m); err != nil {
 				return true, err
 			}
-			exists, err := db.blockWriter.append(logEntry, db.blocks())
+			exists, err := db.blockWriter.append(logEntry, db.startBlockIdx)
 			if err != nil {
 				return true, err
 			}
@@ -107,9 +109,13 @@ func (db *syncHandle) startRecovery() error {
 		}
 
 		if last || db.rawData.Size() > db.opts.BufferSize {
-			nBlocks := db.blockWriter.Count()
-			for i := 0; i < nBlocks; i++ {
-				if _, err := db.newBlock(); err != nil {
+			if db.blockWriter.UpperSeq() == 0 {
+				return false, nil
+			}
+			nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
+			if nBlocks > db.blocks() {
+				// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
+				if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
 					return true, err
 				}
 			}
@@ -125,12 +131,10 @@ func (db *syncHandle) startRecovery() error {
 			if err := db.sync(); err != nil {
 				return true, err
 			}
-
 			db.incount(db.internal.count)
 			db.meter.Syncs.Inc(db.internal.count)
 			db.meter.InMsgs.Inc(db.internal.count)
 			db.meter.InBytes.Inc(db.internal.inBytes)
-
 			db.internal.reset()
 		}
 

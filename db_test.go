@@ -120,7 +120,7 @@ func TestBatch(t *testing.T) {
 	var n uint8 = 255
 
 	verifyMsgsAndClose := func() {
-		if count := db.Count(); count != 510 {
+		if count := db.Count(); count != 255 {
 			t.Fatalf("expected 255 records; got %d", count)
 		}
 		qtopic := topic

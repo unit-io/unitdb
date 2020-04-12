@@ -33,6 +33,7 @@ type (
 		next     uint32
 		entryIdx uint16
 
+		dirty  bool
 		leased bool
 	}
 
@@ -43,11 +44,11 @@ type (
 	}
 
 	blockWriter struct {
-		blocks map[int32]block // map[blockIdx]block
+		upperSeq uint64
+		blocks   map[int32]block // map[blockIdx]block
 
 		*file
-		buffer  *bpool.Buffer
-		nBlocks int // non-leased block count
+		buffer *bpool.Buffer
 	}
 )
 
@@ -105,7 +106,7 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 func (b block) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)
 	if startBlockIdx != blockIdx {
-		return errors.New("block.write: validation failed")
+		return errors.New(fmt.Sprintf("block.write: validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx))
 	}
 	return nil
 }
@@ -196,9 +197,8 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 				return false, err
 			}
 			b = bh.block
+
 			b.leased = true
-		} else {
-			bw.nBlocks++
 		}
 	}
 	entryIdx := 0
@@ -211,79 +211,99 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 	if entryIdx == -1 {
 		return true, nil
 	}
+	b.dirty = true
+	if bw.upperSeq < e.seq {
+		bw.upperSeq = e.seq
+	}
+
 	b.entries[b.entryIdx] = e
 	b.entryIdx++
-
+	if err := b.validation(startBlockIdx); err != nil {
+		return false, err
+	}
 	bw.blocks[startBlockIdx] = b
 
 	return false, nil
 }
 
 func (bw *blockWriter) write() error {
-	defer func() {
-		bw.nBlocks = 0
-		bw.blocks = make(map[int32]block)
-	}()
-
-	for blockIdx, b := range bw.blocks {
-		if !b.leased {
+	var leasedBlocks []int32
+	for bIdx, b := range bw.blocks {
+		if !b.leased || !b.dirty {
 			continue
 		}
-		if err := b.validation(blockIdx); err != nil {
+		if err := b.validation(bIdx); err != nil {
 			return err
 		}
-		off := blockOffset(blockIdx)
+		off := blockOffset(bIdx)
 		buf := b.MarshalBinary()
 		if _, err := bw.WriteAt(buf, off); err != nil {
 			return err
 		}
-		delete(bw.blocks, blockIdx)
+		b.dirty = false
+		bw.blocks[bIdx] = b
+		leasedBlocks = append(leasedBlocks, bIdx)
 	}
 
+	// fmt.Println("block.write: leasedBlocks ", leasedBlocks)
+
 	// sort blocks by blockIdx
-	var idx []int
-	for i := range bw.blocks {
-		idx = append(idx, int(i))
+	var blockIdx []int
+	for bIdx := range bw.blocks {
+		if bw.blocks[bIdx].leased || !bw.blocks[bIdx].dirty {
+			continue
+		}
+		blockIdx = append(blockIdx, int(bIdx))
 	}
-	sort.Ints(idx)
-	blocks, err := blockRange(idx)
+	sort.Ints(blockIdx)
+	blockRange, err := blockRange(blockIdx)
 	if err != nil {
 		return err
 	}
-	// fmt.Println("block.write: blocks ", blocks)
-	for _, bIdx := range blocks {
-		if len(bIdx) == 1 {
-			blockIdx := int32(bIdx[0])
-			off := blockOffset(blockIdx)
-			b := bw.blocks[blockIdx]
-			if err := b.validation(blockIdx); err != nil {
+	// fmt.Println("block.write: blocks ", blockRange)
+	bufOff := int64(0)
+	for _, blocks := range blockRange {
+		if len(blocks) == 1 {
+			bIdx := int32(blocks[0])
+			off := blockOffset(bIdx)
+			b := bw.blocks[bIdx]
+			if err := b.validation(bIdx); err != nil {
 				return err
 			}
 			buf := b.MarshalBinary()
 			if _, err := bw.WriteAt(buf, off); err != nil {
 				return err
 			}
+			b.dirty = false
+			bw.blocks[bIdx] = b
 			continue
 		}
-		blockOff := blockOffset(int32(bIdx[0]))
-		bw.buffer.Reset()
-		for i := bIdx[0]; i <= bIdx[1]; i++ {
-			b := bw.blocks[int32(i)]
-			if err := b.validation(int32(i)); err != nil {
+		blockOff := blockOffset(int32(blocks[0]))
+		// bw.buffer.Reset()
+		for bIdx := int32(blocks[0]); bIdx <= int32(blocks[1]); bIdx++ {
+			b := bw.blocks[bIdx]
+			if err := b.validation(bIdx); err != nil {
 				return err
 			}
 			bw.buffer.Write(b.MarshalBinary())
+			b.dirty = false
+			bw.blocks[bIdx] = b
 		}
-		if _, err := bw.WriteAt(bw.buffer.Bytes(), blockOff); err != nil {
+		blockData, err := bw.buffer.Slice(bufOff, bw.buffer.Size())
+		if err != nil {
 			return err
 		}
+		if _, err := bw.WriteAt(blockData, blockOff); err != nil {
+			return err
+		}
+		bufOff = bw.buffer.Size()
 	}
 
 	return nil
 }
 
-func (bw *blockWriter) Count() int {
-	return bw.nBlocks
+func (bw *blockWriter) UpperSeq() uint64 {
+	return bw.upperSeq
 }
 
 func blockRange(idx []int) ([][]int, error) {

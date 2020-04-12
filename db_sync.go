@@ -11,11 +11,12 @@ import (
 
 type (
 	internal struct {
-		upperSeq     uint64
-		lastSyncSeq  uint64
-		syncStatusOk bool
-		inBytes      int64
-		count        int64
+		startBlockIdx int32
+		upperSeq      uint64
+		lastSyncSeq   uint64
+		syncStatusOk  bool
+		inBytes       int64
+		count         int64
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
@@ -34,8 +35,9 @@ type (
 func (db *syncHandle) startSync() bool {
 	if db.lastSyncSeq == db.Seq() {
 		db.syncStatusOk = false
-		return false
+		return db.syncStatusOk
 	}
+	db.startBlockIdx = db.blocks()
 	db.lastSyncSeq = db.Seq()
 
 	db.rawWindow = db.bufPool.Get()
@@ -47,7 +49,7 @@ func (db *syncHandle) startSync() bool {
 	db.dataWriter = newDataWriter(&db.data, db.rawData)
 	db.syncStatusOk = true
 
-	return true
+	return db.syncStatusOk
 }
 
 func (db *syncHandle) finish() error {
@@ -58,7 +60,12 @@ func (db *syncHandle) finish() error {
 	db.bufPool.Put(db.rawWindow)
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
+	db.syncStatusOk = false
 	return nil
+}
+
+func (db *syncHandle) status() (ok bool) {
+	return db.syncStatusOk
 }
 
 func (in *internal) reset() error {
@@ -82,6 +89,10 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-db.closeC:
 				return
 			case <-syncTicker.C:
+				if ok := syncHandle.status(); ok {
+					// sync is in-progress
+					continue
+				}
 				if err := syncHandle.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
 				}
@@ -140,6 +151,7 @@ func (db *syncHandle) Sync() error {
 		return nil
 	}
 	defer func() {
+		db.internal.reset()
 		db.finish()
 	}()
 
@@ -175,7 +187,7 @@ func (db *syncHandle) Sync() error {
 				if memEntry.msgOffset, err = db.dataWriter.writeMessage(memdata[entrySize:]); err != nil {
 					return true, err
 				}
-				exists, err := db.blockWriter.append(memEntry, db.blocks())
+				exists, err := db.blockWriter.append(memEntry, db.startBlockIdx)
 				if err != nil {
 					return true, err
 				}
@@ -193,9 +205,13 @@ func (db *syncHandle) Sync() error {
 			}
 
 			if db.rawData.Size() > db.opts.BufferSize {
-				nBlocks := db.blockWriter.Count()
-				for i := 0; i < nBlocks; i++ {
-					if _, err := db.newBlock(); err != nil {
+				if db.blockWriter.UpperSeq() == 0 {
+					return false, nil
+				}
+				nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
+				if nBlocks > db.blocks() {
+					// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
+					if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
 						return true, err
 					}
 				}
@@ -211,6 +227,12 @@ func (db *syncHandle) Sync() error {
 				if err := db.sync(); err != nil {
 					return true, err
 				}
+				db.incount(db.internal.count)
+				db.meter.Syncs.Inc(db.internal.count)
+				db.meter.InMsgs.Inc(db.internal.count)
+				db.meter.InBytes.Inc(db.internal.inBytes)
+
+				db.internal.reset()
 				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 					return true, err
 				}
@@ -219,11 +241,15 @@ func (db *syncHandle) Sync() error {
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
 
-		if last || db.rawData.Size() > db.opts.BufferSize {
-			nBlocks := db.blockWriter.Count()
-			for i := 0; i < nBlocks; i++ {
-				if _, err := db.newBlock(); err != nil {
-					return false, err
+		if last {
+			if db.blockWriter.UpperSeq() == 0 {
+				return false, nil
+			}
+			nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
+			if nBlocks > db.blocks() {
+				// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
+				if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
+					return true, err
 				}
 			}
 			if _, err := db.dataWriter.write(); err != nil {
@@ -241,7 +267,6 @@ func (db *syncHandle) Sync() error {
 			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 				return true, err
 			}
-
 			db.incount(db.internal.count)
 			db.meter.Syncs.Inc(db.internal.count)
 			db.meter.InMsgs.Inc(db.internal.count)

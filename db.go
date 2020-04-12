@@ -283,10 +283,10 @@ func (db *DB) readHeader() error {
 	// 	return errCorrupted
 	// }
 	db.dbInfo = h.dbInfo
-	db.timeWindow.setWindowIndex(db.dbInfo.seq, db.dbInfo.windowIdx)
-	if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
-		return err
-	}
+	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
+	// if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
+	// 	return nil
+	// }
 	db.dbInfo.freeblockOff = -1
 	return nil
 }
@@ -654,8 +654,17 @@ func (db *DB) NewID() []byte {
 // newBlock adds new block to DB and it returns block offset
 func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
-	db.addBlock()
+	db.addBlocks(1)
 	return off, err
+}
+
+// newBlock adds new block to DB and it returns block offset
+func (db *DB) extendBlocks(nBlocks int32) error {
+	if _, err := db.index.extend(uint32(nBlocks) * blockSize); err != nil {
+		return err
+	}
+	db.addBlocks(nBlocks)
+	return nil
 }
 
 func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
@@ -994,8 +1003,8 @@ func (db *DB) blocks() int32 {
 }
 
 // addBlock adds new block to the DB.
-func (db *DB) addBlock() int32 {
-	return atomic.AddInt32(&db.blockIdx, 1)
+func (db *DB) addBlocks(nBlocks int32) int32 {
+	return atomic.AddInt32(&db.blockIdx, nBlocks)
 }
 
 func (db *DB) incount(count int64) int64 {

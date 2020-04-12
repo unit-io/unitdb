@@ -102,11 +102,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	if db.bufPool.Backoff() {
-		return b.Commit()
-	}
-	go b.Commit()
-	return nil
+	return b.Commit()
 }
 
 // BatchGroup runs multiple batches concurrently without causing conflicts
