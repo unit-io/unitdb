@@ -30,6 +30,7 @@ const (
 	dataPostfix   = ".data"
 	windowPostfix = ".win"
 	logPostfix    = ".log"
+	leasePostfix  = ".lease"
 	lockPostfix   = ".lock"
 	idSize        = 24
 	filterPostfix = ".filter"
@@ -83,6 +84,7 @@ type (
 		lock       fs.LockFile
 		index      file
 		data       dataTable
+		lease      *lease
 		wal        *wal.WAL
 		syncWrites bool
 		dbInfo
@@ -124,6 +126,11 @@ func Open(path string, opts *Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	leaseFile, err := newFile(fs, path+leasePostfix)
+	if err != nil {
+		return nil, err
+	}
+	lease := newLease(leaseFile, opts.MinimumFreeBlocksSize)
 	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: opts.BackgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
@@ -137,8 +144,9 @@ func Open(path string, opts *Options) (*DB, error) {
 		mutex:       newMutex(),
 		lock:        lock,
 		index:       index,
-		data:        dataTable{file: data, lease: newLease(opts.MinimumFreeBlocksSize), offset: data.Size()},
+		data:        dataTable{file: data, lease: lease, offset: data.Size()},
 		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
+		lease:       lease,
 		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
 		commitLockC: make(chan struct{}, 1),
@@ -251,12 +259,10 @@ func Open(path string, opts *Options) (*DB, error) {
 
 func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
-		db.data.lease.defrag()
-		freeblockOff, err := db.data.lease.write(db.data)
-		if err != nil {
+		db.lease.defrag()
+		if err := db.lease.write(); err != nil {
 			return err
 		}
-		db.dbInfo.freeblockOff = freeblockOff
 	}
 	h := header{
 		signature: signature,
@@ -284,10 +290,9 @@ func (db *DB) readHeader() error {
 	// }
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
-	// if err := db.data.lease.read(db.data, db.dbInfo.freeblockOff); err != nil {
-	// 	return nil
-	// }
-	db.dbInfo.freeblockOff = -1
+	if err := db.lease.read(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -333,9 +338,6 @@ func (db *DB) loadTopicHash() error {
 					}
 				}
 				if entryIdx == -1 {
-					if w.offset > 0 {
-						db.trie.addRecoveryOffset(w.topicHash, w.offset)
-					}
 					fmt.Println("db.loadTopicHash: topicHash, off seq ", w.topicHash, off, seq)
 					// return false, errors.New("db.loadTopicHash: unable to get topic from db.")
 					return false, nil
@@ -350,7 +352,7 @@ func (db *DB) loadTopicHash() error {
 				if err != nil {
 					return true, err
 				}
-				if ok := db.trie.addTopic(message.Contract(topic.Parts), w.topicHash, topic.Parts, topic.Depth); ok {
+				if ok := db.trie.add(message.Contract(topic.Parts), w.topicHash, topic.Parts, topic.Depth); ok {
 					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
 						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
 					}
@@ -493,16 +495,11 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// trie lookup lookups in memory entries from trie as trie cache recent entries at the time of timeWindow sync
 	// lookup lookups persisted entries if fanout is true
 	// lookup gets most recent entries without need for sorting. This is an art and not technological solution:)
-	pEntries, topicHss, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
-	for i, topicHash := range topicHss {
-		var fanout bool
+	topics, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
+	for i, topicHash := range topics {
 		var wEntries []winEntry
 		nextOff := int64(0)
-		if q.winEntries, fanout = db.timeWindow.ilookup(topicHash, q.Limit); fanout {
-			if len(pEntries) > i {
-				q.winEntries = append(q.winEntries, pEntries[i]...)
-			}
-		}
+		q.winEntries = db.timeWindow.ilookup(topicHash, q.Limit)
 		if uint32(len(q.winEntries)) < q.Limit {
 			limit := q.Limit - uint32(len(q.winEntries))
 			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(q.winEntries), limit)
@@ -530,9 +527,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					}
 					if e.isExpired() {
 						expiryCount++
-						if ok := db.trie.remove(topicHash, we); ok {
-							db.timeWindow.addExpiry(e)
-						}
+						db.timeWindow.addExpiry(e)
 						// if id is expired it does not return an error but continue the iteration
 						return nil
 					}
@@ -766,7 +761,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		contract: e.contract,
 		seq:      e.seq,
 	}
-	if ok = db.trie.addTopic(e.contract, e.topicHash, topic.Parts, topic.Depth); ok {
+	if ok = db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); ok {
 		if err := db.timeWindow.add(e.topicHash, we); err != nil {
 			return err
 		}
@@ -912,32 +907,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
 	}
-	topic := new(message.Topic)
-	if e.Contract == 0 {
-		e.Contract = message.MasterContract
-	}
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	e.Topic = topic.Topic
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return errBadRequest
-	}
-
-	topic.AddContract(e.Contract)
 	// message ID is the database key
 	id := message.ID(e.ID)
-	contract := message.Contract(topic.Parts)
-	id.AddContract(contract)
-	mu := db.getMutex(contract)
-	mu.Lock()
-	defer mu.Unlock()
-	we := winEntry{
-		contract: contract,
-		seq:      message.ID(id).Seq(),
-	}
-	db.trie.remove(topic.GetHash(contract), we)
 	if err := db.delete(message.ID(id).Seq()); err != nil {
 		return err
 	}
@@ -960,7 +931,7 @@ func (db *DB) delete(seq uint64) error {
 	if err != nil {
 		return err
 	}
-	db.data.free(e)
+	db.lease.free(e.seq, e.msgOffset, e.mSize())
 	db.decount()
 	if db.syncWrites {
 		return db.sync()

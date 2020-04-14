@@ -217,7 +217,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			t := new(message.Topic)
 			t.Unmarshal(ptopic)
 			topics[contract] = t
-			if ok := b.db.trie.addTopic(contract, t.GetHash(contract), t.Parts, t.Depth); !ok {
+			if ok := b.db.trie.add(contract, t.GetHash(contract), t.Parts, t.Depth); !ok {
 				return errBadRequest
 			}
 		}
@@ -231,9 +231,6 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
 				return nil
-			}
-			if ok := b.db.trie.remove(topicHash, we); !ok {
-				return errBadRequest
 			}
 			b.db.delete(seq)
 			continue

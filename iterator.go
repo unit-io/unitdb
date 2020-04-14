@@ -110,15 +110,10 @@ func (it *ItemIterator) Next() {
 
 // First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
-	pEntries, topicHss, topicOffsets := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
-	for i, topicHash := range topicHss {
-		var fanout bool
+	topics, topicOffsets := it.db.trie.lookup(it.query.contract, it.query.parts, it.query.Limit)
+	for i, topicHash := range topics {
 		var wEntries []winEntry
-		if it.query.winEntries, fanout = it.db.timeWindow.ilookup(topicHash, it.query.Limit); fanout {
-			if len(pEntries) > i {
-				it.query.winEntries = append(it.query.winEntries, pEntries[i]...)
-			}
-		}
+		it.query.winEntries = it.db.timeWindow.ilookup(topicHash, it.query.Limit)
 		if uint32(len(it.query.winEntries)) < it.query.Limit {
 			limit := it.query.Limit - uint32(len(it.query.winEntries))
 			wEntries, _ = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(it.query.winEntries), limit)

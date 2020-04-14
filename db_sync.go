@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/message"
 )
 
 type (
@@ -15,6 +14,7 @@ type (
 		upperSeq      uint64
 		lastSyncSeq   uint64
 		syncStatusOk  bool
+		syncComplete  bool
 		inBytes       int64
 		count         int64
 
@@ -77,6 +77,14 @@ func (in *internal) reset() error {
 	return nil
 }
 
+func (db *syncHandle) abort() error {
+	if db.syncComplete {
+		db.internal.reset()
+		return nil
+	}
+	return nil
+}
+
 func (db *DB) startSyncer(interval time.Duration) {
 	syncTicker := time.NewTicker(interval)
 	syncHandle := syncHandle{DB: db, internal: internal{}}
@@ -129,6 +137,41 @@ func (db *DB) sync() error {
 	}
 	if err := db.data.Sync(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (db *syncHandle) sync(last bool) error {
+	defer db.abort()
+	db.syncComplete = false
+	if last || db.rawData.Size() > db.opts.BufferSize {
+		if db.blockWriter.UpperSeq() == 0 {
+			return nil
+		}
+		nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
+		if nBlocks > db.blocks() {
+			// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
+			if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
+				return err
+			}
+		}
+		if err := db.windowWriter.write(); err != nil {
+			return err
+		}
+		if err := db.blockWriter.write(); err != nil {
+			return err
+		}
+		if _, err := db.dataWriter.write(); err != nil {
+			return err
+		}
+		if err := db.DB.sync(); err != nil {
+			return err
+		}
+		db.incount(db.internal.count)
+		db.meter.Syncs.Inc(db.internal.count)
+		db.meter.InMsgs.Inc(db.internal.count)
+		db.meter.InBytes.Inc(db.internal.inBytes)
+		db.syncComplete = true
 	}
 	return nil
 }
@@ -204,35 +247,11 @@ func (db *syncHandle) Sync() error {
 				db.upperSeq = wEntry.seq
 			}
 
-			if db.rawData.Size() > db.opts.BufferSize {
-				if db.blockWriter.UpperSeq() == 0 {
-					return false, nil
-				}
-				nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
-				if nBlocks > db.blocks() {
-					// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
-					if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
-						return true, err
-					}
-				}
-				if err := db.windowWriter.write(); err != nil {
-					return true, err
-				}
-				if err := db.blockWriter.write(); err != nil {
-					return true, err
-				}
-				if _, err := db.dataWriter.write(); err != nil {
-					return true, err
-				}
-				if err := db.sync(); err != nil {
-					return true, err
-				}
-				db.incount(db.internal.count)
-				db.meter.Syncs.Inc(db.internal.count)
-				db.meter.InMsgs.Inc(db.internal.count)
-				db.meter.InBytes.Inc(db.internal.inBytes)
+			if err := db.sync(last); err != nil {
+				return true, err
+			}
 
-				db.internal.reset()
+			if db.syncComplete {
 				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 					return true, err
 				}
@@ -241,38 +260,14 @@ func (db *syncHandle) Sync() error {
 			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
 		}
 
-		if last {
-			if db.blockWriter.UpperSeq() == 0 {
-				return false, nil
-			}
-			nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
-			if nBlocks > db.blocks() {
-				// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
-				if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
-					return true, err
-				}
-			}
-			if _, err := db.dataWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.blockWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.windowWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.sync(); err != nil {
-				return true, err
-			}
+		if err := db.sync(last); err != nil {
+			return true, err
+		}
+
+		if db.syncComplete {
 			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
 				return true, err
 			}
-			db.incount(db.internal.count)
-			db.meter.Syncs.Inc(db.internal.count)
-			db.meter.InMsgs.Inc(db.internal.count)
-			db.meter.InBytes.Inc(db.internal.inBytes)
-
-			db.internal.reset()
 		}
 
 		return false, nil
@@ -302,15 +297,7 @@ func (db *DB) ExpireOldEntries() {
 		if !db.filter.Test(e.seq) {
 			continue
 		}
-		etopic, err := db.data.readTopic(e)
-		if err != nil {
-			continue
-		}
-		topic := new(message.Topic)
-		topic.Unmarshal(etopic)
-		contract := message.Contract(topic.Parts)
-		db.trie.remove(topic.GetHash(contract), expiredEntry.(winEntry))
-		db.data.free(e)
+		db.lease.free(e.seq, e.msgOffset, e.mSize())
 		db.decount()
 	}
 }

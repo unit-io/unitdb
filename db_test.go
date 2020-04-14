@@ -110,7 +110,7 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic := []byte("unit8.test")
+	topic := []byte("unit9.test")
 
 	// if db.count != 0 {
 	// 	t.Fatal()
@@ -180,7 +180,7 @@ func TestBatchGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic := []byte("unit8.test")
+	topic := []byte("unit10.test")
 
 	var i byte
 	var n uint8 = 255
@@ -236,7 +236,7 @@ func TestExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic := []byte("unit8.test")
+	topic := []byte("unit11.test")
 
 	var i byte
 	var n uint8 = 255

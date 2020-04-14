@@ -2,6 +2,8 @@ package tracedb
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -10,10 +12,6 @@ import (
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/tracedb/hash"
-)
-
-const (
-	winBlockSize uint32 = 512
 )
 
 type (
@@ -28,6 +26,7 @@ type (
 		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order)
 		entryIdx   uint16
 
+		dirty  bool
 		leased bool
 	}
 )
@@ -194,8 +193,7 @@ type windowWriter struct {
 	*timeWindowBucket
 	winBlocks map[int32]winBlock // map[windowIdx]winBlock
 
-	buffer  *bpool.Buffer
-	nBlocks uint32 // non-leased window block count
+	buffer *bpool.Buffer
 }
 
 func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
@@ -380,7 +378,7 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 }
 
 // ilookup lookups window entries from timeWindowBucket. These entries are not yet sync to DB
-func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry, fanout bool) {
+func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry) {
 	winEntries = make([]winEntry, 0)
 	// get windows shard
 	ws := wb.getWindows(topicHash)
@@ -408,7 +406,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 		}
 	}
 
-	return winEntries, len(winEntries) < int(limit)
+	return winEntries
 }
 
 // lookup lookups window entries from window file.
@@ -451,21 +449,35 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	return winEntries, nextOff
 }
 
+func (w winBlock) validation(topicHash uint64) error {
+	if w.topicHash != topicHash {
+		return errors.New(fmt.Sprintf("timeWindow.write: validation failed block topicHash %d, topicHash %d", w.topicHash, topicHash))
+	}
+	return nil
+}
+
 // append appends window entries to buffer
 func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
-	blockOff := int64(0)
-	w := windowHandle{file: wb.file, offset: off}
+	var w winBlock
+	var ok bool
+	winIdx := int32(0)
 	if off == 0 {
-		blockOff = wb.newBlock()
-		w.offset = blockOff
-		w.topicHash = topicHash
+		winIdx = wb.windowIdx + 1
 		// fmt.Println("timeWindow.sync: topicHash ", topicHash)
 	} else {
-		if err := w.read(); err != nil {
+		winIdx = int32(off / int64(blockSize))
+	}
+	w, ok = wb.winBlocks[winIdx]
+	if !ok && off > 0 {
+		wh := windowHandle{file: wb.file, offset: off}
+		if err := wh.read(); err != nil {
 			return off, err
 		}
+		w = wh.winBlock
+		w.validation(topicHash)
 		w.leased = true
 	}
+	w.topicHash = topicHash
 	for _, we := range wEntries {
 		if we.Seq() == 0 {
 			continue
@@ -481,83 +493,81 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 		if entryIdx == -1 {
 			continue
 		}
+		w.dirty = true
 		if w.entryIdx == seqsPerWindowBlock {
-			off = wb.newBlock()
-			if blockOff == 0 {
-				blockOff = off
-				if err := w.write(); err != nil {
-					return 0, err
-				}
-			}
 			topicHash := w.topicHash
-			next := w.offset
-			w = windowHandle{file: wb.file, offset: off}
-			w.topicHash = topicHash
-			w.next = next
-
-			wb.winBlocks[wb.windowIdx] = w.winBlock
+			next := int64(blockSize * uint32(winIdx))
+			wb.winBlocks[winIdx] = w
+			winIdx++
+			w = winBlock{topicHash: topicHash, next: next}
 		}
 		w.winEntries[w.entryIdx] = winEntry{seq: we.Seq()}
 		w.entryIdx++
 	}
 
-	wb.winBlocks[wb.windowIdx] = w.winBlock
-	return w.offset, nil
+	wb.winBlocks[winIdx] = w
+	return int64(blockSize * uint32(winIdx)), nil
 }
 
 func (wb *windowWriter) write() error {
-	defer func() {
-		wb.nBlocks = 0
-		wb.winBlocks = make(map[int32]winBlock)
-	}()
-
-	for bIdx, b := range wb.winBlocks {
-		if !b.leased {
+	for bIdx, w := range wb.winBlocks {
+		if !w.leased || !w.dirty {
 			continue
 		}
 		off := int64(blockSize * uint32(bIdx))
-		if _, err := wb.WriteAt(b.MarshalBinary(), off); err != nil {
+		if _, err := wb.WriteAt(w.MarshalBinary(), off); err != nil {
 			return err
 		}
-		delete(wb.winBlocks, bIdx)
+		w.dirty = false
+		wb.winBlocks[bIdx] = w
 	}
 
 	// sort blocks by blockIdx
-	var idx []int
-	for i := range wb.winBlocks {
-		idx = append(idx, int(i))
+	var blockIdx []int
+	for bIdx := range wb.winBlocks {
+		if wb.winBlocks[bIdx].leased || !wb.winBlocks[bIdx].dirty {
+			continue
+		}
+		blockIdx = append(blockIdx, int(bIdx))
 	}
-	sort.Ints(idx)
+	sort.Ints(blockIdx)
 
-	winBlocks, err := blockRange(idx)
+	winBlocks, err := blockRange(blockIdx)
 	if err != nil {
 		return err
 	}
 	// fmt.Println("timeWindow.write: winBlocks ", winBlocks)
-	for _, bIdx := range winBlocks {
-		if len(bIdx) == 1 {
-			winIdx := int32(bIdx[0])
+	bufOff := int64(0)
+	nBlocks := uint32(0)
+	for _, blocks := range winBlocks {
+		if len(blocks) == 1 {
+			winIdx := int32(blocks[0])
 			off := int64(blockSize * uint32(winIdx))
 			b := wb.winBlocks[winIdx]
 			buf := b.MarshalBinary()
 			if _, err := wb.WriteAt(buf, off); err != nil {
 				return err
 			}
+			nBlocks++
 			continue
 		}
-		off := int64(blockSize * uint32(bIdx[0]))
-		wb.buffer.Reset()
-		for i := bIdx[0]; i <= bIdx[1]; i++ {
-			b := wb.winBlocks[int32(i)]
-			wb.buffer.Write(b.MarshalBinary())
-			wb.nBlocks++
+		blockOff := int64(blockSize * uint32(blocks[0]))
+		for bIdx := int32(blocks[0]); bIdx <= int32(blocks[1]); bIdx++ {
+			w := wb.winBlocks[bIdx]
+			wb.buffer.Write(w.MarshalBinary())
+			w.dirty = false
+			wb.winBlocks[bIdx] = w
+			nBlocks++
 		}
-		if err := wb.extendBlocks(wb.nBlocks); err != nil {
+		blockData, err := wb.buffer.Slice(bufOff, wb.buffer.Size())
+		if err != nil {
 			return err
 		}
-		if _, err := wb.WriteAt(wb.buffer.Bytes(), off); err != nil {
+		if _, err := wb.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
+		wb.windowIdx += int32(nBlocks)
+		bufOff = wb.buffer.Size()
 	}
 
 	return nil

@@ -13,7 +13,7 @@ import (
 func (db *syncHandle) recoverWindowBlocks() error {
 	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
-			topicOff, ok := db.trie.getRecoveryOffset(h)
+			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
 				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie")
 			}
@@ -24,17 +24,9 @@ func (db *syncHandle) recoverWindowBlocks() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
 			}
-			if topicOff > 0 {
-				if ok := db.trie.deleteRecoveryOffset(h); ok {
-					fmt.Println("recovery.recoverWindowBlocks: topicHash, off ", h, topicOff)
-				}
-			}
 		}
 		return false, nil
 	})
-	// if ok := db.trie.recoveryStatus(); !ok {
-	// 	return errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to recover topics")
-	// }
 	return err
 }
 
@@ -92,7 +84,7 @@ func (db *syncHandle) startRecovery() error {
 				seq:      logEntry.seq,
 			}
 			db.timeWindow.add(topicHash, we)
-			if ok := db.trie.addTopic(contract, topicHash, topic.Parts, topic.Depth); !ok {
+			if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth); !ok {
 				return true, errBadRequest
 			}
 			db.filter.Append(logEntry.seq)
@@ -108,34 +100,8 @@ func (db *syncHandle) startRecovery() error {
 			db.upperSeq = upperSeq
 		}
 
-		if last || db.rawData.Size() > db.opts.BufferSize {
-			if db.blockWriter.UpperSeq() == 0 {
-				return false, nil
-			}
-			nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
-			if nBlocks > db.blocks() {
-				// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
-				if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
-					return true, err
-				}
-			}
-			if err := db.windowWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.blockWriter.write(); err != nil {
-				return true, err
-			}
-			if _, err := db.dataWriter.write(); err != nil {
-				return true, err
-			}
-			if err := db.sync(); err != nil {
-				return true, err
-			}
-			db.incount(db.internal.count)
-			db.meter.Syncs.Inc(db.internal.count)
-			db.meter.InMsgs.Inc(db.internal.count)
-			db.meter.InBytes.Inc(db.internal.inBytes)
-			db.internal.reset()
+		if err := db.sync(last); err != nil {
+			return true, err
 		}
 
 		return false, nil

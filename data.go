@@ -7,7 +7,7 @@ import (
 type (
 	dataTable struct {
 		file
-		lease lease
+		lease *lease
 
 		offset int64
 	}
@@ -47,12 +47,6 @@ func (dt *dataTable) readTopic(e entry) ([]byte, error) {
 		return e.cacheBlock[idSize : e.topicSize+idSize], nil
 	}
 	return dt.Slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
-}
-
-func (dt *dataTable) free(e entry) {
-	// size := align(e.mSize())
-	size := e.mSize()
-	dt.lease.free(e.seq, e.msgOffset, size)
 }
 
 func (dt *dataTable) extend(size uint32) (int64, error) {

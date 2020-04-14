@@ -255,9 +255,6 @@ func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
 			if stop, err := f(ul.seq, idx == l-1, r); stop || err != nil {
 				return err
 			}
-			if err := wal.signalLogApplied(i); err != nil {
-				return err
-			}
 			offset += ul.size
 
 			idx++
@@ -342,6 +339,14 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 			if err := wal.signalLogApplied(i); err != nil {
 				return err
 			}
+		}
+	}
+	for i := 0; i < l; i++ {
+		if wal.logs[i].status == logStatusReleased {
+			// Remove log from wal
+			wal.logs = wal.logs[:i+copy(wal.logs[i:], wal.logs[i+1:])]
+			l -= 1
+			i--
 		}
 	}
 	return wal.writeHeader()

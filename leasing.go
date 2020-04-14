@@ -16,6 +16,7 @@ type freeslots struct {
 // A "thread" safe lease freeblocks.
 // To avoid lock bottlenecks slots are divided into several shards (nShards).
 type lease struct {
+	file
 	slots                 []*freeslots
 	blocks                []*freeBlocks
 	size                  int64 // total size of free blocks
@@ -35,8 +36,9 @@ type freeBlocks struct {
 }
 
 // newLeaswing creates a new concurrent freeblocks.
-func newLease(minimumSize int64) lease {
-	l := lease{
+func newLease(f file, minimumSize int64) *lease {
+	l := &lease{
+		file:                  f,
 		slots:                 make([]*freeslots, nShards),
 		blocks:                make([]*freeBlocks, nShards),
 		minimumFreeBlocksSize: minimumSize,
@@ -221,23 +223,19 @@ func (s *freeBlocks) binarySize() uint32 {
 	return uint32((4 + (8+4)*len(s.fb))) // FIXME: this is ugly
 }
 
-func (l *lease) read(dt dataTable, off int64) error {
-	if off == -1 {
-		return nil
-	}
-
+func (l *lease) read() error {
 	var size uint32
-	offset := off
+	offset := int64(0)
 	for i := 0; i < nShards; i++ {
 		fbs := l.blocks[i]
 		buf := make([]byte, 4)
-		if _, err := dt.ReadAt(buf, offset); err != nil {
+		if _, err := l.ReadAt(buf, offset); err != nil {
 			return err
 		}
 		n := binary.LittleEndian.Uint32(buf)
 		size += n
 		buf = make([]byte, (4+8)*n)
-		if _, err := dt.ReadAt(buf, offset+4); err != nil {
+		if _, err := l.ReadAt(buf, offset+4); err != nil {
 			return err
 		}
 		for i := uint32(0); i < n; i++ {
@@ -251,14 +249,12 @@ func (l *lease) read(dt dataTable, off int64) error {
 		}
 		offset += int64(12 * n)
 	}
-	// l.freeBlock(off, align(4+size*12))
-	l.freeBlock(off, 4+size*12)
 	return nil
 }
 
-func (l *lease) write(dt dataTable) (int64, error) {
+func (l *lease) write() error {
 	if len(l.blocks) == 0 {
-		return -1, nil
+		return nil
 	}
 	var marshaledSize uint32
 	var buf []byte
@@ -269,13 +265,9 @@ func (l *lease) write(dt dataTable) (int64, error) {
 		data, err := fbs.MarshalBinary()
 		buf = append(buf, data...)
 		if err != nil {
-			return -1, err
+			return err
 		}
 	}
-	off, err := dt.extend(marshaledSize)
-	if err != nil {
-		return -1, err
-	}
-	_, err = dt.WriteAt(buf, off)
-	return off, err
+	_, err := l.WriteAt(buf, 0)
+	return err
 }
