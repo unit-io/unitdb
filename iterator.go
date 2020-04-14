@@ -24,7 +24,7 @@ type Query struct {
 	contract   uint64
 	cutoff     int64 // time limit check on message Ids.
 	winEntries []winEntry
-	Limit      uint32 // The maximum number of elements to return.
+	Limit      int // The maximum number of elements to return.
 }
 
 // ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
@@ -34,8 +34,8 @@ type ItemIterator struct {
 	query       *Query
 	item        *Item
 	queue       []*Item
-	next        uint32
-	invalidKeys uint32
+	next        int
+	invalidKeys int
 }
 
 // Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
@@ -55,18 +55,18 @@ func (it *ItemIterator) Next() {
 				}
 				e, err := it.db.readEntry(it.query.contract, we.seq)
 				if err != nil {
+					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
 				if e.isExpired() {
-					// if ok := it.db.trie.remove(it.query.topicHash, we); ok {
-					it.db.timeWindow.addExpiry(e)
-					// }
 					it.invalidKeys++
+					it.db.timeWindow.addExpiry(e)
 					// if id is expired it does not return an error but continue the iteration
 					return nil
 				}
 				id, val, err := it.db.data.readMessage(e)
 				if err != nil {
+					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
 				}
 				msgId := message.ID(id)
@@ -78,12 +78,14 @@ func (it *ItemIterator) Next() {
 				if msgId.IsEncrypted() {
 					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {
+						logger.Error().Err(err).Str("context", "mac.Decrypt")
 						return err
 					}
 				}
 				var buffer []byte
 				val, err = snappy.Decode(buffer, val)
 				if err != nil {
+					logger.Error().Err(err).Str("context", "snappy.Decode")
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
@@ -114,8 +116,8 @@ func (it *ItemIterator) First() {
 	for i, topicHash := range topics {
 		var wEntries []winEntry
 		it.query.winEntries = it.db.timeWindow.ilookup(topicHash, it.query.Limit)
-		if uint32(len(it.query.winEntries)) < it.query.Limit {
-			limit := it.query.Limit - uint32(len(it.query.winEntries))
+		if len(it.query.winEntries) < it.query.Limit {
+			limit := it.query.Limit - len(it.query.winEntries)
 			wEntries, _ = it.db.timeWindow.lookup(topicHash, topicOffsets[i], len(it.query.winEntries), limit)
 			it.query.winEntries = append(it.query.winEntries, wEntries...)
 		}

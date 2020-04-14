@@ -152,16 +152,20 @@ func (db *syncHandle) sync(last bool) error {
 		if nBlocks > db.blocks() {
 			// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
 			if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
+				logger.Error().Err(err).Str("context", "db.extendBlocks")
 				return err
 			}
 		}
 		if err := db.windowWriter.write(); err != nil {
+			logger.Error().Err(err).Str("context", "timeWindow.write")
 			return err
 		}
 		if err := db.blockWriter.write(); err != nil {
+			logger.Error().Err(err).Str("context", "block.write")
 			return err
 		}
 		if _, err := db.dataWriter.write(); err != nil {
+			logger.Error().Err(err).Str("context", "data.write")
 			return err
 		}
 		if err := db.DB.sync(); err != nil {
@@ -220,6 +224,7 @@ func (db *syncHandle) Sync() error {
 				mseq := db.cacheID ^ wEntry.seq
 				memdata, err := db.mem.Get(wEntry.contract, mseq)
 				if err != nil {
+					logger.Error().Err(err).Str("context", "mem.Get")
 					return true, err
 				}
 				memEntry := entry{}
@@ -253,6 +258,7 @@ func (db *syncHandle) Sync() error {
 
 			if db.syncComplete {
 				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+					logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 					return true, err
 				}
 			}
@@ -266,6 +272,7 @@ func (db *syncHandle) Sync() error {
 
 		if db.syncComplete {
 			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 				return true, err
 			}
 		}

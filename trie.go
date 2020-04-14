@@ -42,7 +42,7 @@ type partTrie struct {
 }
 
 // newPartTrie creates a new part Trie.
-func newPartTrie(cacheCap uint32) *partTrie {
+func newPartTrie() *partTrie {
 	return &partTrie{
 		summary: make(map[uint64]*part),
 		root: &part{
@@ -60,10 +60,10 @@ type trie struct {
 
 // NewTrie new trie creates a Trie with an initialized Trie.
 // Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
-func newTrie(cacheCap uint32) *trie {
+func newTrie() *trie {
 	return &trie{
 		mutex:    newMutex(),
-		partTrie: newPartTrie(cacheCap),
+		partTrie: newPartTrie(),
 	}
 }
 
@@ -114,7 +114,7 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 }
 
 // lookup returns window entry set for given topic.
-func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (topics []uint64, offs []int64) {
+func (t *trie) lookup(contract uint64, parts []message.Part, limit int) (topics []uint64, offs []int64) {
 	t.RLock()
 	mu := t.getMutex(contract)
 	mu.Lock()
@@ -127,7 +127,7 @@ func (t *trie) lookup(contract uint64, parts []message.Part, limit uint32) (topi
 	return topics, offs
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, topics *[]uint64, offs *[]int64, part *part, limit uint32) {
+func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, topics *[]uint64, offs *[]int64, part *part, limit int) {
 	l := limit
 	// Add window entry set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {

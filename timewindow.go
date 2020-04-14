@@ -378,30 +378,30 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 }
 
 // ilookup lookups window entries from timeWindowBucket. These entries are not yet sync to DB
-func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries []winEntry) {
+func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries []winEntry) {
 	winEntries = make([]winEntry, 0)
 	// get windows shard
 	ws := wb.getWindows(topicHash)
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
-	var l uint32
+	var l int
 	wEntries := ws.friezedEntries[topicHash]
 	if len(wEntries) > 0 {
 		l = limit
-		if uint32(len(wEntries)) < limit {
-			l = uint32(len(wEntries))
+		if len(wEntries) < limit {
+			l = len(wEntries)
 		}
-		for _, we := range wEntries[uint32(len(wEntries))-l:] { // most recent entries are appended to the end so get the entries from end
+		for _, we := range wEntries[len(wEntries)-l:] { // most recent entries are appended to the end so get the entries from end
 			winEntries = append(winEntries, we.(winEntry))
 		}
 	}
 	wEntries = ws.entries[topicHash]
 	if len(wEntries) > 0 {
 		l = limit - l
-		if uint32(len(wEntries)) < l {
-			l = uint32(len(wEntries))
+		if len(wEntries) < l {
+			l = len(wEntries)
 		}
-		for _, we := range wEntries[uint32(len(wEntries))-l:] {
+		for _, we := range wEntries[len(wEntries)-l:] {
 			winEntries = append(winEntries, we.(winEntry))
 		}
 	}
@@ -410,8 +410,13 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit uint32) (winEntries 
 }
 
 // lookup lookups window entries from window file.
-func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit uint32) (winEntries []winEntry, nextOff int64) {
-	winEntries = make([]winEntry, 0)
+func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit int) (winEntries []winEntry, nextOff int64) {
+	// winEntries = wb.ilookup(topicHash, limit)
+	// if len(winEntries) > limit {
+	// 	limit = limit - len(winEntries)
+	// } else {
+	// 	return winEntries, off
+	// }
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
 			b := windowHandle{file: wb.file, offset: off}
@@ -434,8 +439,8 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 			count += int(b.entryIdx)
 			return false, nil
 		}
-		if uint32(len(winEntries)) > limit-uint32(b.entryIdx) {
-			limit = limit - uint32(len(winEntries))
+		if len(winEntries) > limit-int(b.entryIdx) {
+			limit = limit - len(winEntries)
 			winEntries = append(winEntries, b.winEntries[b.entryIdx-uint16(limit):b.entryIdx]...)
 			nextOff = b.next
 			return true, nil
@@ -566,10 +571,9 @@ func (wb *windowWriter) write() error {
 		if _, err := wb.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
-		wb.windowIdx += int32(nBlocks)
 		bufOff = wb.buffer.Size()
 	}
-
+	wb.windowIdx += int32(nBlocks)
 	return nil
 }
 

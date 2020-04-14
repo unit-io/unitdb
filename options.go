@@ -23,12 +23,6 @@ type Options struct {
 	// Encryption Key
 	EncryptionKey []byte
 
-	// Cache capacity is number of seq to cache per topic in a seq set of a topic
-	CacheCap int64
-
-	//Tiny Batch Size to group tiny batches and write into db on tiny batch interval
-	TinyBatchSize int
-
 	//Tiny Batch interval to group tiny batches and write into db on tiny batch interval
 	// Setting the value to 0 immediately writes entries into db.
 	TinyBatchWriteInterval time.Duration
@@ -58,12 +52,6 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.BackgroundSyncInterval == 0 {
 		opts.BackgroundSyncInterval = 1 * time.Second
-	}
-	if opts.CacheCap == 0 {
-		opts.CacheCap = 500
-	}
-	if opts.TinyBatchSize == 0 {
-		opts.TinyBatchSize = 500
 	}
 	if opts.TinyBatchWriteInterval == 0 {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond

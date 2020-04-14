@@ -93,6 +93,7 @@ func (db *syncHandle) startRecovery() error {
 		}
 
 		if err := db.recoverWindowBlocks(); err != nil {
+			logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
 			return true, err
 		}
 
@@ -110,6 +111,7 @@ func (db *syncHandle) startRecovery() error {
 		return err
 	}
 	if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+		logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 		return err
 	}
 	return nil

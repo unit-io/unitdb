@@ -165,7 +165,7 @@ func (t *Topic) TTL() (int64, bool) {
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.
-func (t *Topic) Last() (time.Time, uint32, bool) {
+func (t *Topic) Last() (time.Time, int, bool) {
 	dur, last, ok := t.getOption("last")
 	if ok {
 		if last > 0 {
@@ -191,12 +191,12 @@ func toUnix(t int64) time.Time {
 }
 
 // getOption retrieves a Uint option
-func (t *Topic) getOption(name string) (string, uint32, bool) {
+func (t *Topic) getOption(name string) (string, int, bool) {
 	for i := 0; i < len(t.Options); i++ {
 		if t.Options[i].Key == name {
 			val, err := strconv.ParseInt(t.Options[i].Value, 10, 64)
 			if err == nil {
-				return "", uint32(val), true
+				return "", int(val), true
 			}
 			return t.Options[i].Value, 0, true
 		}

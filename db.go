@@ -76,7 +76,6 @@ type (
 		mutex
 		mac         *crypto.MAC
 		writeLockC  chan struct{}
-		commitLockC chan struct{}
 		syncLockC   chan struct{}
 		expiryLockC chan struct{}
 		// consistent     *hash.Consistent
@@ -149,7 +148,6 @@ func Open(path string, opts *Options) (*DB, error) {
 		lease:       lease,
 		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		writeLockC:  make(chan struct{}, 1),
-		commitLockC: make(chan struct{}, 1),
 		syncLockC:   make(chan struct{}, 1),
 		expiryLockC: make(chan struct{}, 1),
 		dbInfo: dbInfo{
@@ -157,7 +155,7 @@ func Open(path string, opts *Options) (*DB, error) {
 			freeblockOff: -1,
 		},
 		batchdb: &batchdb{},
-		trie:    newTrie(uint32(opts.CacheCap)),
+		trie:    newTrie(),
 		start:   time.Now(),
 		meter:   NewMeter(),
 		// Close
@@ -228,7 +226,8 @@ func Open(path string, opts *Options) (*DB, error) {
 	db.filter.cache = db.mem
 	db.filter.cacheID = db.cacheID
 
-	if err := db.loadTopicHash(); err != nil {
+	if err := db.loadTrie(); err != nil {
+		logger.Error().Err(err).Str("context", "db.loadTrie")
 		return nil, err
 	}
 
@@ -236,6 +235,7 @@ func Open(path string, opts *Options) (*DB, error) {
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
+		logger.Error().Err(err).Str("context", "wal.New")
 		return nil, err
 	}
 
@@ -261,6 +261,7 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 	if writeFreeList {
 		db.lease.defrag()
 		if err := db.lease.write(); err != nil {
+			logger.Error().Err(err).Str("context", "db.writeHeader")
 			return err
 		}
 	}
@@ -283,6 +284,7 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 func (db *DB) readHeader() error {
 	h := &header{}
 	if err := db.index.readUnmarshalableAt(h, headerSize, 0); err != nil {
+		logger.Error().Err(err).Str("context", "db.readHeader")
 		return err
 	}
 	// if !bytes.Equal(h.signature[:], signature[:]) {
@@ -291,26 +293,14 @@ func (db *DB) readHeader() error {
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
 	if err := db.lease.read(); err != nil {
+		logger.Error().Err(err).Str("context", "db.readHeader")
 		return err
 	}
 	return nil
 }
 
-func (db *DB) recoverTopicHash(pendingTopics map[uint64]int64) error {
-
-	for h, off := range pendingTopics {
-		wOff, ok := db.trie.getOffset(h)
-		if !ok || wOff < off {
-			if ok := db.trie.setOffset(h, off); !ok {
-				return errors.New("db.recoverTopicHash: unable to recover topic hash, topic not found in trie.")
-			}
-		}
-	}
-	return nil
-}
-
 // loadTopicHash loads topic and offset from window file
-func (db *DB) loadTopicHash() error {
+func (db *DB) loadTrie() error {
 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
 		w := &curw
 		wOff, ok := db.trie.getOffset(w.topicHash)
@@ -372,10 +362,10 @@ func (db *DB) Close() error {
 
 	// Signal all goroutines.
 	close(db.closeC)
+	time.Sleep(db.opts.TinyBatchWriteInterval)
 
-	// Acquire writer lock.
+	// Acquire lock.
 	db.writeLockC <- struct{}{}
-	db.commitLockC <- struct{}{}
 	db.syncLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
@@ -492,16 +482,15 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	defer mu.RUnlock()
 	// lookups are performed in following order
 	// ilookup lookups in memory entries from timeWindow those are not yet sync
-	// trie lookup lookups in memory entries from trie as trie cache recent entries at the time of timeWindow sync
 	// lookup lookups persisted entries if fanout is true
-	// lookup gets most recent entries without need for sorting. This is an art and not technological solution:)
+	// lookup gets most recent entries without need for sorting.
 	topics, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
 	for i, topicHash := range topics {
 		var wEntries []winEntry
 		nextOff := int64(0)
 		q.winEntries = db.timeWindow.ilookup(topicHash, q.Limit)
-		if uint32(len(q.winEntries)) < q.Limit {
-			limit := q.Limit - uint32(len(q.winEntries))
+		if len(q.winEntries) < q.Limit {
+			limit := q.Limit - len(q.winEntries)
 			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(q.winEntries), limit)
 			q.winEntries = append(q.winEntries, wEntries...)
 		}
@@ -510,10 +499,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 
 		expiryCount := 0
-		start := uint32(0)
+		start := 0
 		limit := q.Limit
 		if len(q.winEntries) < int(q.Limit) {
-			limit = uint32(len(q.winEntries))
+			limit = len(q.winEntries)
 		}
 		for {
 			for _, we := range q.winEntries[start:limit] {
@@ -523,16 +512,21 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					}
 					e, err := db.readEntry(q.contract, we.seq)
 					if err != nil {
+						logger.Error().Err(err).Str("context", "db.readEntry")
 						return err
 					}
 					if e.isExpired() {
 						expiryCount++
-						db.timeWindow.addExpiry(e)
+						if err := db.timeWindow.addExpiry(e); err != nil {
+							logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+							return err
+						}
 						// if id is expired it does not return an error but continue the iteration
 						return nil
 					}
 					id, val, err := db.data.readMessage(e)
 					if err != nil {
+						logger.Error().Err(err).Str("context", "data.readMessage")
 						return err
 					}
 					msgId := message.ID(id)
@@ -543,6 +537,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					if msgId.IsEncrypted() {
 						val, err = db.mac.Decrypt(nil, val)
 						if err != nil {
+							logger.Error().Err(err).Str("context", "mac.decrypt")
 							return err
 						}
 					}
@@ -560,8 +555,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				}
 			}
 
-			if uint32(cap(q.winEntries)) == limit && cap(q.winEntries) < int(q.Limit) && nextOff > 0 {
-				limit := q.Limit - uint32(len(items))
+			if cap(q.winEntries) == limit && cap(q.winEntries) < q.Limit && nextOff > 0 {
+				limit := q.Limit - len(items)
 				wEntries, nextOff = db.timeWindow.lookup(topicHash, nextOff, 0, limit)
 				if len(wEntries) == 0 {
 					break
@@ -569,16 +564,16 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				q.winEntries = append(q.winEntries, wEntries...)
 			}
 
-			if expiryCount == 0 || len(items) >= int(q.Limit) || uint32(cap(q.winEntries)) == limit {
+			if expiryCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
 				break
 			}
 
-			if cap(q.winEntries) < int(q.Limit+uint32(expiryCount)) {
+			if cap(q.winEntries) < int(q.Limit+expiryCount) {
 				start = limit
-				limit = uint32(cap(q.winEntries))
+				limit = cap(q.winEntries)
 			} else {
 				start = limit
-				limit = limit + uint32(expiryCount)
+				limit = limit + expiryCount
 			}
 		}
 		db.meter.Gets.Inc(int64(len(items)))

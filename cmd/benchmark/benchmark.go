@@ -214,7 +214,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
+		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
 		if err != nil {
 			return err
 		}
@@ -300,7 +300,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: uint32(batchSize)})
+		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
 		if err != nil {
 			return err
 		}
