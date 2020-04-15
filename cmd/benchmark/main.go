@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/pkg/profile"
 )
@@ -41,49 +40,18 @@ func main() {
 		defer profile.Start(profile.MutexProfile).Stop()
 	}
 
-	func(retry int) {
-		i := 1
-		for range time.Tick(1000 * time.Millisecond) {
-			if err := benchmark(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
-				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-			}
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
-
-	func(retry int) {
-		i := 1
-		for range time.Tick(1000 * time.Millisecond) {
-			if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
-				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-			}
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
-
+	if err := benchmark1(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	}
+	if err := benchmark2(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	}
 	if err := benchmark3(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
-
-	func(retry int) {
-		i := 1
-		for range time.Tick(1000 * time.Millisecond) {
-			if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
-				fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-			}
-			if i >= retry {
-				return
-			}
-			i++
-		}
-	}(1)
-
+	if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
+	}
 	if err := recovery(*dir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running recovery: %v\n", err)
 	}

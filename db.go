@@ -293,6 +293,9 @@ func (db *DB) readHeader() error {
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
 	if err := db.lease.read(); err != nil {
+		if err == io.EOF {
+			return nil
+		}
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return err
 	}
@@ -544,6 +547,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					var buffer []byte
 					val, err = snappy.Decode(buffer, val)
 					if err != nil {
+						logger.Error().Err(err).Str("context", "snappy.Decode")
 						return err
 					}
 					items = append(items, val)
@@ -818,6 +822,7 @@ func (db *DB) tinyCommit() error {
 	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {
+		db.tinyBatch.buffer.Reset()
 		db.closeW.Done()
 		<-db.writeLockC
 	}()
@@ -860,6 +865,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {
+		buf.Reset()
 		db.closeW.Done()
 		<-db.writeLockC
 	}()

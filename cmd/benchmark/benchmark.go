@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/unit-io/tracedb"
 	"golang.org/x/sync/errgroup"
 )
@@ -69,7 +71,94 @@ func showProgress(gid int, total int) {
 	fmt.Printf("Goroutine %d. Processed %d items...\n", gid, total)
 }
 
-func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
+func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
+	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
+	// defer p.Stop()
+	batchSize := numKeys / concurrency
+	dbpath := path.Join(dir, "bench_tracedb")
+	db, err := tracedb.Open(dbpath, nil)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Number of keys: %d\n", numKeys)
+	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
+	fmt.Printf("Concurrency: %d\n", concurrency)
+	fmt.Printf("Running tracedb benchmark...\n")
+
+	topics := generateTopics(concurrency, minKS, maxKS)
+	vals := generateVals(numKeys, minVS, maxVS)
+	forceGC()
+
+	func(retry int) error {
+		r := 1
+		for range time.Tick(100 * time.Millisecond) {
+			start := time.Now()
+			eg := &errgroup.Group{}
+			func(concurrent int) error {
+				i := 1
+				for {
+					topic := append(topics[i-1], []byte("?ttl=1m")...)
+					eg.Go(func() error {
+						for k := 0; k < batchSize; k++ {
+							if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
+								return err
+							}
+						}
+						return err
+					})
+					if i >= concurrent {
+						return nil
+					}
+					i++
+				}
+			}(concurrency)
+			err = eg.Wait()
+			if err != nil {
+				return err
+			}
+			endsecs := time.Since(start).Seconds()
+			fmt.Printf("Put: %d %.3f sec, %d ops/sec\n", r, endsecs, int(float64(numKeys)/endsecs))
+
+			sz, err := db.FileSize()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("File size: %s\n", byteSize(sz))
+			if r >= retry {
+				return nil
+			}
+			r++
+		}
+		return nil
+	}(7)
+
+	printStats(db)
+
+	start := time.Now()
+
+	for i := 0; i < concurrency; i++ {
+		topic := append(topics[i], []byte("?last=1m")...)
+		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
+		if err != nil {
+			return err
+		}
+	}
+
+	endsecs := time.Since(start).Seconds()
+	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+	sz, err := db.FileSize()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("File size: %s\n", byteSize(sz))
+	printStats(db)
+	return db.Close()
+}
+
+func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
+	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
+	// defer p.Stop()
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)
@@ -151,7 +240,7 @@ func benchmark(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS i
 	return db.Close()
 }
 
-func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
+func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)
@@ -231,89 +320,6 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
 
-	return db.Close()
-}
-
-func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
-	batchSize := numKeys / concurrency
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Number of keys: %d\n", numKeys)
-	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
-	fmt.Printf("Concurrency: %d\n", concurrency)
-	fmt.Printf("Running tracedb benchmark...\n")
-
-	topics := generateTopics(concurrency, minKS, maxKS)
-	vals := generateVals(numKeys, minVS, maxVS)
-	forceGC()
-
-	func(retry int) error {
-		r := 1
-		for range time.Tick(100 * time.Millisecond) {
-			start := time.Now()
-			eg := &errgroup.Group{}
-			func(concurrent int) error {
-				i := 1
-				for {
-					topic := append(topics[i-1], []byte("?ttl=1m")...)
-					eg.Go(func() error {
-						for k := 0; k < batchSize; k++ {
-							if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
-								return err
-							}
-						}
-						return err
-					})
-					if i >= concurrent {
-						return nil
-					}
-					i++
-				}
-			}(concurrency)
-			err = eg.Wait()
-			if err != nil {
-				return err
-			}
-			endsecs := time.Since(start).Seconds()
-			fmt.Printf("Put: %d %.3f sec, %d ops/sec\n", r, endsecs, int(float64(numKeys)/endsecs))
-
-			sz, err := db.FileSize()
-			if err != nil {
-				return err
-			}
-			fmt.Printf("File size: %s\n", byteSize(sz))
-			if r >= retry {
-				return nil
-			}
-			r++
-		}
-		return nil
-	}(3)
-
-	printStats(db)
-
-	start := time.Now()
-
-	for i := 0; i < concurrency; i++ {
-		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
-		if err != nil {
-			return err
-		}
-	}
-
-	endsecs := time.Since(start).Seconds()
-	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
-	sz, err := db.FileSize()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("File size: %s\n", byteSize(sz))
-	printStats(db)
 	return db.Close()
 }
 
