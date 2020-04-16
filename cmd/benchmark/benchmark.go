@@ -99,9 +99,11 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				i := 1
 				for {
 					topic := append(topics[i-1], []byte("?ttl=1m")...)
+					entry := &tracedb.Entry{Topic: topic}
 					eg.Go(func() error {
 						for k := 0; k < batchSize; k++ {
-							if err := db.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[k]}); err != nil {
+							entry.SetPayload(vals[k])
+							if err := db.PutEntry(entry); err != nil {
 								return err
 							}
 						}

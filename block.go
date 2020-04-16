@@ -211,12 +211,12 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 	if entryIdx == -1 {
 		return true, nil
 	}
-	b.dirty = true
 	if bw.upperSeq < e.seq {
 		bw.upperSeq = e.seq
 	}
 
 	b.entries[b.entryIdx] = e
+	b.dirty = true
 	b.entryIdx++
 	if err := b.validation(startBlockIdx); err != nil {
 		return false, err

@@ -411,12 +411,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries []w
 
 // lookup lookups window entries from window file.
 func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit int) (winEntries []winEntry, nextOff int64) {
-	// winEntries = wb.ilookup(topicHash, limit)
-	// if len(winEntries) > limit {
-	// 	limit = limit - len(winEntries)
-	// } else {
-	// 	return winEntries, off
-	// }
+	winEntries = make([]winEntry, 0)
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
 			b := windowHandle{file: wb.file, offset: off}
@@ -435,6 +430,9 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	count := 0
 	err := next(off, func(curb windowHandle) (bool, error) {
 		b := &curb
+		if b.topicHash != topicHash {
+			return true, nil
+		}
 		if skip > count+int(b.entryIdx) {
 			count += int(b.entryIdx)
 			return false, nil
@@ -467,8 +465,8 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 	var ok bool
 	winIdx := int32(0)
 	if off == 0 {
-		winIdx = wb.windowIdx + 1
-		// fmt.Println("timeWindow.sync: topicHash ", topicHash)
+		wb.windowIdx++
+		winIdx = wb.windowIdx
 	} else {
 		winIdx = int32(off / int64(blockSize))
 	}
@@ -498,15 +496,16 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 		if entryIdx == -1 {
 			continue
 		}
-		w.dirty = true
 		if w.entryIdx == seqsPerWindowBlock {
 			topicHash := w.topicHash
 			next := int64(blockSize * uint32(winIdx))
 			wb.winBlocks[winIdx] = w
-			winIdx++
+			wb.windowIdx++
+			winIdx = wb.windowIdx
 			w = winBlock{topicHash: topicHash, next: next}
 		}
 		w.winEntries[w.entryIdx] = winEntry{seq: we.Seq()}
+		w.dirty = true
 		w.entryIdx++
 	}
 
@@ -543,17 +542,17 @@ func (wb *windowWriter) write() error {
 	}
 	// fmt.Println("timeWindow.write: winBlocks ", winBlocks)
 	bufOff := int64(0)
-	nBlocks := uint32(0)
 	for _, blocks := range winBlocks {
 		if len(blocks) == 1 {
-			winIdx := int32(blocks[0])
-			off := int64(blockSize * uint32(winIdx))
-			b := wb.winBlocks[winIdx]
-			buf := b.MarshalBinary()
+			bIdx := int32(blocks[0])
+			off := int64(blockSize * uint32(bIdx))
+			w := wb.winBlocks[bIdx]
+			buf := w.MarshalBinary()
 			if _, err := wb.WriteAt(buf, off); err != nil {
 				return err
 			}
-			nBlocks++
+			w.dirty = false
+			wb.winBlocks[bIdx] = w
 			continue
 		}
 		blockOff := int64(blockSize * uint32(blocks[0]))
@@ -562,7 +561,6 @@ func (wb *windowWriter) write() error {
 			wb.buffer.Write(w.MarshalBinary())
 			w.dirty = false
 			wb.winBlocks[bIdx] = w
-			nBlocks++
 		}
 		blockData, err := wb.buffer.Slice(bufOff, wb.buffer.Size())
 		if err != nil {
@@ -573,7 +571,6 @@ func (wb *windowWriter) write() error {
 		}
 		bufOff = wb.buffer.Size()
 	}
-	wb.windowIdx += int32(nBlocks)
 	return nil
 }
 

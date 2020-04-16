@@ -40,7 +40,7 @@ To build tracedb from source code use go get command.
 
 ## Usage
 
-The tracedb support Get, Put, Delete operations. It also support encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/tracedb/docs/usage/advanced.md) for more advanced use case. 
+The tracedb support Get, Put, Delete operations. It also support encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/tracedb/tree/master/docs/usage/advanced.md) for more advanced use case. 
 
 ### Opening a database
 
@@ -96,7 +96,7 @@ Note, DB.Get() or DB.Items() function does not fetch expired messages.
 ```
 
 #### Read messages
-Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to gets last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieves messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to get last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
 
@@ -147,7 +147,7 @@ Topic isolation can be achieved using Contract while putting messages into trace
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrieves values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the tracedb:
+Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the tracedb:
 
 ```
 

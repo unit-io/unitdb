@@ -85,6 +85,23 @@ Use DB.Put() to store message to a topic or use DB.PutEntry() to store message e
 
 ```
 
+#### Store a message
+Use Entry.SetPayload for Bulk storing messages and then use DB.PutEntry. As topic is parsed on first entry into DB and subsequent request skips parsing of the topic.
+
+```
+	topic := []byte("unit8.b.b1")
+	entry := &tracedb.Entry{Topic: topic}
+	for j := 0; j < 50; j++ {
+		t := time.Now().Add(time.Duration(j) * time.Millisecond)
+		p, _ := t.MarshalText()
+		messageId := db.NewID()
+		entry.SetID(messageId)
+		entry.SetPayload(p)
+		db.PutEntry(entry)
+	}
+
+```
+
 #### Specify ttl 
 Specify ttl parameter to a topic while storing messages to expire it after specific duration. 
 Note, DB.Get() or DB.Items() function does not fetch expired messages. 
@@ -97,7 +114,7 @@ Note, DB.Get() or DB.Items() function does not fetch expired messages.
 ```
 
 #### Read messages
-Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to gets last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieves messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to get last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
 
@@ -198,7 +215,7 @@ All batch operations are non-blocking so client program can decide to wait for c
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrieves values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the tracedb:
+Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieve last 100 messages from the tracedb:
 
 ```
 

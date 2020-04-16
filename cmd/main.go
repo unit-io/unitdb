@@ -84,12 +84,15 @@ func main() {
 
 	func(retry int) {
 		i := 1
+		entry := &tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
 			for j := 0; j < 50; j++ {
 				t := time.Now().Add(time.Duration(j) * time.Millisecond)
 				p, _ := t.MarshalText()
 				messageId := db.NewID()
-				db.PutEntry(&tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1h"), Payload: p})
+				entry.SetID(messageId)
+				entry.SetPayload(p)
+				db.PutEntry(entry)
 			}
 			if err != nil {
 				log.Printf("Error update1: %s", err)

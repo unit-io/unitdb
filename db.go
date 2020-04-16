@@ -686,7 +686,7 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 	var id message.ID
 	var seq uint64
 	encryption := db.encryption == 1 || e.encryption
-	if ttl > 0 {
+	if e.ExpiresAt == 0 && ttl > 0 {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	if e.ID != nil {
@@ -710,6 +710,48 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 	e.seq = seq
 	e.id = id
 	e.val = val
+	return nil
+}
+
+// SetEntry puts parsed entry into the DB, if Contract is not specified then it uses master Contract.
+// It is safe to modify the contents of the argument after PutEntry returns but not
+// before.
+func (db *DB) SetEntry(e *Entry) error {
+	if !e.parsed {
+		return errEntryInvalid
+	}
+	switch {
+	case len(e.Payload) == 0:
+		return errValueEmpty
+	case len(e.Payload) > MaxValueLength:
+		return errValueTooLarge
+	}
+	we := winEntry{
+		contract: e.contract,
+		seq:      e.seq,
+	}
+	if err := db.timeWindow.add(e.topicHash, we); err != nil {
+		return err
+	}
+	data, err := db.packEntry(e)
+	if err != nil {
+		return err
+	}
+	memseq := db.cacheID ^ e.seq
+	if err := db.mem.Set(e.contract, memseq, data); err != nil {
+		return err
+	}
+	var scratch [4]byte
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
+		return err
+	}
+	if _, err := db.tinyBatch.buffer.Write(data); err != nil {
+		return err
+	}
+
+	db.tinyBatch.incount()
 	return nil
 }
 
@@ -740,13 +782,22 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	topic, ttl, err := db.parseTopic(e)
-	if err != nil {
-		return err
+	var topic *message.Topic
+	var ttl int64
+	var err error
+	if !e.parsed {
+		topic, ttl, err = db.parseTopic(e)
+		if err != nil {
+			return err
+		}
+		e.topic = topic.Marshal()
+		e.contract = message.Contract(topic.Parts)
+		e.topicHash = topic.GetHash(e.contract)
+		if ok := db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); !ok {
+			return errBadRequest
+		}
+		e.parsed = true
 	}
-	e.topic = topic.Marshal()
-	e.contract = message.Contract(topic.Parts)
-	e.topicHash = topic.GetHash(e.contract)
 	if err := db.setEntry(e, ttl); err != nil {
 		return err
 	}
@@ -754,39 +805,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.encryption == 1 {
 		e.val = db.mac.Encrypt(nil, e.val)
 	}
-
-	var ok bool
-	we := winEntry{
-		contract: e.contract,
-		seq:      e.seq,
-	}
-	if ok = db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); ok {
-		if err := db.timeWindow.add(e.topicHash, we); err != nil {
-			return err
-		}
-		e.topicOffset, _ = db.trie.getOffset(e.topicHash)
-		data, err := db.packEntry(e)
-		if err != nil {
-			return err
-		}
-		memseq := db.cacheID ^ e.seq
-		if err := db.mem.Set(e.contract, memseq, data); err != nil {
-			return err
-		}
-		var scratch [4]byte
-		binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
-		if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
-			return err
-		}
-		if _, err := db.tinyBatch.buffer.Write(data); err != nil {
-			return err
-		}
-
-		db.tinyBatch.incount()
-	}
-
-	return nil
+	return db.SetEntry(e)
 }
 
 // packEntry marshal entry and message data

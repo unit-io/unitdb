@@ -175,7 +175,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	e.id = id
 	e.seq = id.Seq()
 	key := topic.GetHashCode()
-	e.topicOffset, _ = b.db.trie.getOffset(topic.GetHash(e.contract))
 	data, err := b.db.packEntry(e)
 	if err != nil {
 		return err
