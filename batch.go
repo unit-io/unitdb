@@ -108,7 +108,6 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
-	e.topicHash = topic.GetHash(e.contract)
 	e.encryption = b.opts.Encryption
 	if err := b.db.setEntry(e, ttl); err != nil {
 		return err
@@ -169,7 +168,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	}
 	e.topic = topic.Marshal()
 	e.contract = message.Contract(topic.Parts)
-	e.topicHash = topic.GetHash(e.contract)
 	id := message.ID(e.ID)
 	id.AddContract(e.contract)
 	e.id = id

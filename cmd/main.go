@@ -84,14 +84,10 @@ func main() {
 
 	func(retry int) {
 		i := 1
-		entry := &tracedb.Entry{ID: messageId, Topic: []byte("unit8.c.*?ttl=1h")}
+		entry := &tracedb.Entry{Topic: []byte("unit8.c.*?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
-			for j := 0; j < 50; j++ {
-				t := time.Now().Add(time.Duration(j) * time.Millisecond)
-				p, _ := t.MarshalText()
-				messageId := db.NewID()
-				entry.SetID(messageId)
-				entry.SetPayload(p)
+			for j := uint8(0); j < 50; j++ {
+				entry.SetPayload(append([]byte("msg."), j))
 				db.PutEntry(entry)
 			}
 			if err != nil {
@@ -121,7 +117,7 @@ func main() {
 				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
-				for j := 0; j < 250; j++ {
+				for j := 0; j < 500; j++ {
 					t := time.Now().Add(time.Duration(j) * time.Millisecond)
 					p, _ := t.MarshalText()
 					b.Put(p)

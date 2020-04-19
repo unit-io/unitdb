@@ -20,6 +20,7 @@ The tracedb can out performs any similar time-series databases for IoT, realtime
  * [Opening a database](#Opening-a-database)
  + [Writing to a database](#Writing-to-a-database)
    - [Store a message](#Store-a-message)
+   - [Store a message](#Store-bulk-messages)
    - [Specify ttl](#Specify-ttl)
    - [Read messages](#Read-messages)
    - [Deleting a message](#Deleting-a-message)
@@ -85,18 +86,14 @@ Use DB.Put() to store message to a topic or use DB.PutEntry() to store message e
 
 ```
 
-#### Store a message
-Use Entry.SetPayload for Bulk storing messages and then use DB.PutEntry. As topic is parsed on first entry into DB and subsequent request skips parsing of the topic.
+#### Store bulk messages
+Use Entry.SetPayload() method to store bulk messages and then use DB.PutEntry() method for better performance as topic is parsed on first entry into DB and subsequent entries skips parsing of the topic.
 
 ```
 	topic := []byte("unit8.b.b1")
 	entry := &tracedb.Entry{Topic: topic}
-	for j := 0; j < 50; j++ {
-		t := time.Now().Add(time.Duration(j) * time.Millisecond)
-		p, _ := t.MarshalText()
-		messageId := db.NewID()
-		entry.SetID(messageId)
-		entry.SetPayload(p)
+	for j := uint8(0); j < 50; j++ {
+		entry.SetPayload(append([]byte("msg."), j))
 		db.PutEntry(entry)
 	}
 
@@ -326,5 +323,16 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 	})
 
 	err = g.Run()
+
+```
+
+### Statistics
+The tracedb keeps a running metrics of internal operations it performs. To get tracedb metrics use DB.Varz() function.
+
+```
+
+	if varz, err := db.Varz(); err == nil {
+		fmt.Printf("%+v\n", varz)
+	}
 
 ```

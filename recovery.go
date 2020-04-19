@@ -7,7 +7,6 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/unit-io/tracedb/message"
-	"github.com/unit-io/tracedb/wal"
 )
 
 func (db *syncHandle) recoverWindowBlocks() error {
@@ -43,12 +42,15 @@ func (db *syncHandle) startRecovery() error {
 		return nil
 	}
 	defer func() {
-		db.internal.reset()
 		db.finish()
 	}()
 
 	var logEntry entry
-	err := db.wal.Read(func(upperSeq uint64, last bool, r *wal.Reader) (ok bool, err error) {
+	r, err := db.wal.NewReader()
+	if err != nil {
+		return err
+	}
+	err = r.Read(func(upperSeq uint64, last bool) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok := r.Next()
@@ -61,7 +63,7 @@ func (db *syncHandle) startRecovery() error {
 			}
 			msgOffset := logEntry.mSize()
 			m := data[:msgOffset]
-			if logEntry.msgOffset, err = db.dataWriter.writeMessage(m); err != nil {
+			if logEntry.msgOffset, err = db.dataWriter.append(m); err != nil {
 				return true, err
 			}
 			exists, err := db.blockWriter.append(logEntry, db.startBlockIdx)

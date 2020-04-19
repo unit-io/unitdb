@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -199,88 +198,6 @@ func (wal *WAL) put(log logInfo) error {
 	}
 	wal.logs = append(wal.logs, log)
 	return nil
-}
-
-// Reader reader is a simple iterator over log data
-type Reader struct {
-	entryCount  uint32
-	logData     []byte
-	blockOffset int64
-}
-
-// Read reads log written to the WAL but fully applied. It returns Reader iterator
-func (wal *WAL) Read(f func(uint64, bool, *Reader) (bool, error)) (err error) {
-	// func (wal *WAL) Read() (*Reader, error) {
-	wal.mu.RLock()
-	defer wal.mu.RUnlock()
-	idx := 0
-	l := len(wal.logs)
-	bufSize := wal.opts.BufferSize
-	fileOff := wal.logs[0].offset
-	size := wal.logFile.Size() - fileOff
-	buffer := wal.bufPool.Get()
-	defer wal.bufPool.Put(buffer)
-
-	for {
-		buffer.Reset()
-		offset := int64(0)
-		if size <= bufSize {
-			bufSize = size
-		}
-		if _, err := buffer.Extend(bufSize); err != nil {
-			return err
-		}
-		if _, err := wal.logFile.readAt(buffer.Internal(), fileOff); err != nil {
-			return err
-		}
-		for i := idx; i < l; i++ {
-			ul := wal.logs[i]
-			if bufSize < ul.size {
-				bufSize += ul.size
-				break
-			}
-			if ul.offset == wal.logFile.fb.currOffset+wal.logFile.fb.currSize && ul.offset != fileOff {
-				offset += wal.logFile.fb.currSize
-			}
-			if bufSize-offset < ul.size {
-				fileOff = ul.offset
-				size = wal.logFile.Size() - ul.offset
-				break
-			}
-			data, err := buffer.Slice(offset+int64(logHeaderSize), offset+ul.size)
-			if err != nil {
-				return err
-			}
-			r := &Reader{entryCount: ul.entryCount, logData: data, blockOffset: 0}
-			if stop, err := f(ul.seq, idx == l-1, r); stop || err != nil {
-				return err
-			}
-			offset += ul.size
-
-			idx++
-		}
-		if idx == l {
-			break
-		}
-	}
-	return nil
-}
-
-// Count returns entry count in the current reader
-func (r *Reader) Count() uint32 {
-	return r.entryCount
-}
-
-// Next returns next record from the log data iterator or false if iteration is done
-func (r *Reader) Next() ([]byte, bool) {
-	if r.entryCount == 0 {
-		return nil, false
-	}
-	r.entryCount--
-	logData := r.logData[r.blockOffset:]
-	dataLen := binary.LittleEndian.Uint32(logData[0:4])
-	r.blockOffset += int64(dataLen)
-	return logData[4:dataLen], true
 }
 
 func (wal *WAL) logMerge(log logInfo) (released bool, err error) {

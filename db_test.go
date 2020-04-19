@@ -56,7 +56,7 @@ func TestSimple(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	syncHandle := syncHandle{DB: db, internal: internal{}}
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	syncHandle := syncHandle{DB: db, internal: internal{}}
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestBatchGroup(t *testing.T) {
 	}
 
 	// wg.Wait()
-	time.Sleep(1 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 	syncHandle := syncHandle{DB: db, internal: internal{}}
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	// wg.Wait()
-	time.Sleep(3 * time.Second)
+	time.Sleep(10 * time.Millisecond)
 	db.ExpireOldEntries()
 
 	if data, err := db.Get(&Query{Topic: topic, Contract: contract}); len(data) != 0 || err != nil {

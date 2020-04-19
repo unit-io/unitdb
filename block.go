@@ -49,11 +49,13 @@ type (
 
 		*file
 		buffer *bpool.Buffer
+
+		leasing map[uint64]struct{}
 	}
 )
 
 func newBlockWriter(f *file, buf *bpool.Buffer) *blockWriter {
-	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf}
+	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
 }
 
 func (e entry) time() uint32 {
@@ -191,6 +193,7 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 	b, ok = bw.blocks[startBlockIdx]
 	if !ok {
 		if startBlockIdx <= blockIdx {
+			bw.leasing[e.seq] = struct{}{}
 			off := blockOffset(int32(startBlockIdx))
 			bh := blockHandle{file: bw.file, offset: off}
 			if err := bh.read(); err != nil {
@@ -337,4 +340,14 @@ func blockRange(idx []int) ([][]int, error) {
 		n1 = n2
 	}
 	return parts, nil
+}
+
+func (bw *blockWriter) rollback() error {
+	for seq := range bw.leasing {
+		fmt.Println("block.rollback: free blocks")
+		if _, err := bw.del(seq); err != nil {
+			return err
+		}
+	}
+	return nil
 }

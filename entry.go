@@ -11,14 +11,13 @@ type Entry struct {
 	contract   uint64
 	seq        uint64
 	id         []byte
-	topicHash  uint64
 	topic      []byte
 	val        []byte
 	encryption bool
 	parsed     bool
-	ID         []byte `json:"id,omitempty"`   // The ID of the message
-	Topic      []byte `json:"chan,omitempty"` // The topic of the message
-	Payload    []byte `json:"data,omitempty"` // The payload of the message
+	ID         []byte // The ID of the message
+	Topic      []byte // The topic of the message
+	Payload    []byte // The payload of the message
 	ExpiresAt  uint32 // The time expiry of the message
 	Contract   uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
 }
@@ -56,6 +55,14 @@ func (e *Entry) SetTTL(ttl []byte) *Entry {
 	duration, _ = time.ParseDuration(unsafeToString(ttl))
 	e.ExpiresAt = uint32(time.Now().Add(duration).Unix())
 	return e
+}
+
+func (e *Entry) reset() {
+	e.seq = 0
+	e.id = nil
+	e.val = nil
+	e.ID = nil
+	e.Payload = nil
 }
 
 // unsafeToString is used to convert a slice

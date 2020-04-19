@@ -3,6 +3,7 @@ package tracedb
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -13,6 +14,7 @@ type (
 		startBlockIdx int32
 		upperSeq      uint64
 		lastSyncSeq   uint64
+		upperCount    int64
 		syncStatusOk  bool
 		syncComplete  bool
 		inBytes       int64
@@ -21,6 +23,11 @@ type (
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
 		rawData   *bpool.Buffer
+
+		// offsets for rollback in case of sync error
+		winOff   int64
+		blockOff int64
+		dataOff  int64
 	}
 	syncHandle struct {
 		internal
@@ -47,6 +54,10 @@ func (db *syncHandle) startSync() bool {
 	db.windowWriter = newWindowWriter(db.timeWindow, db.rawWindow)
 	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
 	db.dataWriter = newDataWriter(&db.data, db.rawData)
+
+	db.winOff = db.timeWindow.currSize()
+	db.blockOff = db.index.currSize()
+	db.dataOff = db.data.currSize()
 	db.syncStatusOk = true
 
 	return db.syncStatusOk
@@ -57,9 +68,11 @@ func (db *syncHandle) finish() error {
 		return nil
 	}
 
+	db.internal.reset()
 	db.bufPool.Put(db.rawWindow)
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
+
 	db.syncStatusOk = false
 	return nil
 }
@@ -82,6 +95,24 @@ func (db *syncHandle) abort() error {
 		db.internal.reset()
 		return nil
 	}
+	// rollback blocks
+	fmt.Println("syncHandle.abort: abort blocks sync")
+	db.data.Truncate(db.dataOff)
+	db.index.Truncate(db.blockOff)
+	db.timeWindow.Truncate(db.winOff)
+	atomic.CompareAndSwapInt32(&db.blockIdx, db.blocks(), db.startBlockIdx)
+	db.decount(db.upperCount)
+
+	if err := db.dataWriter.rollback(); err != nil {
+		return err
+	}
+	if err := db.blockWriter.rollback(); err != nil {
+		return err
+	}
+	if err := db.windowWriter.rollback(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -142,12 +173,13 @@ func (db *DB) sync() error {
 }
 
 func (db *syncHandle) sync(last bool) error {
-	defer db.abort()
-	db.syncComplete = false
 	if last || db.rawData.Size() > db.opts.BufferSize {
 		if db.blockWriter.UpperSeq() == 0 {
 			return nil
 		}
+		db.syncComplete = false
+		defer db.abort()
+
 		nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
 		if nBlocks > db.blocks() {
 			// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
@@ -198,7 +230,6 @@ func (db *syncHandle) Sync() error {
 		return nil
 	}
 	defer func() {
-		db.internal.reset()
 		db.finish()
 	}()
 
@@ -232,7 +263,7 @@ func (db *syncHandle) Sync() error {
 					return true, err
 				}
 
-				if memEntry.msgOffset, err = db.dataWriter.writeMessage(memdata[entrySize:]); err != nil {
+				if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
 					return true, err
 				}
 				exists, err := db.blockWriter.append(memEntry, db.startBlockIdx)
@@ -305,6 +336,6 @@ func (db *DB) ExpireOldEntries() {
 			continue
 		}
 		db.lease.free(e.seq, e.msgOffset, e.mSize())
-		db.decount()
+		db.decount(1)
 	}
 }

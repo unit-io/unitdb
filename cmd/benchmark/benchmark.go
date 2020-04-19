@@ -348,7 +348,7 @@ func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]
 	return keys
 }
 
-func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int, progress bool) error {
+func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_tracedb")
 	db, err := tracedb.Open(dbpath, nil)

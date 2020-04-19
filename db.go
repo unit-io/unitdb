@@ -713,48 +713,6 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 	return nil
 }
 
-// SetEntry puts parsed entry into the DB, if Contract is not specified then it uses master Contract.
-// It is safe to modify the contents of the argument after PutEntry returns but not
-// before.
-func (db *DB) SetEntry(e *Entry) error {
-	if !e.parsed {
-		return errEntryInvalid
-	}
-	switch {
-	case len(e.Payload) == 0:
-		return errValueEmpty
-	case len(e.Payload) > MaxValueLength:
-		return errValueTooLarge
-	}
-	we := winEntry{
-		contract: e.contract,
-		seq:      e.seq,
-	}
-	if err := db.timeWindow.add(e.topicHash, we); err != nil {
-		return err
-	}
-	data, err := db.packEntry(e)
-	if err != nil {
-		return err
-	}
-	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(e.contract, memseq, data); err != nil {
-		return err
-	}
-	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
-	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
-		return err
-	}
-	if _, err := db.tinyBatch.buffer.Write(data); err != nil {
-		return err
-	}
-
-	db.tinyBatch.incount()
-	return nil
-}
-
 // Put puts entry into DB. It uses default Contract to put entry into DB.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
@@ -779,10 +737,13 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errTopicEmpty
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
+	case len(e.Payload) == 0:
+		return errValueEmpty
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
 	var topic *message.Topic
+	var topicHash uint64
 	var ttl int64
 	var err error
 	if !e.parsed {
@@ -792,8 +753,8 @@ func (db *DB) PutEntry(e *Entry) error {
 		}
 		e.topic = topic.Marshal()
 		e.contract = message.Contract(topic.Parts)
-		e.topicHash = topic.GetHash(e.contract)
-		if ok := db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); !ok {
+		topicHash := topic.GetHash(e.contract)
+		if ok := db.trie.add(e.contract, topicHash, topic.Parts, topic.Depth); !ok {
 			return errBadRequest
 		}
 		e.parsed = true
@@ -805,7 +766,34 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.encryption == 1 {
 		e.val = db.mac.Encrypt(nil, e.val)
 	}
-	return db.SetEntry(e)
+	we := winEntry{
+		contract: e.contract,
+		seq:      e.seq,
+	}
+	if err := db.timeWindow.add(topicHash, we); err != nil {
+		return err
+	}
+	data, err := db.packEntry(e)
+	if err != nil {
+		return err
+	}
+	memseq := db.cacheID ^ e.seq
+	if err := db.mem.Set(e.contract, memseq, data); err != nil {
+		return err
+	}
+	var scratch [4]byte
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
+
+	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
+		return err
+	}
+	if _, err := db.tinyBatch.buffer.Write(data); err != nil {
+		return err
+	}
+
+	db.tinyBatch.incount()
+	e.reset()
+	return nil
 }
 
 // packEntry marshal entry and message data
@@ -952,7 +940,7 @@ func (db *DB) delete(seq uint64) error {
 		return err
 	}
 	db.lease.free(e.seq, e.msgOffset, e.mSize())
-	db.decount()
+	db.decount(1)
 	if db.syncWrites {
 		return db.sync()
 	}
@@ -1002,8 +990,8 @@ func (db *DB) incount(count int64) int64 {
 	return atomic.AddInt64(&db.count, count)
 }
 
-func (db *DB) decount() int64 {
-	return atomic.AddInt64(&db.count, -11)
+func (db *DB) decount(count int64) int64 {
+	return atomic.AddInt64(&db.count, -count)
 }
 
 // Once is an object that will perform exactly one action

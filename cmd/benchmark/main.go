@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-
-	"github.com/pkg/profile"
 )
 
 var (
@@ -16,8 +14,6 @@ var (
 	maxValueSize = flag.Int("maxv", 512, "maximum value size")
 	concurrency  = flag.Int("c", 10, "number of concurrent goroutines")
 	dir          = flag.String("d", ".", "database directory")
-	profileMode  = flag.String("profile", "", "enable profile. cpu, mem, block or mutex")
-	progress     = flag.Bool("p", false, "show progress")
 )
 
 func main() {
@@ -29,17 +25,6 @@ func main() {
 		return
 	}
 
-	switch *profileMode {
-	case "cpu":
-		defer profile.Start(profile.CPUProfile).Stop()
-	case "mem":
-		defer profile.Start(profile.MemProfile).Stop()
-	case "block":
-		defer profile.Start(profile.BlockProfile).Stop()
-	case "mutex":
-		defer profile.Start(profile.MutexProfile).Stop()
-	}
-
 	if err := benchmark1(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
@@ -49,7 +34,7 @@ func main() {
 	if err := benchmark3(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
-	if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency, *progress); err != nil {
+	if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
 	if err := recovery(*dir); err != nil {

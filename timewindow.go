@@ -194,10 +194,12 @@ type windowWriter struct {
 	winBlocks map[int32]winBlock // map[windowIdx]winBlock
 
 	buffer *bpool.Buffer
+
+	leasing map[int32][]uint64 // map[blockIdx][]seq
 }
 
 func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
-	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf}
+	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
 // newBlock adds new window block to timeWindowBucket and returns block offset
@@ -459,6 +461,34 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
+func (wb *windowWriter) del(seq uint64, bIdx int32) error {
+	off := int64(blockSize * uint32(bIdx))
+	w := windowHandle{file: wb.file, offset: off}
+	if err := w.read(); err != nil {
+		return err
+	}
+	entryIdx := -1
+	for i := 0; i < int(w.entryIdx); i++ {
+		e := w.winEntries[i]
+		if e.seq == seq { //record exist in db
+			entryIdx = i
+			break
+		}
+	}
+	if entryIdx == -1 {
+		return nil // no entry in db to delete
+	}
+	w.entryIdx--
+
+	i := entryIdx
+	for ; i < entriesPerIndexBlock-1; i++ {
+		w.winEntries[i] = w.winEntries[i+1]
+	}
+	w.winEntries[i] = winEntry{}
+
+	return nil
+}
+
 // append appends window entries to buffer
 func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
 	var w winBlock
@@ -503,6 +533,9 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 			wb.windowIdx++
 			winIdx = wb.windowIdx
 			w = winBlock{topicHash: topicHash, next: next}
+		}
+		if w.leased {
+			wb.leasing[winIdx] = append(wb.leasing[winIdx], we.Seq())
 		}
 		w.winEntries[w.entryIdx] = winEntry{seq: we.Seq()}
 		w.dirty = true
@@ -570,6 +603,18 @@ func (wb *windowWriter) write() error {
 			return err
 		}
 		bufOff = wb.buffer.Size()
+	}
+	return nil
+}
+
+func (wb *windowWriter) rollback() error {
+	for bIdx, seqs := range wb.leasing {
+		fmt.Println("block.rollback: free winBlocks")
+		for _, seq := range seqs {
+			if err := wb.del(seq, bIdx); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -27,19 +27,18 @@ type Writer struct {
 }
 
 // NewWriter returns new log writer to write to WAL
-func (wal *WAL) NewWriter() (writer Writer, err error) {
+func (wal *WAL) NewWriter() (*Writer, error) {
 	if err := wal.ok(); err != nil {
-		return writer, err
+		return &Writer{wal: wal}, err
 	}
-	writer = Writer{
-		Id: uid.NewLID(),
-		// startSeq:       wal.seq,
+	w := &Writer{
+		Id:             uid.NewLID(),
 		wal:            wal,
 		writeCompleted: make(chan struct{}, 1),
 	}
 
-	writer.buffer = wal.bufPool.Get()
-	return writer, nil
+	w.buffer = wal.bufPool.Get()
+	return w, nil
 }
 
 func (w *Writer) append(data []byte) error {

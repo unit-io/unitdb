@@ -6,7 +6,6 @@ import (
 )
 
 func TestIteratorEmpty(t *testing.T) {
-	time.Sleep(1 * time.Second)
 	db, err := open("test.db", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -19,7 +18,6 @@ func TestIteratorEmpty(t *testing.T) {
 }
 
 func TestIterator(t *testing.T) {
-	time.Sleep(1 * time.Second)
 	db, err := open("test.db", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +27,7 @@ func TestIterator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic := []byte("unit8.test")
+	topic := []byte("unit12.test")
 
 	items := map[byte]bool{}
 	var i byte
@@ -46,7 +44,7 @@ func TestIterator(t *testing.T) {
 		}
 	}
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(20 * time.Millisecond)
 	topic = append(topic, []byte("?last=255")...)
 	it, err := db.Items(&Query{Topic: topic, Contract: contract})
 	if err != nil {

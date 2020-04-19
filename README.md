@@ -17,9 +17,6 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - Entire database can run in memory backed with file storage if system memory is larger than data sets. 
 - All DB methods are safe for concurrent use by multiple goroutines.
 
-# Planned
-- Documentation - document the technical architecture, technical design and advanced usage guides.
-
 ## Table of Contents
  * [Quick Start](#Quick-Start)
  * [Usage](#Usage)

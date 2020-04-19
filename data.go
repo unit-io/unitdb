@@ -1,6 +1,8 @@
 package tracedb
 
 import (
+	"fmt"
+
 	"github.com/unit-io/bpool"
 )
 
@@ -16,12 +18,13 @@ type (
 		*dataTable
 		buffer *bpool.Buffer
 
+		leasing       map[int64]uint32 // map[offset]size
 		writeComplete bool
 	}
 )
 
 func newDataWriter(dt *dataTable, buf *bpool.Buffer) *dataWriter {
-	return &dataWriter{dataTable: dt, buffer: buf}
+	return &dataWriter{dataTable: dt, buffer: buf, leasing: make(map[int64]uint32)}
 }
 
 func (dt *dataTable) readMessage(e entry) ([]byte, []byte, error) {
@@ -59,38 +62,31 @@ func (dt *dataTable) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-func (dw *dataWriter) writeMessage(data []byte) (off int64, err error) {
-	// dataLen := align(uint32(len(data)))
-	dataLen := uint32(len(data))
-	buf := make([]byte, dataLen)
-	copy(buf, data)
-	off = dw.lease.allocate(dataLen)
-	if off != -1 {
-		if _, err = dw.file.WriteAt(buf, off); err != nil {
-			return 0, err
-		}
-	} else {
-		off = dw.offset
-		if _, err := dw.append(data); err != nil {
-			return 0, err
-		}
-	}
-	return off, err
-}
-
-func (dw *dataWriter) append(data []byte) (int, error) {
+func (dw *dataWriter) append(data []byte) (off int64, err error) {
 	if len(data) == 0 {
 		return 0, nil
 	}
 
-	// dataLen := align(uint32(len(data)))
 	dataLen := len(data)
-	off, err := dw.buffer.Extend(int64(dataLen))
+	off = dw.lease.allocate(uint32(dataLen))
+	if off != -1 {
+		buf := make([]byte, dataLen)
+		copy(buf, data)
+		if _, err = dw.file.WriteAt(buf, off); err != nil {
+			return 0, err
+		}
+		return off, err
+	}
+	off = dw.offset
+	offset, err := dw.buffer.Extend(int64(dataLen))
 	if err != nil {
 		return 0, err
 	}
 	dw.offset += int64(dataLen)
-	return dw.buffer.WriteAt(data, off)
+	if _, err := dw.buffer.WriteAt(data, offset); err != nil {
+		return 0, err
+	}
+	return off, err
 }
 
 func (dw *dataWriter) write() (int, error) {
@@ -100,4 +96,12 @@ func (dw *dataWriter) write() (int, error) {
 	}
 	dw.writeComplete = true
 	return n, err
+}
+
+func (dw *dataWriter) rollback() error {
+	for off, size := range dw.leasing {
+		fmt.Println("block.rollback: free data blocks")
+		dw.lease.freeBlock(off, size)
+	}
+	return nil
 }
