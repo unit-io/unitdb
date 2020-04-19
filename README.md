@@ -10,12 +10,71 @@ tracedb is blazing fast time-series database for IoT, realtime messaging  applic
 
 Tracedb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. Tracedb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
-# Key characteristics
-- 100% Go.
-- Optimized for fast lookups and bulk inserts.
-- Can store larger-than-memory data sets.
-- Entire database can run in memory backed with file storage if system memory is larger than data sets. 
-- All DB methods are safe for concurrent use by multiple goroutines.
+# About tracedb 
+
+## Key characteristics
+- 100% Go
+- Optimized for fast lookups and hyper scale writes
+- Can store larger-than-memory data sets
+- Data is safely written to disk with accuracy and high perfomant block sync technique
+- Supports time-to-live on message entry
+- Supports writing to wildcard topics
+- Queried data is returned complete and correct
+
+The tracedb engine includes the following components:
+
+- Buffer Pool
+- Block Cache
+- Write Ahead Log (WAL)
+- Lookup Trie
+- Writing to timeWindow file
+- Writing to Block Index file
+- Writing to Data file
+
+### Writing data to disk 
+The tracedb engine handles data from the point put request is received through writing data to the physical disk. Data is written to tracedb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb block cache and become immediately queryable. The memdb block cache is periodically written to disk in the form of blocks.
+
+### Write Ahead Log (WAL)
+The Write Ahead Log (WAL) retains tracedb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
+
+When the tracedb engine receives a put request, the following steps occur:
+
+- The put request is parsed, packed and appended to the tinyBatch buffer.
+- Topic is parsed into parts and added to the lookup Trie. Contract is added to the first part of the parts in the lookup Trie.
+- The data is added to the memdb block cache.
+- The tinyBatch is appended to the WAL in cyclic order.
+- The last topic offset from timeWindow block is added to the Trie.
+- Data is written to disk using block sync.
+- The memdb block cache is updated with free offset. The memdb block cache shrinks if it reaches target size.
+- When data is successfully written to WAL, a response confirms the write request was successful.
+
+Blocks sync writes the timeWindow blocks, index blocks, and data blocks to disk.
+
+When the tracedb restarts, last offset of every all topics are loaded into Trie, the WAL file is read back and pending writes are applied to tracedb.
+
+### Block Cache
+The memdb block cache is an in-memory copy of entries that currently stored in the WAL. The block cache:
+
+- Organizes entries as per contract into shards.
+- Stores keys and offsets in map
+- Stores compressed data into data blocks.
+
+Queries to the tracedb merge data from the block cache with data from the files. Queries first lookup topic offset from lookup Trie. Topic offset is used to traverse timeWindow blocks and get entries sequence. Entry sequence is used to calculate index block offset and index block is read from file, it uses entry information from index block to read data from data file and un-compresses the data. As encryption flag is set on first bit of sequence so if data is encrypted then it get un-encrypted while data is read.
+
+### Block Sync
+#### TimeWindow Block
+To efficiently compact and store data, the tracedb engine groups entry sequences by topic key, and then orders those sequences by time and each block keep offset to next field of previous block in time order in timeWindow block.
+
+#### Index Block
+Index block stores entry sequence, topic key, data block offset and expiry details. The block offset of index block is calculated from entry sequence.
+
+#### Data Block
+The tracedb compress data and store it into data blocks. If an entry expires or deleted then the data offset and size is marked as free and added to lease blocks.
+
+#### Lease Block
+The tracedb stores sequence and data offset and size from data file into lease blocks if entry is expired or deleted so it can allocated by new request.
+
+After data is stored safely in files, the WAL is truncated and the block cache free offset is updated to shrink memdb.
 
 ## Table of Contents
  * [Quick Start](#Quick-Start)
