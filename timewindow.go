@@ -346,7 +346,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w m
 				ws.unFreeze()
 				ws.mu.Unlock()
 			}
-			continue
+			return err
 		}
 		if freeze {
 			ws.mu.Lock()

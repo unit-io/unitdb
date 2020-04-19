@@ -193,7 +193,6 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 	b, ok = bw.blocks[startBlockIdx]
 	if !ok {
 		if startBlockIdx <= blockIdx {
-			bw.leasing[e.seq] = struct{}{}
 			off := blockOffset(int32(startBlockIdx))
 			bh := blockHandle{file: bw.file, offset: off}
 			if err := bh.read(); err != nil {
@@ -218,6 +217,9 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 		bw.upperSeq = e.seq
 	}
 
+	if b.leased {
+		bw.leasing[e.seq] = struct{}{}
+	}
 	b.entries[b.entryIdx] = e
 	b.dirty = true
 	b.entryIdx++

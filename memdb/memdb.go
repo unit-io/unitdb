@@ -17,37 +17,37 @@ const (
 
 	drainInterval         = 1 * time.Second
 	memShrinkFactor       = 0.7
-	dataTableShrinkFactor = 0.33 // shrinker try to free 20% of total memdb size
+	dataTableShrinkFactor = 0.33 // shrinker try to free 33% of total memdb size
 )
 
-// A "thread" safe map of type seq:offset.
-// To avoid lock bottlenecks this map is divided into several (nShards) map shards.
-type blockCache []*concurrentCache
+// To avoid lock bottlenecks block cache is divided into several (nShards) shards.
+type blockCache []*memCache
 
-type concurrentCache struct {
+type memCache struct {
 	data         dataTable
-	freeOffset   int64            // cache keep lowest offset that can be free.
-	cache        map[uint64]int64 // seq and offset map
+	freeOffset   int64            // mem cache keep lowest offset that can be free.
+	m            map[uint64]int64 // map[seq]offset
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
 
-// newCache creates a new concurrent block cache.
-func newCache(memSize int64) blockCache {
+// newBlockCache creates a new concurrent block cache.
+func newBlockCache(memSize int64) blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		m[i] = &concurrentCache{data: dataTable{}, cache: make(map[uint64]int64)}
+		m[i] = &memCache{data: dataTable{}, m: make(map[uint64]int64)}
 	}
 	return m
 }
 
-// DB represents the block cache storage.
+// DB represents the block cache mem store.
 // All DB methods are safe for concurrent use by multiple goroutines.
+// Note: memdb is not a general purpose mem store but it designed for specific use in tracedb.
 type DB struct {
 	targetSize int64
 	resetLockC chan struct{}
 	// block cache
 	consistent *hash.Consistent
-	blockCache blockCache // seq and offset map
+	blockCache blockCache
 
 	// close
 	closeC chan struct{}
@@ -60,7 +60,7 @@ func Open(memSize int64) (*DB, error) {
 	}
 	db := &DB{
 		targetSize: memSize,
-		blockCache: newCache(memSize),
+		blockCache: newBlockCache(memSize),
 		// Close
 		closeC: make(chan struct{}),
 	}
@@ -94,22 +94,22 @@ func (db *DB) drain(interval time.Duration) {
 
 func (db *DB) shrinkDataTable() error {
 	for i := 0; i < nShards; i++ {
-		shard := db.blockCache[i]
-		shard.Lock()
-		if shard.freeOffset > 0 {
-			if err := shard.data.shrink(shard.freeOffset); err != nil {
+		cache := db.blockCache[i]
+		cache.Lock()
+		if cache.freeOffset > 0 {
+			if err := cache.data.shrink(cache.freeOffset); err != nil {
 				return err
 			}
 		}
-		for seq, off := range shard.cache {
-			if off < shard.freeOffset {
-				delete(shard.cache, seq)
+		for seq, off := range cache.m {
+			if off < cache.freeOffset {
+				delete(cache.m, seq)
 			} else {
-				shard.cache[seq] = off - shard.freeOffset
+				cache.m[seq] = off - cache.freeOffset
 			}
 		}
-		shard.freeOffset = 0
-		shard.Unlock()
+		cache.freeOffset = 0
+		cache.Unlock()
 	}
 
 	return nil
@@ -118,39 +118,39 @@ func (db *DB) shrinkDataTable() error {
 // Close closes the memdb.
 func (db *DB) Close() error {
 	for i := 0; i < nShards; i++ {
-		shard := db.blockCache[i]
-		shard.RLock()
-		if err := shard.data.close(); err != nil {
+		cache := db.blockCache[i]
+		cache.RLock()
+		if err := cache.data.close(); err != nil {
 			return err
 		}
-		shard.RUnlock()
+		cache.RUnlock()
 	}
 
 	return nil
 }
 
-// getShard returns shard under given contract
-func (db *DB) getShard(contract uint64) *concurrentCache {
+// getCache returns cache under given contract
+func (db *DB) getCache(contract uint64) *memCache {
 	return db.blockCache[db.consistent.FindBlock(contract)]
 }
 
 // Get gets data for the provided key under a contract
 func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
-	// Get shard
-	shard := db.getShard(contract)
-	shard.RLock()
-	defer shard.RUnlock()
-	// Get item from shard.
-	off, ok := shard.cache[key]
+	// Get cache
+	cache := db.getCache(contract)
+	cache.RLock()
+	defer cache.RUnlock()
+	// Get item from cache.
+	off, ok := cache.m[key]
 	if !ok {
 		return nil, errors.New("cache for entry seq not found")
 	}
-	scratch, err := shard.data.readRaw(off, 4) // read data length
+	scratch, err := cache.data.readRaw(off, 4) // read data length
 	if err != nil {
 		return nil, err
 	}
 	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := shard.data.readRaw(off, dataLen)
+	data, err := cache.data.readRaw(off, dataLen)
 	if err != nil {
 		return nil, err
 	}
@@ -159,41 +159,41 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 
 // Set sets the value for the given entry for a contract.
 func (db *DB) Set(contract uint64, key uint64, data []byte) error {
-	// Get cache shard.
-	shard := db.getShard(contract)
-	shard.Lock()
-	defer shard.Unlock()
-	off, err := shard.data.allocate(uint32(len(data) + 4))
+	// Get cache.
+	cache := db.getCache(contract)
+	cache.Lock()
+	defer cache.Unlock()
+	off, err := cache.data.allocate(uint32(len(data) + 4))
 	if err != nil {
 		return err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := shard.data.writeAt(scratch[:], off); err != nil {
+	if _, err := cache.data.writeAt(scratch[:], off); err != nil {
 		return err
 	}
-	if _, err := shard.data.writeAt(data, off+4); err != nil {
+	if _, err := cache.data.writeAt(data, off+4); err != nil {
 		return err
 	}
-	shard.cache[key] = off
+	cache.m[key] = off
 	return nil
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
 func (db *DB) Free(contract uint64, key uint64) error {
-	// Get shard
-	shard := db.getShard(contract)
-	shard.Lock()
-	defer shard.Unlock()
-	if shard.freeOffset > 0 {
+	// Get cache
+	cache := db.getCache(contract)
+	cache.Lock()
+	defer cache.Unlock()
+	if cache.freeOffset > 0 {
 		return nil
 	}
-	off, ok := shard.cache[key]
-	// Get item from shard.
+	off, ok := cache.m[key]
+	// Get item from cache.
 	if ok {
-		if (shard.freeOffset == 0 || shard.freeOffset < off) && float64(off) > float64(shard.data.size)*dataTableShrinkFactor {
-			shard.freeOffset = off
+		if (cache.freeOffset == 0 || cache.freeOffset < off) && float64(off) > float64(cache.data.size)*dataTableShrinkFactor {
+			cache.freeOffset = off
 		}
 	}
 
@@ -204,10 +204,10 @@ func (db *DB) Free(contract uint64, key uint64) error {
 func (db *DB) Count() uint64 {
 	count := 0
 	for i := 0; i < nShards; i++ {
-		shard := db.blockCache[i]
-		shard.RLock()
-		count += len(shard.cache)
-		shard.RUnlock()
+		cache := db.blockCache[i]
+		cache.RLock()
+		count += len(cache.m)
+		cache.RUnlock()
 	}
 	return uint64(count)
 }
@@ -216,10 +216,10 @@ func (db *DB) Count() uint64 {
 func (db *DB) Size() (int64, error) {
 	size := int64(0)
 	for i := 0; i < nShards; i++ {
-		shard := db.blockCache[i]
-		shard.RLock()
-		size += int64(shard.data.size)
-		shard.RUnlock()
+		cache := db.blockCache[i]
+		cache.RLock()
+		size += int64(cache.data.size)
+		cache.RUnlock()
 	}
 	return size, nil
 }

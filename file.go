@@ -30,6 +30,14 @@ func newFile(fs fs.FileSystem, name string) (file, error) {
 	return f, err
 }
 
+func (f *file) truncate(size int64) error {
+	if err := f.Truncate(size); err != nil {
+		return err
+	}
+	f.size = size
+	return nil
+}
+
 func (f *file) extend(size uint32) (int64, error) {
 	off := f.size
 	if err := f.Truncate(off + int64(size)); err != nil {

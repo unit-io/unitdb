@@ -27,26 +27,31 @@ func TestIterator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	topic := []byte("unit12.test")
 
 	items := map[byte]bool{}
 	var i byte
 	// var vals, itvals [][]byte
 
+	entry := &Entry{Topic: []byte("unit12.test?ttl=1h"), Contract: contract}
 	for i = 0; i < 255; i++ {
 		items[i] = false
-		topic := append(topic, []byte("?ttl=1h")...)
 		val := []byte("msg.")
 		val = append(val, i)
 		// vals = append(vals, val)
-		if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+		entry.SetPayload(val)
+		if err := db.PutEntry(entry); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	time.Sleep(20 * time.Millisecond)
-	topic = append(topic, []byte("?last=255")...)
-	it, err := db.Items(&Query{Topic: topic, Contract: contract})
+	time.Sleep(10 * time.Millisecond)
+	syncHandle := syncHandle{DB: db, internal: internal{}}
+	if err := syncHandle.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	it, err := db.Items(&Query{Topic: []byte("unit12.test?last=255"), Contract: contract})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,26 +95,22 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		for range time.Tick(100 * time.Millisecond) {
 			start := time.Now()
 			eg := &errgroup.Group{}
-			func(concurrent int) error {
-				i := 1
-				for {
-					topic := append(topics[i-1], []byte("?ttl=1m")...)
-					entry := &tracedb.Entry{Topic: topic}
-					eg.Go(func() error {
-						for k := 0; k < batchSize; k++ {
-							entry.SetPayload(vals[k])
-							if err := db.PutEntry(entry); err != nil {
-								return err
-							}
+			var entries []tracedb.Entry
+			for i := 0; i < concurrency; i++ {
+				topic := append(topics[i], []byte("?ttl=1m")...)
+				entries = append(entries, tracedb.Entry{Topic: topic})
+			}
+			for _, entry := range entries {
+				eg.Go(func() error {
+					for k := 0; k < batchSize; k++ {
+						entry.SetPayload(vals[k])
+						if err := db.PutEntry(&entry); err != nil {
+							return err
 						}
-						return err
-					})
-					if i >= concurrent {
-						return nil
 					}
-					i++
-				}
-			}(concurrency)
+					return err
+				})
+			}
 			err = eg.Wait()
 			if err != nil {
 				return err

@@ -268,6 +268,9 @@ func (l *lease) write() error {
 			return err
 		}
 	}
+	if err := l.Truncate(0); err != nil {
+		return err
+	}
 	_, err := l.WriteAt(buf, 0)
 	return err
 }

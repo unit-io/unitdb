@@ -2,7 +2,7 @@
 
 tracedb is blazing fast time-series database for IoT, realtime messaging  applications. 
 
-The tracedb can out performs any similar time-series databases for IoT, realtime applications in its write performance.
+The tracedb performs millions of writes in sub-second and it can out perform any similar time-series databases for IoT, realtime applications in its write performance.
 
 # Key characteristics
 - 100% Go.
@@ -10,9 +10,6 @@ The tracedb can out performs any similar time-series databases for IoT, realtime
 - Can store larger-than-memory data sets.
 - Entire database can run in memory backed with file storage if system memory is larger than data sets. 
 - All DB methods are safe for concurrent use by multiple goroutines.
-
-# Planned
-- Documentation - document the technical architecture, technical design and advanced usage guides.
 
 ## Table of Contents
  * [Quick Start](#Quick-Start)

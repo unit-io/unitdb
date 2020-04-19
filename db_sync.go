@@ -68,7 +68,6 @@ func (db *syncHandle) finish() error {
 		return nil
 	}
 
-	db.internal.reset()
 	db.bufPool.Put(db.rawWindow)
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
@@ -91,15 +90,15 @@ func (in *internal) reset() error {
 }
 
 func (db *syncHandle) abort() error {
+	defer db.internal.reset()
 	if db.syncComplete {
-		db.internal.reset()
 		return nil
 	}
 	// rollback blocks
-	fmt.Println("syncHandle.abort: abort blocks sync")
-	db.data.Truncate(db.dataOff)
-	db.index.Truncate(db.blockOff)
-	db.timeWindow.Truncate(db.winOff)
+	// fmt.Println("syncHandle.abort: abort blocks sync")
+	db.data.truncate(db.dataOff)
+	db.index.truncate(db.blockOff)
+	db.timeWindow.truncate(db.winOff)
 	atomic.CompareAndSwapInt32(&db.blockIdx, db.blocks(), db.startBlockIdx)
 	db.decount(db.upperCount)
 
@@ -198,6 +197,11 @@ func (db *syncHandle) sync(last bool) error {
 		}
 		if _, err := db.dataWriter.write(); err != nil {
 			logger.Error().Err(err).Str("context", "data.write")
+			return err
+		}
+		db.lease.defrag()
+		if err := db.lease.write(); err != nil {
+			logger.Error().Err(err).Str("context", "db.writeHeader")
 			return err
 		}
 		if err := db.DB.sync(); err != nil {

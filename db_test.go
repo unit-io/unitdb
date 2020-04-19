@@ -2,6 +2,7 @@ package tracedb
 
 import (
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -49,10 +50,12 @@ func TestSimple(t *testing.T) {
 		t.Fatal()
 	}
 
+	entry := &Entry{Topic: topic, Contract: contract}
 	for i = 0; i < n; i++ {
 		val := []byte("msg.")
 		val = append(val, i)
-		if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+		entry.SetPayload(val)
+		if err := db.PutEntry(entry); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,30 +64,36 @@ func TestSimple(t *testing.T) {
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if db.Count() != 255 {
-		t.Fatal()
+
+	time.Sleep(10 * time.Millisecond)
+	if count := db.Count(); count != int64(n) {
+		varz, err := db.Varz()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("expected %d records; got %d \n%+v", n, count, varz)
 	}
 
 	verifyMsgsAndClose := func() {
-		if db.Count() != 255 {
-			t.Fatal()
+		if count := db.Count(); count != int64(n) {
+			t.Fatalf("expected %d records; got %d", n, count)
 		}
 		qtopic := topic
 		qtopic = append(qtopic, []byte("?last=1h")...)
-		var vals [][]byte
+		var v, vals [][]byte
 		for i = 0; i < n; i++ {
 			val := []byte("msg.")
 			val = append(val, i)
 			vals = append(vals, val)
-			_, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+			v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
 			if err != nil {
 				t.Fatal(err)
 			}
 
 		}
-		// if !reflect.DeepEqual(vals, v) {
-		// 	t.Fatalf("expected %v; got %v", vals, v)
-		// }
+		if !reflect.DeepEqual(vals, v) {
+			t.Fatalf("expected %v; got %v", vals, v)
+		}
 
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
@@ -112,33 +121,33 @@ func TestBatch(t *testing.T) {
 	}
 	topic := []byte("unit9.test")
 
-	// if db.count != 0 {
-	// 	t.Fatal()
-	// }
+	if db.count != 0 {
+		t.Fatal()
+	}
 
 	var i byte
 	var n uint8 = 255
 
 	verifyMsgsAndClose := func() {
-		if count := db.Count(); count != 255 {
-			t.Fatalf("expected 255 records; got %d", count)
+		if count := db.Count(); count != int64(n) {
+			t.Fatalf("expected %d records; got %d", n, count)
 		}
 		qtopic := topic
 		qtopic = append(qtopic, []byte("?last=1h")...)
-		var vals [][]byte
+		var v, vals [][]byte
 		for i = 0; i < n; i++ {
 			val := []byte("msg.")
 			val = append(val, i)
 			vals = append(vals, val)
-			_, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+			v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
 			if err != nil {
 				t.Fatal(err)
 			}
 
 		}
-		// if !reflect.DeepEqual(vals, v) {
-		// 	t.Fatalf("expected %v; got %v", vals, v)
-		// }
+		if !reflect.DeepEqual(vals, v) {
+			t.Fatalf("expected %v; got %v", vals, v)
+		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
