@@ -96,6 +96,8 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return errTopicEmpty
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
+	case len(e.Payload) == 0:
+		return errValueEmpty
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
@@ -159,8 +161,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicEmpty
 	case len(e.Topic) > MaxTopicLength:
 		return errTopicTooLarge
-	case len(e.Payload) > MaxValueLength:
-		return errValueTooLarge
 	}
 	topic, _, err := b.db.parseTopic(e)
 	if err != nil {

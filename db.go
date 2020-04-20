@@ -743,7 +743,6 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	var topic *message.Topic
-	var topicHash uint64
 	var ttl int64
 	var err error
 	if !e.parsed {
@@ -753,8 +752,8 @@ func (db *DB) PutEntry(e *Entry) error {
 		}
 		e.topic = topic.Marshal()
 		e.contract = message.Contract(topic.Parts)
-		topicHash := topic.GetHash(e.contract)
-		if ok := db.trie.add(e.contract, topicHash, topic.Parts, topic.Depth); !ok {
+		e.topicHash = topic.GetHash(e.contract)
+		if ok := db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); !ok {
 			return errBadRequest
 		}
 		e.parsed = true
@@ -770,7 +769,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		contract: e.contract,
 		seq:      e.seq,
 	}
-	if err := db.timeWindow.add(topicHash, we); err != nil {
+	if err := db.timeWindow.add(e.topicHash, we); err != nil {
 		return err
 	}
 	data, err := db.packEntry(e)

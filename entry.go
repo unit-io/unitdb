@@ -12,6 +12,7 @@ type Entry struct {
 	seq        uint64
 	id         []byte
 	topic      []byte
+	topicHash  uint64
 	val        []byte
 	encryption bool
 	parsed     bool

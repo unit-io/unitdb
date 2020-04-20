@@ -32,7 +32,7 @@ func TestIterator(t *testing.T) {
 	var i byte
 	// var vals, itvals [][]byte
 
-	entry := &Entry{Topic: []byte("unit12.test?ttl=1h"), Contract: contract}
+	entry := &Entry{Topic: []byte("unit5.test?ttl=1h"), Contract: contract}
 	for i = 0; i < 255; i++ {
 		items[i] = false
 		val := []byte("msg.")
@@ -51,7 +51,7 @@ func TestIterator(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	it, err := db.Items(&Query{Topic: []byte("unit12.test?last=255"), Contract: contract})
+	it, err := db.Items(&Query{Topic: []byte("unit5.test?last=255"), Contract: contract})
 	if err != nil {
 		t.Fatal(err)
 	}
