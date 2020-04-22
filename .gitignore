@@ -1,0 +1,9 @@
+cmd/**
+*.data
+*.index
+*.win
+*.log
+*.lease
+*.filter
+*.lock
+*.exe

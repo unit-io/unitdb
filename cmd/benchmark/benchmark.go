@@ -143,6 +143,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
+	time.Sleep(100 * time.Millisecond)
 	return db.Close()
 }
 
@@ -211,6 +212,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}(7)
 
 	printStats(db)
+	time.Sleep(100 * time.Millisecond)
 	if err := db.Close(); err != nil {
 		return err
 	}
@@ -309,7 +311,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-
+	time.Sleep(100 * time.Millisecond)
 	return db.Close()
 }
 
@@ -421,6 +423,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
+	time.Sleep(100 * time.Millisecond)
 	return db.Close()
 }
 

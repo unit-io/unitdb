@@ -16,7 +16,7 @@ Tracedb can be used for online gaming and mobile apps as it satisfy the requirem
 - 100% Go
 - Optimized for fast lookups and hyper scale writes
 - Can store larger-than-memory data sets
-- Data is safely written to disk with accuracy and high perfomant block sync technique
+- Data is safely written to disk with accuracy and high performant block sync technique
 - Supports time-to-live on message entry
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct

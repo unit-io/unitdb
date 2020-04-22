@@ -346,7 +346,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w m
 				ws.unFreeze()
 				ws.mu.Unlock()
 			}
-			return err
+			continue
 		}
 		if freeze {
 			ws.mu.Lock()
@@ -355,7 +355,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w m
 			ws.mu.Unlock()
 		}
 	}
-	return nil
+	return err
 }
 
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
@@ -502,13 +502,16 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 	}
 	w, ok = wb.winBlocks[winIdx]
 	if !ok && off > 0 {
-		wh := windowHandle{file: wb.file, offset: off}
-		if err := wh.read(); err != nil {
-			return off, err
+		if winIdx <= wb.windowIdx {
+			wh := windowHandle{file: wb.file, offset: off}
+			if err := wh.read(); err != nil && err != io.EOF {
+				fmt.Println("windowWriter.append: topicHash, off ", topicHash, off, err)
+				return off, err
+			}
+			w = wh.winBlock
+			w.validation(topicHash)
+			w.leased = true
 		}
-		w = wh.winBlock
-		w.validation(topicHash)
-		w.leased = true
 	}
 	w.topicHash = topicHash
 	for _, we := range wEntries {

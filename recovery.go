@@ -99,10 +99,6 @@ func (db *syncHandle) startRecovery() error {
 			return true, err
 		}
 
-		if db.upperSeq < upperSeq {
-			db.upperSeq = upperSeq
-		}
-
 		if err := db.sync(last); err != nil {
 			return true, err
 		}
@@ -112,7 +108,7 @@ func (db *syncHandle) startRecovery() error {
 	if err != nil {
 		return err
 	}
-	if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
+	if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
 		logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 		return err
 	}

@@ -3,6 +3,7 @@ package tracedb
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 type (
 	internal struct {
 		startBlockIdx int32
-		upperSeq      uint64
 		lastSyncSeq   uint64
 		upperCount    int64
 		syncStatusOk  bool
@@ -61,6 +61,10 @@ func (db *syncHandle) startSync() bool {
 	db.syncStatusOk = true
 
 	return db.syncStatusOk
+}
+
+func (db *syncHandle) upperSeq() uint64 {
+	return db.blockWriter.UpperSeq()
 }
 
 func (db *syncHandle) finish() error {
@@ -237,8 +241,8 @@ func (db *syncHandle) Sync() error {
 		db.finish()
 	}()
 
+	var winEntries []timeWindowEntry
 	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
-		var wEntry winEntry
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
@@ -251,70 +255,10 @@ func (db *syncHandle) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			for _, we := range wEntries {
-				if we.Seq() == 0 {
-					continue
-				}
-				wEntry = we.(winEntry)
-				mseq := db.cacheID ^ wEntry.seq
-				memdata, err := db.mem.Get(wEntry.contract, mseq)
-				if err != nil {
-					logger.Error().Err(err).Str("context", "mem.Get")
-					return true, err
-				}
-				memEntry := entry{}
-				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
-					return true, err
-				}
-
-				if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
-					return true, err
-				}
-				exists, err := db.blockWriter.append(memEntry, db.startBlockIdx)
-				if err != nil {
-					return true, err
-				}
-				if exists {
-					continue
-				}
-
-				db.filter.Append(wEntry.seq)
-				db.internal.count++
-				db.internal.inBytes += int64(memEntry.valueSize)
-			}
-
-			if db.upperSeq < wEntry.seq {
-				db.upperSeq = wEntry.seq
-			}
-
-			if err := db.sync(last); err != nil {
-				return true, err
-			}
-
-			if db.syncComplete {
-				if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
-					logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-					return true, err
-				}
-			}
-
-			db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+			winEntries = append(winEntries, wEntries...)
 		}
-
-		if err := db.sync(last); err != nil {
-			return true, err
-		}
-
-		if db.syncComplete {
-			if err := db.wal.SignalLogApplied(db.upperSeq); err != nil {
-				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-				return true, err
-			}
-		}
-
 		return false, nil
 	})
-
 	if err != nil {
 		// run db recovery if an error occur with the db sync
 		if err := db.startRecovery(); err != nil {
@@ -322,6 +266,68 @@ func (db *syncHandle) Sync() error {
 			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
 		}
 	}
+	var wEntry winEntry
+	sort.Slice(winEntries[:], func(i, j int) bool {
+		return winEntries[i].Seq() < winEntries[j].Seq()
+	})
+	groupEntries := batch(winEntries, 1000)
+	for _, wEntries := range groupEntries {
+		for _, we := range wEntries {
+			if we.Seq() == 0 {
+				continue
+			}
+			wEntry = we.(winEntry)
+			mseq := db.cacheID ^ wEntry.seq
+			memdata, err := db.mem.Get(wEntry.contract, mseq)
+			if err != nil {
+				logger.Error().Err(err).Str("context", "mem.Get")
+				return err
+			}
+			memEntry := entry{}
+			if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				return err
+			}
+
+			if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
+				return err
+			}
+			exists, err := db.blockWriter.append(memEntry, db.startBlockIdx)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+
+			db.filter.Append(wEntry.seq)
+			db.internal.count++
+			db.internal.inBytes += int64(memEntry.valueSize)
+		}
+
+		if err := db.sync(false); err != nil {
+			return err
+		}
+
+		if db.syncComplete {
+			if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
+				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
+				return err
+			}
+		}
+
+		db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+	}
+	if err := db.sync(true); err != nil {
+		return err
+	}
+
+	if db.syncComplete {
+		if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
+			logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -342,4 +348,15 @@ func (db *DB) ExpireOldEntries() {
 		db.lease.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
 	}
+}
+
+func batch(winEntries []timeWindowEntry, batchSize int) [][]timeWindowEntry {
+	groupEntries := make([][]timeWindowEntry, 0, (len(winEntries)+batchSize-1)/batchSize)
+
+	for batchSize < len(winEntries) {
+		winEntries, groupEntries = winEntries[batchSize:], append(groupEntries, winEntries[0:batchSize:batchSize])
+	}
+	groupEntries = append(groupEntries, winEntries)
+
+	return groupEntries
 }
