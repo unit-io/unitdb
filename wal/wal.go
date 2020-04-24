@@ -35,13 +35,6 @@ const (
 )
 
 type (
-	freeBlock struct {
-		offset     int64
-		size       int64
-		currOffset int64
-		currSize   int64
-	}
-
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
@@ -91,12 +84,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		if _, err = wal.logFile.allocate(headerSize); err != nil {
 			return nil, false, err
 		}
-		wal.logFile.fb = freeBlock{
-			offset:     int64(headerSize),
-			size:       0,
-			currOffset: int64(headerSize),
-			currSize:   0,
-		}
+		wal.logFile.fb = newFreeBlock()
 		if err := wal.writeHeader(); err != nil {
 			return nil, false, err
 		}
@@ -121,12 +109,7 @@ func (wal *WAL) writeHeader() error {
 		signature: signature,
 		version:   version,
 		seq:       atomic.LoadUint64(&wal.seq),
-		freeBlock: freeBlock{
-			offset:     wal.logFile.fb.offset,
-			size:       wal.logFile.fb.size,
-			currOffset: wal.logFile.fb.currOffset,
-			currSize:   wal.logFile.fb.currSize,
-		},
+		fb:        wal.logFile.fb,
 	}
 	return wal.logFile.writeMarshalableAt(h, 0)
 }
@@ -137,17 +120,15 @@ func (wal *WAL) readHeader() error {
 		return err
 	}
 	wal.seq = h.seq
-	wal.logFile.fb = h.freeBlock
+	wal.logFile.fb = h.fb
 	return nil
 }
 
 func (wal *WAL) recoverLogHeaders() error {
-	offset := int64(headerSize) + wal.logFile.fb.size
+	offset := int64(headerSize)
 	l := logInfo{}
 	for {
-		if offset == wal.logFile.fb.currOffset {
-			offset += wal.logFile.fb.currSize
-		}
+		offset = wal.logFile.fb.recoveryOffset(offset)
 		if err := wal.logFile.readUnmarshalableAt(&l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
@@ -167,7 +148,6 @@ func (wal *WAL) recoverLogHeaders() error {
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
-	// wal.logFile.size = align(wal.logFile.size)
 	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
 		return err
 	}
@@ -204,22 +184,8 @@ func (wal *WAL) logMerge(log logInfo) (released bool, err error) {
 	if log.status == logStatusWritten {
 		return false, nil
 	}
-	if wal.logFile.fb.currOffset+wal.logFile.fb.currSize == log.offset {
-		released = true
-		wal.logFile.fb.currSize += log.size
-	} else {
-		if wal.logFile.fb.offset+wal.logFile.fb.size == log.offset {
-			released = true
-			wal.logFile.fb.size += log.size
-		}
-		// reset current free block
-		if wal.logFile.fb.size != 0 && wal.logFile.fb.offset+wal.logFile.fb.size >= wal.logFile.fb.currOffset {
-			wal.logFile.fb.currOffset = wal.logFile.fb.offset
-			wal.logFile.fb.currSize += wal.logFile.fb.size
-			wal.logFile.fb.size = 0
-		}
-	}
-	// fmt.Println("wal.logMerge: fb ", wal.logFile.fb)
+	released = wal.logFile.fb.free(log.offset, log.size)
+	wal.logFile.fb.swap(wal.opts.TargetSize)
 	return released, nil
 }
 

@@ -267,6 +267,7 @@ func (db *syncHandle) Sync() error {
 		}
 	}
 	var wEntry winEntry
+	var err1 error
 	sort.Slice(winEntries[:], func(i, j int) bool {
 		return winEntries[i].Seq() < winEntries[j].Seq()
 	})
@@ -281,21 +282,20 @@ func (db *syncHandle) Sync() error {
 			memdata, err := db.mem.Get(wEntry.contract, mseq)
 			if err != nil {
 				logger.Error().Err(err).Str("context", "mem.Get")
-				return err
+				err1 = err
+				break
 			}
 			memEntry := entry{}
 			if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
-				return err
+				err1 = err
 			}
 
 			if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
-				return err
+				err1 = err
+				break
 			}
-			exists, err := db.blockWriter.append(memEntry, db.startBlockIdx)
-			if err != nil {
-				return err
-			}
-			if exists {
+			if exists, err := db.blockWriter.append(memEntry, db.startBlockIdx); exists || err != nil {
+				err1 = err
 				continue
 			}
 
@@ -304,18 +304,32 @@ func (db *syncHandle) Sync() error {
 			db.internal.inBytes += int64(memEntry.valueSize)
 		}
 
+		db.mem.Free(wEntry.contract, db.cacheID^db.upperSeq())
+		if err1 != nil {
+			break
+		}
+
 		if err := db.sync(false); err != nil {
-			return err
+			err1 = err
+			break
 		}
 
 		if db.syncComplete {
 			if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
 				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-				return err
+				err1 = err
+				break
 			}
 		}
 
-		db.mem.Free(wEntry.contract, db.cacheID^wEntry.seq)
+	}
+	if err1 != nil {
+		// run db recovery if an error occur with the db sync
+		if err := db.startRecovery(); err != nil {
+			// if unable to recover db then close db
+			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
+		}
+		return nil
 	}
 	if err := db.sync(true); err != nil {
 		return err

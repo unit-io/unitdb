@@ -7,12 +7,20 @@ import (
 	"github.com/unit-io/tracedb/fs"
 )
 
-type file struct {
-	fs.FileManager
-	fb         freeBlock
-	size       int64
-	targetSize int64
-}
+type (
+	freeBlock struct {
+		offset int64
+		size   int64
+	}
+	file struct {
+		fs.FileManager
+		fb         fb
+		size       int64
+		targetSize int64
+	}
+)
+
+type fb [3]freeBlock
 
 func openFile(name string, targetSize int64) (file, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
@@ -36,12 +44,75 @@ func openFile(name string, targetSize int64) (file, error) {
 	return f, err
 }
 
+func newFreeBlock() fb {
+	var fb fb
+	fb[0] = freeBlock{offset: int64(headerSize), size: 0}
+	fb[1] = freeBlock{offset: int64(headerSize), size: 0}
+	return fb
+}
+
+func (fb *fb) currSize() int64 {
+	return fb[1].size
+}
+
+func (fb *fb) currOffset() int64 {
+	return fb[1].offset
+}
+
+func (fb *fb) recoveryOffset(offset int64) int64 {
+	if offset == fb[0].offset {
+		offset += +fb[0].size
+	}
+	if offset == fb[1].offset {
+		offset += fb[1].size
+	}
+	if offset == fb[2].offset {
+		offset += fb[2].size
+	}
+	return offset
+}
+
+func (fb *fb) allocate(size uint32) int64 {
+	off := fb[1].offset
+	fb[1].size -= int64(size)
+	fb[1].offset += int64(size)
+	return off
+}
+
+func (fb *fb) free(offset, size int64) (ok bool) {
+	if fb[1].offset+fb[1].size == offset {
+		ok = true
+		fb[1].size += size
+	} else {
+		if fb[0].offset+fb[0].size == offset {
+			ok = true
+			fb[0].size += size
+		}
+	}
+	return ok
+}
+
+func (fb *fb) swap(targetSize int64) error {
+	if fb[1].size != 0 && fb[1].offset+fb[1].size == fb[2].offset {
+		fb[1].size += fb[2].size
+		fb[2].size = 0
+	}
+	if fb[0].size > targetSize {
+		fb[2].offset = fb[1].offset
+		fb[2].size = fb[1].size
+		fb[1].offset = fb[0].offset
+		fb[1].size = fb[0].size
+		fb[0].size = 0
+	}
+	return nil
+}
+
 func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
 	// do not allocate freeblocks until target size has reached of the log to avoid fragmentation
-	if f.targetSize > (f.size+int64(size)) || (f.targetSize < (f.size+int64(size)) && f.fb.currSize < int64(size)) {
+	if f.targetSize > (f.size+int64(size)) || f.fb.currSize() < int64(size) {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {
 			return 0, err
@@ -49,9 +120,8 @@ func (f *file) allocate(size uint32) (int64, error) {
 		f.size += int64(size)
 		return off, nil
 	}
-	off := f.fb.currOffset
-	f.fb.currSize -= int64(size)
-	f.fb.currOffset += int64(size)
+	off := f.fb.allocate(size)
+
 	return off, nil
 }
 

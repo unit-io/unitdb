@@ -69,8 +69,8 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 				r.bufSize += ul.size
 				break
 			}
-			if ul.offset == r.wal.logFile.fb.currOffset+r.wal.logFile.fb.currSize && ul.offset != fileOff {
-				offset += r.wal.logFile.fb.currSize
+			if ul.offset == r.wal.logFile.fb.currOffset()+r.wal.logFile.fb.currSize() && ul.offset != fileOff {
+				offset += r.wal.logFile.fb.currSize()
 			}
 			if r.bufSize-offset < ul.size {
 				fileOff = ul.offset

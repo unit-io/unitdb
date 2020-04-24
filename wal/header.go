@@ -7,7 +7,7 @@ import (
 var (
 	signature     = [8]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b', '\xfd'}
 	logHeaderSize = 32
-	headerSize    uint32
+	headerSize    = uint32(70)
 )
 
 type logInfo struct {
@@ -48,13 +48,8 @@ type header struct {
 	signature [8]byte
 	version   uint32
 	seq       uint64
-	freeBlock
-	_ [256]byte
-}
-
-func init() {
-	// headerSize = uint32(align(int64(binary.Size(logInfo{}))))
-	headerSize = uint32(binary.Size(logInfo{}))
+	fb
+	_ [2]byte
 }
 
 // MarshalBinary serialized header into binary data
@@ -63,10 +58,12 @@ func (h header) MarshalBinary() ([]byte, error) {
 	copy(buf[:8], h.signature[:])
 	binary.LittleEndian.PutUint32(buf[8:12], h.version)
 	binary.LittleEndian.PutUint64(buf[12:20], h.seq)
-	binary.LittleEndian.PutUint64(buf[20:28], uint64(h.freeBlock.size))
-	binary.LittleEndian.PutUint64(buf[28:36], uint64(h.freeBlock.offset))
-	binary.LittleEndian.PutUint64(buf[36:44], uint64(h.freeBlock.currSize))
-	binary.LittleEndian.PutUint64(buf[44:52], uint64(h.freeBlock.currOffset))
+	binary.LittleEndian.PutUint64(buf[20:28], uint64(h.fb[0].size))
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(h.fb[0].offset))
+	binary.LittleEndian.PutUint64(buf[36:44], uint64(h.fb[1].size))
+	binary.LittleEndian.PutUint64(buf[44:52], uint64(h.fb[1].offset))
+	binary.LittleEndian.PutUint64(buf[52:60], uint64(h.fb[2].size))
+	binary.LittleEndian.PutUint64(buf[60:68], uint64(h.fb[2].offset))
 	return buf, nil
 }
 
@@ -75,9 +72,11 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:8])
 	h.version = binary.LittleEndian.Uint32(data[8:12])
 	h.seq = binary.LittleEndian.Uint64(data[12:20])
-	h.freeBlock.size = int64(binary.LittleEndian.Uint64(data[20:28]))
-	h.freeBlock.offset = int64(binary.LittleEndian.Uint64(data[28:36]))
-	h.freeBlock.currSize = int64(binary.LittleEndian.Uint64(data[36:44]))
-	h.freeBlock.currOffset = int64(binary.LittleEndian.Uint64(data[44:52]))
+	h.fb[0].size = int64(binary.LittleEndian.Uint64(data[20:28]))
+	h.fb[0].offset = int64(binary.LittleEndian.Uint64(data[28:36]))
+	h.fb[1].size = int64(binary.LittleEndian.Uint64(data[36:44]))
+	h.fb[1].offset = int64(binary.LittleEndian.Uint64(data[44:52]))
+	h.fb[2].size = int64(binary.LittleEndian.Uint64(data[52:60]))
+	h.fb[2].offset = int64(binary.LittleEndian.Uint64(data[60:68]))
 	return nil
 }
