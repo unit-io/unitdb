@@ -3,7 +3,6 @@ package tracedb
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +44,6 @@ func (db *syncHandle) startSync() bool {
 		return db.syncStatusOk
 	}
 	db.startBlockIdx = db.blocks()
-	db.lastSyncSeq = db.Seq()
 
 	db.rawWindow = db.bufPool.Get()
 	db.rawBlock = db.bufPool.Get()
@@ -67,6 +65,13 @@ func (db *syncHandle) upperSeq() uint64 {
 	return db.blockWriter.UpperSeq()
 }
 
+func (db *syncHandle) lowerSeq() uint64 {
+	if db.internal.lastSyncSeq == 0 || db.blockWriter.UpperSeq() < db.internal.lastSyncSeq {
+		return db.blockWriter.UpperSeq()
+	}
+	return db.internal.lastSyncSeq
+}
+
 func (db *syncHandle) finish() error {
 	if !db.syncStatusOk {
 		return nil
@@ -76,6 +81,7 @@ func (db *syncHandle) finish() error {
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
 
+	db.lastSyncSeq = db.upperSeq()
 	db.syncStatusOk = false
 	return nil
 }
@@ -113,6 +119,12 @@ func (db *syncHandle) abort() error {
 		return err
 	}
 	if err := db.windowWriter.rollback(); err != nil {
+		return err
+	}
+
+	db.lease.defrag()
+	if err := db.lease.write(); err != nil {
+		logger.Error().Err(err).Str("context", "db.abort")
 		return err
 	}
 
@@ -183,6 +195,11 @@ func (db *syncHandle) sync(last bool) error {
 		db.syncComplete = false
 		defer db.abort()
 
+		if _, err := db.dataWriter.write(); err != nil {
+			logger.Error().Err(err).Str("context", "data.write")
+			return err
+		}
+
 		nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
 		if nBlocks > db.blocks() {
 			// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
@@ -199,15 +216,7 @@ func (db *syncHandle) sync(last bool) error {
 			logger.Error().Err(err).Str("context", "block.write")
 			return err
 		}
-		if _, err := db.dataWriter.write(); err != nil {
-			logger.Error().Err(err).Str("context", "data.write")
-			return err
-		}
-		db.lease.defrag()
-		if err := db.lease.write(); err != nil {
-			logger.Error().Err(err).Str("context", "db.writeHeader")
-			return err
-		}
+
 		if err := db.DB.sync(); err != nil {
 			return err
 		}
@@ -241,9 +250,40 @@ func (db *syncHandle) Sync() error {
 		db.finish()
 	}()
 
-	var winEntries []timeWindowEntry
+	var wEntry winEntry
+	var err1 error
 	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
+			for _, we := range wEntries {
+				if we.Seq() == 0 {
+					continue
+				}
+				wEntry = we.(winEntry)
+				mseq := db.cacheID ^ wEntry.seq
+				memdata, err := db.mem.Get(wEntry.contract, mseq)
+				if err != nil {
+					logger.Error().Err(err).Str("context", "mem.Get")
+					err1 = err
+					break
+				}
+				memEntry := entry{}
+				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
+					err1 = err
+				}
+
+				if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
+					err1 = err
+					break
+				}
+				if exists, err := db.blockWriter.append(memEntry, db.startBlockIdx); exists || err != nil {
+					err1 = err
+					continue
+				}
+
+				db.filter.Append(wEntry.seq)
+				db.internal.count++
+				db.internal.inBytes += int64(memEntry.valueSize)
+			}
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
 				return true, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
@@ -255,88 +295,34 @@ func (db *syncHandle) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			winEntries = append(winEntries, wEntries...)
+			db.mem.Free(wEntry.contract, db.cacheID^db.upperSeq())
+			if err1 != nil {
+				break
+			}
+
+			if err := db.sync(false); err != nil {
+				err1 = err
+				break
+			}
 		}
 		return false, nil
 	})
 	if err != nil {
+		db.syncComplete = false
+		db.abort()
 		// run db recovery if an error occur with the db sync
 		if err := db.startRecovery(); err != nil {
 			// if unable to recover db then close db
 			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
 		}
 	}
-	var wEntry winEntry
-	var err1 error
-	sort.Slice(winEntries[:], func(i, j int) bool {
-		return winEntries[i].Seq() < winEntries[j].Seq()
-	})
-	groupEntries := batch(winEntries, 1000)
-	for _, wEntries := range groupEntries {
-		for _, we := range wEntries {
-			if we.Seq() == 0 {
-				continue
-			}
-			wEntry = we.(winEntry)
-			mseq := db.cacheID ^ wEntry.seq
-			memdata, err := db.mem.Get(wEntry.contract, mseq)
-			if err != nil {
-				logger.Error().Err(err).Str("context", "mem.Get")
-				err1 = err
-				break
-			}
-			memEntry := entry{}
-			if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
-				err1 = err
-			}
 
-			if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
-				err1 = err
-				break
-			}
-			if exists, err := db.blockWriter.append(memEntry, db.startBlockIdx); exists || err != nil {
-				err1 = err
-				continue
-			}
-
-			db.filter.Append(wEntry.seq)
-			db.internal.count++
-			db.internal.inBytes += int64(memEntry.valueSize)
-		}
-
-		db.mem.Free(wEntry.contract, db.cacheID^db.upperSeq())
-		if err1 != nil {
-			break
-		}
-
-		if err := db.sync(false); err != nil {
-			err1 = err
-			break
-		}
-
-		if db.syncComplete {
-			if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
-				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-				err1 = err
-				break
-			}
-		}
-
-	}
-	if err1 != nil {
-		// run db recovery if an error occur with the db sync
-		if err := db.startRecovery(); err != nil {
-			// if unable to recover db then close db
-			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
-		}
-		return nil
-	}
 	if err := db.sync(true); err != nil {
 		return err
 	}
 
 	if db.syncComplete {
-		if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
+		if err := db.wal.SignalLogApplied(db.lowerSeq()); err != nil {
 			logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 			return err
 		}

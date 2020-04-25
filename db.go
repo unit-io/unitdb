@@ -228,7 +228,7 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
-		return nil, err
+		// return nil, err
 	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
@@ -824,14 +824,6 @@ func (db *DB) tinyCommit() error {
 	if err := db.ok(); err != nil {
 		return err
 	}
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.writeLockC <- struct{}{}
-	db.closeW.Add(1)
-	defer func() {
-		db.tinyBatch.buffer.Reset()
-		db.closeW.Done()
-		<-db.writeLockC
-	}()
 
 	if db.tinyBatch.count() == 0 {
 		return nil
@@ -841,7 +833,14 @@ func (db *DB) tinyCommit() error {
 	if err != nil {
 		return err
 	}
-
+	// commit writes batches into write ahead log. The write happen synchronously.
+	db.closeW.Add(1)
+	db.writeLockC <- struct{}{}
+	defer func() {
+		db.tinyBatch.buffer.Reset()
+		<-db.writeLockC
+		db.closeW.Done()
+	}()
 	offset := uint32(0)
 	buf := db.tinyBatch.buffer.Bytes()
 	for i := uint32(0); i < db.tinyBatch.count(); i++ {
@@ -872,8 +871,8 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	db.closeW.Add(1)
 	defer func() {
 		buf.Reset()
-		db.closeW.Done()
 		<-db.writeLockC
+		db.closeW.Done()
 	}()
 
 	logWriter, err := db.wal.NewWriter()

@@ -99,16 +99,21 @@ func (db *syncHandle) startRecovery() error {
 			return true, err
 		}
 
-		if err := db.sync(last); err != nil {
+		if err := db.sync(false); err != nil {
 			return true, err
 		}
 
 		return false, nil
 	})
 	if err != nil {
+		db.syncComplete = false
+		db.abort()
 		return err
 	}
-	if err := db.wal.SignalLogApplied(db.upperSeq()); err != nil {
+	if err := db.sync(true); err != nil {
+		return err
+	}
+	if err := db.wal.SignalLogApplied(db.lowerSeq()); err != nil {
 		logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 		return err
 	}

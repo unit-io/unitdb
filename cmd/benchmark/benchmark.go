@@ -121,7 +121,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			r++
 		}
 		return nil
-	}(7)
+	}(10)
 
 	printStats(db)
 
@@ -209,7 +209,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			r++
 		}
 		return nil
-	}(7)
+	}(10)
 
 	printStats(db)
 	time.Sleep(100 * time.Millisecond)

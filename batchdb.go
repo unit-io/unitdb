@@ -200,8 +200,8 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 	tinyBatchWriterTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {
-			db.closeW.Done()
 			tinyBatchWriterTicker.Stop()
+			db.closeW.Done()
 		}()
 		for {
 			select {
