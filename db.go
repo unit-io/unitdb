@@ -61,6 +61,7 @@ type (
 	dbInfo struct {
 		encryption   uint8
 		seq          uint64
+		logSeq       uint64
 		count        int64
 		blockIdx     int32
 		windowIdx    int32
@@ -853,7 +854,8 @@ func (db *DB) tinyCommit() error {
 	}
 
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
-	if err := <-logWriter.SignalInitWrite(db.Seq()); err != nil {
+	db.setLogSeq(db.Seq())
+	if err := <-logWriter.SignalInitWrite(db.LogSeq()); err != nil {
 		return err
 	}
 	db.tinyBatch.reset()
@@ -891,7 +893,8 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	}
 
 	db.meter.Puts.Inc(int64(l))
-	return <-logWriter.SignalInitWrite(db.Seq())
+	db.setLogSeq(db.Seq())
+	return <-logWriter.SignalInitWrite(db.LogSeq())
 }
 
 // Delete sets entry for deletion.
@@ -967,6 +970,15 @@ func (db *DB) Seq() uint64 {
 
 func (db *DB) nextSeq() uint64 {
 	return atomic.AddUint64(&db.seq, 1)
+}
+
+func (db *DB) LogSeq() uint64 {
+	return atomic.LoadUint64(&db.logSeq)
+}
+
+func (db *DB) setLogSeq(logSeq uint64) error {
+	atomic.StoreUint64(&db.logSeq, logSeq)
+	return nil
 }
 
 // Count returns the number of items in the DB.

@@ -46,11 +46,12 @@ func (db *syncHandle) startRecovery() error {
 	}()
 
 	var logEntry entry
+	var logSeq uint64
 	r, err := db.wal.NewReader()
 	if err != nil {
 		return err
 	}
-	err = r.Read(func(upperSeq uint64, last bool) (ok bool, err error) {
+	err = r.Read(func(lSeq uint64, last bool) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok := r.Next()
@@ -102,7 +103,7 @@ func (db *syncHandle) startRecovery() error {
 		if err := db.sync(false); err != nil {
 			return true, err
 		}
-
+		logSeq = lSeq
 		return false, nil
 	})
 	if err != nil {
@@ -113,7 +114,7 @@ func (db *syncHandle) startRecovery() error {
 	if err := db.sync(true); err != nil {
 		return err
 	}
-	if err := db.wal.SignalLogApplied(db.lowerSeq()); err != nil {
+	if err := db.wal.SignalLogApplied(logSeq); err != nil {
 		logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 		return err
 	}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"path"
-	"runtime"
 	"time"
 
 	_ "net/http/pprof"
@@ -22,10 +21,10 @@ func randKey(minL int, maxL int) string {
 	return string(buf)
 }
 
-func forceGC() {
-	runtime.GC()
-	time.Sleep(time.Millisecond * 500)
-}
+// func forceGC() {
+// 	runtime.GC()
+// 	time.Sleep(time.Millisecond * 500)
+// }
 
 func generateTopics(count int, minL int, maxL int) [][]byte {
 	topics := make([][]byte, 0, count)
@@ -88,7 +87,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
-	forceGC()
+	// forceGC()
 
 	func(retry int) error {
 		r := 1
@@ -123,8 +122,6 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return nil
 	}(10)
 
-	printStats(db)
-
 	start := time.Now()
 
 	for i := 0; i < concurrency; i++ {
@@ -137,13 +134,24 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	endsecs := time.Since(start).Seconds()
 	fmt.Printf("Get: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
+
+	printStats(db)
+	if err := db.Close(); err != nil {
+		return err
+	}
+
+	db, err = tracedb.Open(dbpath, nil)
+	if err != nil {
+		return err
+	}
+
 	sz, err := db.FileSize()
 	if err != nil {
 		return err
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-	time.Sleep(100 * time.Millisecond)
+
 	return db.Close()
 }
 
@@ -165,7 +173,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
 
-	forceGC()
+	// forceGC()
 
 	func(retry int) error {
 		r := 1
@@ -212,7 +220,6 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}(10)
 
 	printStats(db)
-	time.Sleep(100 * time.Millisecond)
 	if err := db.Close(); err != nil {
 		return err
 	}
@@ -248,7 +255,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
 
-	forceGC()
+	// forceGC()
 
 	start := time.Now()
 	eg := &errgroup.Group{}
@@ -289,7 +296,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
 
-	forceGC()
+	// forceGC()
 
 	start = time.Now()
 
@@ -311,7 +318,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-	time.Sleep(100 * time.Millisecond)
 	return db.Close()
 }
 
@@ -354,7 +360,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	keys := generateKeys(batchSize, minKS, maxKS, db)
 	vals := generateVals(batchSize, minVS, maxVS)
-	forceGC()
+	// forceGC()
 
 	start := time.Now()
 	eg := &errgroup.Group{}
@@ -390,7 +396,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	totalalsecs := endsecs
 	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
 	printStats(db)
-	forceGC()
+	// forceGC()
 
 	for contract := range keys {
 		for _, k := range keys[contract] {
@@ -423,7 +429,6 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-	time.Sleep(100 * time.Millisecond)
 	return db.Close()
 }
 

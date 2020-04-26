@@ -13,6 +13,7 @@ type (
 	internal struct {
 		startBlockIdx int32
 		lastSyncSeq   uint64
+		logSeq        uint64
 		upperCount    int64
 		syncStatusOk  bool
 		syncComplete  bool
@@ -44,6 +45,7 @@ func (db *syncHandle) startSync() bool {
 		return db.syncStatusOk
 	}
 	db.startBlockIdx = db.blocks()
+	db.internal.logSeq = db.LogSeq()
 
 	db.rawWindow = db.bufPool.Get()
 	db.rawBlock = db.bufPool.Get()
@@ -65,11 +67,8 @@ func (db *syncHandle) upperSeq() uint64 {
 	return db.blockWriter.UpperSeq()
 }
 
-func (db *syncHandle) lowerSeq() uint64 {
-	if db.internal.lastSyncSeq == 0 || db.blockWriter.UpperSeq() < db.internal.lastSyncSeq {
-		return db.blockWriter.UpperSeq()
-	}
-	return db.internal.lastSyncSeq
+func (db *syncHandle) logSeq() uint64 {
+	return db.internal.logSeq
 }
 
 func (db *syncHandle) finish() error {
@@ -322,7 +321,7 @@ func (db *syncHandle) Sync() error {
 	}
 
 	if db.syncComplete {
-		if err := db.wal.SignalLogApplied(db.lowerSeq()); err != nil {
+		if err := db.wal.SignalLogApplied(db.logSeq()); err != nil {
 			logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 			return err
 		}
