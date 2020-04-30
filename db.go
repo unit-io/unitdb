@@ -803,6 +803,17 @@ func (db *DB) PutEntry(e *Entry) error {
 	return nil
 }
 
+// SetEntry sets payload to the provided entry and out the entry into the DB, if Contract is not specified then it uses master Contract.
+// It is safe to modify the contents of the argument after PutEntry returns but not
+// before.
+func (db *DB) SetEntry(e *Entry, payload []byte) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+	e.SetPayload(payload)
+	return db.PutEntry(e)
+}
+
 // packEntry marshal entry and message data
 func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.Count() == MaxKeys {

@@ -88,8 +88,7 @@ func main() {
 		entry := &tracedb.Entry{Topic: []byte("unit8.c.*?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
 			for j := 0; j < 50; j++ {
-				entry.SetPayload([]byte(fmt.Sprintf("msg.%2d", j)))
-				db.PutEntry(entry)
+				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
 			}
 			if err != nil {
 				log.Printf("Error update1: %s", err)

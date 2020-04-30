@@ -100,8 +100,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			}
 			for _, entry := range entries {
 				for k := 0; k < batchSize; k++ {
-					entry.SetPayload(vals[k])
-					if err := db.PutEntry(&entry); err != nil {
+					if err := db.SetEntry(&entry, vals[k]); err != nil {
 						return err
 					}
 				}
