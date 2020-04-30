@@ -23,9 +23,15 @@ type Options struct {
 	// Encryption Key
 	EncryptionKey []byte
 
-	//Tiny Batch interval to group tiny batches and write into db on tiny batch interval
+	// Tiny Batch interval to group tiny batches and write into db on tiny batch interval
 	// Setting the value to 0 immediately writes entries into db.
 	TinyBatchWriteInterval time.Duration
+
+	// DefaultQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit.
+	DefaultQueryLimit int
+
+	// MaxQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit or specify a limit larger than MaxQueryResults.
+	MaxQueryLimit int
 
 	// Size of buffer to use for pooling
 	BufferSize int64
@@ -55,6 +61,12 @@ func (src *Options) copyWithDefaults() *Options {
 	}
 	if opts.TinyBatchWriteInterval == 0 {
 		opts.TinyBatchWriteInterval = 15 * time.Millisecond
+	}
+	if opts.DefaultQueryLimit == 0 {
+		opts.DefaultQueryLimit = 1000
+	}
+	if opts.MaxQueryLimit == 0 {
+		opts.MaxQueryLimit = 100000
 	}
 	if opts.BufferSize == 0 {
 		opts.BufferSize = 1 << 27 // maximum size of a buffer in bufferpool (128MB).

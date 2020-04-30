@@ -407,7 +407,9 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries []w
 			winEntries = append(winEntries, we.(winEntry))
 		}
 	}
-
+	sort.Slice(winEntries[:], func(i, j int) bool {
+		return winEntries[i].Seq() > winEntries[j].Seq()
+	})
 	return winEntries
 }
 
@@ -451,6 +453,9 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 	if err != nil {
 		return winEntries, nextOff
 	}
+	sort.Slice(winEntries[:], func(i, j int) bool {
+		return winEntries[i].Seq() > winEntries[j].Seq()
+	})
 	return winEntries, nextOff
 }
 

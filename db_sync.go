@@ -337,7 +337,7 @@ func (db *DB) ExpireOldEntries() {
 	defer func() {
 		<-db.syncLockC
 	}()
-	expiredEntries := db.timeWindow.expireOldEntries(maxResults)
+	expiredEntries := db.timeWindow.expireOldEntries(db.opts.DefaultQueryLimit)
 	for _, expiredEntry := range expiredEntries {
 		e := expiredEntry.(entry)
 		/// Test filter block if message hash presence

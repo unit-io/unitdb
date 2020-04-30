@@ -54,7 +54,7 @@ const (
 	MaxSeq = uint64(1<<56 - 1)
 
 	// Maximum number of records to return
-	maxResults = 100000
+	// maxResults = 100000
 )
 
 type (
@@ -474,8 +474,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
 		switch {
-		case (q.Limit == 0 && limit == 0) || q.Limit > maxResults || limit > maxResults:
-			q.Limit = maxResults
+		case (q.Limit == 0 && limit == 0):
+			q.Limit = db.opts.DefaultQueryLimit
+		case q.Limit > db.opts.MaxQueryLimit || limit > db.opts.MaxQueryLimit:
+			q.Limit = db.opts.MaxQueryLimit
 		case limit > q.Limit:
 			q.Limit = limit
 		}
@@ -621,8 +623,10 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
 		switch {
-		case (q.Limit == 0 && limit == 0) || q.Limit > maxResults || limit > maxResults:
-			q.Limit = maxResults
+		case (q.Limit == 0 && limit == 0):
+			q.Limit = db.opts.DefaultQueryLimit
+		case q.Limit > db.opts.MaxQueryLimit || limit > db.opts.MaxQueryLimit:
+			q.Limit = db.opts.MaxQueryLimit
 		case limit > q.Limit:
 			q.Limit = limit
 		}
@@ -708,6 +712,9 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 		id.AddContract(e.contract)
 	}
 	val := snappy.Encode(nil, e.Payload)
+	if seq == 0 {
+		panic("db.setEntry: seq is zero")
+	}
 	e.seq = seq
 	e.id = id
 	e.val = val

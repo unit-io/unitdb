@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -48,16 +49,16 @@ func main() {
 	}
 	defer db.Close()
 
-	print([]byte("unit8.b1?last=1m"), db)
-	print([]byte("unit8.b.b1?last=1m"), db)
-	print([]byte("unit8.b.b11?last=1m"), db)
+	print([]byte("unit8.b1?last=1h"), db)
+	print([]byte("unit8.b.b1?last=1h"), db)
+	print([]byte("unit8.b.b11?last=1h"), db)
 	print([]byte("unit8?last=1m"), db)
 	print([]byte("unit9?last=1m"), db)
 
 	print([]byte("unit8.c.c1?last=30m"), db)
 	print([]byte("unit8.c.c11?last=30m"), db)
 
-	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 250})
+	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 200})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
 	}
@@ -72,7 +73,7 @@ func main() {
 		Contract: contract,
 	})
 
-	// printWithContract([]byte("unit1?last=2m"), contract, db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	err = db.DeleteEntry(&tracedb.Entry{
 		ID:       messageId,
@@ -80,14 +81,14 @@ func main() {
 		Contract: contract,
 	})
 
-	// printWithContract([]byte("unit1?last=2m"), contract, db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	func(retry int) {
 		i := 1
 		entry := &tracedb.Entry{Topic: []byte("unit8.c.*?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
-			for j := uint8(0); j < 50; j++ {
-				entry.SetPayload(append([]byte("msg."), j))
+			for j := 0; j < 50; j++ {
+				entry.SetPayload([]byte(fmt.Sprintf("msg.%2d", j)))
 				db.PutEntry(entry)
 			}
 			if err != nil {
@@ -105,8 +106,8 @@ func main() {
 		log.Printf("%s ", msg)
 	}
 
-	// print([]byte("unit8.c.c1?last=30m"), db)
-	// print([]byte("unit8.c.c11?last=30m"), db)
+	print([]byte("unit8.c.c1?last=30m"), db)
+	print([]byte("unit8.c.c11?last=30m"), db)
 
 	time.Sleep(100 * time.Millisecond)
 	func(retry int) {
@@ -118,20 +119,9 @@ func main() {
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				for j := 0; j < 500; j++ {
-					t := time.Now().Add(time.Duration(j) * time.Millisecond)
-					p, _ := t.MarshalText()
-					b.Put(p)
+					b.Put([]byte(fmt.Sprintf("msg.%2d", j)))
 				}
-				if err := b.Write(); err != nil {
-					return err
-				}
-				go func() {
-					<-completed // it signals batch has completed and fully committed to db
-					log.Printf("batch completed")
-					print([]byte("unit8.b.b1?last=3m"), db)
-					print([]byte("unit8.b.b11?last=3m"), db)
-				}()
-				return nil
+				return b.Write()
 			})
 			if err != nil {
 				log.Printf("Error update1: %s", err)
@@ -143,8 +133,8 @@ func main() {
 		}
 	}(1)
 
-	// print([]byte("unit8.b.b1?last=30m"), db)
-	// print([]byte("unit8.b.b11?last=30m"), db)
+	print([]byte("unit8.b.b1?last=30m"), db)
+	print([]byte("unit8.b.b11?last=30m"), db)
 
 	messageId = db.NewID()
 	err = db.PutEntry(&tracedb.Entry{
@@ -154,20 +144,20 @@ func main() {
 		Contract: contract,
 	})
 
-	// print([]byte("unit1?last=2m"), db)
+	print([]byte("unit1?last=2m"), db)
 
-	err = db.DeleteEntry(&tracedb.Entry{
-		ID:       messageId,
-		Topic:    []byte("unit1"),
-		Contract: contract,
-	})
+	// err = db.DeleteEntry(&tracedb.Entry{
+	// 	ID:       messageId,
+	// 	Topic:    []byte("unit1"),
+	// 	Contract: contract,
+	// })
 
 	// print([]byte("unit1?last=2m"), db)
 
 	err = db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		// opts := tracedb.DefaultBatchOptions
-		// opts.Encryption= true
-		// b.SetOptions(opts)
+		opts := tracedb.DefaultBatchOptions
+		opts.Encryption = true
+		b.SetOptions(opts)
 		b.PutEntry(tracedb.NewEntry([]byte("unit1?ttl=3m"), []byte("unit1.1")))
 		b.PutEntry(tracedb.NewEntry([]byte("unit2?ttl=3m"), []byte("unit2.1")))
 		b.PutEntry(tracedb.NewEntry([]byte("unit3?ttl=3m"), []byte("unit3.1")))
@@ -235,20 +225,20 @@ func main() {
 		return
 	}
 
-	// func(retry int) {
-	// 	i := 1
-	// 	for range time.Tick(3 * time.Second) {
-	// 		print([]byte("unit8.b1?last=20"), db)
-	// 		print([]byte("unit8.b.b1?last=20"), db)
-	// 		print([]byte("unit8.b.b11?last=20"), db)
-	// 		print([]byte("unit8?last=10"), db)
-	// 		print([]byte("unit9?last=10"), db)
-	// 		if i >= retry {
-	// 			return
-	// 		}
-	// 		i++
-	// 	}
-	// }(1)
+	func(retry int) {
+		i := 1
+		for range time.Tick(3 * time.Second) {
+			print([]byte("unit8.b1?last=20"), db)
+			print([]byte("unit8.b.b1?last=20"), db)
+			print([]byte("unit8.b.b11?last=20"), db)
+			print([]byte("unit8?last=10"), db)
+			print([]byte("unit9?last=10"), db)
+			if i >= retry {
+				return
+			}
+			i++
+		}
+	}(1)
 	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 100})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
