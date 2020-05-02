@@ -8,3 +8,4 @@ cmd/benchmark/**
 *.filter
 *.lock
 *.exe
+*.out

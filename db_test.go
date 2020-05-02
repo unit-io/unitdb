@@ -81,16 +81,16 @@ func TestSimple(t *testing.T) {
 		qtopic := topic
 		qtopic = append(qtopic, []byte("?last=1h")...)
 		var v, vals [][]byte
+		v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+		if err != nil {
+			t.Fatal(err)
+		}
 		for i = 0; i < n; i++ {
 			val := []byte("msg.")
-			val = append(val, i)
+			val = append(val, n-i-1)
 			vals = append(vals, val)
-			v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
-			if err != nil {
-				t.Fatal(err)
-			}
-
 		}
+
 		if !reflect.DeepEqual(vals, v) {
 			t.Fatalf("expected %v; got %v", vals, v)
 		}
@@ -135,15 +135,14 @@ func TestBatch(t *testing.T) {
 		qtopic := topic
 		qtopic = append(qtopic, []byte("?last=1h")...)
 		var v, vals [][]byte
+		v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+		if err != nil {
+			t.Fatal(err)
+		}
 		for i = 0; i < n; i++ {
 			val := []byte("msg.")
-			val = append(val, i)
+			val = append(val, n-i-1)
 			vals = append(vals, val)
-			v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
-			if err != nil {
-				t.Fatal(err)
-			}
-
 		}
 		if !reflect.DeepEqual(vals, v) {
 			t.Fatalf("expected %v; got %v", vals, v)
