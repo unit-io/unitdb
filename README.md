@@ -1,12 +1,12 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
 
 <p align="left">
-  <img src="unitdb.png" width="70" alt="Trace" title="unitdb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
+  <img src="unitdb.png" width="300" alt="Trace" title="unitdb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
 # unitdb: blazing fast time-series database for IoT and real-time messaging applications
 
-unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Access unitdb with pubsub over tcp or websocket using [trace](https://github.com/unit-io/unitd) application.
+unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Access unitdb with pubsub over tcp or websocket using [unitd](https://github.com/unit-io/unitd) application.
 
 unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
