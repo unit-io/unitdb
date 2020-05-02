@@ -1,14 +1,13 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/unitdb/fs"
 )
 
 const (
@@ -108,7 +107,7 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 func (b block) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)
 	if startBlockIdx != blockIdx {
-		return errors.New(fmt.Sprintf("block.write: validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx))
+		return fmt.Errorf("block.write: validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
 	}
 	return nil
 }
@@ -332,12 +331,10 @@ func blockRange(idx []int) ([][]int, error) {
 			break
 		}
 		if idx[n2] == idx[n2-1] {
-			return nil, errors.New(fmt.Sprintf(
-				"sequence repeats value %d", idx[n2]))
+			return nil, fmt.Errorf("sequence repeats value %d", idx[n2])
 		}
 		if idx[n2] < idx[n2-1] {
-			return nil, errors.New(fmt.Sprintf(
-				"sequence not ordered: %d < %d", idx[n2], idx[n2-1]))
+			return nil, fmt.Errorf("sequence not ordered: %d < %d", idx[n2], idx[n2-1])
 		}
 		n1 = n2
 	}

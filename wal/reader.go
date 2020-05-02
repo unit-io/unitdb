@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/uid"
+	"github.com/unit-io/unitdb/uid"
 )
 
 // Reader reads logs from WAL.

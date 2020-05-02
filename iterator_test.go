@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"testing"

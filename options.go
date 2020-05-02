@@ -1,9 +1,9 @@
-package tracedb
+package unitdb
 
 import (
 	"time"
 
-	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/unitdb/fs"
 )
 
 // Options holds the optional DB parameters.

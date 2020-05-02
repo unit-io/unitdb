@@ -1,10 +1,10 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding"
 	"os"
 
-	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/unitdb/fs"
 )
 
 type file struct {

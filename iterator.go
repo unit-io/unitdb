@@ -1,11 +1,11 @@
-package tracedb
+package unitdb
 
 import (
 	"sync"
 
 	"github.com/golang/snappy"
 
-	"github.com/unit-io/tracedb/message"
+	"github.com/unit-io/unitdb/message"
 )
 
 // Item items returned by the iterator

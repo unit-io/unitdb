@@ -1,8 +1,7 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -11,7 +10,7 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/hash"
+	"github.com/unit-io/unitdb/hash"
 )
 
 type (
@@ -40,32 +39,32 @@ func (e winEntry) Seq() uint64 {
 }
 
 // MarshalBinary serialized window block into binary data
-func (b winBlock) MarshalBinary() []byte {
+func (w winBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 	for i := 0; i < seqsPerWindowBlock; i++ {
-		e := b.winEntries[i]
+		e := w.winEntries[i]
 		binary.LittleEndian.PutUint64(buf[:8], e.seq)
 		buf = buf[8:]
 	}
-	binary.LittleEndian.PutUint64(buf[:8], b.contract)
-	binary.LittleEndian.PutUint64(buf[8:16], b.topicHash)
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(b.next))
-	binary.LittleEndian.PutUint16(buf[24:26], b.entryIdx)
+	binary.LittleEndian.PutUint64(buf[:8], w.contract)
+	binary.LittleEndian.PutUint64(buf[8:16], w.topicHash)
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(w.next))
+	binary.LittleEndian.PutUint16(buf[24:26], w.entryIdx)
 	return data
 }
 
 // UnmarshalBinary de-serialized window block from binary data
-func (b *winBlock) UnmarshalBinary(data []byte) error {
+func (w *winBlock) UnmarshalBinary(data []byte) error {
 	for i := 0; i < seqsPerWindowBlock; i++ {
 		_ = data[8] // bounds check hint to compiler; see golang.org/issue/14808
-		b.winEntries[i].seq = binary.LittleEndian.Uint64(data[:8])
+		w.winEntries[i].seq = binary.LittleEndian.Uint64(data[:8])
 		data = data[8:]
 	}
-	b.contract = binary.LittleEndian.Uint64(data[:8])
-	b.topicHash = binary.LittleEndian.Uint64(data[8:16])
-	b.next = int64(binary.LittleEndian.Uint64(data[16:24]))
-	b.entryIdx = binary.LittleEndian.Uint16(data[24:26])
+	w.contract = binary.LittleEndian.Uint64(data[:8])
+	w.topicHash = binary.LittleEndian.Uint64(data[8:16])
+	w.next = int64(binary.LittleEndian.Uint64(data[16:24]))
+	w.entryIdx = binary.LittleEndian.Uint16(data[24:26])
 	return nil
 }
 
@@ -317,7 +316,7 @@ func (w *timeWindow) freeze() error {
 
 func (w *timeWindow) unFreeze() error {
 	w.freezed = false
-	for h, _ := range w.friezedEntries {
+	for h := range w.friezedEntries {
 		w.entries[h] = append(w.entries[h], w.friezedEntries[h]...)
 	}
 	w.friezedEntries = make(map[uint64]windowEntries)
@@ -461,7 +460,7 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 
 func (w winBlock) validation(topicHash uint64) error {
 	if w.topicHash != topicHash {
-		return errors.New(fmt.Sprintf("timeWindow.write: validation failed block topicHash %d, topicHash %d", w.topicHash, topicHash))
+		return fmt.Errorf("timeWindow.write: validation failed block topicHash %d, topicHash %d", w.topicHash, topicHash)
 	}
 	return nil
 }

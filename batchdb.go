@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"sort"
@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/memdb"
-	"github.com/unit-io/tracedb/uid"
+	"github.com/unit-io/unitdb/memdb"
+	"github.com/unit-io/unitdb/uid"
 	"golang.org/x/sync/errgroup"
 )
 

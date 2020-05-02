@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"strconv"
@@ -31,21 +31,25 @@ func NewEntry(topic, payload []byte) *Entry {
 	}
 }
 
+// SetID sets entry ID.
 func (e *Entry) SetID(id []byte) *Entry {
 	e.ID = id
 	return e
 }
 
+// SetPayload sets payload to put entry into DB.
 func (e *Entry) SetPayload(payload []byte) *Entry {
 	e.Payload = payload
 	return e
 }
 
+// SetContract sets contract on entry.
 func (e *Entry) SetContract(contract uint32) *Entry {
 	e.Contract = contract
 	return e
 }
 
+// SetTTL sets TTL for message expiry for the entry.
 func (e *Entry) SetTTL(ttl []byte) *Entry {
 	val, err := strconv.ParseInt(unsafeToString(ttl), 10, 64)
 	if err == nil {

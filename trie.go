@@ -1,9 +1,9 @@
-package tracedb
+package unitdb
 
 import (
 	"sync"
 
-	"github.com/unit-io/tracedb/message"
+	"github.com/unit-io/unitdb/message"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"crypto/cipher"
 	"errors"
 
-	"github.com/unit-io/tracedb/hash"
+	"github.com/unit-io/unitdb/hash"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

@@ -1,8 +1,8 @@
-package tracedb
+package unitdb
 
 import (
-	"github.com/unit-io/tracedb/filter"
-	"github.com/unit-io/tracedb/memdb"
+	"github.com/unit-io/unitdb/filter"
+	"github.com/unit-io/unitdb/memdb"
 )
 
 // Filter filter is bloom filter generator

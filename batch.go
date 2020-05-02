@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding/binary"
@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/hash"
-	"github.com/unit-io/tracedb/message"
-	"github.com/unit-io/tracedb/uid"
+	"github.com/unit-io/unitdb/hash"
+	"github.com/unit-io/unitdb/message"
+	"github.com/unit-io/unitdb/uid"
 )
 
 // BatchOptions is used to set options when using batch operation
@@ -22,7 +22,7 @@ type BatchOptions struct {
 	AllowDuplicates bool
 }
 
-// DefaultBatchOptions contains default options when writing batches to Tracedb key-value store.
+// DefaultBatchOptions contains default options when writing batches to unitdb key-value store.
 var DefaultBatchOptions = &BatchOptions{
 	Order:           0,
 	Topic:           nil,

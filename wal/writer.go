@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/uid"
+	"github.com/unit-io/unitdb/uid"
 )
 
 // Writer writes entries to the write ahead log.

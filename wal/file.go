@@ -4,7 +4,7 @@ import (
 	"encoding"
 	"os"
 
-	"github.com/unit-io/tracedb/fs"
+	"github.com/unit-io/unitdb/fs"
 )
 
 type (

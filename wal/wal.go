@@ -30,7 +30,7 @@ const (
 	// Logs with this status are removed from the WAL.
 	logStatusReleased
 
-	DefaultBufferSize = 1 << 27
+	defaultBufferSize = 1 << 27
 	version           = 1 // file format version
 )
 
@@ -68,7 +68,7 @@ type (
 func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	// Create a new WAL.
 	if opts.BufferSize == 0 {
-		opts.BufferSize = DefaultBufferSize
+		opts.BufferSize = defaultBufferSize
 	}
 	wal = &WAL{
 		bufPool: bpool.NewBufferPool(opts.TargetSize, nil),

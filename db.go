@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding/binary"
@@ -14,11 +14,11 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/tracedb/crypto"
-	fltr "github.com/unit-io/tracedb/filter"
-	"github.com/unit-io/tracedb/fs"
-	"github.com/unit-io/tracedb/message"
-	"github.com/unit-io/tracedb/wal"
+	"github.com/unit-io/unitdb/crypto"
+	fltr "github.com/unit-io/unitdb/filter"
+	"github.com/unit-io/unitdb/fs"
+	"github.com/unit-io/unitdb/message"
+	"github.com/unit-io/unitdb/wal"
 )
 
 const (
@@ -982,6 +982,7 @@ func (db *DB) FileSize() (int64, error) {
 	return is.Size() + ds.Size(), nil
 }
 
+// Seq current sequence of the DB.
 func (db *DB) Seq() uint64 {
 	return atomic.LoadUint64(&db.seq)
 }
@@ -990,6 +991,7 @@ func (db *DB) nextSeq() uint64 {
 	return atomic.AddUint64(&db.seq, 1)
 }
 
+// LogSeq current log sequence of the DB.
 func (db *DB) LogSeq() uint64 {
 	return atomic.LoadUint64(&db.logSeq)
 }

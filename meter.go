@@ -1,4 +1,4 @@
-package tracedb
+package unitdb
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/unit-io/tracedb/metrics"
+	"github.com/unit-io/unitdb/metrics"
 )
 
 // Meter meter provides various db statistics
@@ -63,7 +63,7 @@ func (m *Meter) UnregisterAll() {
 	m.Metrics.UnregisterAll()
 }
 
-// Varz outputs tracedb stats on the monitoring port at /varz.
+// Varz outputs unitdb stats on the monitoring port at /varz.
 type Varz struct {
 	Start    time.Time `json:"start"`
 	Now      time.Time `json:"now"`
@@ -120,7 +120,7 @@ func uptime(d time.Duration) string {
 	return fmt.Sprintf("%ds", tsecs)
 }
 
-// Varz returns a Varz struct containing the tracedb information.
+// Varz returns a Varz struct containing the unitdb information.
 func (db *DB) Varz() (*Varz, error) {
 	// Snapshot options.
 
@@ -156,7 +156,7 @@ func (db *DB) Varz() (*Varz, error) {
 	return v, nil
 }
 
-// HandleVarz will process HTTP requests for tracedb stats information.
+// HandleVarz will process HTTP requests for unitdb stats information.
 func (db *DB) HandleVarz(w http.ResponseWriter, r *http.Request) {
 	// As of now, no error is ever returned
 	v, _ := db.Varz()

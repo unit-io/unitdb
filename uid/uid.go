@@ -39,11 +39,12 @@ func NewUnique() uint32 {
 	return u
 }
 
+// Time returns time portion of ID
 func Time(id []byte) int64 {
 	return int64(math.MaxUint32-binary.LittleEndian.Uint32(id)) + Offset
 }
 
-// NewID generates a new, process-wide unique ID.
+// NewLID generates a new, process-wide unique ID.
 func NewLID() LID {
 	return LID(atomic.AddUint32(&Next, 1))
 }

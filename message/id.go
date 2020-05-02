@@ -5,7 +5,7 @@ import (
 	"math"
 	"sync/atomic"
 
-	"github.com/unit-io/tracedb/uid"
+	"github.com/unit-io/unitdb/uid"
 )
 
 // Various constant parts of the ID.

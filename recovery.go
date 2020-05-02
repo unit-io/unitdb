@@ -1,12 +1,12 @@
-package tracedb
+package unitdb
 
 import (
 	"errors"
 	"fmt"
 
-	_ "net/http/pprof"
+	// _ "net/http/pprof"
 
-	"github.com/unit-io/tracedb/message"
+	"github.com/unit-io/unitdb/message"
 )
 
 func (db *syncHandle) recoverWindowBlocks() error {

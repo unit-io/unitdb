@@ -1,8 +1,8 @@
-# tracedb: blazing fast time-series database for IoT and real-time messaging applications
+# unitdb: blazing fast time-series database for IoT and real-time messaging applications
 
-tracedb is blazing fast time-series database for IoT, realtime messaging  applications. 
+unitdb is blazing fast time-series database for IoT, realtime messaging  applications. 
 
-The tracedb performs millions of writes in sub-second and it can out perform any similar time-series databases for IoT, realtime applications in its write performance.
+The unitdb performs millions of writes in sub-second and it can out perform any similar time-series databases for IoT, realtime applications in its write performance.
 
 # Key characteristics
 - 100% Go.
@@ -35,15 +35,15 @@ The tracedb performs millions of writes in sub-second and it can out perform any
  * [Statistics](#Statistics)
 
 ## Quick Start
-To build tracedb from source code use go get command.
+To build unitdb from source code use go get command.
 
-> go get -u github.com/unit-io/tracedb
+> go get -u github.com/unit-io/unitdb
 
 ## Usage
 
 ### Opening a database
 
-To open or create a new database, use the tracedb.Open() function:
+To open or create a new database, use the unitdb.Open() function:
 
 ```
 
@@ -52,11 +52,11 @@ To open or create a new database, use the tracedb.Open() function:
 	import (
 		"log"
 
-		"github.com/unit-io/tracedb"
+		"github.com/unit-io/unitdb"
 	)
 
 	func main() {
-		db, err := tracedb.Open("tracedb.example", nil)
+		db, err := unitdb.Open("unitdb.example", nil)
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -79,7 +79,7 @@ Use DB.Put() to store message to a topic or use DB.PutEntry() to store message e
 
 	or
 	
-	db.PutEntry(tracedb.NewEntry(topic, msg))
+	db.PutEntry(unitdb.NewEntry(topic, msg))
 
 ```
 
@@ -88,7 +88,7 @@ Use Entry.SetPayload() method to store bulk messages and then use DB.PutEntry() 
 
 ```
 	topic := []byte("unit8.b.b1")
-	entry := &tracedb.Entry{Topic: topic}
+	entry := &unitdb.Entry{Topic: topic}
 	for j := uint8(0); j < 50; j++ {
 		entry.SetPayload(append([]byte("msg."), j))
 		db.PutEntry(entry)
@@ -103,36 +103,36 @@ Note, DB.Get() or DB.Items() function does not fetch expired messages.
 ```
 	topic := []byte("unit8.b.b1?ttl=1h")
 	msg := []byte("msg.b.b1.1")
-	b.PutEntry(tracedb.NewEntry(topic, msg))
+	b.PutEntry(unitdb.NewEntry(topic, msg))
 
 ```
 
 #### Read messages
-Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from tracedb stored in last 1 hour, or "last=100" to get last 100 messages from tracedb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from unitdb stored in last 1 hour, or "last=100" to get last 100 messages from unitdb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
 
 	var err error
 	var msg [][]byte
-	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=100")})
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=100")})
     ....
-	msgs, err = db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h", Limit: 100}))
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h", Limit: 100}))
 
 ```
 
 #### Deleting a message
-Deleting a message in tracedb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the tracedb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function.
+Deleting a message in unitdb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the unitdb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function.
 
 ```
 
 	messageId := db.NewID()
-	err := db.PutEntry(&tracedb.Entry{
+	err := db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit8.b.b1"),
 		Payload:  []byte("msg.b.b1.deleting"),
 	})
 	
-	err := db.DeleteEntry(&tracedb.Entry{
+	err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit8.b.b1"),
 	})
@@ -140,33 +140,33 @@ Deleting a message in tracedb is rare and it require additional steps to delete 
 ```
 
 #### Topic isolation
-Topic isolation can be achieved using Contract while putting messages into tracedb or querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() function. Use Contract in the query to get messages from a topic.
+Topic isolation can be achieved using Contract while putting messages into unitdb or querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() function. Use Contract in the query to get messages from a topic.
 
 ```
 	contract, err := db.NewContract()
 
 	messageId := db.NewID()
-	err := db.PutEntry(&tracedb.Entry{
+	err := db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit8.b.b1"),
 		Payload:  []byte("msg.b.b1.1"),
 		Contract: contract,
 	})
 	....
-	msgs, err := db.Get(&tracedb.Query{Topic: []byte("unit8.b.b1?last=1h", Contract: contract, Limit: 100}))
+	msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h", Contract: contract, Limit: 100}))
 
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into tracedb or bulk delete records from tracedb. Batch operation also speeds up reading data if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of running batches concurrently.
+Use batch operation to bulk insert records into unitdb or bulk delete records from unitdb. Batch operation also speeds up reading data if batch operation is used then reading records within short span of time while db is still open. See benchmark examples and run it locally to see performance of running batches concurrently.
 
 #### Writing to a batch
 Use Batch.Put() to write to a single topic in a batch. To write to single topic in a batch specify topic in batch options.
 
 ```
 	// Writing to single topic in a batch
-	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		opts := tracedb.DefaultBatchOptions
+	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		opts := unitdb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1h")
 		b.SetOptions(opts)
 		b.Put([]byte("msg.b.*.1"))
@@ -182,9 +182,9 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 ```
 
     // Writing to multiple topics in a batch
-    err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b11"), []byte("msg.b.b11.1")))
+    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.1")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b11"), []byte("msg.b.b11.1")))
 		err := b.Write()
 		return err
     })
@@ -195,8 +195,8 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 All batch operations are non-blocking so client program can decide to wait for completed signal and further execute any additional tasks.
 
 ```
-    err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b11.1")))
+    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b11.1")))
 		err := b.Write()
 			go func() {
 				<-completed // it signals batch has completed and fully committed to db
@@ -209,13 +209,13 @@ All batch operations are non-blocking so client program can decide to wait for c
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from tracedb stored in last 1 hour, or "last=100" to retrieve last 100 messages from the tracedb:
+Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from unitdb stored in last 1 hour, or "last=100" to retrieve last 100 messages from the unitdb:
 
 ```
 
-	func print(topic []byte, db *tracedb.DB) {
+	func print(topic []byte, db *unitdb.DB) {
 		// topic -> "unit8.b.b1?last=1h"
-		it, err := db.Items(&tracedb.Query{Topic: topic})
+		it, err := db.Items(&unitdb.Query{Topic: topic})
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -235,26 +235,26 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 ### Advanced
 
 #### Writing to wildcard topics
-tracedb supports writing to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
+unitdb supports writing to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
 
 ```
-	b.PutEntry(tracedb.NewEntry([]byte("unit8.*.b1"), []byte("msg.*.b1.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...1")))
-	b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
-	b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
+	b.PutEntry(unitdb.NewEntry([]byte("unit8.*.b1"), []byte("msg.*.b1.1")))
+	b.PutEntry(unitdb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
+	b.PutEntry(unitdb.NewEntry([]byte("unit8..."), []byte("msg...1")))
+	b.PutEntry(unitdb.NewEntry([]byte("*"), []byte("msg.*.1")))
+	b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg...1")))
 
 ```
 
 #### Topic isolation in batch operation
-Topic isolation can be achieved using Contract while putting messages into tracedb and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using Batch.PutEntry() function.
+Topic isolation can be achieved using Contract while putting messages into unitdb and querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using Batch.PutEntry() function.
 
 ```
 	contract, err := db.NewContract()
 
     // Writing to single topic in a batch
-	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		opts := tracedb.DefaultBatchOptions
+	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		opts := unitdb.DefaultBatchOptions
 		opts.Topic = []byte("unit8.b.*?ttl=1h")
 		opts.Contract = contract
 		b.SetOptions(opts)
@@ -265,14 +265,14 @@ Topic isolation can be achieved using Contract while putting messages into trace
     })
 
     // Writing to multiple topics in a batch
-    err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		opts := tracedb.DefaultBatchOptions
+    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		opts := unitdb.DefaultBatchOptions
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8..."), []byte("msg...")))
-		b.PutEntry(tracedb.NewEntry([]byte("*"), []byte("msg.*.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("..."), []byte("msg...1")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.*"), []byte("msg.b.*.1")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8..."), []byte("msg...")))
+		b.PutEntry(unitdb.NewEntry([]byte("*"), []byte("msg.*.1")))
+		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg...1")))
 		return b.Write()
 	})
 
@@ -284,8 +284,8 @@ Set encryption flag in batch options to encrypt all messages in a batch.
 Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter. 
 
 ```
-	err := db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		opts := tracedb.DefaultBatchOptions
+	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		opts := unitdb.DefaultBatchOptions
 		opts.Encryption = true
 		opts.Topic = []byte("unit8.b.b1?ttl=1h")
 		b.SetOptions(opts)
@@ -301,21 +301,21 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 
 ```
     g := db.NewBatchGroup()
-	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1?ttl=2h"), []byte("msg.b.b1.1")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.c.c1?ttl=1h"), []byte("msg.c.c1.1")))
+	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b1?ttl=2h"), []byte("msg.b.b1.1")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.c.c1?ttl=1h"), []byte("msg.c.c1.1")))
 		return b.Write()
 	})
 
-	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.2")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.c.c1"), []byte("msg.c.c1.2")))
+	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.2")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.c.c1"), []byte("msg.c.c1.2")))
 		return b.Write()
 	})
 
-	g.Add(func(b *tracedb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.3")))
-		b.PutEntry(tracedb.NewEntry([]byte("unit8.c.c1"), []byte("msg.c.c1.3")))
+	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.b.b1"), []byte("msg.b.b1.3")))
+		b.PutEntry(unitdb.NewEntry([]byte("unit8.c.c1"), []byte("msg.c.c1.3")))
 		return b.Write()
 	})
 
@@ -324,7 +324,7 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 ```
 
 ### Statistics
-The tracedb keeps a running metrics of internal operations it performs. To get tracedb metrics use DB.Varz() function.
+The unitdb keeps a running metrics of internal operations it performs. To get unitdb metrics use DB.Varz() function.
 
 ```
 

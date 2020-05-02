@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/unit-io/tracedb/hash"
+	"github.com/unit-io/unitdb/hash"
 )
 
 const (
@@ -41,7 +41,7 @@ func newBlockCache(memSize int64) blockCache {
 
 // DB represents the block cache mem store.
 // All DB methods are safe for concurrent use by multiple goroutines.
-// Note: memdb is not a general purpose mem store but it designed for specific use in tracedb.
+// Note: memdb is not a general purpose mem store but it designed for specific use in unitdb.
 type DB struct {
 	targetSize int64
 	resetLockC chan struct{}
