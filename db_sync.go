@@ -186,7 +186,7 @@ func (db *DB) sync() error {
 	return nil
 }
 
-func (db *syncHandle) sync(last bool) error {
+func (db *syncHandle) sync(recovery bool, last bool) error {
 	if last || db.rawData.Size() > db.opts.BufferSize {
 		if db.blockWriter.UpperSeq() == 0 {
 			return nil
@@ -220,6 +220,9 @@ func (db *syncHandle) sync(last bool) error {
 			return err
 		}
 		db.incount(db.internal.count)
+		if recovery {
+			db.meter.Recovers.Inc(db.internal.count)
+		}
 		db.meter.Syncs.Inc(db.internal.count)
 		db.meter.InMsgs.Inc(db.internal.count)
 		db.meter.InBytes.Inc(db.internal.inBytes)
@@ -299,7 +302,7 @@ func (db *syncHandle) Sync() error {
 				break
 			}
 
-			if err := db.sync(false); err != nil {
+			if err := db.sync(false, false); err != nil {
 				err1 = err
 				break
 			}
@@ -316,7 +319,7 @@ func (db *syncHandle) Sync() error {
 		}
 	}
 
-	if err := db.sync(true); err != nil {
+	if err := db.sync(false, true); err != nil {
 		return err
 	}
 

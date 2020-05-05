@@ -8,7 +8,7 @@ import (
 
 	_ "net/http/pprof"
 
-	"github.com/unit-io/tracedb"
+	"github.com/unit-io/unitdb"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -60,7 +60,7 @@ func generateVals(count int, minL int, maxL int) [][]byte {
 	return vals
 }
 
-func printStats(db *tracedb.DB) {
+func printStats(db *unitdb.DB) {
 	if varz, err := db.Varz(); err == nil {
 		fmt.Printf("%+v\n", varz)
 	}
@@ -74,8 +74,8 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	// defer p.Stop()
 	batchSize := numKeys / concurrency
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
+	dbpath := path.Join(dir, "bench_unitdb")
+	db, err := unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Number of keys: %d\n", numKeys)
 	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
 	fmt.Printf("Concurrency: %d\n", concurrency)
-	fmt.Printf("Running tracedb benchmark...\n")
+	fmt.Printf("Running unitdb benchmark...\n")
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
@@ -93,10 +93,10 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		r := 1
 		for range time.Tick(100 * time.Millisecond) {
 			start := time.Now()
-			var entries []tracedb.Entry
+			var entries []unitdb.Entry
 			for i := 0; i < concurrency; i++ {
 				topic := append(topics[i], []byte("?ttl=1m")...)
-				entries = append(entries, tracedb.Entry{Topic: topic})
+				entries = append(entries, unitdb.Entry{Topic: topic})
 			}
 			for _, entry := range entries {
 				for k := 0; k < batchSize; k++ {
@@ -125,7 +125,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
+		_, err := db.Get(&unitdb.Query{Topic: topic, Limit: batchSize})
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	db, err = tracedb.Open(dbpath, nil)
+	db, err = unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -158,8 +158,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	// defer p.Stop()
 	batchSize := numKeys / concurrency
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
+	dbpath := path.Join(dir, "bench_unitdb")
+	db, err := unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Number of keys: %d\n", numKeys)
 	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
 	fmt.Printf("Concurrency: %d\n", concurrency)
-	fmt.Printf("Running tracedb benchmark...\n")
+	fmt.Printf("Running unitdb benchmark...\n")
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
@@ -182,8 +182,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			func(concurrent int) error {
 				i := 1
 				for {
-					db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-						opts := tracedb.DefaultBatchOptions
+					db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+						opts := unitdb.DefaultBatchOptions
 						opts.AllowDuplicates = true
 						opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
 						b.SetOptions(opts)
@@ -223,7 +223,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	db, err = tracedb.Open(dbpath, nil)
+	db, err = unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -240,8 +240,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
+	dbpath := path.Join(dir, "bench_unitdb")
+	db, err := unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Number of keys: %d\n", numKeys)
 	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
 	fmt.Printf("Concurrency: %d\n", concurrency)
-	fmt.Printf("Running tracedb benchmark...\n")
+	fmt.Printf("Running unitdb benchmark...\n")
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
@@ -262,8 +262,8 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	func(concurrent int) error {
 		i := 1
 		for {
-			db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-				opts := tracedb.DefaultBatchOptions
+			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+				opts := unitdb.DefaultBatchOptions
 				opts.AllowDuplicates = true
 				opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
 				b.SetOptions(opts)
@@ -301,7 +301,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&tracedb.Query{Topic: topic, Limit: batchSize})
+		_, err := db.Get(&unitdb.Query{Topic: topic, Limit: batchSize})
 		if err != nil {
 			return err
 		}
@@ -320,7 +320,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	return db.Close()
 }
 
-func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]byte {
+func generateKeys(count int, minL int, maxL int, db *unitdb.DB) map[uint32][][]byte {
 	keys := make(map[uint32][][]byte, count/1000)
 	seen := make(map[string]struct{}, count)
 	contract, _ := db.NewContract()
@@ -345,8 +345,8 @@ func generateKeys(count int, minL int, maxL int, db *tracedb.DB) map[uint32][][]
 
 func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
+	dbpath := path.Join(dir, "bench_unitdb")
+	db, err := unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}
@@ -355,7 +355,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	fmt.Printf("Minimum key size: %d, maximum key size: %d\n", minKS, maxKS)
 	fmt.Printf("Minimum value size: %d, maximum value size: %d\n", minVS, maxVS)
 	fmt.Printf("Concurrency: %d\n", concurrency)
-	fmt.Printf("Running tracedb benchmark...\n")
+	fmt.Printf("Running unitdb benchmark...\n")
 
 	keys := generateKeys(batchSize, minKS, maxKS, db)
 	vals := generateVals(batchSize, minVS, maxVS)
@@ -367,14 +367,14 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	func(concurrent int) error {
 		i := 1
 		for {
-			db.Batch(func(b *tracedb.Batch, completed <-chan struct{}) error {
-				opts := tracedb.DefaultBatchOptions
+			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+				opts := unitdb.DefaultBatchOptions
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
 				for contract := range keys {
 					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1m")...)
-						b.PutEntry(&tracedb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
+						b.PutEntry(&unitdb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
 					}
 				}
 				return b.Write()
@@ -407,7 +407,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for contract := range keys {
 		for _, k := range keys[contract] {
-			_, err := db.Get(&tracedb.Query{Topic: k, Contract: contract})
+			_, err := db.Get(&unitdb.Query{Topic: k, Contract: contract})
 			if err != nil {
 				return err
 			}
@@ -433,8 +433,8 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 func recovery(dir string) error {
 	// open database for recovery
-	dbpath := path.Join(dir, "bench_tracedb")
-	db, err := tracedb.Open(dbpath, nil)
+	dbpath := path.Join(dir, "bench_unitdb")
+	db, err := unitdb.Open(dbpath, nil)
 	if err != nil {
 		return err
 	}

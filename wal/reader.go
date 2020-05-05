@@ -39,8 +39,8 @@ func (wal *WAL) NewReader() (*Reader, error) {
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator
 func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
-	// // release and merge logs before read
-	// r.wal.releaseLogs()
+	// release and merge logs before read
+	r.wal.releaseLogs()
 	r.wal.mu.RLock()
 	defer r.wal.mu.RUnlock()
 	idx := 0

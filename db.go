@@ -346,7 +346,7 @@ func (db *DB) loadTrie() error {
 				if err != nil {
 					return true, err
 				}
-				if ok := db.trie.add(message.Contract(topic.Parts), w.topicHash, topic.Parts, topic.Depth); ok {
+				if ok := db.trie.add(w.topicHash, topic.Parts, topic.Depth); ok {
 					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
 						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
 					}
@@ -434,8 +434,7 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 			return e, nil
 		}
 	}
-	// return entry{}, errMsgIdDoesNotExist
-	return entry{}, nil
+	return entry{}, errMsgIdDoesNotExist
 }
 
 // Get return items matching the query paramater
@@ -458,7 +457,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	//Parse the Key
 	topic.ParseKey(q.Topic)
 	// Parse the topic
-	topic.Parse(q.Contract, false)
+	topic.Parse(q.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
@@ -490,20 +489,25 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// ilookup lookups in memory entries from timeWindow those are not yet sync
 	// lookup lookups persisted entries if fanout is true
 	// lookup gets most recent entries without need for sorting.
-	topics, topicOffsets := db.trie.lookup(q.contract, q.parts, q.Limit)
-	for i, topicHash := range topics {
+	topics := db.trie.lookup(q.parts)
+	for _, topic := range topics {
 		var wEntries []winEntry
 		nextOff := int64(0)
-		q.winEntries = db.timeWindow.ilookup(topicHash, q.Limit)
+		wEntries = db.timeWindow.ilookup(topic.hash, q.Limit)
+		if len(wEntries) > 0 {
+			q.contract = wEntries[0].contract
+			q.winEntries = append(q.winEntries, wEntries...)
+		}
 		if len(q.winEntries) < q.Limit {
 			limit := q.Limit - len(q.winEntries)
-			wEntries, nextOff = db.timeWindow.lookup(topicHash, topicOffsets[i], len(q.winEntries), limit)
-			q.winEntries = append(q.winEntries, wEntries...)
+			wEntries, nextOff = db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
+			if len(wEntries) > 0 {
+				q.winEntries = append(q.winEntries, wEntries...)
+			}
 		}
 		if len(q.winEntries) == 0 {
 			return
 		}
-
 		expiryCount := 0
 		start := 0
 		limit := q.Limit
@@ -564,7 +568,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 
 			if cap(q.winEntries) == limit && cap(q.winEntries) < q.Limit && nextOff > 0 {
 				limit := q.Limit - len(items)
-				wEntries, nextOff = db.timeWindow.lookup(topicHash, nextOff, 0, limit)
+				wEntries, nextOff = db.timeWindow.lookup(topic.hash, nextOff, 0, limit)
 				if len(wEntries) == 0 {
 					break
 				}
@@ -607,7 +611,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	//Parse the Key
 	topic.ParseKey(q.Topic)
 	// Parse the topic
-	topic.Parse(q.Contract, false)
+	topic.Parse(q.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
@@ -758,10 +762,11 @@ func (db *DB) PutEntry(e *Entry) error {
 		if err != nil {
 			return err
 		}
-		e.topic = topic.Marshal()
+		e.topic.data = topic.Marshal()
+		e.topic.size = uint16(len(e.topic.data))
 		e.contract = message.Contract(topic.Parts)
-		e.topicHash = topic.GetHash(e.contract)
-		if ok := db.trie.add(e.contract, e.topicHash, topic.Parts, topic.Depth); !ok {
+		e.topic.hash = topic.GetHash(e.contract)
+		if ok := db.trie.add(e.topic.hash, topic.Parts, topic.Depth); !ok {
 			return errBadRequest
 		}
 		e.parsed = true
@@ -777,7 +782,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		contract: e.contract,
 		seq:      e.seq,
 	}
-	if err := db.timeWindow.add(e.topicHash, we); err != nil {
+	if err := db.timeWindow.add(e.topic.hash, we); err != nil {
 		return err
 	}
 	data, err := db.packEntry(e)
@@ -821,18 +826,18 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	}
 	e1 := entry{
 		seq:       e.seq,
-		topicSize: uint16(len(e.topic)),
+		topicSize: e.topic.size,
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
 
 		// topicOffset: e.topicOffset,
 	}
 	data, _ := e1.MarshalBinary()
-	mLen := idSize + len(e.topic) + len(e.val)
+	mLen := idSize + int(e.topic.size) + len(e.val)
 	m := make([]byte, mLen)
 	copy(m, e.id)
-	copy(m[idSize:], e.topic)
-	copy(m[len(e.topic)+idSize:], e.val)
+	copy(m[idSize:], e.topic.data)
+	copy(m[int(e.topic.size)+idSize:], e.val)
 	data = append(data, m...)
 
 	return data, nil

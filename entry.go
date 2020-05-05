@@ -6,16 +6,22 @@ import (
 	"unsafe"
 )
 
+type topic struct {
+	data   []byte
+	hash   uint64
+	offset int64
+	size   uint16
+	parsed bool
+}
+
 // Entry represents an entry which is stored into DB.
 type Entry struct {
-	contract   uint64
+	contract uint64
+	topic
 	seq        uint64
 	id         []byte
-	topic      []byte
-	topicHash  uint64
 	val        []byte
 	encryption bool
-	parsed     bool
 	ID         []byte // The ID of the message
 	Topic      []byte // The topic of the message
 	Payload    []byte // The payload of the message

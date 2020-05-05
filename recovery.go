@@ -87,7 +87,7 @@ func (db *syncHandle) startRecovery() error {
 				seq:      logEntry.seq,
 			}
 			db.timeWindow.add(topicHash, we)
-			if ok := db.trie.add(contract, topicHash, topic.Parts, topic.Depth); !ok {
+			if ok := db.trie.add(topicHash, topic.Parts, topic.Depth); !ok {
 				return true, errBadRequest
 			}
 			db.filter.Append(logEntry.seq)
@@ -100,7 +100,7 @@ func (db *syncHandle) startRecovery() error {
 			return true, err
 		}
 
-		if err := db.sync(false); err != nil {
+		if err := db.sync(true, false); err != nil {
 			return true, err
 		}
 		logSeq = lSeq
@@ -111,7 +111,7 @@ func (db *syncHandle) startRecovery() error {
 		db.abort()
 		return err
 	}
-	if err := db.sync(true); err != nil {
+	if err := db.sync(true, true); err != nil {
 		return err
 	}
 	if err := db.wal.SignalLogApplied(logSeq); err != nil {

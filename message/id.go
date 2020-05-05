@@ -24,9 +24,9 @@ const (
 // Contract generates contract from parts and concatenate contract and first part of the topic
 func Contract(parts []Part) uint64 {
 	if len(parts) == 1 {
-		return uint64(parts[0].Query)<<32 + uint64(Wildcard)
+		return /*uint64(Wildcard)<<32 +*/ uint64(parts[0].Query)
 	}
-	return uint64(parts[0].Query)<<32 + uint64(parts[1].Query)
+	return uint64(parts[1].Query)<<32 + uint64(parts[0].Query)
 }
 
 // ID represents a message ID encoded at 128bit and lexigraphically sortable
@@ -81,8 +81,9 @@ func (id ID) Seq() uint64 {
 
 // EvalPrefix matches the prefix with the cutoff time.
 func (id ID) EvalPrefix(contract uint64, cutoff int64) bool {
+	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract added to ID
 	if cutoff > 0 {
-		return binary.LittleEndian.Uint64(id[fixed:]) == contract && uid.Time(id[0:4]) >= cutoff
+		return (binary.LittleEndian.Uint64(id[fixed:]) == contract || uint64(binary.LittleEndian.Uint32(id[fixed:fixed+4])) == contract) && uid.Time(id[0:4]) >= cutoff
 	}
-	return binary.LittleEndian.Uint64(id[fixed:]) == contract
+	return binary.LittleEndian.Uint64(id[fixed:]) == contract || uint64(binary.LittleEndian.Uint32(id[fixed:fixed+4])) == contract
 }

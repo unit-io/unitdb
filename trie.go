@@ -75,9 +75,9 @@ func (t *trie) Count() int {
 }
 
 // add adds a topic to trie.
-func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, depth uint8) (added bool) {
+func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added bool) {
 	// Get mutex
-	mu := t.getMutex(contract)
+	mu := t.getMutex(topicHash)
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := t.partTrie.summary[topicHash]; ok {
@@ -114,33 +114,26 @@ func (t *trie) add(contract uint64, topicHash uint64, parts []message.Part, dept
 }
 
 // lookup returns window entry set for given topic.
-func (t *trie) lookup(contract uint64, parts []message.Part, limit int) (topics []uint64, offs []int64) {
+func (t *trie) lookup(query []message.Part) (topics []topic) {
 	t.RLock()
-	mu := t.getMutex(contract)
-	mu.Lock()
-	defer func() {
-		t.RUnlock()
-		mu.Unlock()
-	}()
-
-	t.ilookup(contract, parts, uint8(len(parts)-1), &topics, &offs, t.partTrie.root, limit)
-	return topics, offs
+	defer t.RUnlock()
+	t.ilookup(query, uint8(len(query)-1), &topics, t.partTrie.root)
+	return
 }
 
-func (t *trie) ilookup(contract uint64, parts []message.Part, depth uint8, topics *[]uint64, offs *[]int64, part *part, limit int) {
-	l := limit
+func (t *trie) ilookup(query []message.Part, depth uint8, topics *[]topic, part *part) {
 	// Add window entry set from the current branch
 	if part.depth == depth || (part.depth >= message.TopicMaxDepth && depth > part.depth-message.TopicMaxDepth) {
-		*topics = append(*topics, part.topicHash)
-		*offs = append(*offs, part.offset)
+		topic := topic{hash: part.topicHash, offset: part.offset}
+		*topics = append(*topics, topic)
 	}
 
 	// If we're not yet done, continue
-	if len(parts) > 0 {
+	if len(query) > 0 {
 		// Go through the exact match branch
 		for k, p := range part.children {
-			if k.query == parts[0].Query && uint8(len(parts)) >= k.wildchars+1 {
-				t.ilookup(contract, parts[k.wildchars+1:], depth, topics, offs, p, l)
+			if k.query == query[0].Query && uint8(len(query)) >= k.wildchars+1 {
+				t.ilookup(query[k.wildchars+1:], depth, topics, p)
 			}
 		}
 	}

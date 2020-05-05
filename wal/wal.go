@@ -160,8 +160,6 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
-	wal.mu.Lock()
-	defer wal.mu.Unlock()
 	l := len(wal.logs)
 	log.version = version
 	if wal.seq < log.seq {

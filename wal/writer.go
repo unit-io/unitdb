@@ -81,11 +81,13 @@ func (w *Writer) Append(data []byte) <-chan error {
 // writeLog writes log by setting correct header and status
 func (w *Writer) writeLog(seq uint64) error {
 	w.writeCompleted <- struct{}{}
+	w.wal.mu.Lock()
 	w.wal.wg.Add(1)
 	defer func() {
-		w.wal.wg.Done()
-		<-w.writeCompleted
 		w.wal.bufPool.Put(w.buffer)
+		<-w.writeCompleted
+		defer w.wal.mu.Unlock()
+		w.wal.wg.Done()
 	}()
 
 	if w.logSize == 0 {
@@ -136,7 +138,3 @@ func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
 	}()
 	return done
 }
-
-// func align(n int64) int64 {
-// 	return (n + 511) &^ 511
-// }

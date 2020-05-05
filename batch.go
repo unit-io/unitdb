@@ -108,7 +108,8 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if ttl > 0 {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
-	e.topic = topic.Marshal()
+	e.topic.data = topic.Marshal()
+	e.topic.size = uint16(len(e.topic.data))
 	e.contract = message.Contract(topic.Parts)
 	e.encryption = b.opts.Encryption
 	if err := b.db.setEntry(e, ttl); err != nil {
@@ -136,7 +137,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
-	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: e.topic.size, offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
 
@@ -166,7 +167,8 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	if err != nil {
 		return err
 	}
-	e.topic = topic.Marshal()
+	e.topic.data = topic.Marshal()
+	e.topic.size = uint16(len(e.topic.data))
 	e.contract = message.Contract(topic.Parts)
 	id := message.ID(e.ID)
 	id.AddContract(e.contract)
@@ -186,7 +188,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
-	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: uint16(len(e.topic)), offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: e.topic.size, offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
 	return nil
@@ -214,7 +216,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			t := new(message.Topic)
 			t.Unmarshal(ptopic)
 			topics[contract] = t
-			if ok := b.db.trie.add(contract, t.GetHash(contract), t.Parts, t.Depth); !ok {
+			if ok := b.db.trie.add(t.GetHash(contract), t.Parts, t.Depth); !ok {
 				return errBadRequest
 			}
 		}
