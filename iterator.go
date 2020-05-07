@@ -21,6 +21,7 @@ type Query struct {
 	Topic      []byte         // The topic of the message
 	Contract   uint32         // The contract is used as prefix in the message Id
 	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
+	depth      uint8
 	contract   uint64
 	cutoff     int64 // time limit check on message Ids.
 	winEntries []winEntry
@@ -112,7 +113,7 @@ func (it *ItemIterator) Next() {
 
 // First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
-	topics := it.db.trie.lookup(it.query.parts)
+	topics := it.db.trie.lookup(it.query.parts, it.query.depth)
 	for _, topic := range topics {
 		var wEntries []winEntry
 		wEntries = it.db.timeWindow.ilookup(topic.hash, it.query.Limit)

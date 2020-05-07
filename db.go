@@ -467,6 +467,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
+	q.depth = topic.Depth
 	q.contract = message.Contract(q.parts)
 
 	// In case of last, include it to the query
@@ -489,7 +490,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	// ilookup lookups in memory entries from timeWindow those are not yet sync
 	// lookup lookups persisted entries if fanout is true
 	// lookup gets most recent entries without need for sorting.
-	topics := db.trie.lookup(q.parts)
+	topics := db.trie.lookup(q.parts, q.depth)
 	for _, topic := range topics {
 		var wEntries []winEntry
 		nextOff := int64(0)
@@ -621,6 +622,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
+	q.depth = topic.Depth
 	q.contract = message.Contract(q.parts)
 
 	// In case of ttl, include it to the query

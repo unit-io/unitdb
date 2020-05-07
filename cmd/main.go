@@ -83,22 +83,22 @@ func main() {
 
 	printWithContract([]byte("unit1?last=2m"), contract, db)
 
-	func(retry int) {
-		i := 1
-		entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
-		for range time.Tick(1 * time.Millisecond) {
-			for j := 0; j < 50; j++ {
-				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
-			}
-			if err != nil {
-				log.Printf("Error update1: %s", err)
-			}
-			if i >= retry {
-				break
-			}
-			i++
-		}
-	}(1)
+	// func(retry int) {
+	// 	i := 1
+	// 	entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
+	// 	for range time.Tick(1 * time.Millisecond) {
+	// 		for j := 0; j < 50; j++ {
+	// 			db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
+	// 		}
+	// 		if err != nil {
+	// 			log.Printf("Error update1: %s", err)
+	// 		}
+	// 		if i >= retry {
+	// 			break
+	// 		}
+	// 		i++
+	// 	}
+	// }(1)
 
 	func(retry int) {
 		i := 1
@@ -117,7 +117,9 @@ func main() {
 		}
 	}(1)
 
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.c.c1?last=1h"), Limit: 100})
+	print([]byte("unit8.c.*?last=30m"), db)
+
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.c.*?last=1h"), Limit: 100})
 	for _, msg := range msgs {
 		log.Printf("%s ", msg)
 	}
@@ -134,7 +136,7 @@ func main() {
 				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
-				for j := 0; j < 500; j++ {
+				for j := 0; j < 50; j++ {
 					b.Put([]byte(fmt.Sprintf("msg.%2d", j)))
 				}
 				return b.Write()
