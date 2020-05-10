@@ -14,10 +14,10 @@ Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/uni
 
 ### First Client
 <p align="left">
-  <img src="https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png" alt="client1"> 
+  <img src="docs/img/client1.png" /> 
 </p>
 
 ### Second Client
 <p align="left">
-  <img src="https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png" alt="client2"> 
+  <img src="docs/img/client2.png" /> 
 </p>
