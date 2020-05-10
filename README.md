@@ -231,10 +231,14 @@ Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/uni
 - Specify message to send and publish to topic
 
 ### First Client
-![Client1](https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png)
+<p align="left">
+  <img src="https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png" alt="client1"> 
+</p>
 
 ### Second Client
-![Client2](https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png)
+<p align="left">
+  <img src="https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png" alt="client2"> 
+</p>
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
