@@ -143,7 +143,10 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	// Get item from cache.
 	off, ok := cache.m[key]
 	if !ok {
-		return nil, errors.New("cache for entry seq not found")
+		return nil, nil
+	}
+	if off == -1 {
+		return nil, errors.New("entry deleted")
 	}
 	scratch, err := cache.data.readRaw(off, 4) // read data length
 	if err != nil {
@@ -155,6 +158,20 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 		return nil, err
 	}
 	return data[4:], nil
+}
+
+// Remove sets data offset to -1 for the key under a contract
+func (db *DB) Remove(contract uint64, key uint64) error {
+	// Get cache
+	cache := db.getCache(contract)
+	cache.RLock()
+	defer cache.RUnlock()
+	// Get item from cache.
+	if _, ok := cache.m[key]; !ok {
+		return errors.New("entry not found")
+	}
+	cache.m[key] = -1
+	return nil
 }
 
 // Set sets the value for the given entry for a contract.

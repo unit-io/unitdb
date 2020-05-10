@@ -415,7 +415,11 @@ func (db *DB) Close() error {
 func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 	cacheKey := db.cacheID ^ seq
 	e := entry{}
-	if data, _ := db.mem.Get(contract, cacheKey); data != nil {
+	data, err := db.mem.Get(contract, cacheKey)
+	if err != nil {
+		return entry{}, errMsgIdDeleted
+	}
+	if data != nil {
 		e.UnmarshalBinary(data[:entrySize])
 		e.cacheBlock = make([]byte, len(data[entrySize:]))
 		copy(e.cacheBlock, data[entrySize:])
@@ -509,7 +513,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		if len(q.winEntries) == 0 {
 			return
 		}
-		expiryCount := 0
+		invalidCount := 0
 		start := 0
 		limit := q.Limit
 		if len(q.winEntries) < int(q.Limit) {
@@ -523,11 +527,15 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					}
 					e, err := db.readEntry(q.contract, we.seq)
 					if err != nil {
+						if err == errMsgIdDeleted {
+							invalidCount++
+							return nil
+						}
 						logger.Error().Err(err).Str("context", "db.readEntry")
 						return err
 					}
 					if e.isExpired() {
-						expiryCount++
+						invalidCount++
 						if err := db.timeWindow.addExpiry(e); err != nil {
 							logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 							return err
@@ -541,7 +549,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 						return err
 					}
 					msgId := message.ID(id)
-					if !msgId.EvalPrefix(q.contract, q.cutoff) {
+					if !msgId.EvalPrefix(q.Contract, q.cutoff) {
+						invalidCount++
 						return nil
 					}
 
@@ -576,16 +585,16 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				q.winEntries = append(q.winEntries, wEntries...)
 			}
 
-			if expiryCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
+			if invalidCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
 				break
 			}
 
-			if cap(q.winEntries) < int(q.Limit+expiryCount) {
+			if cap(q.winEntries) < int(q.Limit+invalidCount) {
 				start = limit
 				limit = cap(q.winEntries)
 			} else {
 				start = limit
-				limit = limit + expiryCount
+				limit = limit + invalidCount
 			}
 		}
 		db.meter.Gets.Inc(int64(len(items)))
@@ -674,9 +683,7 @@ func (db *DB) extendBlocks(nBlocks int32) error {
 
 func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 	topic := new(message.Topic)
-	if e.Contract == 0 {
-		e.Contract = message.MasterContract
-	}
+
 	//Parse the Key
 	topic.ParseKey(e.Topic)
 	// Parse the topic
@@ -684,7 +691,6 @@ func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 	if topic.TopicType == message.TopicInvalid {
 		return nil, 0, errBadRequest
 	}
-	topic.AddContract(e.Contract)
 	// In case of ttl, add ttl to the msg and store to the db
 	if ttl, ok := topic.TTL(); ok {
 		return topic, ttl, nil
@@ -696,13 +702,13 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 	//message ID is the database key
 	var id message.ID
 	var seq uint64
-	encryption := db.encryption == 1 || e.encryption
+	e.encryption = db.encryption == 1 || e.encryption
 	if e.ExpiresAt == 0 && ttl > 0 {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	if e.ID != nil {
 		id = message.ID(e.ID)
-		if encryption {
+		if e.encryption {
 			id.SetEncryption()
 		}
 		id.AddContract(e.contract)
@@ -714,7 +720,7 @@ func (db *DB) setEntry(e *Entry, ttl int64) error {
 		} else {
 			seq = db.nextSeq()
 		}
-		id = message.NewID(seq, encryption)
+		id = message.NewID(seq, e.encryption)
 		id.AddContract(e.contract)
 	}
 	val := snappy.Encode(nil, e.Payload)
@@ -760,14 +766,19 @@ func (db *DB) PutEntry(e *Entry) error {
 	var ttl int64
 	var err error
 	if !e.parsed {
+		if e.Contract == 0 {
+			e.Contract = message.MasterContract
+		}
 		topic, ttl, err = db.parseTopic(e)
 		if err != nil {
 			return err
 		}
+		topic.AddContract(e.Contract)
 		e.topic.data = topic.Marshal()
 		e.topic.size = uint16(len(e.topic.data))
 		e.contract = message.Contract(topic.Parts)
 		e.topic.hash = topic.GetHash(e.contract)
+		// fmt.Println("db.PutEntry: contact, topicHash, parts ", e.contract, e.topic.hash, topic.Depth, topic.Parts)
 		if ok := db.trie.add(e.topic.hash, topic.Parts, topic.Depth); !ok {
 			return errBadRequest
 		}
@@ -943,19 +954,32 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 	// message ID is the database key
 	id := message.ID(e.ID)
-	if err := db.delete(message.ID(id).Seq()); err != nil {
+	topic, _, err := db.parseTopic(e)
+	if err != nil {
+		return err
+	}
+	if e.Contract == 0 {
+		e.Contract = message.MasterContract
+	}
+	topic.AddContract(e.Contract)
+	e.contract = message.Contract(topic.Parts)
+	if err := db.delete(e.contract, message.ID(id).Seq()); err != nil {
 		return err
 	}
 	return nil
 }
 
 // delete deletes the given key from the DB.
-func (db *DB) delete(seq uint64) error {
+func (db *DB) delete(contract, seq uint64) error {
 	//// Test filter block for the message id presence
 	if !db.filter.Test(seq) {
 		return nil
 	}
 	db.meter.Dels.Inc(1)
+	memseq := db.cacheID ^ seq
+	if err := db.mem.Remove(contract, memseq); err != nil {
+		return err
+	}
 	blockIdx := startBlockIndex(seq)
 	if blockIdx > db.blocks() {
 		return nil // no record to delete

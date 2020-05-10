@@ -80,10 +80,10 @@ func (id ID) Seq() uint64 {
 }
 
 // EvalPrefix matches the prefix with the cutoff time.
-func (id ID) EvalPrefix(contract uint64, cutoff int64) bool {
-	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract added to ID
+func (id ID) EvalPrefix(contract uint32, cutoff int64) bool {
+	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract was added to the ID
 	if cutoff > 0 {
-		return (binary.LittleEndian.Uint64(id[fixed:]) == contract || uint64(binary.LittleEndian.Uint32(id[fixed:fixed+4])) == contract) && uid.Time(id[0:4]) >= cutoff
+		return binary.LittleEndian.Uint32(id[fixed:fixed+4]) == contract && uid.Time(id[0:4]) >= cutoff
 	}
-	return binary.LittleEndian.Uint64(id[fixed:]) == contract || uint64(binary.LittleEndian.Uint32(id[fixed:fixed+4])) == contract
+	return binary.LittleEndian.Uint32(id[fixed:fixed+4]) == contract
 }

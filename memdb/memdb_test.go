@@ -26,7 +26,7 @@ func TestSimple(t *testing.T) {
 
 	for i = 0; i < n; i++ {
 		k := cacheID ^ uint64(i)
-		if data, err := mdb.Get(contract, k); data != nil || err == nil {
+		if data, err := mdb.Get(contract, k); data != nil || err != nil {
 			t.Fatal(err)
 		}
 	}

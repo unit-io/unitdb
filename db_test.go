@@ -42,7 +42,7 @@ func TestSimple(t *testing.T) {
 
 	id := db.NewID()
 
-	if err := db.DeleteEntry(&Entry{ID: id, Topic: topic, Contract: contract}); err != nil {
+	if err := db.DeleteEntry(&Entry{ID: id, Topic: topic, Contract: contract}); err == nil {
 		t.Fatal(err)
 	}
 

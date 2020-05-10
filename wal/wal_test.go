@@ -107,8 +107,8 @@ func TestLogApplied(t *testing.T) {
 	}
 	err = r.Read(func(upSeq uint64, last bool) (bool, error) {
 		for {
-			_, ok := r.Next()
-			if !ok {
+			_, ok, err := r.Next()
+			if !ok || err != nil {
 				break
 			}
 		}

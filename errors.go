@@ -7,6 +7,7 @@ import (
 var (
 	errTopicEmpty          = errors.New("Topic is empty")
 	errMsgIdEmpty          = errors.New("Message Id is empty")
+	errMsgIdDeleted        = errors.New("Message Id is deleted")
 	errMsgIdDoesNotExist   = errors.New("Message Id does not exist in database")
 	errMsgIdPrefixMismatch = errors.New("Message Id does not match topic or Contract")
 	errTtlTooLarge         = errors.New("TTL is too large")

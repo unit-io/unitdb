@@ -117,6 +117,7 @@ func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added b
 func (t *trie) lookup(query []message.Part, depth uint8) (topics []topic) {
 	t.RLock()
 	defer t.RUnlock()
+	// fmt.Println("trie.lookup: depth, parts ", depth, query)
 	t.ilookup(query, depth, &topics, t.partTrie.root)
 	return
 }
@@ -136,11 +137,11 @@ func (t *trie) ilookup(query []message.Part, depth uint8, topics *[]topic, currp
 		// Go through the exact match branch
 		for k, p = range currpart.children {
 			if k.query == q.Query && uint8(len(query)) >= k.wildchars+1 {
-				// fmt.Println("trie.ilookup: topicHash, depth, wildchars, queryHash, partHash ", p.topicHash, depth, k.wildchars, q.Query, k.query)
+				// fmt.Println("trie.ilookup: topicHash,wildchars,  depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
 				t.ilookup(query[k.wildchars+1:], depth, topics, p)
 			}
 			if k.query == q.Query && uint8(len(query)) == k.wildchars {
-				// fmt.Println("trie.ilookup: topicHash, depth, wildchars, queryHash, partHash ", p.topicHash, depth, k.wildchars, q.Query, k.query)
+				// fmt.Println("trie.ilookup: topicHash, wildchars, depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
 				t.ilookup(query[k.wildchars:], depth, topics, p)
 			}
 		}

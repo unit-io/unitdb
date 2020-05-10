@@ -2,6 +2,7 @@ package wal
 
 import (
 	"encoding/binary"
+	"errors"
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/uid"
@@ -86,6 +87,7 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 				return err
 			}
 			offset += ul.size
+			offset += r.wal.logFile.fb.freeSize(ul.offset + ul.size)
 
 			idx++
 		}
@@ -102,13 +104,16 @@ func (r *Reader) Count() uint32 {
 }
 
 // Next returns next record from the log data iterator or false if iteration is done
-func (r *Reader) Next() ([]byte, bool) {
+func (r *Reader) Next() ([]byte, bool, error) {
 	if r.entryCount == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 	r.entryCount--
 	logData := r.logData[r.blockOffset:]
 	dataLen := binary.LittleEndian.Uint32(logData[0:4])
+	if uint32(len(logData)) < dataLen {
+		return nil, false, errors.New("logData error")
+	}
 	r.blockOffset += int64(dataLen)
-	return logData[4:dataLen], true
+	return logData[4:dataLen], true, nil
 }

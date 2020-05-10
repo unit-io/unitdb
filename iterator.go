@@ -56,6 +56,10 @@ func (it *ItemIterator) Next() {
 				}
 				e, err := it.db.readEntry(it.query.contract, we.seq)
 				if err != nil {
+					if err == errMsgIdDeleted {
+						it.invalidKeys++
+						return nil
+					}
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
@@ -71,7 +75,7 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				msgId := message.ID(id)
-				if !msgId.EvalPrefix(it.query.contract, it.query.cutoff) {
+				if !msgId.EvalPrefix(it.query.Contract, it.query.cutoff) {
 					it.invalidKeys++
 					return nil
 				}

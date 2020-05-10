@@ -54,7 +54,10 @@ func (db *syncHandle) startRecovery() error {
 	err = r.Read(func(lSeq uint64, last bool) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
-			logData, ok := r.Next()
+			logData, ok, err := r.Next()
+			if err != nil {
+				return false, err
+			}
 			if !ok {
 				break
 			}

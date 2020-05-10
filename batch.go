@@ -101,6 +101,9 @@ func (b *Batch) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
+	if e.Contract == 0 {
+		e.Contract = message.MasterContract
+	}
 	topic, ttl, err := b.db.parseTopic(e)
 	if err != nil {
 		return err
@@ -108,6 +111,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if ttl > 0 {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
+	topic.AddContract(e.Contract)
 	e.topic.data = topic.Marshal()
 	e.topic.size = uint16(len(e.topic.data))
 	e.contract = message.Contract(topic.Parts)
@@ -167,6 +171,10 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	if err != nil {
 		return err
 	}
+	if e.Contract == 0 {
+		e.Contract = message.MasterContract
+	}
+	topic.AddContract(e.Contract)
 	e.topic.data = topic.Marshal()
 	e.topic.size = uint16(len(e.topic.data))
 	e.contract = message.Contract(topic.Parts)
@@ -207,14 +215,14 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 	for i, index := range b.pendingWrites {
 		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
 		data := buf[index.offset+4 : index.offset+int64(dataLen)]
-		id, ptopic := index.message(data[entrySize:])
+		id, rawTopic := index.message(data[entrySize:])
 
 		ID := message.ID(id)
 		seq := ID.Seq()
 		contract := ID.Contract()
 		if _, ok := topics[contract]; !ok {
 			t := new(message.Topic)
-			t.Unmarshal(ptopic)
+			t.Unmarshal(rawTopic)
 			topics[contract] = t
 			if ok := b.db.trie.add(t.GetHash(contract), t.Parts, t.Depth); !ok {
 				return errBadRequest
@@ -231,7 +239,7 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			b.db.delete(seq)
+			b.db.delete(contract, seq)
 			continue
 		}
 		b.db.timeWindow.add(topicHash, we)

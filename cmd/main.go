@@ -66,39 +66,38 @@ func main() {
 	contract, err := db.NewContract()
 
 	messageId := db.NewID()
-	err = db.PutEntry(&unitdb.Entry{
+	entry := &unitdb.Entry{
 		ID:       messageId,
-		Topic:    []byte("unit1?ttl=3m"),
-		Payload:  []byte("unit1.1"),
+		Topic:    []byte("...?ttl=3m"),
 		Contract: contract,
-	})
+	}
+	db.SetEntry(entry, []byte("...1"))
 
-	printWithContract([]byte("unit1?last=2m"), contract, db)
+	printWithContract([]byte("...?last=2m"), contract, db)
 
 	err = db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit1"),
 		Contract: contract,
 	})
-
+	if err != nil {
+		log.Printf("Error update1: %s", err)
+	}
 	printWithContract([]byte("unit1?last=2m"), contract, db)
 
-	// func(retry int) {
-	// 	i := 1
-	// 	entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
-	// 	for range time.Tick(1 * time.Millisecond) {
-	// 		for j := 0; j < 50; j++ {
-	// 			db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
-	// 		}
-	// 		if err != nil {
-	// 			log.Printf("Error update1: %s", err)
-	// 		}
-	// 		if i >= retry {
-	// 			break
-	// 		}
-	// 		i++
-	// 	}
-	// }(1)
+	func(retry int) {
+		i := 1
+		entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
+		for range time.Tick(1 * time.Millisecond) {
+			for j := 0; j < 50; j++ {
+				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
+			}
+			if i >= retry {
+				break
+			}
+			i++
+		}
+	}(1)
 
 	func(retry int) {
 		i := 1
@@ -106,9 +105,6 @@ func main() {
 		for range time.Tick(1 * time.Millisecond) {
 			for j := 50; j < 100; j++ {
 				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
-			}
-			if err != nil {
-				log.Printf("Error update1: %s", err)
 			}
 			if i >= retry {
 				break
@@ -165,13 +161,13 @@ func main() {
 
 	print([]byte("unit1?last=2m"), db)
 
-	// err = db.DeleteEntry(&unitdb.Entry{
-	// 	ID:       messageId,
-	// 	Topic:    []byte("unit1"),
-	// 	Contract: contract,
-	// })
+	err = db.DeleteEntry(&unitdb.Entry{
+		ID:       messageId,
+		Topic:    []byte("unit1"),
+		Contract: contract,
+	})
 
-	// print([]byte("unit1?last=2m"), db)
+	print([]byte("unit1?last=2m"), db)
 
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions

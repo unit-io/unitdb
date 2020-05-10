@@ -61,7 +61,7 @@ func (fb *fb) currOffset() int64 {
 
 func (fb *fb) recoveryOffset(offset int64) int64 {
 	if offset == fb[0].offset {
-		offset += +fb[0].size
+		offset += fb[0].size
 	}
 	if offset == fb[1].offset {
 		offset += fb[1].size
@@ -70,6 +70,19 @@ func (fb *fb) recoveryOffset(offset int64) int64 {
 		offset += fb[2].size
 	}
 	return offset
+}
+
+func (fb *fb) freeSize(offset int64) int64 {
+	if offset == fb[0].offset {
+		return fb[0].size
+	}
+	if offset == fb[1].offset {
+		return fb[1].size
+	}
+	if offset == fb[2].offset {
+		return fb[2].size
+	}
+	return 0
 }
 
 func (fb *fb) allocate(size uint32) int64 {
