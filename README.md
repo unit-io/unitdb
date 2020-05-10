@@ -216,12 +216,12 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 
 ```
 
-# Demo
+## Example Web Application
 To access unitdb using websocket build unitd from source code using go get command.
 
 > go get -u github.com/unit-io/unitd && unitd
 
-Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/unitd.html) under example/html folder in browser.
+Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/unitd.html) under example/html folder in a browser.
 
 ## Steps
 - Generate Client ID
