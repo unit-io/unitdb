@@ -1,7 +1,7 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
 
 <p align="left">
-  <img src="unitdb.png" width="300" alt="Trace" title="unitdb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
+  <img src="unitdb.png" width="300" alt="unitdb" title="unitdb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
 </p>
 
 # unitdb: blazing fast time-series database for IoT and real-time messaging applications
@@ -215,6 +215,26 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 	}
 
 ```
+
+# Demo
+To access unitdb using websocket build unitd from source code using go get command.
+
+> go get -u github.com/unit-io/unitd && unitd
+
+Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/unitd.html) under example/html folder in browser.
+
+## Steps
+- Generate Client ID
+- Specify new client ID and connect to client
+- Specify topics to subscribe/publish messages and generate key
+- Specify key to the topics with separator '/' and subscribe to topic
+- Specify message to send and publish to topic
+
+### First Client
+![Client1](https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png?raw=true)
+
+### Second Client
+![Client2](https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png?raw=true)
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
