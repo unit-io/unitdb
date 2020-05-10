@@ -13,7 +13,7 @@ Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/uni
 - Specify message to send and publish to topic
 
 ### First Client
-![Client1](https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png?raw=true)
+![Client1](https://github.com/unit-io/unitdb/tree/master/docs/img/client1.png)
 
 ### Second Client
-![Client2](https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png?raw=true)
+![Client2](https://github.com/unit-io/unitdb/tree/master/docs/img/client2.png)
