@@ -395,13 +395,6 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	totalalsecs := endsecs
 	fmt.Printf("Put: %.3f sec, %d ops/sec\n", endsecs, int(float64(numKeys)/endsecs))
 	printStats(db)
-	// forceGC()
-
-	for contract := range keys {
-		for _, k := range keys[contract] {
-			k = append(k, []byte("?last=1m")...)
-		}
-	}
 
 	start = time.Now()
 

@@ -497,7 +497,7 @@ func (wb *windowWriter) del(seq uint64, bIdx int32) error {
 func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
 	var w winBlock
 	var ok bool
-	winIdx := int32(0)
+	var winIdx int32
 	if off == 0 {
 		wb.windowIdx++
 		winIdx = wb.windowIdx

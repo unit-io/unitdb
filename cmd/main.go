@@ -49,6 +49,20 @@ func main() {
 	}
 	defer db.Close()
 
+	contract, err := db.NewContract()
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	messageId := db.NewID()
+	entry := &unitdb.Entry{
+		ID:    messageId,
+		Topic: []byte("unit8...?ttl=3m"),
+		// Contract: contract,
+	}
+	db.SetEntry(entry, []byte("unit8.b...1"))
+
 	print([]byte("unit8.b1?last=1h"), db)
 	print([]byte("unit8.b.b1?last=1h"), db)
 	print([]byte("unit8.b.b11?last=1h"), db)
@@ -58,29 +72,19 @@ func main() {
 	print([]byte("unit8.c.c1?last=30m"), db)
 	print([]byte("unit8.c.c11?last=30m"), db)
 
-	msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 200})
-	for _, msg := range msgs {
-		log.Printf("%s ", msg)
+	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 200}); err == nil {
+		for _, msg := range msgs {
+			log.Printf("%s ", msg)
+		}
 	}
 
-	contract, err := db.NewContract()
+	print([]byte("unit8...?last=2m"), db)
 
-	messageId := db.NewID()
-	entry := &unitdb.Entry{
-		ID:       messageId,
-		Topic:    []byte("...?ttl=3m"),
-		Contract: contract,
-	}
-	db.SetEntry(entry, []byte("...1"))
-
-	printWithContract([]byte("...?last=2m"), contract, db)
-
-	err = db.DeleteEntry(&unitdb.Entry{
+	if err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit1"),
 		Contract: contract,
-	})
-	if err != nil {
+	}); err != nil {
 		log.Printf("Error update1: %s", err)
 	}
 	printWithContract([]byte("unit1?last=2m"), contract, db)
@@ -115,9 +119,10 @@ func main() {
 
 	print([]byte("unit8.c.*?last=30m"), db)
 
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.c.*?last=1h"), Limit: 100})
-	for _, msg := range msgs {
-		log.Printf("%s ", msg)
+	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.c.*?last=1h"), Limit: 100}); err == nil {
+		for _, msg := range msgs {
+			log.Printf("%s ", msg)
+		}
 	}
 
 	print([]byte("unit8.c.c1?last=30m"), db)
@@ -152,24 +157,28 @@ func main() {
 	print([]byte("unit8.b.b11?last=30m"), db)
 
 	messageId = db.NewID()
-	err = db.PutEntry(&unitdb.Entry{
+	if err := db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit1?ttl=3m"),
 		Payload:  []byte("unit1.2"),
 		Contract: contract,
-	})
+	}); err != nil {
+		log.Printf("Error %s", err)
+	}
 
 	print([]byte("unit1?last=2m"), db)
 
-	err = db.DeleteEntry(&unitdb.Entry{
+	if err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("unit1"),
 		Contract: contract,
-	})
+	}); err != nil {
+		log.Printf("Error %s", err)
+	}
 
 	print([]byte("unit1?last=2m"), db)
 
-	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+	if err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
 		opts.Encryption = true
 		b.SetOptions(opts)
@@ -178,9 +187,11 @@ func main() {
 		b.PutEntry(unitdb.NewEntry([]byte("unit3?ttl=3m"), []byte("unit3.1")))
 		err := b.Write()
 		return err
-	})
+	}); err != nil {
+		log.Printf("Error %s", err)
+	}
 
-	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+	if err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(&unitdb.Entry{Topic: []byte("unit8.*.b11"), Payload: []byte("unit8.*.b11.1"), Contract: contract})
 		b.PutEntry(&unitdb.Entry{Topic: []byte("unit8.b.*"), Payload: []byte("unit8.b.*.1"), Contract: contract})
 		b.PutEntry(&unitdb.Entry{Topic: []byte("unit8"), Payload: []byte("unit8.1"), Contract: contract})
@@ -192,7 +203,9 @@ func main() {
 			printWithContract([]byte("unit8.b.b11?last=3m"), contract, db)
 		}()
 		return err
-	})
+	}); err != nil {
+		log.Printf("Error %s", err)
+	}
 
 	g := db.NewBatchGroup()
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
@@ -254,8 +267,9 @@ func main() {
 			i++
 		}
 	}(1)
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 100})
-	for _, msg := range msgs {
-		log.Printf("%s ", msg)
+	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h"), Limit: 100}); err == nil {
+		for _, msg := range msgs {
+			log.Printf("%s ", msg)
+		}
 	}
 }
