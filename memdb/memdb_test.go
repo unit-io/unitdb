@@ -7,7 +7,7 @@ import (
 )
 
 func TestSimple(t *testing.T) {
-	size := 1 << 33
+	size := 1 << 4
 	mdb, err := Open(int64(size))
 	if err != nil {
 		t.Fatal(err)
@@ -40,10 +40,10 @@ func TestSimple(t *testing.T) {
 		}
 	}
 
-	verifyMsgsAndClose := func() {
-		if count := mdb.Count(); count != 255 {
+	verifyMsgs := func() {
+		if count := mdb.Count(); count != uint64(n) {
 			mdb.Close()
-			t.Fatalf("expected 255 records; got %d", count)
+			t.Fatalf("expected %d records; got %d", n, count)
 		}
 		var v []byte
 		for i = 0; i < n; i++ {
@@ -57,12 +57,37 @@ func TestSimple(t *testing.T) {
 			if !reflect.DeepEqual(val, v) {
 				t.Fatalf("expected %v; got %v", val, v)
 			}
+		}
+		if size, err := mdb.Size(); err != nil || size > maxTableSize {
+			t.Fatal(err)
+		}
+	}
 
+	verifyMsgs()
+
+	if err := mdb.Free(contract, cacheID^uint64(n-1)); err != nil {
+		t.Fatal(err)
+	}
+
+	for i = 0; i < n; i++ {
+		k := cacheID ^ uint64(i)
+		if err = mdb.Remove(contract, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := mdb.shrinkDataTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	verifyAndClose := func() {
+		if count := mdb.Count(); count != 0 {
+			mdb.Close()
+			t.Fatalf("expected zero records; got %d", count)
 		}
 		if err := mdb.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	verifyMsgsAndClose()
+	verifyAndClose()
 }

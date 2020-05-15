@@ -58,10 +58,10 @@ func main() {
 	messageId := db.NewID()
 	entry := &unitdb.Entry{
 		ID:    messageId,
-		Topic: []byte("unit8...?ttl=3m"),
+		Topic: []byte("unit.*.b1.*.*.*.b11111.*?ttl=3m"),
 		// Contract: contract,
 	}
-	db.SetEntry(entry, []byte("unit8.b...1"))
+	db.SetEntry(entry, []byte("unit.*.b1.*.*.*.b11111.*.1"))
 
 	print([]byte("unit8.b1?last=1h"), db)
 	print([]byte("unit8.b.b1?last=1h"), db)
@@ -78,7 +78,7 @@ func main() {
 		}
 	}
 
-	print([]byte("unit8...?last=2m"), db)
+	print([]byte("unit.*.b1.*.*.*.b11111.*?last=2m"), db)
 
 	if err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
@@ -87,7 +87,7 @@ func main() {
 	}); err != nil {
 		log.Printf("Error update1: %s", err)
 	}
-	printWithContract([]byte("unit1?last=2m"), contract, db)
+	print([]byte("unit.b.b1.b11.b111.b1111.b11111.b111111?last=2m"), db)
 
 	func(retry int) {
 		i := 1
