@@ -59,11 +59,10 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageId)
 	}
-	dbsync := syncHandle{DB: db, internal: internal{}}
 
 	verifyMsgsAndClose := func() {
 		if count := db.Count(); count != int64(n) {
-			if err := dbsync.startRecovery(); err != nil {
+			if err := db.recoverLog(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -98,22 +97,25 @@ func TestSimple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = db.Get(&Query{Topic: topic, Contract: contract, Limit: int(n)})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for i = 0; i < n; i++ {
 		messageId := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
+		if err := db.Put(topic, val); err != nil {
+			t.Fatal(err)
+		}
 		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, messageId)
 	}
 	db.tinyCommit()
-	dbsync = syncHandle{DB: db, internal: internal{}}
+	dbsync := syncHandle{DB: db, internal: internal{}}
 	if err := dbsync.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Get(&Query{Topic: topic})
-	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -135,17 +137,16 @@ func TestBatch(t *testing.T) {
 	}
 	topic := []byte("unit2.test")
 
-	if db.count != 0 {
-		t.Fatal()
-	}
+	// if db.count != 0 {
+	// 	t.Fatal()
+	// }
 
 	var i uint16
 	var n uint16 = 255
-	dbsync := syncHandle{DB: db, internal: internal{}}
 
 	verifyMsgsAndClose := func() {
 		if count := db.Count(); count != int64(n) {
-			if err := dbsync.startRecovery(); err != nil {
+			if err := db.recoverLog(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -193,6 +194,7 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dbsync := syncHandle{DB: db, internal: internal{}}
 	if err := dbsync.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +240,6 @@ func TestBatchGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// wg.Wait()
-	time.Sleep(10 * time.Millisecond)
 	syncHandle := syncHandle{DB: db, internal: internal{}}
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,8 @@ func TestBatchGroup(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	db, err := open("test.db", nil)
+	opts := &Options{BackgroundKeyExpiry: true}
+	db, err := open("test.db", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,11 +273,12 @@ func TestExpiry(t *testing.T) {
 
 	// var wg sync.WaitGroup
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
-		// wg.Add(1)
+		expiresAt := uint32(time.Now().Add(-1 * time.Hour).Unix())
+
 		for i = 0; i < n; i++ {
-			topic := append(topic, []byte("?ttl=1h")...)
 			val := []byte(fmt.Sprintf("msg.%2d", i))
-			if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+			entry := &Entry{Topic: topic, Payload: val, Contract: contract, ExpiresAt: expiresAt}
+			if err := db.PutEntry(entry); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -287,11 +289,85 @@ func TestExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// wg.Wait()
-	time.Sleep(10 * time.Millisecond)
-	db.ExpireOldEntries()
 
-	if data, err := db.Get(&Query{Topic: topic, Contract: contract}); len(data) != 0 || err != nil {
+	if data, err := db.Get(&Query{Topic: topic, Contract: contract, Limit: int(n)}); len(data) != 0 || err != nil {
 		t.Fatal()
+	}
+	db.ExpireOldEntries()
+}
+
+func TestAbort(t *testing.T) {
+	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	db, err := open("test.db", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var i uint16
+	var n uint16 = 1000
+
+	topic := []byte("unit1.test")
+
+	for i = 0; i < n; i++ {
+		val := []byte(fmt.Sprintf("msg.%2d", i))
+		if err := db.Put(topic, val); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.tinyCommit()
+	dbsync := syncHandle{DB: db, internal: internal{}}
+	dbabort := syncHandle{DB: db, internal: dbsync.internal}
+	dbabort.startSync()
+	if err := dbsync.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	dbabort.abort()
+}
+
+func TestLeasing(t *testing.T) {
+	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	db, err := open("test.db", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var i uint16
+	var n uint16 = 1000
+
+	topic := []byte("unit1.test")
+	var ids [][]byte
+	for i = 0; i < n; i++ {
+		messageId := db.NewID()
+		val := []byte(fmt.Sprintf("msg.%2d", i))
+		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, messageId)
+	}
+	db.tinyCommit()
+	dbsync := syncHandle{DB: db, internal: internal{}}
+	if err := dbsync.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		db.Delete(id, topic)
+	}
+	for i = 0; i < n; i++ {
+		messageId := db.NewID()
+		val := []byte(fmt.Sprintf("msg.%2d", i))
+		if err := db.Put(topic, val); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, messageId)
+	}
+	db.tinyCommit()
+	if err := dbsync.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		db.Delete(id, topic)
 	}
 }

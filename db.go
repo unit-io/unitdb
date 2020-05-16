@@ -317,7 +317,6 @@ func (db *DB) loadTrie() error {
 				b := blockHandle{file: db.index, offset: off}
 				if err := b.read(); err != nil {
 					if err == io.EOF {
-						fmt.Println("db.loadTopicHash: eof ", w.topicHash, off, seq)
 						return false, nil
 					}
 					return true, err
@@ -331,8 +330,6 @@ func (db *DB) loadTrie() error {
 					}
 				}
 				if entryIdx == -1 {
-					fmt.Println("db.loadTopicHash: topicHash, off seq ", w.topicHash, off, seq)
-					// return false, errors.New("db.loadTopicHash: unable to get topic from db.")
 					return false, nil
 				}
 				e := b.entries[entryIdx]

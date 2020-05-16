@@ -86,15 +86,15 @@ func (wh *windowHandle) read() error {
 	return wh.UnmarshalBinary(buf)
 }
 
-func (wh *windowHandle) write() error {
-	if wh.entryIdx == 0 {
-		return nil
-	}
-	buf := wh.MarshalBinary()
-	_, err := wh.file.WriteAt(buf, wh.offset)
+// func (wh *windowHandle) write() error {
+// 	if wh.entryIdx == 0 {
+// 		return nil
+// 	}
+// 	buf := wh.MarshalBinary()
+// 	_, err := wh.file.WriteAt(buf, wh.offset)
 
-	return err
-}
+// 	return err
+// }
 
 // A "thread" safe timeWindows.
 // To avoid lock bottlenecks timeWindows are dived to several (nShards).
@@ -201,20 +201,6 @@ func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
 	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
-// newBlock adds new window block to timeWindowBucket and returns block offset
-func (wb *timeWindowBucket) newBlock() int64 {
-	wb.windowIdx++
-	return int64(blockSize * uint32(wb.windowIdx))
-}
-
-// extendBlocks adds new window blocks to timeWindowBucket
-func (wb *timeWindowBucket) extendBlocks(n uint32) error {
-	if _, err := wb.extend(blockSize * n); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 	if !wb.opts.backgroundKeyExpiry {
 		return nil
@@ -254,6 +240,7 @@ func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
 			}
 		}
 	}
+	atomic.StoreInt64(&wb.earliestExpiryHash, 0)
 	return expiredEntries
 }
 
@@ -274,9 +261,6 @@ func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
 		ws.expiry[timeExpiry] = expiryWindow
 	} else {
 		ws.expiry[timeExpiry] = windowEntries{e}
-		if atomic.LoadInt64(&wb.earliestExpiryHash) > timeExpiry {
-			wb.earliestExpiryHash = timeExpiry
-		}
 	}
 
 	return nil
@@ -616,7 +600,6 @@ func (wb *windowWriter) write() error {
 
 func (wb *windowWriter) rollback() error {
 	for bIdx, seqs := range wb.leasing {
-		fmt.Println("block.rollback: free winBlocks")
 		for _, seq := range seqs {
 			if err := wb.del(seq, bIdx); err != nil {
 				return err
@@ -635,7 +618,7 @@ func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
 	return nil
 }
 
-func (wb *timeWindowBucket) nextWindowIndex() int32 {
-	wb.windowIdx++
-	return wb.windowIdx
-}
+// func (wb *timeWindowBucket) nextWindowIndex() int32 {
+// 	wb.windowIdx++
+// 	return wb.windowIdx
+// }

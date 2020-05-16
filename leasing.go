@@ -98,29 +98,15 @@ func (l *lease) freeBlocks(contract uint64) *freeBlocks {
 
 func (s *freeBlocks) search(size uint32) int {
 	// limit search to first 100 freeblocks
-	return sort.Search(100, func(i int) bool {
+	return sort.Search(len(s.fb), func(i int) bool {
 		return s.fb[i].size >= size
 	})
-}
-
-// contains checks whether a message id is in the set.
-func (s *freeBlocks) contains(off int64) bool {
-	for _, v := range s.fb {
-		if v.offset == off {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *freeBlocks) defrag() {
 	l := len(s.fb)
 	if l <= 1 {
 		return
-	}
-	// limit fragmentation to first 1000 freeblocks
-	if l > 1000 {
-		l = 1000
 	}
 	sort.Slice(s.fb[:l], func(i, j int) bool {
 		return s.fb[i].offset < s.fb[j].offset
@@ -183,9 +169,6 @@ func (l *lease) allocate(size uint32) int64 {
 	fbs := l.freeBlocks(uint64(size))
 	fbs.Lock()
 	defer fbs.Unlock()
-	if len(fbs.fb) < 100 {
-		return -1
-	}
 	i := fbs.search(size)
 	if i >= len(fbs.fb) {
 		return -1

@@ -343,7 +343,6 @@ func blockRange(idx []int) ([][]int, error) {
 
 func (bw *blockWriter) rollback() error {
 	for seq := range bw.leasing {
-		fmt.Println("block.rollback: free blocks")
 		if _, err := bw.del(seq); err != nil {
 			return err
 		}

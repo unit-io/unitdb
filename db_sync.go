@@ -351,14 +351,3 @@ func (db *DB) ExpireOldEntries() {
 		db.decount(1)
 	}
 }
-
-func batch(winEntries []timeWindowEntry, batchSize int) [][]timeWindowEntry {
-	groupEntries := make([][]timeWindowEntry, 0, (len(winEntries)+batchSize-1)/batchSize)
-
-	for batchSize < len(winEntries) {
-		winEntries, groupEntries = winEntries[batchSize:], append(groupEntries, winEntries[0:batchSize:batchSize])
-	}
-	groupEntries = append(groupEntries, winEntries)
-
-	return groupEntries
-}

@@ -1,8 +1,6 @@
 package unitdb
 
 import (
-	"fmt"
-
 	"github.com/unit-io/bpool"
 )
 
@@ -38,13 +36,6 @@ func (dt *dataTable) readMessage(e entry) ([]byte, []byte, error) {
 	return message[:idSize], message[e.topicSize+idSize:], nil
 }
 
-func (dt *dataTable) readId(e entry) ([]byte, error) {
-	if e.cacheBlock != nil {
-		return e.cacheBlock[:idSize], nil
-	}
-	return dt.Slice(e.msgOffset, e.msgOffset+int64(idSize))
-}
-
 func (dt *dataTable) readTopic(e entry) ([]byte, error) {
 	if e.cacheBlock != nil {
 		return e.cacheBlock[idSize : e.topicSize+idSize], nil
@@ -75,6 +66,7 @@ func (dw *dataWriter) append(data []byte) (off int64, err error) {
 		if _, err = dw.file.WriteAt(buf, off); err != nil {
 			return 0, err
 		}
+		dw.leasing[off] = uint32(dataLen)
 		return off, err
 	}
 	off = dw.offset
@@ -100,7 +92,6 @@ func (dw *dataWriter) write() (int, error) {
 
 func (dw *dataWriter) rollback() error {
 	for off, size := range dw.leasing {
-		fmt.Println("block.rollback: free data blocks")
 		dw.lease.freeBlock(off, size)
 	}
 	return nil

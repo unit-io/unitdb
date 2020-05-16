@@ -56,12 +56,12 @@ func (it *ItemIterator) Next() {
 				}
 				e, err := it.db.readEntry(it.query.contract, we.seq)
 				if err != nil {
-					if err == errMsgIdDeleted {
-						it.invalidKeys++
-						return nil
+					if err == errMsgIdDoesNotExist {
+						logger.Error().Err(err).Str("context", "db.readEntry")
+						return err
 					}
-					logger.Error().Err(err).Str("context", "db.readEntry")
-					return err
+					it.invalidKeys++
+					return nil
 				}
 				if e.isExpired() {
 					it.invalidKeys++
