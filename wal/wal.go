@@ -160,19 +160,10 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
-	l := len(wal.logs)
+	// l := len(wal.logs)
 	log.version = version
 	if wal.seq < log.seq {
 		wal.seq = log.seq
-	}
-	for i := 0; i < l; i++ {
-		if wal.logs[i].offset == log.offset {
-			wal.logs[i].status = log.status
-			wal.logs[i].entryCount = log.entryCount
-			wal.logs[i].seq = log.seq
-			wal.logs[i].size = log.size
-			return nil
-		}
 	}
 	wal.logs = append(wal.logs, log)
 	return nil

@@ -55,10 +55,6 @@ func (fb *fb) currSize() int64 {
 	return fb[1].size
 }
 
-func (fb *fb) currOffset() int64 {
-	return fb[1].offset
-}
-
 func (fb *fb) recoveryOffset(offset int64) int64 {
 	if offset == fb[0].offset {
 		offset += fb[0].size
@@ -136,15 +132,6 @@ func (f *file) allocate(size uint32) (int64, error) {
 	off := f.fb.allocate(size)
 
 	return off, nil
-}
-
-func (f *file) append(data []byte) error {
-	off := f.size
-	if _, err := f.WriteAt(data, off); err != nil {
-		return err
-	}
-	f.size += int64(len(data))
-	return nil
 }
 
 func (f *file) readAt(buf []byte, off int64) (int, error) {

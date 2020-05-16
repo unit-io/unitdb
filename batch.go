@@ -299,14 +299,14 @@ func (b *Batch) Abort() {
 	b.db = nil
 }
 
-// Reset resets the batch.
-func (b *Batch) Reset() {
-	b.entryCount = 0
-	b.size = 0
-	b.index = b.index[:0]
-	b.pendingWrites = b.pendingWrites[:0]
-	// b.buffer.Reset()
-}
+// // Reset resets the batch.
+// func (b *Batch) Reset() {
+// 	b.entryCount = 0
+// 	b.size = 0
+// 	b.index = b.index[:0]
+// 	b.pendingWrites = b.pendingWrites[:0]
+// 	// b.buffer.Reset()
+// }
 
 func (b *Batch) uniq() []batchIndex {
 	if b.opts.AllowDuplicates {

@@ -1,6 +1,7 @@
 package unitdb
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -28,16 +29,14 @@ func TestIterator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items := map[byte]bool{}
-	var i byte
-	// var vals, itvals [][]byte
+	var i uint16
+	var n uint16 = 255
+	items := map[uint16]bool{}
 
-	entry := &Entry{Topic: []byte("unit5.test?ttl=1h"), Contract: contract}
-	for i = 0; i < 255; i++ {
+	entry := &Entry{Topic: []byte("unit5.test?ttl=1m"), Contract: contract}
+	for i = 0; i < n; i++ {
 		items[i] = false
-		val := []byte("msg.")
-		val = append(val, i)
-		// vals = append(vals, val)
+		val := []byte(fmt.Sprintf("msg.%2d", i))
 		entry.SetPayload(val)
 		if err := db.PutEntry(entry); err != nil {
 			t.Fatal(err)
@@ -51,7 +50,7 @@ func TestIterator(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	it, err := db.Items(&Query{Topic: []byte("unit5.test?last=255"), Contract: contract})
+	it, err := db.Items(&Query{Topic: []byte("unit5.test?last=1s"), Contract: contract})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,14 +60,10 @@ func TestIterator(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// vals = append(vals, it.Item().Value())
 		i++
 	}
-	// if !reflect.DeepEqual(vals, itvals) {
-	// 	t.Fatalf("expected %v; got %v", vals, itvals)
-	// }
 
-	if i != 255 {
-		t.Fatalf("expected 255 records; got %d", i)
+	if i != n {
+		t.Fatalf("expected %d records; got %d", n, i)
 	}
 }

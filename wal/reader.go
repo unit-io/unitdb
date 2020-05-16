@@ -46,6 +46,9 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 	defer r.wal.mu.RUnlock()
 	idx := 0
 	l := len(r.wal.logs)
+	if l == 0 {
+		return nil
+	}
 	fileOff := r.wal.logs[0].offset
 	size := r.wal.logFile.Size() - fileOff
 

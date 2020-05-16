@@ -1,12 +1,13 @@
 package wal
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
 
 func newTestWal(path string, del bool) (*WAL, bool, error) {
-	logOpts := Options{Path: path + ".log", TargetSize: 1 << 27, BufferSize: 1 << 20}
+	logOpts := Options{Path: path + ".log", TargetSize: 1 << 8, BufferSize: 1 << 8}
 	if del {
 		os.Remove(logOpts.Path)
 	}
@@ -36,8 +37,8 @@ func TestRecovery(t *testing.T) {
 		t.Fatalf("Write ahead log non-empty")
 	}
 
-	var i byte
-	var n uint8 = 255
+	var i uint16
+	var n uint16 = 1000
 
 	logWriter, err := wal.NewWriter()
 	if err != nil {
@@ -45,14 +46,13 @@ func TestRecovery(t *testing.T) {
 	}
 
 	for i = 0; i < n; i++ {
-		val := []byte("msg.")
-		val = append(val, i)
+		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := <-logWriter.Append(val); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(255); err != nil {
+	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,8 +72,8 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer wal.Close()
-	var i byte
-	var n uint8 = 255
+	var i uint16
+	var n uint16 = 1000
 
 	var upperSeq uint64
 	logWriter, err := wal.NewWriter()
@@ -82,14 +82,13 @@ func TestLogApplied(t *testing.T) {
 	}
 
 	for i = 0; i < n; i++ {
-		val := []byte("msg.")
-		val = append(val, i)
+		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := <-logWriter.Append(val); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(255); err != nil {
+	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,8 +139,8 @@ func TestSimple(t *testing.T) {
 	}
 	defer wal.Close()
 
-	var i byte
-	var n uint8 = 255
+	var i uint16
+	var n uint16 = 1000
 
 	logWriter, err := wal.NewWriter()
 	if err != nil {
@@ -149,14 +148,13 @@ func TestSimple(t *testing.T) {
 	}
 
 	for i = 0; i < n; i++ {
-		val := []byte("msg.")
-		val = append(val, i)
+		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := <-logWriter.Append(val); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(255); err != nil {
+	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -8,14 +8,6 @@ type dataTable struct {
 	closed bool
 }
 
-// func (t *dataTable) append(data []byte) (int64, error) {
-// 	off := t.size
-// 	if _, err := t.writeAt(data, off); err != nil {
-// 		return 0, err
-// 	}
-// 	return off, nil
-// }
-
 func (t *dataTable) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
@@ -46,18 +38,6 @@ func (t *dataTable) close() error {
 	return nil
 }
 
-// func (t *dataTable) readAt(p []byte, off int64) (int, error) {
-// 	if t.closed {
-// 		return 0, errors.New("table closed")
-// 	}
-// 	n := len(p)
-// 	if int64(n) > t.size-off {
-// 		return 0, errors.New("eof")
-// 	}
-// 	copy(p, t.buf[off:off+int64(n)])
-// 	return n, nil
-// }
-
 func (t *dataTable) writeAt(p []byte, off int64) (int, error) {
 	if t.closed {
 		return 0, errors.New("table closed")
@@ -73,11 +53,6 @@ func (t *dataTable) writeAt(p []byte, off int64) (int, error) {
 	}
 	return n, nil
 }
-
-// func (t *dataTable) extend(size uint32) (int64, error) {
-// 	off := t.size
-// 	return off, t.truncate(t.size + int64(size))
-// }
 
 func (t *dataTable) truncate(size int64) error {
 	if t.closed {

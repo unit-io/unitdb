@@ -89,7 +89,6 @@ type (
 		syncWrites bool
 		dbInfo
 		timeWindow *timeWindowBucket
-		once       Once
 
 		//batchdb
 		*batchdb
@@ -971,7 +970,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(contract, seq uint64) error {
-	//// Test filter block for the message id presence
+	// Test filter block for the message id presence
 	if !db.filter.Test(seq) {
 		return nil
 	}
@@ -1053,38 +1052,6 @@ func (db *DB) incount(count int64) int64 {
 
 func (db *DB) decount(count int64) int64 {
 	return atomic.AddInt64(&db.count, -count)
-}
-
-// Once is an object that will perform exactly one action
-// until Reset is called.
-// See http://golang.org/pkg/sync/#Once
-type Once struct {
-	m    sync.Mutex
-	done uint32
-}
-
-// Do simulates sync.Once.Do by executing the specified function
-// only once, until Reset is called.
-// See http://golang.org/pkg/sync/#Once
-func (o *Once) Do(f func()) {
-	if atomic.LoadUint32(&o.done) == 1 {
-		return
-	}
-	// Slow-path.
-	o.m.Lock()
-	defer o.m.Unlock()
-	if o.done == 0 {
-		defer atomic.StoreUint32(&o.done, 1)
-		f()
-	}
-}
-
-// Reset indicates that the next call to Do should actually be called
-// once again.
-func (o *Once) Reset() {
-	o.m.Lock()
-	defer o.m.Unlock()
-	atomic.StoreUint32(&o.done, 0)
 }
 
 // Set closed flag; return true if not already closed.

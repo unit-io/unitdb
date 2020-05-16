@@ -167,10 +167,9 @@ func (db *DB) Remove(contract uint64, key uint64) error {
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get item from cache.
-	if _, ok := cache.m[key]; !ok {
-		return errors.New("entry not found")
+	if _, ok := cache.m[key]; ok {
+		cache.m[key] = -1
 	}
-	cache.m[key] = -1
 	return nil
 }
 
