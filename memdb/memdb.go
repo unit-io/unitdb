@@ -129,15 +129,15 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// getCache returns cache under given contract
-func (db *DB) getCache(contract uint64) *memCache {
-	return db.blockCache[db.consistent.FindBlock(contract)]
+// getCache returns cache under given blockId
+func (db *DB) getCache(blockId uint64) *memCache {
+	return db.blockCache[db.consistent.FindBlock(blockId)]
 }
 
-// Get gets data for the provided key under a contract
-func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
+// Get gets data for the provided key under a blockId
+func (db *DB) Get(blockId uint64, key uint64) ([]byte, error) {
 	// Get cache
-	cache := db.getCache(contract)
+	cache := db.getCache(blockId)
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get item from cache.
@@ -160,10 +160,10 @@ func (db *DB) Get(contract uint64, key uint64) ([]byte, error) {
 	return data[4:], nil
 }
 
-// Remove sets data offset to -1 for the key under a contract
-func (db *DB) Remove(contract uint64, key uint64) error {
+// Remove sets data offset to -1 for the key under a blockId
+func (db *DB) Remove(blockId uint64, key uint64) error {
 	// Get cache
-	cache := db.getCache(contract)
+	cache := db.getCache(blockId)
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get item from cache.
@@ -173,10 +173,10 @@ func (db *DB) Remove(contract uint64, key uint64) error {
 	return nil
 }
 
-// Set sets the value for the given entry for a contract.
-func (db *DB) Set(contract uint64, key uint64, data []byte) error {
+// Set sets the value for the given entry for a blockId.
+func (db *DB) Set(blockId uint64, key uint64, data []byte) error {
 	// Get cache.
-	cache := db.getCache(contract)
+	cache := db.getCache(blockId)
 	cache.Lock()
 	defer cache.Unlock()
 	off, err := cache.data.allocate(uint32(len(data) + 4))
@@ -197,9 +197,9 @@ func (db *DB) Set(contract uint64, key uint64, data []byte) error {
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
-func (db *DB) Free(contract uint64, key uint64) error {
+func (db *DB) Free(blockId uint64, key uint64) error {
 	// Get cache
-	cache := db.getCache(contract)
+	cache := db.getCache(blockId)
 	cache.Lock()
 	defer cache.Unlock()
 	if cache.freeOffset > 0 {

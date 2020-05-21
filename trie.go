@@ -114,21 +114,21 @@ func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added b
 }
 
 // lookup returns window entry set for given topic.
-func (t *trie) lookup(query []message.Part, depth uint8) (topics []topic) {
+func (t *trie) lookup(query []message.Part, depth uint8) (tops topics) {
 	t.RLock()
 	defer t.RUnlock()
 	// fmt.Println("trie.lookup: depth, parts ", depth, query)
-	t.ilookup(query, depth, &topics, t.partTrie.root)
+	t.ilookup(query, depth, &tops, t.partTrie.root)
 	return
 }
 
-func (t *trie) ilookup(query []message.Part, depth uint8, topics *[]topic, currpart *part) {
+func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart *part) {
 	// Add window entry set from the current branch
 	var p *part
 	var k key
 	if currpart.depth == depth || (currpart.depth >= message.TopicMaxDepth && depth > currpart.depth-message.TopicMaxDepth) {
 		topic := topic{hash: currpart.topicHash, offset: currpart.offset}
-		*topics = append(*topics, topic)
+		tops.addUnique(topic)
 	}
 
 	// If we're not yet done, continue
@@ -136,13 +136,13 @@ func (t *trie) ilookup(query []message.Part, depth uint8, topics *[]topic, currp
 		q := query[0]
 		// Go through the exact match branch
 		for k, p = range currpart.children {
+			if k.query == q.Query && q.Wildchars == k.wildchars {
+				// fmt.Println("trie.ilookup: topicHash, wildchars, depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
+				t.ilookup(query[1:], depth, tops, p)
+			}
 			if k.query == q.Query && uint8(len(query)) >= k.wildchars+1 {
 				// fmt.Println("trie.ilookup: topicHash,wildchars,  depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
-				t.ilookup(query[k.wildchars+1:], depth, topics, p)
-			}
-			if k.query == q.Query && uint8(len(query)) == k.wildchars {
-				// fmt.Println("trie.ilookup: topicHash, wildchars, depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
-				t.ilookup(query[k.wildchars:], depth, topics, p)
+				t.ilookup(query[k.wildchars+1:], depth, tops, p)
 			}
 		}
 	}

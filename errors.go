@@ -16,6 +16,7 @@ var (
 	errValueEmpty          = errors.New("Payload is empty")
 	errValueTooLarge       = errors.New("value is too large")
 	errEntryInvalid        = errors.New("entry is invalid")
+	errImmutable           = errors.New("database is immutable")
 	errFull                = errors.New("database is full")
 	errCorrupted           = errors.New("database is corrupted")
 	errLocked              = errors.New("database is locked")

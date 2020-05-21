@@ -56,7 +56,10 @@ To open or create a new database, use the unitdb.Open() function:
 	)
 
 	func main() {
-		db, err := unitdb.Open("unitdb.example", nil)
+		// Opening a database.
+		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
+		flags := &unitdb.Flags{Immutable: true}
+		db, err := unitdb.Open("unitdb.example", flags, opts)
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -97,8 +100,7 @@ Use Entry.SetPayload() method to store bulk messages and then use DB.PutEntry() 
 ```
 
 #### Specify ttl 
-Specify ttl parameter to a topic while storing messages to expire it after specific duration. 
-Note, DB.Get() or DB.Items() function does not fetch expired messages. 
+Specify ttl parameter to a topic while storing messages to expire it after specific duration. DB query does not fetch expired messages. 
 
 ```
 	topic := []byte("unit8.b.b1?ttl=1h")
@@ -121,7 +123,7 @@ Use DB.Get() to read messages from a topic. Use last parameter to specify durati
 ```
 
 #### Deleting a message
-Deleting a message in unitdb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the unitdb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function.
+Deleting a message in unitdb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the unitdb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function. If Immutable flag is set when DB is open then DB.DeleteEntry() returns an error.
 
 ```
 

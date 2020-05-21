@@ -262,7 +262,7 @@ func (db *syncHandle) Sync() error {
 				}
 				wEntry = we.(winEntry)
 				mseq := db.cacheID ^ wEntry.seq
-				memdata, err := db.mem.Get(wEntry.contract, mseq)
+				memdata, err := db.mem.Get(h, mseq)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "mem.Get")
 					err1 = err
@@ -297,7 +297,7 @@ func (db *syncHandle) Sync() error {
 			if ok := db.trie.setOffset(h, wOff); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			db.mem.Free(wEntry.contract, db.cacheID^db.upperSeq())
+			db.mem.Free(h, db.cacheID^db.upperSeq())
 			if err1 != nil {
 				break
 			}

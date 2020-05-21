@@ -154,14 +154,14 @@ func (t *Topic) Target() uint32 {
 }
 
 // TTL returns a Time-To-Live option.
-func (t *Topic) TTL() (int64, bool) {
+func (t *Topic) TTL() (uint32, bool) {
 	ttl, sec, ok := t.getOption("ttl")
 	if sec > 0 {
-		return int64(time.Duration(sec) * time.Second), ok
+		return uint32(time.Duration(sec) * time.Second), ok
 	}
 	var duration time.Duration
 	duration, _ = time.ParseDuration(ttl)
-	return int64(duration), ok
+	return uint32(time.Now().Add(duration).Unix()), ok
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.

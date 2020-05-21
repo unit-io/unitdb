@@ -7,7 +7,7 @@ import (
 )
 
 func TestIteratorEmpty(t *testing.T) {
-	db, err := open("test.db", nil)
+	db, err := open("test.db", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestIteratorEmpty(t *testing.T) {
 }
 
 func TestIterator(t *testing.T) {
-	db, err := open("test.db", nil)
+	db, err := open("test.db", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

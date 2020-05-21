@@ -8,19 +8,20 @@ import (
 	"time"
 )
 
-func open(path string, opts *Options) (*DB, error) {
+func open(path string, flags *Flags, opts *Options) (*DB, error) {
 	os.Remove(path + indexPostfix)
 	os.Remove(path + dataPostfix)
 	os.Remove(path + logPostfix)
 	os.Remove(path + lockPostfix)
 	os.Remove(path + windowPostfix)
 	os.Remove(path + filterPostfix)
-	return Open(path, opts)
+	return Open(path, flags, opts)
 }
 
 func TestSimple(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestSimple(t *testing.T) {
 	}
 
 	verifyMsgsAndClose()
-	db, err = Open("test.db", nil)
+	db, err = Open("test.db", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,8 @@ func TestSimple(t *testing.T) {
 
 func TestBatch(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +205,8 @@ func TestBatch(t *testing.T) {
 
 func TestBatchGroup(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,8 +259,8 @@ func TestBatchGroup(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	opts := &Options{BackgroundKeyExpiry: true}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false, BackgroundKeyExpiry: true}
+	db, err := open("test.db", flags, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +301,8 @@ func TestExpiry(t *testing.T) {
 
 func TestAbort(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +330,8 @@ func TestAbort(t *testing.T) {
 
 func TestLeasing(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,5 +374,39 @@ func TestLeasing(t *testing.T) {
 	}
 	for _, id := range ids {
 		db.Delete(id, topic)
+	}
+}
+
+func TestWildcardTopics(t *testing.T) {
+	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	flags := &Flags{Immutable: false}
+	db, err := open("test.db", flags, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tests := []struct {
+		wtopic []byte
+		topic  []byte
+		msg    []byte
+	}{
+		{[]byte("..."), []byte("unit.b.b1"), []byte("...1")},
+		{[]byte("unit.b..."), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.b...1")},
+		{[]byte("unit.*.b1.b11.*.*.b11111.*"), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.*.b1.b11.*.*.b11111.*.1")},
+		{[]byte("unit.*.b1.*.*.*.b11111.*"), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.*.b1.*.*.*.b11111.*.1")},
+		{[]byte("unit.b.b1"), []byte("unit.b.b1"), []byte("unit.b.b1.1")},
+		{[]byte("unit.b.b1.b11"), []byte("unit.b.b1.b11"), []byte("unit.b.b1.b11.1")},
+		{[]byte("unit.b"), []byte("unit.b"), []byte("unit.b.1")},
+	}
+	for _, tt := range tests {
+		db.Put(tt.wtopic, tt.msg)
+		db.tinyCommit()
+		if msg, err := db.Get(&Query{Topic: tt.wtopic, Limit: 10}); len(msg) == 0 || err != nil {
+			t.Fatal(err)
+		}
+		if msg, err := db.Get(&Query{Topic: tt.topic, Limit: 10}); len(msg) == 0 || err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/uid"
 	"golang.org/x/sync/errgroup"
 )
@@ -40,11 +39,9 @@ func (b *tinyBatch) incount() uint32 {
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	mem         *memdb.DB
 	batchQueue  chan *Batch
 	commitQueue chan *Batch
 
-	opts    *Options
 	bufPool *bpool.BufferPool
 	//tiny Batch
 	tinyBatch *tinyBatch
@@ -53,6 +50,7 @@ type batchdb struct {
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
+	opts.Immutable = db.flags.Immutable
 	opts.Encryption = db.encryption == 1
 	b := &Batch{opts: opts, batchId: uid.NewLID(), db: db}
 	b.buffer = db.bufPool.Get()
@@ -63,7 +61,6 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb(opts *Options) error {
 	bdb := &batchdb{
 		// batchDB
-		opts:        opts,
 		bufPool:     bpool.NewBufferPool(opts.BufferSize, nil),
 		tinyBatch:   &tinyBatch{Id: uid.NewLID()},
 		batchQueue:  make(chan *Batch, 100),
@@ -71,12 +68,6 @@ func (db *DB) initbatchdb(opts *Options) error {
 	}
 
 	db.batchdb = bdb
-	// Create a memdb.
-	mem, err := memdb.Open(opts.MemdbSize)
-	if err != nil {
-		return err
-	}
-	db.mem = mem
 	db.tinyBatch.buffer = db.bufPool.Get()
 
 	db.tinyBatchLoop(opts.TinyBatchWriteInterval)

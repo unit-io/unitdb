@@ -42,7 +42,9 @@ func printWithContract(topic []byte, contract uint32, db *unitdb.DB) {
 
 func main() {
 	// Opening a database.
-	db, err := unitdb.Open("example", nil)
+	opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
+	flags := &unitdb.Flags{Immutable: true}
+	db, err := unitdb.Open("example", flags, opts)
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -166,7 +168,7 @@ func main() {
 		log.Printf("Error %s", err)
 	}
 
-	print([]byte("unit1?last=2m"), db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	if err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
@@ -176,7 +178,7 @@ func main() {
 		log.Printf("Error %s", err)
 	}
 
-	print([]byte("unit1?last=2m"), db)
+	printWithContract([]byte("unit1?last=2m"), contract, db)
 
 	if err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions

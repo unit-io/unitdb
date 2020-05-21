@@ -5,6 +5,8 @@
 - Optimized for fast lookups and writes
 - Can store larger-than-memory data sets
 - Data is safely written to disk with accuracy and high performant block sync technique
+- Supports opening database with immutable flag
+- Supports data encryption
 - Supports time-to-live on message entry
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct

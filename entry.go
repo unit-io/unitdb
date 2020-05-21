@@ -76,6 +76,27 @@ func (e *Entry) reset() {
 	e.Payload = nil
 }
 
+type topics []topic
+
+// addUnique adds topic to the set.
+func (top *topics) addUnique(value topic) (added bool) {
+	if top.contains(value) == false {
+		*top = append(*top, value)
+		added = true
+	}
+	return
+}
+
+// contains checks whether a topic is in the set.
+func (top *topics) contains(value topic) bool {
+	for _, v := range *top {
+		if v.hash == value.hash {
+			return true
+		}
+	}
+	return false
+}
+
 // unsafeToString is used to convert a slice
 // of bytes to a string without incurring overhead.
 func unsafeToString(bs []byte) string {

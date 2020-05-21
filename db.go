@@ -17,6 +17,7 @@ import (
 	"github.com/unit-io/unitdb/crypto"
 	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/fs"
+	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
 	"github.com/unit-io/unitdb/wal"
 )
@@ -89,6 +90,9 @@ type (
 		syncWrites bool
 		dbInfo
 		timeWindow *timeWindowBucket
+		opts       *Options
+		flags      *Flags
+		mem        *memdb.DB
 
 		//batchdb
 		*batchdb
@@ -107,8 +111,9 @@ type (
 )
 
 // Open opens or creates a new DB.
-func Open(path string, opts *Options) (*DB, error) {
+func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 	opts = opts.copyWithDefaults()
+	flags = flags.copyWithDefaults()
 	fs := opts.FileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
@@ -130,7 +135,7 @@ func Open(path string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	lease := newLease(leaseFile, opts.MinimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: opts.BackgroundKeyExpiry}
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -154,6 +159,9 @@ func Open(path string, opts *Options) (*DB, error) {
 			blockIdx:     -1,
 			freeblockOff: -1,
 		},
+		opts:  opts,
+		flags: flags,
+
 		batchdb: &batchdb{},
 		trie:    newTrie(),
 		start:   time.Now(),
@@ -214,9 +222,16 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	// set encryption flag to encrypt messages
 	db.encryption = 0
-	if opts.Encryption {
+	if flags.Encryption {
 		db.encryption = 1
 	}
+
+	// Create a memdb.
+	mem, err := memdb.Open(opts.MemdbSize)
+	if err != nil {
+		return nil, err
+	}
+	db.mem = mem
 
 	//initbatchdb
 	if err = db.initbatchdb(opts); err != nil {
@@ -251,7 +266,7 @@ func Open(path string, opts *Options) (*DB, error) {
 
 	db.startSyncer(opts.BackgroundSyncInterval)
 
-	if opts.BackgroundKeyExpiry {
+	if flags.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
@@ -408,10 +423,10 @@ func (db *DB) Close() error {
 	return err
 }
 
-func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
+func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
 	cacheKey := db.cacheID ^ seq
 	e := entry{}
-	data, err := db.mem.Get(contract, cacheKey)
+	data, err := db.mem.Get(topicHash, cacheKey)
 	if err != nil {
 		return entry{}, errMsgIdDeleted
 	}
@@ -434,7 +449,7 @@ func (db *DB) readEntry(contract uint64, seq uint64) (entry, error) {
 			return e, nil
 		}
 	}
-	return entry{}, errMsgIdDoesNotExist
+	return entry{}, nil
 }
 
 // Get return items matching the query paramater
@@ -469,7 +484,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	q.parts = topic.Parts
 	q.depth = topic.Depth
 	q.contract = message.Contract(q.parts)
-
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
@@ -481,6 +495,9 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		case limit > q.Limit:
 			q.Limit = limit
 		}
+	}
+	if q.Limit == 0 {
+		q.Limit = db.opts.DefaultQueryLimit
 	}
 
 	mu := db.getMutex(q.contract)
@@ -494,11 +511,10 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	for _, topic := range topics {
 		var wEntries []winEntry
 		nextOff := int64(0)
-		wEntries = db.timeWindow.ilookup(topic.hash, q.Limit)
-		if len(wEntries) > 0 {
-			q.contract = wEntries[0].contract
-			q.winEntries = append(q.winEntries, wEntries...)
-		}
+		q.winEntries = db.timeWindow.ilookup(topic.hash, q.Limit)
+		// if len(wEntries) > 0 {
+		// 	q.contract = wEntries[0].contract
+		// }
 		if len(q.winEntries) < q.Limit {
 			limit := q.Limit - len(q.winEntries)
 			wEntries, nextOff = db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
@@ -521,7 +537,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					if we.seq == 0 {
 						return nil
 					}
-					e, err := db.readEntry(q.contract, we.seq)
+					e, err := db.readEntry(topic.hash, we.seq)
 					if err != nil {
 						if err == errMsgIdDeleted {
 							invalidCount++
@@ -621,10 +637,6 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
-	// // Iterator should only have static topic strings
-	// if topic.TopicType != message.TopicStatic {
-	// 	return errForbidden
-	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 	q.depth = topic.Depth
@@ -641,6 +653,9 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 		case limit > q.Limit:
 			q.Limit = limit
 		}
+	}
+	if q.Limit == 0 {
+		q.Limit = db.opts.DefaultQueryLimit
 	}
 
 	return &ItemIterator{db: db, query: q}, nil
@@ -677,7 +692,7 @@ func (db *DB) extendBlocks(nBlocks int32) error {
 	return nil
 }
 
-func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
+func (db *DB) parseTopic(e *Entry) (*message.Topic, uint32, error) {
 	topic := new(message.Topic)
 
 	//Parse the Key
@@ -694,13 +709,13 @@ func (db *DB) parseTopic(e *Entry) (*message.Topic, int64, error) {
 	return topic, 0, nil
 }
 
-func (db *DB) setEntry(e *Entry, ttl int64) error {
+func (db *DB) setEntry(e *Entry, ttl uint32) error {
 	//message ID is the database key
 	var id message.ID
 	var seq uint64
 	e.encryption = db.encryption == 1 || e.encryption
 	if e.ExpiresAt == 0 && ttl > 0 {
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
+		e.ExpiresAt = ttl
 	}
 	if e.ID != nil {
 		id = message.ID(e.ID)
@@ -759,7 +774,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	var topic *message.Topic
-	var ttl int64
+	var ttl uint32
 	var err error
 	if !e.parsed {
 		if e.Contract == 0 {
@@ -774,7 +789,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		e.topic.size = uint16(len(e.topic.data))
 		e.contract = message.Contract(topic.Parts)
 		e.topic.hash = topic.GetHash(e.contract)
-		// fmt.Println("db.PutEntry: contact, topicHash, parts ", e.contract, e.topic.hash, topic.Depth, topic.Parts)
+		// fmt.Println("db.PutEntry: contact, topicHash ", e.contract, e.topic.hash)
 		if ok := db.trie.add(e.topic.hash, topic.Parts, topic.Depth); !ok {
 			return errBadRequest
 		}
@@ -787,11 +802,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.encryption == 1 {
 		e.val = db.mac.Encrypt(nil, e.val)
 	}
-	we := winEntry{
-		contract: e.contract,
-		seq:      e.seq,
-	}
-	if err := db.timeWindow.add(e.topic.hash, we); err != nil {
+	if err := db.timeWindow.add(e.topic.hash, winEntry{seq:e.seq}); err != nil {
 		return err
 	}
 	data, err := db.packEntry(e)
@@ -799,7 +810,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(e.contract, memseq, data); err != nil {
+	if err := db.mem.Set(e.topic.hash, memseq, data); err != nil {
 		return err
 	}
 	var scratch [4]byte
@@ -941,6 +952,8 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
+	case db.flags.Immutable:
+		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIdEmpty
 	case len(e.Topic) == 0:
@@ -959,21 +972,24 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 	topic.AddContract(e.Contract)
 	e.contract = message.Contract(topic.Parts)
-	if err := db.delete(e.contract, message.ID(id).Seq()); err != nil {
+	if err := db.delete(topic.GetHash(e.contract), message.ID(id).Seq()); err != nil {
 		return err
 	}
 	return nil
 }
 
 // delete deletes the given key from the DB.
-func (db *DB) delete(contract, seq uint64) error {
+func (db *DB) delete(topicHash, seq uint64) error {
+	if db.flags.Immutable {
+		return nil
+	}
 	// Test filter block for the message id presence
 	if !db.filter.Test(seq) {
 		return nil
 	}
 	db.meter.Dels.Inc(1)
 	memseq := db.cacheID ^ seq
-	if err := db.mem.Remove(contract, memseq); err != nil {
+	if err := db.mem.Remove(topicHash, memseq); err != nil {
 		return err
 	}
 	blockIdx := startBlockIndex(seq)

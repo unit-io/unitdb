@@ -18,6 +18,7 @@ type BatchOptions struct {
 	Order           int8
 	Topic           []byte
 	Contract        uint32
+	Immutable       bool
 	Encryption      bool
 	AllowDuplicates bool
 }
@@ -160,6 +161,8 @@ func (b *Batch) Delete(id, topic []byte) error {
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
 	switch {
+	case b.opts.Immutable:
+		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIdEmpty
 	case len(e.Topic) == 0:
@@ -202,7 +205,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	return nil
 }
 
-func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, data []byte) error) error {
 	if err := b.db.ok(); err != nil {
 		return err
 	} // // CPU profiling by default
@@ -230,10 +233,6 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 		}
 		topic := topics[contract]
 		topicHash := topic.GetHash(contract)
-		we := winEntry{
-			contract: contract,
-			seq:      seq,
-		}
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
@@ -242,10 +241,10 @@ func (b *Batch) writeInternal(fn func(i int, contract uint64, memseq uint64, dat
 			b.db.delete(contract, seq)
 			continue
 		}
-		b.db.timeWindow.add(topicHash, we)
+		b.db.timeWindow.add(topicHash, winEntry{seq: seq})
 
 		memseq := b.db.cacheID ^ seq
-		if err := fn(i, contract, memseq, data); err != nil {
+		if err := fn(i, topicHash, memseq, data); err != nil {
 			return err
 		}
 	}
@@ -265,8 +264,8 @@ func (b *Batch) Write() error {
 		b.db.batchQueue <- b
 		return nil
 	}
-	err := b.writeInternal(func(i int, contract uint64, memseq uint64, data []byte) error {
-		return b.db.mem.Set(contract, memseq, data)
+	err := b.writeInternal(func(i int, topicHash uint64, memseq uint64, data []byte) error {
+		return b.db.mem.Set(topicHash, memseq, data)
 	})
 	if err != nil {
 		return err

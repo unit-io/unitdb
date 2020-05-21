@@ -54,7 +54,7 @@ func (it *ItemIterator) Next() {
 				if we.seq == 0 {
 					return nil
 				}
-				e, err := it.db.readEntry(it.query.contract, we.seq)
+				e, err := it.db.readEntry(we.topicHash, we.seq)
 				if err != nil {
 					if err == errMsgIdDoesNotExist {
 						logger.Error().Err(err).Str("context", "db.readEntry")
@@ -121,15 +121,14 @@ func (it *ItemIterator) First() {
 	for _, topic := range topics {
 		var wEntries []winEntry
 		wEntries = it.db.timeWindow.ilookup(topic.hash, it.query.Limit)
-		if len(wEntries) > 0 {
-			it.query.contract = wEntries[0].contract
-			it.query.winEntries = append(it.query.winEntries, wEntries...)
+		for _, we := range wEntries {
+			it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.seq})
 		}
 		if len(it.query.winEntries) < it.query.Limit {
 			limit := it.query.Limit - len(it.query.winEntries)
 			wEntries, _ = it.db.timeWindow.lookup(topic.hash, topic.offset, len(it.query.winEntries), limit)
-			if len(wEntries) > 0 {
-				it.query.winEntries = append(it.query.winEntries, wEntries...)
+			for _, we := range wEntries {
+				it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.seq})
 			}
 		}
 	}

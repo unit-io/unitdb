@@ -6,6 +6,25 @@ import (
 	"github.com/unit-io/unitdb/fs"
 )
 
+// Flags holds various DB flags.
+type Flags struct {
+	// Immutable set immutable flag on database
+	Immutable bool
+
+	// Encryption flag to encrypt keys
+	Encryption bool
+
+	// BackgroundKeyExpiry sets flag to run key expirer
+	BackgroundKeyExpiry bool
+}
+
+func (src *Flags) copyWithDefaults() *Flags {
+	if src != nil {
+		return src
+	}
+	return &Flags{Immutable: true, Encryption: false, BackgroundKeyExpiry: true}
+}
+
 // Options holds the optional DB parameters.
 type Options struct {
 	// BackgroundSyncInterval sets the amount of time between background fsync() calls.
@@ -13,12 +32,6 @@ type Options struct {
 	// Setting the value to 0 disables the automatic background synchronization.
 	// Setting the value to -1 makes the DB call fsync() after every write operation.
 	BackgroundSyncInterval time.Duration
-
-	// BackgroundKeyExpiry sets flag to run key expirer
-	BackgroundKeyExpiry bool
-
-	// Encryption flag to encrypt keys
-	Encryption bool
 
 	// Encryption Key
 	EncryptionKey []byte

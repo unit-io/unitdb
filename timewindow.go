@@ -15,8 +15,8 @@ import (
 
 type (
 	winEntry struct {
-		contract uint64
-		seq      uint64
+		topicHash uint64
+		seq       uint64
 	}
 	winBlock struct {
 		contract   uint64
@@ -85,16 +85,6 @@ func (wh *windowHandle) read() error {
 	}
 	return wh.UnmarshalBinary(buf)
 }
-
-// func (wh *windowHandle) write() error {
-// 	if wh.entryIdx == 0 {
-// 		return nil
-// 	}
-// 	buf := wh.MarshalBinary()
-// 	_, err := wh.file.WriteAt(buf, wh.offset)
-
-// 	return err
-// }
 
 // A "thread" safe timeWindows.
 // To avoid lock bottlenecks timeWindows are dived to several (nShards).
@@ -617,8 +607,3 @@ func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
 	wb.windowIdx = windowIdx
 	return nil
 }
-
-// func (wb *timeWindowBucket) nextWindowIndex() int32 {
-// 	wb.windowIdx++
-// 	return wb.windowIdx
-// }

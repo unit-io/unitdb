@@ -75,7 +75,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	// defer p.Stop()
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_unitdb")
-	db, err := unitdb.Open(dbpath, nil)
+	db, err := unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	db, err = unitdb.Open(dbpath, nil)
+	db, err = unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	// defer p.Stop()
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_unitdb")
-	db, err := unitdb.Open(dbpath, nil)
+	db, err := unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		return err
 	}
 
-	db, err = unitdb.Open(dbpath, nil)
+	db, err = unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_unitdb")
-	db, err := unitdb.Open(dbpath, nil)
+	db, err := unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -346,7 +346,7 @@ func generateKeys(count int, minL int, maxL int, db *unitdb.DB) map[uint32][][]b
 func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_unitdb")
-	db, err := unitdb.Open(dbpath, nil)
+	db, err := unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -427,7 +427,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 func recovery(dir string) error {
 	// open database for recovery
 	dbpath := path.Join(dir, "bench_unitdb")
-	db, err := unitdb.Open(dbpath, nil)
+	db, err := unitdb.Open(dbpath, nil, nil)
 	if err != nil {
 		return err
 	}
