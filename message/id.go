@@ -12,8 +12,6 @@ import (
 const (
 	// MasterContract contract is default contract used for topics if client program does not specify Contract in the request
 	MasterContract = uint32(3376684800)
-	// Wildcard wildcard is hash for wildcard topic such as '*'
-	Wildcard = uint32(857445537)
 
 	None      = uint32(0)      // ID has no flags.
 	Encrypted = uint32(1 << 0) // ID has encryption set.

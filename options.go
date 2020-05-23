@@ -9,20 +9,32 @@ import (
 // Flags holds various DB flags.
 type Flags struct {
 	// Immutable set immutable flag on database
-	Immutable bool
+	Immutable int8
 
 	// Encryption flag to encrypt keys
-	Encryption bool
+	Encryption int8
 
 	// BackgroundKeyExpiry sets flag to run key expirer
-	BackgroundKeyExpiry bool
+	BackgroundKeyExpiry int8
 }
 
 func (src *Flags) copyWithDefaults() *Flags {
+	flgs := Flags{}
 	if src != nil {
-		return src
+		flgs = *src
 	}
-	return &Flags{Immutable: true, Encryption: false, BackgroundKeyExpiry: true}
+
+	if flgs.Immutable == 0 {
+		flgs.Immutable = 1
+	}
+	if flgs.Encryption == 0 {
+		flgs.Encryption = -1
+	}
+	if flgs.BackgroundKeyExpiry == 0 {
+		flgs.BackgroundKeyExpiry = -1
+	}
+
+	return &flgs
 }
 
 // Options holds the optional DB parameters.

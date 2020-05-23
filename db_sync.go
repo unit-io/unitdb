@@ -254,7 +254,7 @@ func (db *syncHandle) Sync() error {
 
 	var wEntry winEntry
 	var err1 error
-	err := db.timeWindow.foreachTimeWindow(true, func(last bool, windowEntries map[uint64]windowEntries) (bool, error) {
+	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
 			for _, we := range wEntries {
 				if we.Seq() == 0 {

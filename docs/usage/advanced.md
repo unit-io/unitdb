@@ -58,7 +58,8 @@ To open or create a new database, use the unitdb.Open() function:
 	func main() {
 		// Opening a database.
 		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
-		flags := &unitdb.Flags{Immutable: true}
+		// Flag: 1 - Set or -1 - Unset
+		flags := &unitdb.Flags{Immutable: 1, Encryption: -1, BackgroundKeyExpiry: -1}
 		db, err := unitdb.Open("unitdb.example", flags, opts)
 		if err != nil {
 			log.Fatal(err)

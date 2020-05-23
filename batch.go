@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/hash"
@@ -23,7 +22,7 @@ type BatchOptions struct {
 	AllowDuplicates bool
 }
 
-// DefaultBatchOptions contains default options when writing batches to unitdb key-value store.
+// DefaultBatchOptions contains default options when writing batches to unitdb topicc=>key-value store.
 var DefaultBatchOptions = &BatchOptions{
 	Order:           0,
 	Topic:           nil,
@@ -36,7 +35,7 @@ func (index batchIndex) message(data []byte) (id, topic []byte) {
 	return data[:idSize], data[idSize : idSize+index.topicSize]
 }
 
-// SetOptions sets batch options to defer default option and use options specified by client program
+// SetOptions sets batch options
 func (b *Batch) SetOptions(opts *BatchOptions) {
 	b.opts = opts
 }
@@ -48,7 +47,7 @@ type (
 
 	batchIndex struct {
 		delFlag   bool
-		key       uint32 // key is local id unique in batch and used to removed duplicate entry from bacth before writing records into DB
+		key       uint32 // key is local id unique in batch and used to remove duplicate values from a topic in the batch before writing records into DB
 		topicSize uint16
 		offset    int64
 	}
@@ -108,9 +107,6 @@ func (b *Batch) PutEntry(e *Entry) error {
 	topic, ttl, err := b.db.parseTopic(e)
 	if err != nil {
 		return err
-	}
-	if ttl > 0 {
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(ttl)).Unix())
 	}
 	topic.AddContract(e.Contract)
 	e.topic.data = topic.Marshal()
@@ -278,11 +274,11 @@ func (b *Batch) Write() error {
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
+		b.Abort()
 		return nil
 	}
 	defer func() {
 		close(b.commitComplete)
-		b.Abort()
 	}()
 	if err := b.db.commit(b.Len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
@@ -293,19 +289,19 @@ func (b *Batch) Commit() error {
 //Abort abort is a batch cleanup operation on batch complete
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
-	// b.Reset()
+	b.Reset()
 	b.db.bufPool.Put(b.buffer)
 	b.db = nil
 }
 
-// // Reset resets the batch.
-// func (b *Batch) Reset() {
-// 	b.entryCount = 0
-// 	b.size = 0
-// 	b.index = b.index[:0]
-// 	b.pendingWrites = b.pendingWrites[:0]
-// 	// b.buffer.Reset()
-// }
+// Reset resets the batch.
+func (b *Batch) Reset() {
+	b.entryCount = 0
+	b.size = 0
+	b.index = b.index[:0]
+	b.pendingWrites = b.pendingWrites[:0]
+	// b.buffer.Reset()
+}
 
 func (b *Batch) uniq() []batchIndex {
 	if b.opts.AllowDuplicates {
@@ -332,17 +328,17 @@ func (b *Batch) uniq() []batchIndex {
 	return b.pendingWrites
 }
 
-func (b *Batch) append(bnew *Batch) {
-	if bnew.Len() == 0 {
+func (b *Batch) append(new *Batch) {
+	if new.Len() == 0 {
 		return
 	}
 	off := b.size
-	for _, idx := range bnew.index {
+	for _, idx := range new.index {
 		idx.offset = idx.offset + int64(off)
 		b.index = append(b.index, idx)
 	}
-	b.size += bnew.size
-	b.buffer.Write(bnew.buffer.Bytes())
+	b.size += new.size
+	b.buffer.Write(new.buffer.Bytes())
 }
 
 // _assert will panic with a given formatted message if the given condition is false.

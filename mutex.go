@@ -10,7 +10,7 @@ const (
 	nMutex = 16
 )
 
-// mutex mutex to lock/unlock on topic based on contract
+// mutex mutex to lock/unlock on contract
 type mutex struct {
 	internal   []*sync.RWMutex
 	consistent *hash.Consistent
@@ -30,7 +30,7 @@ func newMutex() mutex {
 	return mu
 }
 
-// getMutex returns mutex under given contract for a specific topic
+// getMutex returns mutex under given contract
 func (mu *mutex) getMutex(contract uint64) *sync.RWMutex {
 	return mu.internal[mu.consistent.FindBlock(contract)]
 }

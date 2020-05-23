@@ -17,11 +17,14 @@ const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
 	TopicWildcard
-	TopicAnySeparator         = '*'
-	TopicChildrenAllSeparator = "..."
-	TopicSeparator            = '.'   // The separator character.
-	MaxMessageSize            = 65536 // Maximum message size allowed.
-	TopicMaxDepth             = 100   // Maximum depth for topic using a separator
+	TopicAnySeparator = '*'
+	TopicAllSeparator = "..."
+	TopicSeparator    = '.'   // The separator character.
+	MaxMessageSize    = 65536 // Maximum message size allowed.
+	TopicMaxDepth     = 100   // Maximum depth for topic using a separator
+
+	// Wildcard wildcard is hash for wildcard topic such as '*' or '...'
+	Wildcard = uint32(857445537)
 )
 
 // TopicOption represents a key/value pair option.
@@ -82,7 +85,7 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 	for _, i := range t.Parts[1:] {
 		h ^= i.Query
 	}
-	return uint64(h)<<32 + contract
+	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
 }
 
 // Marshal serializes topic to binary
@@ -303,16 +306,16 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	}
 
 	depth := uint8(0)
-	q := []byte(TopicChildrenAllSeparator)
+	q := []byte(TopicAllSeparator)
 	if bytes.HasSuffix(topic.Topic, q) {
-		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicChildrenAllSeparator))
+		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicAllSeparator))
 		topic.TopicType = TopicWildcard
 		topic.Depth = TopicMaxDepth
 
 		if len(topic.Topic) == 0 {
 			part.Query = Wildcard
 			topic.Parts = append(topic.Parts, part)
-			return false
+			return true
 		}
 	}
 

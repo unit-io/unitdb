@@ -18,7 +18,7 @@ unitdb can be used for online gaming and mobile apps as it satisfy the requireme
 - Can store larger-than-memory data sets
 - Data is safely written to disk with accuracy and high performant block sync technique
 - Supports opening database with immutable flag
-- Supports data encryption
+- Supports database encryption
 - Supports time-to-live on message entry
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct
@@ -61,7 +61,8 @@ To open or create a new database, use the unitdb.Open() function:
 	func main() {
 		// Opening a database.
 		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
-		flags := &unitdb.Flags{Immutable: true}
+		// Flag: 1 - Set or -1 - Unset
+		flags := &unitdb.Flags{Immutable: 1, Encryption: -1, BackgroundKeyExpiry: -1}
 		db, err := unitdb.Open("unitdb", flags, opts)
 		if err != nil {
 			log.Fatal(err)
@@ -186,7 +187,7 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 ```
 
 ## Example Web Application
-To access unitdb using websocket build unitd from source code using go get command.
+To access unitdb using websocket build Unitd from source code and copy unitd.conf to the path unitd binary is placed.
 
 > go get -u github.com/unit-io/unitd && unitd
 

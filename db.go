@@ -60,7 +60,7 @@ const (
 
 type (
 	dbInfo struct {
-		encryption   uint8
+		encryption   int8
 		seq          uint64
 		logSeq       uint64
 		count        int64
@@ -135,7 +135,7 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	lease := newLease(leaseFile, opts.MinimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry}
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry == 1}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -221,10 +221,7 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 	}
 
 	// set encryption flag to encrypt messages
-	db.encryption = 0
-	if flags.Encryption {
-		db.encryption = 1
-	}
+	db.encryption = flags.Encryption
 
 	// Create a memdb.
 	mem, err := memdb.Open(opts.MemdbSize)
@@ -266,7 +263,7 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 
 	db.startSyncer(opts.BackgroundSyncInterval)
 
-	if flags.BackgroundKeyExpiry {
+	if flags.BackgroundKeyExpiry == 1 {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
@@ -802,7 +799,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.encryption == 1 {
 		e.val = db.mac.Encrypt(nil, e.val)
 	}
-	if err := db.timeWindow.add(e.topic.hash, winEntry{seq:e.seq}); err != nil {
+	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq}); err != nil {
 		return err
 	}
 	data, err := db.packEntry(e)
@@ -952,7 +949,7 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
-	case db.flags.Immutable:
+	case db.flags.Immutable == 1:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIdEmpty
@@ -980,7 +977,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(topicHash, seq uint64) error {
-	if db.flags.Immutable {
+	if db.flags.Immutable == 1 {
 		return nil
 	}
 	// Test filter block for the message id presence

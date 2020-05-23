@@ -45,15 +45,21 @@ When the unitdb restarts, last offset of all topics is loaded into Trie, the WAL
 ### Block Cache
 The memdb block cache is an in-memory copy of entries that currently stored in the WAL. The block cache:
 
-- Organizes entries as per contract into shards.
+- Organizes entries as per topic hash into shards.
 - Stores keys and offsets into map
 - Stores compressed data into data blocks.
 
-Queries to the unitdb merge data from the block cache with data from the files. Queries first lookup topic offset from lookup Trie. Topic offset is used to traverse timeWindow blocks and get entries sequence. Entry sequence is used to calculate index block offset and index block is read from the index file, then it uses entry information from index block to read data from data file and un-compresses the data. As encryption flag is set on first bit of sequence so if data is encrypted then it get un-encrypted while data is read.
+Queries to the unitdb merge data from the block cache with data from the files. Query first lookup topic offset in lookup Trie then uses Topic offset to traverse to timeWindow blocks and read window entries. The sequence from window entry is used to find block offset of index block file. The index block is read from the index file, that has entry information and using these information it read data from data block in data file and un-compresses the data. As encryption flag is set on first bit of sequence so if data is encrypted then it get un-encrypted while data is read.
 
 ### Block Sync
+
+#### Time Window
 To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset to next field of previous block in reverse time order.
 
-Index block stores entry sequence, data block offset, message size and expiry details. The block offset of index block is calculated from entry sequence. The unitdb compress data and store it into data blocks. If an entry expires or deleted then the data offset and size is marked as free and added to the lease blocks so that it can get allocated by new request.
+#### Block Index
+Block index stores entry sequence, offset of data block, message size and expiry details. Entry sequence is used to find block offset of index block. 
+
+#### Data Block
+The unitdb compress data and store it into data blocks. If an entry expires or deleted then the offset and size of data is marked as free and added to the leasing blocks that get allocated by new request.
 
 After data is stored safely in files, the WAL is truncated and memdb is shrink.

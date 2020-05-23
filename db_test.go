@@ -20,7 +20,7 @@ func open(path string, flags *Flags, opts *Options) (*DB, error) {
 
 func TestSimple(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestSimple(t *testing.T) {
 
 func TestBatch(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestBatch(t *testing.T) {
 
 func TestBatchGroup(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestBatchGroup(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	flags := &Flags{Immutable: false, BackgroundKeyExpiry: true}
+	flags := &Flags{Immutable: -1, BackgroundKeyExpiry: 1}
 	db, err := open("test.db", flags, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +301,7 @@ func TestExpiry(t *testing.T) {
 
 func TestAbort(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +330,7 @@ func TestAbort(t *testing.T) {
 
 func TestLeasing(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +379,7 @@ func TestLeasing(t *testing.T) {
 
 func TestWildcardTopics(t *testing.T) {
 	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
-	flags := &Flags{Immutable: false}
+	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +401,6 @@ func TestWildcardTopics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		db.Put(tt.wtopic, tt.msg)
-		db.tinyCommit()
 		if msg, err := db.Get(&Query{Topic: tt.wtopic, Limit: 10}); len(msg) == 0 || err != nil {
 			t.Fatal(err)
 		}

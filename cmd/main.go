@@ -43,7 +43,7 @@ func printWithContract(topic []byte, contract uint32, db *unitdb.DB) {
 func main() {
 	// Opening a database.
 	opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
-	flags := &unitdb.Flags{Immutable: true}
+	flags := &unitdb.Flags{Immutable: 1, Encryption: -1, BackgroundKeyExpiry: -1}
 	db, err := unitdb.Open("example", flags, opts)
 	if err != nil {
 		log.Fatal(err)
@@ -56,14 +56,6 @@ func main() {
 		log.Fatal(err)
 		return
 	}
-
-	messageId := db.NewID()
-	entry := &unitdb.Entry{
-		ID:    messageId,
-		Topic: []byte("unit.*.b1.*.*.*.b11111.*?ttl=3m"),
-		// Contract: contract,
-	}
-	db.SetEntry(entry, []byte("unit.*.b1.*.*.*.b11111.*.1"))
 
 	print([]byte("unit8.b1?last=1h"), db)
 	print([]byte("unit8.b.b1?last=1h"), db)
@@ -79,6 +71,42 @@ func main() {
 			log.Printf("%s ", msg)
 		}
 	}
+
+	reqs := []struct {
+		wtopic []byte
+		topic  []byte
+		msg    []byte
+	}{
+		{[]byte("..."), []byte("unit8.b.b1"), []byte("...1")},
+		{[]byte("unit.b..."), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.b...1")},
+		{[]byte("unit.*.b1.b11.*.*.b11111.*"), []byte("unit"), []byte("unit.*.b1.b11.*.*.b11111.*.1")},
+		{[]byte("unit.*.b1.*.*.*.b11111.*"), []byte("unit.b.b1?ttl=3m"), []byte("unit.*.b1.*.*.*.b11111.*.1")},
+		{[]byte("unit.b.b1"), []byte("unit.b.b1?ttl=3m"), []byte("unit.b.b1.1")},
+		{[]byte("unit.b.b1.b11"), []byte("unit.b.b1.b11"), []byte("unit.b.b1.b11.1")},
+		{[]byte("unit.b"), []byte("unit.b"), []byte("unit.b.1")},
+		{[]byte("unit8.b.b1"), []byte("unit8.b.b1"), []byte("unit8.b.b1.1")},
+	}
+	for _, r := range reqs {
+		db.Put(r.wtopic, r.msg)
+		if msgs, err := db.Get(&unitdb.Query{Topic: r.wtopic, Limit: 10}); err == nil {
+			for _, msg := range msgs {
+				log.Printf("%s ", msg)
+			}
+		}
+		if msgs, err := db.Get(&unitdb.Query{Topic: r.topic, Limit: 10}); err == nil {
+			for _, msg := range msgs {
+				log.Printf("%s ", msg)
+			}
+		}
+	}
+
+	messageId := db.NewID()
+	entry := &unitdb.Entry{
+		ID:    messageId,
+		Topic: []byte("unit.*.b1.*.*.*.b11111.*?ttl=3m"),
+		// Contract: contract,
+	}
+	db.SetEntry(entry, []byte("unit.*.b1.*.*.*.b11111.*.1"))
 
 	print([]byte("unit.*.b1.*.*.*.b11111.*?last=2m"), db)
 

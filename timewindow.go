@@ -6,7 +6,6 @@ import (
 	"io"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -15,7 +14,7 @@ import (
 
 type (
 	winEntry struct {
-		topicHash uint64
+		topicHash uint64 // topicHash used in DB query
 		seq       uint64
 	}
 	winBlock struct {
@@ -86,41 +85,6 @@ func (wh *windowHandle) read() error {
 	return wh.UnmarshalBinary(buf)
 }
 
-// A "thread" safe timeWindows.
-// To avoid lock bottlenecks timeWindows are dived to several (nShards).
-type timeWindows struct {
-	sync.RWMutex
-	windows    []*windows
-	consistent *hash.Consistent
-}
-
-type windows struct {
-	expiry map[int64]windowEntries // map[expiryHash]windowEntries
-	timeWindow
-	mu sync.RWMutex // Read Write mutex, guards access to internal collection.
-}
-
-// newTimeWindows creates a new concurrent timeWindows.
-func newTimeWindows() *timeWindows {
-	w := &timeWindows{
-		windows:    make([]*windows, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
-	}
-
-	for i := 0; i < nShards; i++ {
-		w.windows[i] = &windows{expiry: make(map[int64]windowEntries), timeWindow: timeWindow{friezedEntries: make(map[uint64]windowEntries), entries: make(map[uint64]windowEntries)}}
-	}
-
-	return w
-}
-
-// getWindows returns shard under given key
-func (w *timeWindows) getWindows(key uint64) *windows {
-	w.RLock()
-	defer w.RUnlock()
-	return w.windows[w.consistent.FindBlock(key)]
-}
-
 type timeWindowEntry interface {
 	Seq() uint64
 	time() uint32
@@ -128,26 +92,61 @@ type timeWindowEntry interface {
 
 type windowEntries []timeWindowEntry
 type timeWindow struct {
+	mu sync.RWMutex
+
 	freezed        bool
 	entries        map[uint64]windowEntries // map[topicHash]windowEntries
 	friezedEntries map[uint64]windowEntries
+}
+
+// A "thread" safe timeWindows.
+// To avoid lock bottlenecks windows are divided into several shards (nShards).
+// type timeWindows struct {
+// 	sync.RWMutex
+// 	windows    []*windows
+// 	consistent *hash.Consistent
+// }
+
+type windows struct {
+	sync.RWMutex
+	windows    []*timeWindow
+	consistent *hash.Consistent
+}
+
+// newWindows creates a new concurrent windows.
+func newWindows() *windows {
+	w := &windows{
+		windows:    make([]*timeWindow, nShards),
+		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+	}
+
+	for i := 0; i < nShards; i++ {
+		w.windows[i] = &timeWindow{friezedEntries: make(map[uint64]windowEntries), entries: make(map[uint64]windowEntries)}
+	}
+
+	return w
+}
+
+// getWindows returns shard under given key
+func (w *windows) getWindows(key uint64) *timeWindow {
+	w.RLock()
+	defer w.RUnlock()
+	return w.windows[w.consistent.FindBlock(key)]
 }
 
 type (
 	timeOptions struct {
 		expDurationType     time.Duration
 		maxExpDurations     int
-		windowDurationType  time.Duration
-		maxWindowDurations  int
 		backgroundKeyExpiry bool
 	}
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
-		*timeWindows
-		windowIdx          int32
-		earliestExpiryHash int64
-		opts               *timeOptions
+		*windows
+		*expiryWindowBucket
+		windowIdx int32
+		opts      *timeOptions
 	}
 )
 
@@ -159,21 +158,16 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 	if opts.expDurationType == 0 {
 		opts.expDurationType = time.Minute
 	}
-	if opts.windowDurationType == 0 {
-		opts.expDurationType = time.Hour
-	}
 	if opts.maxExpDurations == 0 {
 		opts.maxExpDurations = 1
-	}
-	if opts.maxWindowDurations == 0 {
-		opts.maxWindowDurations = 24
 	}
 	return &opts
 }
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	l := &timeWindowBucket{file: f, windowIdx: -1}
-	l.timeWindows = newTimeWindows()
+	l.windows = newWindows()
+	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
 	return l
 }
@@ -189,71 +183,6 @@ type windowWriter struct {
 
 func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
 	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf, leasing: make(map[int32][]uint64)}
-}
-
-func (wb *timeWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
-	if !wb.opts.backgroundKeyExpiry {
-		return nil
-	}
-	var expiredEntries []timeWindowEntry
-	startTime := uint32(time.Now().Unix())
-
-	if atomic.LoadInt64(&wb.earliestExpiryHash) > int64(startTime) {
-		return expiredEntries
-	}
-
-	for i := 0; i < nShards; i++ {
-		// get windows shard
-		ws := wb.timeWindows.windows[i]
-		ws.mu.Lock()
-		defer ws.mu.Unlock()
-		windowTimes := make([]int64, 0, len(ws.expiry))
-		for windowTime := range ws.expiry {
-			windowTimes = append(windowTimes, windowTime)
-		}
-		sort.Slice(windowTimes[:], func(i, j int) bool { return windowTimes[i] < windowTimes[j] })
-		for i := 0; i < len(windowTimes); i++ {
-			if windowTimes[i] > int64(startTime) || len(expiredEntries) > maxResults {
-				break
-			}
-			windowEntries := ws.expiry[windowTimes[i]]
-			expiredEntriesCount := 0
-			for i := range windowEntries {
-				entry := windowEntries[i]
-				if entry.time() < startTime {
-					expiredEntries = append(expiredEntries, entry)
-					expiredEntriesCount++
-				}
-			}
-			if expiredEntriesCount == len(windowEntries) {
-				delete(ws.expiry, windowTimes[i])
-			}
-		}
-	}
-	atomic.StoreInt64(&wb.earliestExpiryHash, 0)
-	return expiredEntries
-}
-
-// addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window
-func (wb *timeWindowBucket) addExpiry(e timeWindowEntry) error {
-	if !wb.opts.backgroundKeyExpiry {
-		return nil
-	}
-	timeExpiry := int64(time.Unix(int64(e.time()), 0).Truncate(wb.opts.expDurationType).Add(1 * wb.opts.expDurationType).Unix())
-	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
-
-	// get windows shard
-	ws := wb.getWindows(uint64(e.time()))
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-	if expiryWindow, ok := ws.expiry[timeExpiry]; ok {
-		expiryWindow = append(expiryWindow, e)
-		ws.expiry[timeExpiry] = expiryWindow
-	} else {
-		ws.expiry[timeExpiry] = windowEntries{e}
-	}
-
-	return nil
 }
 
 func (wb *timeWindowBucket) add(topicHash uint64, e timeWindowEntry) error {
@@ -299,9 +228,9 @@ func (w *timeWindow) unFreeze() error {
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to window file
 // it takes timewindow snapshot to iterate and deletes blocks from timewindow
-func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w map[uint64]windowEntries) (bool, error)) (err error) {
+func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
-		ws := wb.timeWindows.windows[i]
+		ws := wb.windows.windows[i]
 		ws.mu.RLock()
 		wEntries := make(map[uint64]windowEntries)
 		if freeze {
@@ -311,7 +240,7 @@ func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(last bool, w m
 			wEntries[h] = entries
 		}
 		ws.mu.RUnlock()
-		stop, err1 := f(i == nShards-1, wEntries)
+		stop, err1 := f(wEntries)
 		if stop || err1 != nil {
 			err = err1
 			if freeze {
