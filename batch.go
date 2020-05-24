@@ -237,7 +237,10 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 			b.db.delete(contract, seq)
 			continue
 		}
-		b.db.timeWindow.add(topicHash, winEntry{seq: seq})
+		we := winEntry{
+			seq: seq,
+		}
+		b.db.timeWindow.add(topicHash, we)
 
 		memseq := b.db.cacheID ^ seq
 		if err := fn(i, topicHash, memseq, data); err != nil {

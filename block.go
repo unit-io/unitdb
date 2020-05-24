@@ -57,7 +57,7 @@ func newBlockWriter(f *file, buf *bpool.Buffer) *blockWriter {
 	return &blockWriter{blocks: make(map[int32]block), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
 }
 
-func (e entry) time() uint32 {
+func (e entry) ExpiresAt() uint32 {
 	return e.expiresAt
 }
 
@@ -70,10 +70,6 @@ func blockOffset(idx int32) int64 {
 		return int64(headerSize)
 	}
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
-}
-
-func (e entry) Seq() uint64 {
-	return e.seq
 }
 
 func (e entry) isExpired() bool {

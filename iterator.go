@@ -1,6 +1,7 @@
 package unitdb
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -122,19 +123,22 @@ func (it *ItemIterator) First() {
 		var wEntries []winEntry
 		wEntries = it.db.timeWindow.ilookup(topic.hash, it.query.Limit)
 		for _, we := range wEntries {
-			it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.seq})
+			it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
 		}
 		if len(it.query.winEntries) < it.query.Limit {
 			limit := it.query.Limit - len(it.query.winEntries)
-			wEntries, _ = it.db.timeWindow.lookup(topic.hash, topic.offset, len(it.query.winEntries), limit)
+			wEntries := it.db.timeWindow.lookup(topic.hash, topic.offset, len(it.query.winEntries), limit)
 			for _, we := range wEntries {
-				it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.seq})
+				it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
 			}
 		}
 	}
 	if len(it.query.winEntries) == 0 || it.next >= 1 {
 		return
 	}
+	sort.Slice(it.query.winEntries[:], func(i, j int) bool {
+		return it.query.winEntries[i].seq > it.query.winEntries[j].seq
+	})
 	it.Next()
 }
 

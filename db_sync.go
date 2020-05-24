@@ -252,7 +252,6 @@ func (db *syncHandle) Sync() error {
 		db.finish()
 	}()
 
-	var wEntry winEntry
 	var err1 error
 	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
@@ -260,8 +259,7 @@ func (db *syncHandle) Sync() error {
 				if we.Seq() == 0 {
 					continue
 				}
-				wEntry = we.(winEntry)
-				mseq := db.cacheID ^ wEntry.seq
+				mseq := db.cacheID ^ uint64(we.Seq())
 				memdata, err := db.mem.Get(h, mseq)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "mem.Get")
@@ -282,7 +280,7 @@ func (db *syncHandle) Sync() error {
 					continue
 				}
 
-				db.filter.Append(wEntry.seq)
+				db.filter.Append(we.Seq())
 				db.internal.count++
 				db.internal.inBytes += int64(memEntry.valueSize)
 			}

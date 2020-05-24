@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -324,8 +325,8 @@ func (db *DB) loadTrie() error {
 				if w.entryIdx == 0 {
 					return false, nil
 				}
-				seq := w.winEntries[w.entryIdx-1].seq
-				off := blockOffset(startBlockIndex(seq))
+				we := w.entries[w.entryIdx-1]
+				off := blockOffset(startBlockIndex(we.Seq()))
 				b := blockHandle{file: db.index, offset: off}
 				if err := b.read(); err != nil {
 					if err == io.EOF {
@@ -336,7 +337,7 @@ func (db *DB) loadTrie() error {
 				entryIdx := -1
 				for i := 0; i < entriesPerIndexBlock; i++ {
 					e := b.entries[i]
-					if e.seq == seq { //record exist in db
+					if e.seq == we.Seq() { //record exist in db
 						entryIdx = i
 						break
 					}
@@ -473,10 +474,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if topic.TopicType == message.TopicInvalid {
 		return nil, errBadRequest
 	}
-	// // Get should only have static topic strings
-	// if topic.TopicType != message.TopicStatic {
-	// 	return errForbidden
-	// }
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 	q.depth = topic.Depth
@@ -502,113 +499,107 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	defer mu.RUnlock()
 	// lookups are performed in following order
 	// ilookup lookups in memory entries from timeWindow those are not yet sync
-	// lookup lookups persisted entries if fanout is true
-	// lookup gets most recent entries without need for sorting.
+	// lookup lookups persisted entries
 	topics := db.trie.lookup(q.parts, q.depth)
 	for _, topic := range topics {
-		var wEntries []winEntry
-		nextOff := int64(0)
-		q.winEntries = db.timeWindow.ilookup(topic.hash, q.Limit)
-		// if len(wEntries) > 0 {
-		// 	q.contract = wEntries[0].contract
-		// }
-		if len(q.winEntries) < q.Limit {
-			limit := q.Limit - len(q.winEntries)
-			wEntries, nextOff = db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
-			if len(wEntries) > 0 {
-				q.winEntries = append(q.winEntries, wEntries...)
-			}
+		wEntries := db.timeWindow.ilookup(topic.hash, q.Limit)
+		for _, we := range wEntries {
+			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
 		}
-		if len(q.winEntries) == 0 {
-			return
-		}
-		invalidCount := 0
-		start := 0
-		limit := q.Limit
-		if len(q.winEntries) < int(q.Limit) {
-			limit = len(q.winEntries)
-		}
-		for {
-			for _, we := range q.winEntries[start:limit] {
-				err = func() error {
-					if we.seq == 0 {
-						return nil
-					}
-					e, err := db.readEntry(topic.hash, we.seq)
-					if err != nil {
-						if err == errMsgIdDeleted {
-							invalidCount++
-							return nil
-						}
-						logger.Error().Err(err).Str("context", "db.readEntry")
-						return err
-					}
-					if e.isExpired() {
-						invalidCount++
-						if err := db.timeWindow.addExpiry(e); err != nil {
-							logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
-							return err
-						}
-						// if id is expired it does not return an error but continue the iteration
-						return nil
-					}
-					id, val, err := db.data.readMessage(e)
-					if err != nil {
-						logger.Error().Err(err).Str("context", "data.readMessage")
-						return err
-					}
-					msgId := message.ID(id)
-					if !msgId.EvalPrefix(q.Contract, q.cutoff) {
-						invalidCount++
-						return nil
-					}
-
-					if msgId.IsEncrypted() {
-						val, err = db.mac.Decrypt(nil, val)
-						if err != nil {
-							logger.Error().Err(err).Str("context", "mac.decrypt")
-							return err
-						}
-					}
-					var buffer []byte
-					val, err = snappy.Decode(buffer, val)
-					if err != nil {
-						logger.Error().Err(err).Str("context", "snappy.Decode")
-						return err
-					}
-					items = append(items, val)
-					db.meter.OutBytes.Inc(int64(e.valueSize))
-					return nil
-				}()
-				if err != nil {
-					return items, err
-				}
-			}
-
-			if cap(q.winEntries) == limit && cap(q.winEntries) < q.Limit && nextOff > 0 {
-				limit := q.Limit - len(items)
-				wEntries, nextOff = db.timeWindow.lookup(topic.hash, nextOff, 0, limit)
-				if len(wEntries) == 0 {
-					break
-				}
-				q.winEntries = append(q.winEntries, wEntries...)
-			}
-
-			if invalidCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
-				break
-			}
-
-			if cap(q.winEntries) < int(q.Limit+invalidCount) {
-				start = limit
-				limit = cap(q.winEntries)
-			} else {
-				start = limit
-				limit = limit + invalidCount
-			}
-		}
-		db.meter.Gets.Inc(int64(len(items)))
-		db.meter.OutMsgs.Inc(int64(len(items)))
 	}
+	for _, topic := range topics {
+		if len(q.winEntries) > q.Limit {
+			break
+		}
+		limit := q.Limit - len(q.winEntries)
+		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
+		for _, we := range wEntries {
+			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
+		}
+	}
+	if len(q.winEntries) == 0 {
+		return
+	}
+	sort.Slice(q.winEntries[:], func(i, j int) bool {
+		return q.winEntries[i].seq > q.winEntries[j].seq
+	})
+	invalidCount := 0
+	start := 0
+	limit := q.Limit
+	if len(q.winEntries) < int(q.Limit) {
+		limit = len(q.winEntries)
+	}
+	for {
+		for _, we := range q.winEntries[start:limit] {
+			err = func() error {
+				if we.seq == 0 {
+					return nil
+				}
+				e, err := db.readEntry(we.topicHash, we.seq)
+				if err != nil {
+					if err == errMsgIdDeleted {
+						invalidCount++
+						return nil
+					}
+					logger.Error().Err(err).Str("context", "db.readEntry")
+					return err
+				}
+				if e.isExpired() {
+					invalidCount++
+					if err := db.timeWindow.addExpiry(e); err != nil {
+						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+						return err
+					}
+					// if id is expired it does not return an error but continue the iteration
+					return nil
+				}
+				id, val, err := db.data.readMessage(e)
+				if err != nil {
+					logger.Error().Err(err).Str("context", "data.readMessage")
+					return err
+				}
+				msgId := message.ID(id)
+				if !msgId.EvalPrefix(q.Contract, q.cutoff) {
+					invalidCount++
+					return nil
+				}
+
+				if msgId.IsEncrypted() {
+					val, err = db.mac.Decrypt(nil, val)
+					if err != nil {
+						logger.Error().Err(err).Str("context", "mac.decrypt")
+						return err
+					}
+				}
+				var buffer []byte
+				val, err = snappy.Decode(buffer, val)
+				if err != nil {
+					logger.Error().Err(err).Str("context", "snappy.Decode")
+					return err
+				}
+				items = append(items, val)
+				db.meter.OutBytes.Inc(int64(e.valueSize))
+				return nil
+			}()
+			if err != nil {
+				return items, err
+			}
+		}
+
+		if invalidCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
+			break
+		}
+
+		if cap(q.winEntries) < int(q.Limit+invalidCount) {
+			start = limit
+			limit = cap(q.winEntries)
+		} else {
+			start = limit
+			limit = limit + invalidCount
+		}
+	}
+	db.meter.Gets.Inc(int64(len(items)))
+	db.meter.OutMsgs.Inc(int64(len(items)))
 	return items, nil
 }
 

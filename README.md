@@ -60,7 +60,7 @@ To open or create a new database, use the unitdb.Open() function:
 
 	func main() {
 		// Opening a database.
-		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
+		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30}
 		// Flag: 1 - Set or -1 - Unset
 		flags := &unitdb.Flags{Immutable: 1, Encryption: -1, BackgroundKeyExpiry: -1}
 		db, err := unitdb.Open("unitdb", flags, opts)
@@ -187,7 +187,7 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 ```
 
 ## Example Web Application
-To access unitdb using websocket build Unitd from source code and copy unitd.conf to the path unitd binary is placed.
+To access unitdb using websocket build [unitd](https://github.com/unit-io/unitd) from source code and copy unitd.conf to the path unitd binary is placed.
 
 > go get -u github.com/unit-io/unitd && unitd
 
