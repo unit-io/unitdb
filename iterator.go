@@ -17,8 +17,15 @@ type Item struct {
 	err       error
 }
 
+// QueryOptions is used to set options for DB query
+type QueryOptions struct {
+	DefaultQueryLimit int
+	MaxQueryLimit     int
+}
+
 // Query represents a topic to query and optional contract information.
 type Query struct {
+	db         *DB
 	Topic      []byte         // The topic of the message
 	Contract   uint32         // The contract is used as prefix in the message Id
 	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
@@ -27,11 +34,12 @@ type Query struct {
 	cutoff     int64 // time limit check on message Ids.
 	winEntries []winEntry
 	Limit      int // The maximum number of elements to return.
+
+	opts *QueryOptions
 }
 
 // ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
-	db          *DB
 	mu          sync.Mutex
 	query       *Query
 	item        *Item
@@ -40,12 +48,72 @@ type ItemIterator struct {
 	invalidKeys int
 }
 
+func (q *Query) parse() error {
+	if q.Contract == 0 {
+		q.Contract = message.MasterContract
+	}
+	topic := new(message.Topic)
+	//Parse the Key
+	topic.ParseKey(q.Topic)
+	// Parse the topic
+	topic.Parse(q.Contract, true)
+	if topic.TopicType == message.TopicInvalid {
+		return errBadRequest
+	}
+	topic.AddContract(q.Contract)
+	q.parts = topic.Parts
+	q.depth = topic.Depth
+	q.contract = message.Contract(q.parts)
+	// In case of last, include it to the query
+	if from, limit, ok := topic.Last(); ok {
+		q.cutoff = from.Unix()
+		switch {
+		case (q.Limit == 0 && limit == 0):
+			q.Limit = q.opts.DefaultQueryLimit
+		case q.Limit > q.opts.MaxQueryLimit || limit > q.opts.MaxQueryLimit:
+			q.Limit = q.opts.MaxQueryLimit
+		case limit > q.Limit:
+			q.Limit = limit
+		}
+	}
+	if q.Limit == 0 {
+		q.Limit = q.opts.DefaultQueryLimit
+	}
+	return nil
+}
+
+// lookups are performed in following order
+// ilookup lookups in memory entries from timeWindow
+// lookup lookups persisted entries from timeWindow file
+func (q *Query) lookup() error {
+	topics := q.db.trie.lookup(q.parts, q.depth)
+	sort.Slice(topics[:], func(i, j int) bool {
+		return topics[i].offset > topics[j].offset
+	})
+	for _, topic := range topics {
+		if len(q.winEntries) > q.Limit {
+			break
+		}
+		// add one extra window block to query limit
+		// limit := q.Limit + seqsPerWindowBlock - len(q.winEntries)
+		limit := q.Limit - len(q.winEntries)
+		wEntries := q.db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
+		for _, we := range wEntries {
+			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
+		}
+	}
+	sort.Slice(q.winEntries[:], func(i, j int) bool {
+		return q.winEntries[i].seq > q.winEntries[j].seq
+	})
+	return nil
+}
+
 // Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.contract)
+	mu := it.query.db.getMutex(it.query.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
@@ -55,7 +123,7 @@ func (it *ItemIterator) Next() {
 				if we.seq == 0 {
 					return nil
 				}
-				e, err := it.db.readEntry(we.topicHash, we.seq)
+				e, err := it.query.db.readEntry(we.topicHash, we.seq)
 				if err != nil {
 					if err == errMsgIdDoesNotExist {
 						logger.Error().Err(err).Str("context", "db.readEntry")
@@ -64,13 +132,7 @@ func (it *ItemIterator) Next() {
 					it.invalidKeys++
 					return nil
 				}
-				if e.isExpired() {
-					it.invalidKeys++
-					it.db.timeWindow.addExpiry(e)
-					// if id is expired it does not return an error but continue the iteration
-					return nil
-				}
-				id, val, err := it.db.data.readMessage(e)
+				id, val, err := it.query.db.data.readMessage(e)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -82,7 +144,7 @@ func (it *ItemIterator) Next() {
 				}
 
 				if msgId.IsEncrypted() {
-					val, err = it.db.mac.Decrypt(nil, val)
+					val, err = it.query.db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.Decrypt")
 						return err
@@ -95,9 +157,9 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
-				it.db.meter.Gets.Inc(1)
-				it.db.meter.OutMsgs.Inc(1)
-				it.db.meter.OutBytes.Inc(int64(e.valueSize))
+				it.query.db.meter.Gets.Inc(1)
+				it.query.db.meter.OutMsgs.Inc(1)
+				it.query.db.meter.OutBytes.Inc(int64(e.valueSize))
 				return nil
 			}()
 			if err != nil {
@@ -118,27 +180,10 @@ func (it *ItemIterator) Next() {
 
 // First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
-	topics := it.db.trie.lookup(it.query.parts, it.query.depth)
-	for _, topic := range topics {
-		var wEntries []winEntry
-		wEntries = it.db.timeWindow.ilookup(topic.hash, it.query.Limit)
-		for _, we := range wEntries {
-			it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-		}
-		if len(it.query.winEntries) < it.query.Limit {
-			limit := it.query.Limit - len(it.query.winEntries)
-			wEntries := it.db.timeWindow.lookup(topic.hash, topic.offset, len(it.query.winEntries), limit)
-			for _, we := range wEntries {
-				it.query.winEntries = append(it.query.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-			}
-		}
-	}
+	it.query.lookup()
 	if len(it.query.winEntries) == 0 || it.next >= 1 {
 		return
 	}
-	sort.Slice(it.query.winEntries[:], func(i, j int) bool {
-		return it.query.winEntries[i].seq > it.query.winEntries[j].seq
-	})
 	it.Next()
 }
 

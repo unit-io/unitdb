@@ -13,17 +13,16 @@ import (
 )
 
 type (
-	// seq      uint64
 	winEntry struct {
 		topicHash uint64 // topicHash used in DB query
 		seq       uint64
 		expiresAt uint32
 	}
 	winBlock struct {
-		contract  uint64
 		topicHash uint64
 		entries   [seqsPerWindowBlock]winEntry
 		next      int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order)
+		cutoff    int64
 		entryIdx  uint16
 
 		dirty  bool
@@ -35,8 +34,12 @@ func (e winEntry) Seq() uint64 {
 	return e.seq
 }
 
-func (e winEntry) ExpireAt() uint32 {
+func (e winEntry) ExpiresAt() uint32 {
 	return e.expiresAt
+}
+
+func (e winEntry) isExpired() bool {
+	return e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix())
 }
 
 // MarshalBinary serialized window block into binary data
@@ -46,9 +49,10 @@ func (w winBlock) MarshalBinary() []byte {
 	for i := 0; i < seqsPerWindowBlock; i++ {
 		e := w.entries[i]
 		binary.LittleEndian.PutUint64(buf[:8], e.seq)
-		buf = buf[8:]
+		binary.LittleEndian.PutUint32(buf[8:12], e.expiresAt)
+		buf = buf[12:]
 	}
-	binary.LittleEndian.PutUint64(buf[:8], w.contract)
+	binary.LittleEndian.PutUint64(buf[:8], uint64(w.cutoff))
 	binary.LittleEndian.PutUint64(buf[8:16], w.topicHash)
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(w.next))
 	binary.LittleEndian.PutUint16(buf[24:26], w.entryIdx)
@@ -58,11 +62,12 @@ func (w winBlock) MarshalBinary() []byte {
 // UnmarshalBinary de-serialized window block from binary data
 func (w *winBlock) UnmarshalBinary(data []byte) error {
 	for i := 0; i < seqsPerWindowBlock; i++ {
-		_ = data[8] // bounds check hint to compiler; see golang.org/issue/14808
+		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808
 		w.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
-		data = data[8:]
+		w.entries[i].expiresAt = binary.LittleEndian.Uint32(data[8:12])
+		data = data[12:]
 	}
-	w.contract = binary.LittleEndian.Uint64(data[:8])
+	w.cutoff = int64(binary.LittleEndian.Uint64(data[:8]))
 	w.topicHash = binary.LittleEndian.Uint64(data[8:16])
 	w.next = int64(binary.LittleEndian.Uint64(data[16:24]))
 	w.entryIdx = binary.LittleEndian.Uint16(data[24:26])
@@ -280,6 +285,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
 	var l int
+	var expiryCount int
 	wEntries := ws.friezedEntries[topicHash]
 	if len(wEntries) > 0 {
 		l = limit
@@ -287,16 +293,32 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 			l = len(wEntries)
 		}
 		for _, we := range wEntries[len(wEntries)-l:] { // most recent entries are appended to the end so get the entries from end
+			if we.isExpired() {
+				expiryCount++
+				if err := wb.addExpiry(we); err != nil {
+					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+				}
+				// if id is expired it does not return an error but continue the iteration
+				continue
+			}
 			winEntries = append(winEntries, we)
 		}
 	}
 	wEntries = ws.entries[topicHash]
 	if len(wEntries) > 0 {
-		l = limit - l
+		l = limit + expiryCount - l
 		if len(wEntries) < l {
 			l = len(wEntries)
 		}
 		for _, we := range wEntries[len(wEntries)-l:] {
+			if we.isExpired() {
+				if err := wb.addExpiry(we); err != nil {
+					expiryCount++
+					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+				}
+				// if id is expired it does not return an error but continue the iteration
+				continue
+			}
 			winEntries = append(winEntries, we)
 		}
 	}
@@ -305,7 +327,11 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 
 // lookup lookups window entries from window file.
 func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit int) (winEntries windowEntries) {
-	winEntries = make([]winEntry, 0)
+	// winEntries = make([]winEntry, 0)
+	winEntries = wb.ilookup(topicHash, limit)
+	if len(winEntries) >= limit {
+		return winEntries
+	}
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
 			b := windowHandle{file: wb.file, offset: off}
@@ -322,6 +348,7 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 		}
 	}
 	count := 0
+	expiryCount := 0
 	err := next(off, func(curb windowHandle) (bool, error) {
 		b := &curb
 		if b.topicHash != topicHash {
@@ -333,10 +360,32 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 		}
 		if len(winEntries) > limit-int(b.entryIdx) {
 			limit = limit - len(winEntries)
-			winEntries = append(winEntries, b.entries[b.entryIdx-uint16(limit):b.entryIdx]...)
-			return true, nil
+			for _, we := range b.entries[b.entryIdx-uint16(limit) : b.entryIdx] {
+				if we.isExpired() {
+					if err := wb.addExpiry(we); err != nil {
+						expiryCount++
+						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+					}
+					// if id is expired it does not return an error but continue the iteration
+					continue
+				}
+				winEntries = append(winEntries, we)
+			}
+			if len(winEntries) >= limit {
+				return true, nil
+			}
 		}
-		winEntries = append(winEntries, b.entries[:b.entryIdx]...)
+		for _, we := range b.entries[:b.entryIdx] {
+			if we.isExpired() {
+				if err := wb.addExpiry(we); err != nil {
+					expiryCount++
+					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
+				}
+				// if id is expired it does not return an error but continue the iteration
+				continue
+			}
+			winEntries = append(winEntries, we)
+		}
 		return false, nil
 	})
 	if err != nil {
@@ -431,7 +480,7 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 		if w.leased {
 			wb.leasing[winIdx] = append(wb.leasing[winIdx], we.seq)
 		}
-		w.entries[w.entryIdx] = winEntry{seq: we.seq}
+		w.entries[w.entryIdx] = winEntry{seq: we.seq, expiresAt: we.expiresAt}
 		w.dirty = true
 		w.entryIdx++
 	}

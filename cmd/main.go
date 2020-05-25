@@ -167,7 +167,7 @@ func main() {
 				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
-				for j := 0; j < 50; j++ {
+				for j := 0; j < 500; j++ {
 					b.Put([]byte(fmt.Sprintf("msg.%2d", j)))
 				}
 				return b.Write()

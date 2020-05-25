@@ -50,6 +50,7 @@ type (
 		key       uint32 // key is local id unique in batch and used to remove duplicate values from a topic in the batch before writing records into DB
 		topicSize uint16
 		offset    int64
+		expiresAt uint32
 	}
 
 	// Batch is a write batch.
@@ -138,7 +139,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
-	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: e.topic.size, offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: e.topic.size, offset: b.size, expiresAt: e.ExpiresAt})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
 
@@ -237,10 +238,7 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 			b.db.delete(contract, seq)
 			continue
 		}
-		we := winEntry{
-			seq: seq,
-		}
-		b.db.timeWindow.add(topicHash, we)
+		b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: index.expiresAt})
 
 		memseq := b.db.cacheID ^ seq
 		if err := fn(i, topicHash, memseq, data); err != nil {

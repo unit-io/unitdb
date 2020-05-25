@@ -3,6 +3,7 @@ package unitdb
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -332,7 +333,7 @@ func (db *syncHandle) Sync() error {
 }
 
 // ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
-func (db *DB) ExpireOldEntries() {
+func (db *DB) ExpireOldEntries() error {
 	// expiry happens synchronously
 	db.syncLockC <- struct{}{}
 	defer func() {
@@ -340,12 +341,34 @@ func (db *DB) ExpireOldEntries() {
 	}()
 	expiredEntries := db.timeWindow.expireOldEntries(db.opts.DefaultQueryLimit)
 	for _, expiredEntry := range expiredEntries {
-		e := expiredEntry.(entry)
+		we := expiredEntry.(winEntry)
 		/// Test filter block if message hash presence
-		if !db.filter.Test(e.seq) {
+		if !db.filter.Test(we.seq) {
 			continue
 		}
+		off := blockOffset(startBlockIndex(we.Seq()))
+		b := blockHandle{file: db.index, offset: off}
+		if err := b.read(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		entryIdx := -1
+		for i := 0; i < entriesPerIndexBlock; i++ {
+			e := b.entries[i]
+			if e.seq == we.Seq() { //record exist in db
+				entryIdx = i
+				break
+			}
+		}
+		if entryIdx == -1 {
+			return nil
+		}
+		e := b.entries[entryIdx]
 		db.lease.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
 	}
+
+	return nil
 }

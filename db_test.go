@@ -67,10 +67,8 @@ func TestSimple(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		qtopic := topic
-		qtopic = append(qtopic, []byte("?last=1h")...)
 		var v, vals [][]byte
-		v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+		v, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,10 +150,8 @@ func TestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		qtopic := topic
-		qtopic = append(qtopic, []byte("?last=1h")...)
 		var v, vals [][]byte
-		v, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+		v, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,10 +244,8 @@ func TestBatchGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	// count -> 255+256+256
-	qtopic := topic
-	qtopic = append(qtopic, []byte("?last=1h")...)
 	for i = 0; i < n; i++ {
-		_, err = db.Get(&Query{Topic: qtopic, Contract: contract})
+		_, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	entriesPerIndexBlock = 150 // (4096 i.e blocksize/26 i.e entry size)
-	seqsPerWindowBlock   = 508 // ((4096 i.e. blocksize - 26 fixed)/8 i.e. window entry size)
+	entriesPerIndexBlock = 185 // (4096 i.e blocksize/26 i.e entry size)
+	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
 	indexPostfix  = ".index"
@@ -463,60 +463,15 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	topic := new(message.Topic)
-	if q.Contract == 0 {
-		q.Contract = message.MasterContract
+	q.db = db
+	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
+	if err := q.parse(); err != nil {
+		return nil, err
 	}
-	//Parse the Key
-	topic.ParseKey(q.Topic)
-	// Parse the topic
-	topic.Parse(q.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return nil, errBadRequest
-	}
-	topic.AddContract(q.Contract)
-	q.parts = topic.Parts
-	q.depth = topic.Depth
-	q.contract = message.Contract(q.parts)
-	// In case of last, include it to the query
-	if from, limit, ok := topic.Last(); ok {
-		q.cutoff = from.Unix()
-		switch {
-		case (q.Limit == 0 && limit == 0):
-			q.Limit = db.opts.DefaultQueryLimit
-		case q.Limit > db.opts.MaxQueryLimit || limit > db.opts.MaxQueryLimit:
-			q.Limit = db.opts.MaxQueryLimit
-		case limit > q.Limit:
-			q.Limit = limit
-		}
-	}
-	if q.Limit == 0 {
-		q.Limit = db.opts.DefaultQueryLimit
-	}
-
 	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	// lookups are performed in following order
-	// ilookup lookups in memory entries from timeWindow those are not yet sync
-	// lookup lookups persisted entries
-	topics := db.trie.lookup(q.parts, q.depth)
-	for _, topic := range topics {
-		wEntries := db.timeWindow.ilookup(topic.hash, q.Limit)
-		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-		}
-	}
-	for _, topic := range topics {
-		if len(q.winEntries) > q.Limit {
-			break
-		}
-		limit := q.Limit - len(q.winEntries)
-		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
-		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-		}
-	}
+	q.lookup()
 	if len(q.winEntries) == 0 {
 		return
 	}
@@ -543,15 +498,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					}
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
-				}
-				if e.isExpired() {
-					invalidCount++
-					if err := db.timeWindow.addExpiry(e); err != nil {
-						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
-						return err
-					}
-					// if id is expired it does not return an error but continue the iteration
-					return nil
 				}
 				id, val, err := db.data.readMessage(e)
 				if err != nil {
@@ -614,39 +560,14 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	case len(q.Topic) > MaxTopicLength:
 		return nil, errTopicTooLarge
 	}
-	topic := new(message.Topic)
-	if q.Contract == 0 {
-		q.Contract = message.MasterContract
-	}
-	//Parse the Key
-	topic.ParseKey(q.Topic)
-	// Parse the topic
-	topic.Parse(q.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return nil, errBadRequest
-	}
-	topic.AddContract(q.Contract)
-	q.parts = topic.Parts
-	q.depth = topic.Depth
-	q.contract = message.Contract(q.parts)
 
-	// In case of ttl, include it to the query
-	if from, limit, ok := topic.Last(); ok {
-		q.cutoff = from.Unix()
-		switch {
-		case (q.Limit == 0 && limit == 0):
-			q.Limit = db.opts.DefaultQueryLimit
-		case q.Limit > db.opts.MaxQueryLimit || limit > db.opts.MaxQueryLimit:
-			q.Limit = db.opts.MaxQueryLimit
-		case limit > q.Limit:
-			q.Limit = limit
-		}
-	}
-	if q.Limit == 0 {
-		q.Limit = db.opts.DefaultQueryLimit
+	q.db = db
+	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
+	if err := q.parse(); err != nil {
+		return nil, err
 	}
 
-	return &ItemIterator{db: db, query: q}, nil
+	return &ItemIterator{query: q}, nil
 }
 
 // NewContract generates a new Contract.
@@ -790,7 +711,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if db.encryption == 1 {
 		e.val = db.mac.Encrypt(nil, e.val)
 	}
-	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq}); err != nil {
+	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq, expiresAt: e.ExpiresAt}); err != nil {
 		return err
 	}
 	data, err := db.packEntry(e)

@@ -4,14 +4,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/fs"
 )
 
 const (
-	entrySize        = 26
+	entrySize        = 22
 	blockSize uint32 = 4096
 )
 
@@ -72,10 +71,6 @@ func blockOffset(idx int32) int64 {
 	return int64(headerSize) + (int64(blockSize) * int64(idx))
 }
 
-func (e entry) isExpired() bool {
-	return e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix())
-}
-
 func (e entry) mSize() uint32 {
 	return idSize + uint32(e.topicSize) + e.valueSize
 }
@@ -117,8 +112,7 @@ func (b block) MarshalBinary() []byte {
 		binary.LittleEndian.PutUint64(buf[:8], e.seq)
 		binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
 		binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
-		binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
-		binary.LittleEndian.PutUint64(buf[18:26], uint64(e.msgOffset))
+		binary.LittleEndian.PutUint64(buf[14:22], uint64(e.msgOffset))
 		buf = buf[entrySize:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
@@ -133,8 +127,7 @@ func (b *block) UnmarshalBinary(data []byte) error {
 		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
 		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[8:10])
 		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[10:14])
-		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[14:18])
-		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[18:26]))
+		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
 		data = data[entrySize:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
@@ -245,8 +238,6 @@ func (bw *blockWriter) write() error {
 		leasedBlocks = append(leasedBlocks, bIdx)
 	}
 
-	// fmt.Println("block.write: leasedBlocks ", leasedBlocks)
-
 	// sort blocks by blockIdx
 	var blockIdx []int
 	for bIdx := range bw.blocks {
@@ -260,7 +251,6 @@ func (bw *blockWriter) write() error {
 	if err != nil {
 		return err
 	}
-	// fmt.Println("block.write: blocks ", blockRange)
 	bufOff := int64(0)
 	for _, blocks := range blockRange {
 		if len(blocks) == 1 {
