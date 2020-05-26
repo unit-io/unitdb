@@ -123,10 +123,8 @@ func (t *trie) lookup(query []message.Part, depth uint8) (tops topics) {
 }
 
 func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart *part) {
-	// Add window entry set from the current branch
-	var p *part
-	var k key
-	if currpart.depth == depth || (currpart.depth >= message.TopicMaxDepth && depth > currpart.depth-message.TopicMaxDepth) {
+	// Add topics from the current branch
+	if currpart.depth == depth || currpart.k.query == message.Wildcard {
 		topic := topic{hash: currpart.topicHash, offset: currpart.offset}
 		tops.addUnique(topic)
 	}
@@ -135,14 +133,14 @@ func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart
 	if len(query) > 0 {
 		q := query[0]
 		// Go through the exact match branch
-		for k, p = range currpart.children {
-			if k.query == q.Query && q.Wildchars == k.wildchars {
-				// fmt.Println("trie.ilookup: topicHash, wildchars, depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
+		for k, p := range currpart.children {
+			switch {
+			case k.query == q.Query && q.Wildchars == k.wildchars:
 				t.ilookup(query[1:], depth, tops, p)
-			}
-			if k.query == q.Query && uint8(len(query)) >= k.wildchars+1 {
-				// fmt.Println("trie.ilookup: topicHash,wildchars,  depth, queryHash, partHash ", p.topicHash, k.wildchars, depth, q.Query, k.query)
+			case k.query == q.Query && uint8(len(query)) >= k.wildchars+1:
 				t.ilookup(query[k.wildchars+1:], depth, tops, p)
+			case k.query == message.Wildcard:
+				t.ilookup(query[:], depth, tops, p)
 			}
 		}
 	}

@@ -68,12 +68,8 @@ func (t *Topic) AddContract(contract uint32) {
 		Wildchars: 0,
 		Query:     contract,
 	}
-	if t.Parts[0].Query == Wildcard {
-		t.Parts[0].Query = contract
-	} else {
-		parts := []Part{part}
-		t.Parts = append(parts, t.Parts...)
-	}
+	parts := []Part{part}
+	t.Parts = append(parts, t.Parts...)
 }
 
 // GetHash combines the parts into a single hash.
@@ -85,7 +81,7 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 	for _, i := range t.Parts[1:] {
 		h ^= i.Query
 	}
-	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
+	return uint64(h)<<32 + contract
 }
 
 // Marshal serializes topic to binary
@@ -308,15 +304,10 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	depth := uint8(0)
 	q := []byte(TopicAllSeparator)
 	if bytes.HasSuffix(topic.Topic, q) {
+		depth++
 		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicAllSeparator))
 		topic.TopicType = TopicWildcard
 		topic.Depth = TopicMaxDepth
-
-		if len(topic.Topic) == 0 {
-			part.Query = Wildcard
-			topic.Parts = append(topic.Parts, part)
-			return true
-		}
 	}
 
 	parts := bytes.FieldsFunc(topic.Topic, fn.splitTopic)
@@ -351,7 +342,11 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	if wildchars > 0 {
 		topic.Parts[len(topic.Parts)-1:][0].Wildchars = wildchars
 	}
-	topic.Depth += depth
+	if topic.Depth == TopicMaxDepth {
+		part.Query = Wildcard
+		topic.Parts = append(topic.Parts, part)
+	}
+	topic.Depth = depth
 
 	if topic.TopicType != TopicWildcard {
 		topic.TopicType = TopicStatic

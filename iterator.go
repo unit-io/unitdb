@@ -1,7 +1,6 @@
 package unitdb
 
 import (
-	"sort"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -25,7 +24,6 @@ type QueryOptions struct {
 
 // Query represents a topic to query and optional contract information.
 type Query struct {
-	db         *DB
 	Topic      []byte         // The topic of the message
 	Contract   uint32         // The contract is used as prefix in the message Id
 	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
@@ -40,6 +38,7 @@ type Query struct {
 
 // ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
+	db         *DB
 	mu          sync.Mutex
 	query       *Query
 	item        *Item
@@ -82,38 +81,12 @@ func (q *Query) parse() error {
 	return nil
 }
 
-// lookups are performed in following order
-// ilookup lookups in memory entries from timeWindow
-// lookup lookups persisted entries from timeWindow file
-func (q *Query) lookup() error {
-	topics := q.db.trie.lookup(q.parts, q.depth)
-	sort.Slice(topics[:], func(i, j int) bool {
-		return topics[i].offset > topics[j].offset
-	})
-	for _, topic := range topics {
-		if len(q.winEntries) > q.Limit {
-			break
-		}
-		// add one extra window block to query limit
-		// limit := q.Limit + seqsPerWindowBlock - len(q.winEntries)
-		limit := q.Limit - len(q.winEntries)
-		wEntries := q.db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
-		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-		}
-	}
-	sort.Slice(q.winEntries[:], func(i, j int) bool {
-		return q.winEntries[i].seq > q.winEntries[j].seq
-	})
-	return nil
-}
-
 // Next returns the next topic->key/value pair if available, otherwise it returns ErrIterationDone error.
 func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.query.db.getMutex(it.query.contract)
+	mu := it.db.getMutex(it.query.contract)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
@@ -123,7 +96,7 @@ func (it *ItemIterator) Next() {
 				if we.seq == 0 {
 					return nil
 				}
-				e, err := it.query.db.readEntry(we.topicHash, we.seq)
+				e, err := it.db.readEntry(we.topicHash, we.seq)
 				if err != nil {
 					if err == errMsgIdDoesNotExist {
 						logger.Error().Err(err).Str("context", "db.readEntry")
@@ -132,7 +105,7 @@ func (it *ItemIterator) Next() {
 					it.invalidKeys++
 					return nil
 				}
-				id, val, err := it.query.db.data.readMessage(e)
+				id, val, err := it.db.data.readMessage(e)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -144,7 +117,7 @@ func (it *ItemIterator) Next() {
 				}
 
 				if msgId.IsEncrypted() {
-					val, err = it.query.db.mac.Decrypt(nil, val)
+					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.Decrypt")
 						return err
@@ -157,9 +130,9 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
-				it.query.db.meter.Gets.Inc(1)
-				it.query.db.meter.OutMsgs.Inc(1)
-				it.query.db.meter.OutBytes.Inc(int64(e.valueSize))
+				it.db.meter.Gets.Inc(1)
+				it.db.meter.OutMsgs.Inc(1)
+				it.db.meter.OutBytes.Inc(int64(e.valueSize))
 				return nil
 			}()
 			if err != nil {
@@ -180,7 +153,7 @@ func (it *ItemIterator) Next() {
 
 // First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
-	it.query.lookup()
+	it.db.lookup(it.query)
 	if len(it.query.winEntries) == 0 || it.next >= 1 {
 		return
 	}

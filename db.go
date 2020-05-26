@@ -450,6 +450,30 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
 	return entry{}, nil
 }
 
+// lookups are performed in following order
+// ilookup lookups in memory entries from timeWindow
+// lookup lookups persisted entries from timeWindow file
+func (db *DB) lookup(q *Query) error {
+	topics := db.trie.lookup(q.parts, q.depth)
+	sort.Slice(topics[:], func(i, j int) bool {
+		return topics[i].offset > topics[j].offset
+	})
+	for _, topic := range topics {
+		if len(q.winEntries) > q.Limit {
+			break
+		}
+		limit := q.Limit - len(q.winEntries)
+		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
+		for _, we := range wEntries {
+			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
+		}
+	}
+	sort.Slice(q.winEntries[:], func(i, j int) bool {
+		return q.winEntries[i].seq > q.winEntries[j].seq
+	})
+	return nil
+}
+
 // Get return items matching the query paramater
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
@@ -463,7 +487,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	q.db = db
 	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
@@ -471,7 +494,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	mu := db.getMutex(q.contract)
 	mu.RLock()
 	defer mu.RUnlock()
-	q.lookup()
+	db.lookup(q)
 	if len(q.winEntries) == 0 {
 		return
 	}
@@ -561,13 +584,12 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 		return nil, errTopicTooLarge
 	}
 
-	q.db = db
 	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
 
-	return &ItemIterator{query: q}, nil
+	return &ItemIterator{db: db, query: q}, nil
 }
 
 // NewContract generates a new Contract.

@@ -27,7 +27,7 @@ func TestSimple(t *testing.T) {
 	}
 	defer db.Close()
 	var i uint16
-	var n uint16 = 1000
+	var n uint16 = 100
 
 	contract, err := db.NewContract()
 	if err != nil {
@@ -302,7 +302,7 @@ func TestAbort(t *testing.T) {
 	}
 	defer db.Close()
 	var i uint16
-	var n uint16 = 1000
+	var n uint16 = 100
 
 	topic := []byte("unit1.test")
 
@@ -331,7 +331,7 @@ func TestLeasing(t *testing.T) {
 	}
 	defer db.Close()
 	var i uint16
-	var n uint16 = 1000
+	var n uint16 = 100
 
 	topic := []byte("unit1.test")
 	var ids [][]byte
