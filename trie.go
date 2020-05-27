@@ -94,10 +94,9 @@ func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added b
 		t.RUnlock()
 		if !ok {
 			child = &part{
-				k:         k,
-				parent:    curr,
-				children:  make(map[key]*part),
-				topicHash: topicHash,
+				k:        k,
+				parent:   curr,
+				children: make(map[key]*part),
 			}
 			t.Lock()
 			curr.children[k] = child
@@ -106,6 +105,7 @@ func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added b
 		curr = child
 	}
 	t.Lock()
+	curr.topicHash = topicHash
 	t.partTrie.summary[topicHash] = curr
 	t.Unlock()
 	added = true
@@ -136,10 +136,13 @@ func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart
 		for k, p := range currpart.children {
 			switch {
 			case k.query == q.Query && q.Wildchars == k.wildchars:
+				// fmt.Println("trie.lookup: wildchars, part ", k.wildchars, k.query)
 				t.ilookup(query[1:], depth, tops, p)
 			case k.query == q.Query && uint8(len(query)) >= k.wildchars+1:
+				// fmt.Println("trie.lookup: wildchar, part ", k.wildchars, k.query)
 				t.ilookup(query[k.wildchars+1:], depth, tops, p)
 			case k.query == message.Wildcard:
+				// fmt.Println("trie.lookup: wildcard, part ", k.query)
 				t.ilookup(query[:], depth, tops, p)
 			}
 		}

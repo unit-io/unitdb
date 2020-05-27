@@ -19,7 +19,7 @@ func open(path string, flags *Flags, opts *Options) (*DB, error) {
 }
 
 func TestSimple(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 4, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestSimple(t *testing.T) {
 }
 
 func TestBatch(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestBatch(t *testing.T) {
 	// }
 
 	var i uint16
-	var n uint16 = 255
+	var n uint16 = 100
 
 	verifyMsgsAndClose := func() {
 		if count := db.Count(); count != int64(n) {
@@ -200,7 +200,7 @@ func TestBatch(t *testing.T) {
 }
 
 func TestBatchGroup(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
@@ -214,7 +214,7 @@ func TestBatchGroup(t *testing.T) {
 	topic := []byte("unit3.test")
 
 	var i uint16
-	var n uint16 = 255
+	var n uint16 = 50
 
 	// var wg sync.WaitGroup
 	batch := func(b *Batch, completed <-chan struct{}) error {
@@ -243,7 +243,6 @@ func TestBatchGroup(t *testing.T) {
 	if err := syncHandle.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	// count -> 255+256+256
 	for i = 0; i < n; i++ {
 		_, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
 		if err != nil {
@@ -266,7 +265,7 @@ func TestExpiry(t *testing.T) {
 	topic := []byte("unit4.test")
 
 	var i uint16
-	var n uint16 = 255
+	var n uint16 = 100
 
 	// var wg sync.WaitGroup
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
@@ -294,7 +293,7 @@ func TestExpiry(t *testing.T) {
 }
 
 func TestAbort(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
@@ -302,7 +301,7 @@ func TestAbort(t *testing.T) {
 	}
 	defer db.Close()
 	var i uint16
-	var n uint16 = 100
+	var n uint16 = 500
 
 	topic := []byte("unit1.test")
 
@@ -323,7 +322,7 @@ func TestAbort(t *testing.T) {
 }
 
 func TestLeasing(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 4}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
@@ -372,7 +371,7 @@ func TestLeasing(t *testing.T) {
 }
 
 func TestWildcardTopics(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 8, MemdbSize: 1 << 8, LogSize: 1 << 8, MinimumFreeBlocksSize: 1 << 4}
+	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
 	flags := &Flags{Immutable: -1}
 	db, err := open("test.db", flags, opts)
 	if err != nil {
