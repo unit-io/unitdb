@@ -315,52 +315,97 @@ func (db *DB) readHeader() error {
 	return nil
 }
 
+// // loadTopicHash loads topic and offset from window file
+// func (db *DB) loadTrie() error {
+// 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
+// 		w := &curw
+// 		wOff, ok := db.trie.getOffset(w.topicHash)
+// 		if !ok || wOff < w.offset {
+// 			if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
+// 				if w.entryIdx == 0 {
+// 					return false, nil
+// 				}
+// 				we := w.entries[w.entryIdx-1]
+// 				off := blockOffset(startBlockIndex(we.Seq()))
+// 				b := blockHandle{file: db.index, offset: off}
+// 				if err := b.read(); err != nil {
+// 					if err == io.EOF {
+// 						return false, nil
+// 					}
+// 					return true, err
+// 				}
+// 				entryIdx := -1
+// 				for i := 0; i < entriesPerIndexBlock; i++ {
+// 					e := b.entries[i]
+// 					if e.seq == we.Seq() { //record exist in db
+// 						entryIdx = i
+// 						break
+// 					}
+// 				}
+// 				if entryIdx == -1 {
+// 					return false, nil
+// 				}
+// 				e := b.entries[entryIdx]
+// 				t, err := db.data.readTopic(e)
+// 				if err != nil {
+// 					return true, err
+// 				}
+// 				topic := new(message.Topic)
+// 				err = topic.Unmarshal(t)
+// 				if err != nil {
+// 					return true, err
+// 				}
+// 				if ok := db.trie.add(w.topicHash, topic.Parts, topic.Depth); ok {
+// 					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
+// 						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
+// 					}
+// 				}
+// 			}
+// 		}
+// 		return false, nil
+// 	})
+// 	return err
+// }
+
 // loadTopicHash loads topic and offset from window file
 func (db *DB) loadTrie() error {
 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
 		w := &curw
-		wOff, ok := db.trie.getOffset(w.topicHash)
-		if !ok || wOff < w.offset {
-			if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
-				if w.entryIdx == 0 {
-					return false, nil
-				}
-				we := w.entries[w.entryIdx-1]
-				off := blockOffset(startBlockIndex(we.Seq()))
-				b := blockHandle{file: db.index, offset: off}
-				if err := b.read(); err != nil {
-					if err == io.EOF {
-						return false, nil
-					}
-					return true, err
-				}
-				entryIdx := -1
-				for i := 0; i < entriesPerIndexBlock; i++ {
-					e := b.entries[i]
-					if e.seq == we.Seq() { //record exist in db
-						entryIdx = i
-						break
-					}
-				}
-				if entryIdx == -1 {
-					return false, nil
-				}
-				e := b.entries[entryIdx]
-				t, err := db.data.readTopic(e)
-				if err != nil {
-					return true, err
-				}
-				topic := new(message.Topic)
-				err = topic.Unmarshal(t)
-				if err != nil {
-					return true, err
-				}
-				if ok := db.trie.add(w.topicHash, topic.Parts, topic.Depth); ok {
-					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
-						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
-					}
-				}
+		if w.entryIdx == 0 {
+			return false, nil
+		}
+		we := w.entries[w.entryIdx-1]
+		off := blockOffset(startBlockIndex(we.Seq()))
+		b := blockHandle{file: db.index, offset: off}
+		if err := b.read(); err != nil {
+			if err == io.EOF {
+				return false, nil
 			}
+			return true, err
+		}
+		entryIdx := -1
+		for i := 0; i < entriesPerIndexBlock; i++ {
+			e := b.entries[i]
+			if e.seq == we.Seq() { //record exist in db
+				entryIdx = i
+				break
+			}
+		}
+		if entryIdx == -1 {
+			return false, nil
+		}
+		e := b.entries[entryIdx]
+		rawtopic, err := db.data.readTopic(e)
+		if err != nil {
+			return true, err
+		}
+		t := new(message.Topic)
+		err = t.Unmarshal(rawtopic)
+		if err != nil {
+			return true, err
+		}
+		if ok := db.trie.add(topic{hash: w.topicHash, offset: w.offset}, t.Parts, t.Depth); !ok {
+			return true, errors.New("db.loadTrie: unable to add topic to trie")
 		}
 		return false, nil
 	})
@@ -704,24 +749,24 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(e.Payload) > MaxValueLength:
 		return errValueTooLarge
 	}
-	var topic *message.Topic
+	var t *message.Topic
 	var ttl uint32
 	var err error
 	if !e.parsed {
 		if e.Contract == 0 {
 			e.Contract = message.MasterContract
 		}
-		topic, ttl, err = db.parseTopic(e)
+		t, ttl, err = db.parseTopic(e)
 		if err != nil {
 			return err
 		}
-		topic.AddContract(e.Contract)
-		e.topic.data = topic.Marshal()
+		t.AddContract(e.Contract)
+		e.topic.data = t.Marshal()
 		e.topic.size = uint16(len(e.topic.data))
-		e.contract = message.Contract(topic.Parts)
-		e.topic.hash = topic.GetHash(e.contract)
+		e.contract = message.Contract(t.Parts)
+		e.topic.hash = t.GetHash(e.contract)
 		// fmt.Println("db.PutEntry: contact, topicHash ", e.contract, e.topic.hash)
-		if ok := db.trie.add(e.topic.hash, topic.Parts, topic.Depth); !ok {
+		if ok := db.trie.add(topic{hash: e.topic.hash}, t.Parts, t.Depth); !ok {
 			return errBadRequest
 		}
 		e.parsed = true

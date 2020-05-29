@@ -80,21 +80,15 @@ type topics []topic
 
 // addUnique adds topic to the set.
 func (top *topics) addUnique(value topic) (added bool) {
-	if top.contains(value) == false {
-		*top = append(*top, value)
-		added = true
-	}
-	return
-}
-
-// contains checks whether a topic is in the set.
-func (top *topics) contains(value topic) bool {
-	for _, v := range *top {
+	for i, v := range *top {
 		if v.hash == value.hash {
-			return true
+			(*top)[i].offset = value.offset
+			return false
 		}
 	}
-	return false
+	*top = append(*top, value)
+	added = true
+	return
 }
 
 // unsafeToString is used to convert a slice

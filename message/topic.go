@@ -81,7 +81,7 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 	for _, i := range t.Parts[1:] {
 		h ^= i.Query
 	}
-	return uint64(h)<<32 + contract
+	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
 }
 
 // Marshal serializes topic to binary

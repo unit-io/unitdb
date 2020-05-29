@@ -16,12 +16,11 @@ type key struct {
 }
 
 type part struct {
-	k         key
-	depth     uint8
-	parent    *part
-	children  map[key]*part
-	offset    int64
-	topicHash uint64
+	k        key
+	depth    uint8
+	parent   *part
+	children map[key]*part
+	topics   topics
 }
 
 func (p *part) orphan() {
@@ -75,12 +74,12 @@ func (t *trie) Count() int {
 }
 
 // add adds a topic to trie.
-func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added bool) {
+func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) {
 	// Get mutex
-	mu := t.getMutex(topicHash)
+	mu := t.getMutex(topic.hash)
 	mu.Lock()
 	defer mu.Unlock()
-	if _, ok := t.partTrie.summary[topicHash]; ok {
+	if _, ok := t.partTrie.summary[topic.hash]; ok {
 		return true
 	}
 	curr := t.partTrie.root
@@ -105,8 +104,8 @@ func (t *trie) add(topicHash uint64, parts []message.Part, depth uint8) (added b
 		curr = child
 	}
 	t.Lock()
-	curr.topicHash = topicHash
-	t.partTrie.summary[topicHash] = curr
+	curr.topics.addUnique(topic)
+	t.partTrie.summary[topic.hash] = curr
 	t.Unlock()
 	added = true
 	curr.depth = depth
@@ -125,8 +124,9 @@ func (t *trie) lookup(query []message.Part, depth uint8) (tops topics) {
 func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart *part) {
 	// Add topics from the current branch
 	if currpart.depth == depth || currpart.k.query == message.Wildcard {
-		topic := topic{hash: currpart.topicHash, offset: currpart.offset}
-		tops.addUnique(topic)
+		for _, topic := range currpart.topics {
+			tops.addUnique(topic)
+		}
 	}
 
 	// If we're not yet done, continue
@@ -153,18 +153,20 @@ func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	t.RLock()
 	defer t.RUnlock()
 	if curr, ok := t.partTrie.summary[topicHash]; ok {
-		return curr.offset, ok
+		for _, topic := range curr.topics {
+			if topic.hash == topicHash {
+				return topic.offset, ok
+			}
+		}
 	}
 	return off, ok
 }
 
-func (t *trie) setOffset(topicHash uint64, off int64) (ok bool) {
+func (t *trie) setOffset(top topic) (ok bool) {
 	t.Lock()
 	defer t.Unlock()
-	if curr, ok := t.partTrie.summary[topicHash]; ok {
-		if curr.offset < off {
-			curr.offset = off
-		}
+	if curr, ok := t.partTrie.summary[top.hash]; ok {
+		curr.topics.addUnique(top)
 		return ok
 	}
 	return false

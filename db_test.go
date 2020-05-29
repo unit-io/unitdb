@@ -27,7 +27,7 @@ func TestSimple(t *testing.T) {
 	}
 	defer db.Close()
 	var i uint16
-	var n uint16 = 100
+	var n uint16 = 1000
 
 	contract, err := db.NewContract()
 	if err != nil {

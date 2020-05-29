@@ -20,7 +20,7 @@ func (db *syncHandle) recoverWindowBlocks() error {
 			if err != nil {
 				return true, err
 			}
-			if ok := db.trie.setOffset(h, wOff); !ok {
+			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
 				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
 			}
 		}
@@ -77,16 +77,16 @@ func (db *syncHandle) startRecovery() error {
 			if exists {
 				continue
 			}
-			t := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
+			rawtopic := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
-			topic := new(message.Topic)
-			if err := topic.Unmarshal(t); err != nil {
+			t := new(message.Topic)
+			if err := t.Unmarshal(rawtopic); err != nil {
 				return true, err
 			}
-			contract := message.Contract(topic.Parts)
-			topicHash := topic.GetHash(contract)
+			contract := message.Contract(t.Parts)
+			topicHash := t.GetHash(contract)
 			db.timeWindow.add(topicHash, winEntry{seq: logEntry.seq, expiresAt: logEntry.expiresAt})
-			if ok := db.trie.add(topicHash, topic.Parts, topic.Depth); !ok {
+			if ok := db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth); !ok {
 				return true, errBadRequest
 			}
 			db.filter.Append(logEntry.seq)

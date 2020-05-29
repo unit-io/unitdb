@@ -224,7 +224,7 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 			t := new(message.Topic)
 			t.Unmarshal(rawTopic)
 			topics[contract] = t
-			if ok := b.db.trie.add(t.GetHash(contract), t.Parts, t.Depth); !ok {
+			if ok := b.db.trie.add(topic{hash: t.GetHash(contract)}, t.Parts, t.Depth); !ok {
 				return errBadRequest
 			}
 		}

@@ -293,7 +293,7 @@ func (db *syncHandle) Sync() error {
 			if err != nil {
 				return true, err
 			}
-			if ok := db.trie.setOffset(h, wOff); !ok {
+			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
 			db.mem.Free(h, db.cacheID^db.upperSeq())
