@@ -508,7 +508,7 @@ func (db *DB) lookup(q *Query) error {
 			break
 		}
 		limit := q.Limit - len(q.winEntries)
-		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, len(q.winEntries), limit)
+		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, len(q.winEntries), limit)
 		for _, we := range wEntries {
 			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
 		}

@@ -14,7 +14,7 @@ import (
 
 type (
 	winEntry struct {
-		topicHash uint64 // topicHash used in DB query
+		topicHash uint64 // topicHash used in DB query and not persisted
 		seq       uint64
 		expiresAt uint32
 	}
@@ -25,8 +25,8 @@ type (
 		cutoff    int64
 		entryIdx  uint16
 
-		dirty  bool
-		leased bool
+		dirty  bool // dirty used during timeWindow append and not persisted
+		leased bool // leased used in timeWindow write and not persisted
 	}
 )
 
@@ -40,6 +40,10 @@ func (e winEntry) ExpiresAt() uint32 {
 
 func (e winEntry) isExpired() bool {
 	return e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix())
+}
+
+func (w winBlock) Cutoff(cutoff int64) bool {
+	return w.cutoff != 0 && w.cutoff < cutoff
 }
 
 // MarshalBinary serialized window block into binary data
@@ -222,8 +226,7 @@ func (w *timeWindow) unFreeze() error {
 	return nil
 }
 
-// foreachTimeWindow iterates timewindow entries during sync or recovery process to write entries to window file
-// it takes timewindow snapshot to iterate and deletes blocks from timewindow
+// foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
 func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
 		ws := wb.windows.window[i]
@@ -277,7 +280,7 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 	return nil
 }
 
-// ilookup lookups window entries from timeWindowBucket. These entries are not yet sync to DB
+// ilookup lookups window entries from timeWindowBucket and not yet sync to DB
 func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries windowEntries) {
 	winEntries = make([]winEntry, 0)
 	// get windows shard
@@ -326,7 +329,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 }
 
 // lookup lookups window entries from window file.
-func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit int) (winEntries windowEntries) {
+func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, skip, limit int) (winEntries windowEntries) {
 	// winEntries = make([]winEntry, 0)
 	winEntries = wb.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
@@ -385,6 +388,10 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off int64, skip int, limit 
 				continue
 			}
 			winEntries = append(winEntries, we)
+
+		}
+		if b.Cutoff(cutoff) {
+			return true, nil
 		}
 		return false, nil
 	})
@@ -472,6 +479,8 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 		if w.entryIdx == seqsPerWindowBlock {
 			topicHash := w.topicHash
 			next := int64(blockSize * uint32(winIdx))
+			// set approximate cutoff on winBlock
+			w.cutoff = time.Now().Unix()
 			wb.winBlocks[winIdx] = w
 			wb.windowIdx++
 			winIdx = wb.windowIdx

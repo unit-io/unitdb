@@ -123,7 +123,7 @@ func main() {
 		i := 1
 		entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
-			for j := 0; j < 50; j++ {
+			for j := 0; j < 5000; j++ {
 				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
 			}
 			if i >= retry {
@@ -136,7 +136,7 @@ func main() {
 	func(retry int) {
 		i := 1
 		entry := &unitdb.Entry{Topic: []byte("unit8.c.*?ttl=1h")}
-		for range time.Tick(1 * time.Millisecond) {
+		for range time.Tick(10 * time.Second) {
 			for j := 50; j < 100; j++ {
 				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
 			}
@@ -147,7 +147,7 @@ func main() {
 		}
 	}(1)
 
-	print([]byte("unit8.c.*?last=30m"), db)
+	print([]byte("unit8.c.c1?last=10s"), db)
 
 	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.c.*?last=1h"), Limit: 100}); err == nil {
 		for _, msg := range msgs {
