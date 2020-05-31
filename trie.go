@@ -113,38 +113,40 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 }
 
 // lookup returns window entry set for given topic.
-func (t *trie) lookup(query []message.Part, depth uint8) (tops topics) {
+func (t *trie) lookup(query []message.Part, depth, topicType uint8) (tops topics) {
 	t.RLock()
 	defer t.RUnlock()
 	// fmt.Println("trie.lookup: depth, parts ", depth, query)
-	t.ilookup(query, depth, &tops, t.partTrie.root)
+	t.ilookup(query, depth, topicType, &tops, t.partTrie.root)
 	return
 }
 
-func (t *trie) ilookup(query []message.Part, depth uint8, tops *topics, currpart *part) {
+func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topics, currpart *part) {
 	// Add topics from the current branch
-	if currpart.depth == depth || currpart.k.query == message.Wildcard {
+	if currpart.depth == depth || (topicType == message.TopicStatic && currpart.k.query == message.Wildcard) {
 		for _, topic := range currpart.topics {
 			tops.addUnique(topic)
 		}
 	}
 
-	// If we're not yet done, continue
-	if len(query) > 0 {
-		q := query[0]
-		// Go through the exact match branch
-		for k, p := range currpart.children {
-			switch {
-			case k.query == q.Query && q.Wildchars == k.wildchars:
-				// fmt.Println("trie.lookup: wildchars, part ", k.wildchars, k.query)
-				t.ilookup(query[1:], depth, tops, p)
-			case k.query == q.Query && uint8(len(query)) >= k.wildchars+1:
-				// fmt.Println("trie.lookup: wildchar, part ", k.wildchars, k.query)
-				t.ilookup(query[k.wildchars+1:], depth, tops, p)
-			case k.query == message.Wildcard:
-				// fmt.Println("trie.lookup: wildcard, part ", k.query)
-				t.ilookup(query[:], depth, tops, p)
-			}
+	// if done then stop
+	if len(query) == 0 {
+		return
+	}
+
+	q := query[0]
+	// Go through the wildcard match branch
+	for k, p := range currpart.children {
+		switch {
+		case k.query == q.Query && q.Wildchars == k.wildchars:
+			// fmt.Println("trie.lookup: wildchars, part ", k.wildchars, k.query)
+			t.ilookup(query[1:], depth, topicType, tops, p)
+		case k.query == q.Query && uint8(len(query)) >= k.wildchars+1:
+			// fmt.Println("trie.lookup: wildchar, part ", k.wildchars, k.query)
+			t.ilookup(query[k.wildchars+1:], depth, topicType, tops, p)
+		case k.query == message.Wildcard:
+			// fmt.Println("trie.lookup: wildcard, part ", k.query)
+			t.ilookup(query[:], depth, topicType, tops, p)
 		}
 	}
 }

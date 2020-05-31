@@ -315,58 +315,6 @@ func (db *DB) readHeader() error {
 	return nil
 }
 
-// // loadTopicHash loads topic and offset from window file
-// func (db *DB) loadTrie() error {
-// 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
-// 		w := &curw
-// 		wOff, ok := db.trie.getOffset(w.topicHash)
-// 		if !ok || wOff < w.offset {
-// 			if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
-// 				if w.entryIdx == 0 {
-// 					return false, nil
-// 				}
-// 				we := w.entries[w.entryIdx-1]
-// 				off := blockOffset(startBlockIndex(we.Seq()))
-// 				b := blockHandle{file: db.index, offset: off}
-// 				if err := b.read(); err != nil {
-// 					if err == io.EOF {
-// 						return false, nil
-// 					}
-// 					return true, err
-// 				}
-// 				entryIdx := -1
-// 				for i := 0; i < entriesPerIndexBlock; i++ {
-// 					e := b.entries[i]
-// 					if e.seq == we.Seq() { //record exist in db
-// 						entryIdx = i
-// 						break
-// 					}
-// 				}
-// 				if entryIdx == -1 {
-// 					return false, nil
-// 				}
-// 				e := b.entries[entryIdx]
-// 				t, err := db.data.readTopic(e)
-// 				if err != nil {
-// 					return true, err
-// 				}
-// 				topic := new(message.Topic)
-// 				err = topic.Unmarshal(t)
-// 				if err != nil {
-// 					return true, err
-// 				}
-// 				if ok := db.trie.add(w.topicHash, topic.Parts, topic.Depth); ok {
-// 					if ok := db.trie.setOffset(w.topicHash, w.offset); !ok {
-// 						return true, errors.New("db.loadTopicHash: unable to set topic offset to topic trie")
-// 					}
-// 				}
-// 			}
-// 		}
-// 		return false, nil
-// 	})
-// 	return err
-// }
-
 // loadTopicHash loads topic and offset from window file
 func (db *DB) loadTrie() error {
 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
@@ -499,7 +447,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
 // ilookup lookups in memory entries from timeWindow
 // lookup lookups persisted entries from timeWindow file
 func (db *DB) lookup(q *Query) error {
-	topics := db.trie.lookup(q.parts, q.depth)
+	topics := db.trie.lookup(q.parts, q.depth, q.topicType)
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
@@ -508,7 +456,7 @@ func (db *DB) lookup(q *Query) error {
 			break
 		}
 		limit := q.Limit - len(q.winEntries)
-		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, len(q.winEntries), limit)
+		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, limit)
 		for _, we := range wEntries {
 			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
 		}

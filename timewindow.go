@@ -329,7 +329,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 }
 
 // lookup lookups window entries from window file.
-func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, skip, limit int) (winEntries windowEntries) {
+func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit int) (winEntries windowEntries) {
 	// winEntries = make([]winEntry, 0)
 	winEntries = wb.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
@@ -350,16 +350,11 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, skip, li
 			off = b.next
 		}
 	}
-	count := 0
 	expiryCount := 0
 	err := next(off, func(curb windowHandle) (bool, error) {
 		b := &curb
 		if b.topicHash != topicHash {
 			return true, nil
-		}
-		if skip > count+int(b.entryIdx) {
-			count += int(b.entryIdx)
-			return false, nil
 		}
 		if len(winEntries) > limit-int(b.entryIdx) {
 			limit = limit - len(winEntries)

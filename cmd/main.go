@@ -78,24 +78,24 @@ func main() {
 		msg    []byte
 	}{
 		{[]byte("..."), []byte("unit8.b.b1"), []byte("...1")},
-		{[]byte("unit.b..."), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.b...1")},
 		{[]byte("unit.*.b1.b11.*.*.b11111.*"), []byte("unit"), []byte("unit.*.b1.b11.*.*.b11111.*.1")},
+		{[]byte("unit.b..."), []byte("unit.b.b1.b11.b111.b1111.b11111.b111111"), []byte("unit.b...1")},
 		{[]byte("unit.*.b1.*.*.*.b11111.*"), []byte("unit.b.b1?ttl=3m"), []byte("unit.*.b1.*.*.*.b11111.*.1")},
 		{[]byte("unit.b.b1"), []byte("unit.b.b1?ttl=3m"), []byte("unit.b.b1.1")},
 		{[]byte("unit.b.b1.b11"), []byte("unit.b.b1.b11"), []byte("unit.b.b1.b11.1")},
 		{[]byte("unit.b"), []byte("unit.b"), []byte("unit.b.1")},
 		{[]byte("unit8.b.b1"), []byte("unit8.b.b1"), []byte("unit8.b.b1.1")},
 	}
-	for _, r := range reqs {
+	for i, r := range reqs {
 		db.Put(r.wtopic, r.msg)
 		if msgs, err := db.Get(&unitdb.Query{Topic: r.wtopic, Limit: 10}); err == nil {
 			for _, msg := range msgs {
-				log.Printf("%s ", msg)
+				log.Printf("req %d %s ", i, msg)
 			}
 		}
 		if msgs, err := db.Get(&unitdb.Query{Topic: r.topic, Limit: 10}); err == nil {
 			for _, msg := range msgs {
-				log.Printf("%s ", msg)
+				log.Printf("req %d %s ", i, msg)
 			}
 		}
 	}
@@ -123,7 +123,7 @@ func main() {
 		i := 1
 		entry := &unitdb.Entry{Topic: []byte("unit8.c.c1?ttl=1h")}
 		for range time.Tick(1 * time.Millisecond) {
-			for j := 0; j < 5000; j++ {
+			for j := 0; j < 50; j++ {
 				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
 			}
 			if i >= retry {
@@ -136,7 +136,7 @@ func main() {
 	func(retry int) {
 		i := 1
 		entry := &unitdb.Entry{Topic: []byte("unit8.c.*?ttl=1h")}
-		for range time.Tick(10 * time.Second) {
+		for range time.Tick(1 * time.Millisecond) {
 			for j := 50; j < 100; j++ {
 				db.SetEntry(entry, []byte(fmt.Sprintf("msg.%2d", j)))
 			}
@@ -167,7 +167,7 @@ func main() {
 				opts.Topic = []byte("unit8.b.*?ttl=1h")
 				opts.AllowDuplicates = true
 				b.SetOptions(opts)
-				for j := 0; j < 500; j++ {
+				for j := 0; j < 50; j++ {
 					b.Put([]byte(fmt.Sprintf("msg.%2d", j)))
 				}
 				return b.Write()

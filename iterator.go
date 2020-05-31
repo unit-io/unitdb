@@ -28,6 +28,7 @@ type Query struct {
 	Contract   uint32         // The contract is used as prefix in the message Id
 	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 	depth      uint8
+	topicType  uint8
 	contract   uint64
 	cutoff     int64 // time limit check on message Ids.
 	winEntries []winEntry
@@ -38,7 +39,7 @@ type Query struct {
 
 // ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.
 type ItemIterator struct {
-	db         *DB
+	db          *DB
 	mu          sync.Mutex
 	query       *Query
 	item        *Item
@@ -62,6 +63,7 @@ func (q *Query) parse() error {
 	topic.AddContract(q.Contract)
 	q.parts = topic.Parts
 	q.depth = topic.Depth
+	q.topicType = topic.TopicType
 	q.contract = message.Contract(q.parts)
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
