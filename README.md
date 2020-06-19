@@ -1,14 +1,8 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Build Status](https://travis-ci.org/unit-io/unitdb.svg?branch=master)](https://travis-ci.org/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
 
-<p align="left">
-  <img src="unitdb.png" width="300" alt="unitdb" title="unitdb: Blazing fast timeseries database fro IoT and real-time messaging applications"> 
-</p>
+Unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Access unitdb with grpc client ot pubsub over tcp or websocket using [unitd](https://github.com/unit-io/unitd) application.
 
-# unitdb: blazing fast time-series database for IoT and real-time messaging applications
-
-unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Access unitdb with pubsub over tcp or websocket using [unitd](https://github.com/unit-io/unitd) application.
-
-unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
+Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
 # About unitdb 
 
@@ -23,17 +17,10 @@ unitdb can be used for online gaming and mobile apps as it satisfy the requireme
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct
 
-The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb block cache and become immediately queryable. The memdb block cache is periodically written to disk in the form of blocks and after data is stored safely in files, the WAL is truncated and memdb is shrink.
-
-The unitdb engine includes the following components:
-
-- Buffer Pool
-- Block Cache
-- Write Ahead Log (WAL)
-- Lookup Trie
-- Writing to timeWindow file
-- Writing to Block Index file
-- Writing to Data file
+## Unitd Clients
+To run unitdb as daemon service start [unitd](https://github.com/unit-io/unitd) application and copy unitd.conf to the path unitd binary is placed. Unitd supports pubsub using GRPC client or MQTT client to connect to service using tcp or websocket.
+- [unitd-go](https://github.com/unit-io/unitd-go) is Go client to pubsub messages using GRPC application
+- [unitd-ws](https://github.com/unit-io/unitd-ws) is javascript client to pubsub messages using MQTT over websocket 
 
 ## Quick Start
 To build unitdb from source code use go get command.
@@ -42,7 +29,7 @@ To build unitdb from source code use go get command.
 
 ## Usage
 
-The unitdb support Get, Put, Delete operations. It also support encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage/advanced.md) for more advanced use case. 
+The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage/advanced.md). 
 
 ### Opening a database
 
@@ -61,9 +48,8 @@ To open or create a new database, use the unitdb.Open() function:
 	func main() {
 		// Opening a database.
 		opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30}
-		// Flag: 1 - Set or -1 - Unset
-		flags := &unitdb.Flags{Immutable: 1, Encryption: -1, BackgroundKeyExpiry: -1}
-		db, err := unitdb.Open("unitdb", flags, opts)
+		// Open DB with Mutable flag to allow DB.Delete operation
+		db, err := unitdb.Open("unitdb", opts, unitdb.WithMutable())
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -76,26 +62,34 @@ To open or create a new database, use the unitdb.Open() function:
 ### Writing to a database
 
 #### Store a message
-Use DB.Put() to store message to a topic or use DB.PutEntry() to store message entry to a topic. DB.PutEntry() allows client to specify ID and Contract parameters. 
+Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages to specific topic or wildcard topics.
 
 ```
 
-	topic := []byte("unit8.b.b1")
-	msg := []byte("msg.b.b1.1")
+	topic := []byte("teams.alpha.ch1")
+	msg := []byte("msg for team alpha channel1")
 	db.Put(topic, msg)
 
 	or
-	
-	db.PutEntry(unitdb.NewEntry(topic, msg))
+
+	// send message to all receivers of channel1 for team alpha
+	topic := []byte("teams.alpha.ch1.*")
+	msg := []byte("msg for team alpha channel1 receivers")
+	db.Put(topic, msg)
+
+	// send message to all channels for team alpha
+	topic := []byte("teams.alpha...")
+	msg := []byte("msg for team alpha all channels")
+	db.Put(topic, msg)
 
 ```
 
 #### Specify ttl 
-Specify ttl parameter to a topic while storing messages to expire it after specific duration. DB query does not fetch expired messages. 
+Specify ttl parameter to a topic while storing messages to expire it after specific duration. 
 
 ```
-	topic := []byte("unit8.b.b1?ttl=1h")
-	msg := []byte("msg.b.b1.1")
+	topic := []byte("teams.alpha.ch1.u1?ttl=1h")
+	msg := []byte("msg for team alpha channel1 receiver1")
 	b.PutEntry(unitdb.NewEntry(topic, msg))
 
 ```
@@ -107,9 +101,9 @@ Use DB.Get() to read messages from a topic. Use last parameter to specify durati
 
 	var err error
 	var msg [][]byte
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=100")})
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=100")})
     ....
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h", Limit: 100}))
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h", Limit: 100}))
 
 ```
 
@@ -121,13 +115,13 @@ Deleting a message in unitdb is rare and it require additional steps to delete m
 	messageId := db.NewID()
 	err := db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
-		Topic:    []byte("unit8.b.b1"),
-		Payload:  []byte("msg.b.b1.deleting"),
+		Topic:    []byte("teams.alpha.ch1.u1"),
+		Payload:  []byte("msg for team alpha channel1 receiver1"),
 	})
 	
 	err := db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
-		Topic:    []byte("unit8.b.b1"),
+		Topic:    []byte("teams.alpha.ch1.u1"),
 	})
 
 ```
@@ -141,12 +135,12 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 	messageId := db.NewID()
 	err := db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
-		Topic:    []byte("unit8.b.b1"),
-		Payload:  []byte("msg.b.b1.1"),
+		Topic:    []byte("teams.alpha.ch1"),
+		Payload:  []byte("msg for team alpha channel1"),
 		Contract: contract,
 	})
 	....
-	msgs, err := db.Get(&unitdb.Query{Topic: []byte("unit8.b.b1?last=1h", Contract: contract, Limit: 100}))
+	msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=1h", Contract: contract, Limit: 100}))
 
 ```
 
@@ -157,7 +151,7 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 ```
 
 	func print(topic []byte, db *unitdb.DB) {
-		// topic -> "unit8.b.b1?last=1h"
+		// topic -> "teams.alpha.ch1?last=1h"
 		it, err := db.Items(&unitdb.Query{Topic: topic})
 		if err != nil {
 			log.Fatal(err)
@@ -185,30 +179,6 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 	}
 
 ```
-
-## Example Web Application
-To access unitdb using websocket build [unitd](https://github.com/unit-io/unitd) from source code and copy unitd.conf to the path unitd binary is placed.
-
-> go get -u github.com/unit-io/unitd && unitd
-
-Open [unitd.html](https://github.com/unit-io/unitd/blob/master/examples/html/unitd.html) under example/html folder in a browser.
-
-## Steps
-- Generate Client ID
-- Specify new client ID and connect to client
-- Specify topics to subscribe/publish messages and generate key
-- Specify key to the topics with separator '/' and subscribe to topic
-- Specify message to send and publish to topic
-
-### First Client
-<p align="left">
-  <img src="docs/img/client1.png" /> 
-</p>
-
-### Second Client
-<p align="left">
-  <img src="docs/img/client2.png" /> 
-</p>
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.

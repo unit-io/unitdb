@@ -6,35 +6,70 @@ import (
 	"github.com/unit-io/unitdb/fs"
 )
 
-// Flags holds various DB flags.
-type Flags struct {
+// flags holds various DB flags.
+type flags struct {
 	// Immutable set immutable flag on database
-	Immutable int8
+	Immutable bool
 
 	// Encryption flag to encrypt keys
-	Encryption int8
+	Encryption bool
 
 	// BackgroundKeyExpiry sets flag to run key expirer
-	BackgroundKeyExpiry int8
+	BackgroundKeyExpiry bool
 }
 
-func (src *Flags) copyWithDefaults() *Flags {
-	flgs := Flags{}
-	if src != nil {
-		flgs = *src
-	}
+// Flags it contains configurable flags for DB
+type Flags interface {
+	set(*flags)
+}
 
-	if flgs.Immutable == 0 {
-		flgs.Immutable = 1
-	}
-	if flgs.Encryption == 0 {
-		flgs.Encryption = -1
-	}
-	if flgs.BackgroundKeyExpiry == 0 {
-		flgs.BackgroundKeyExpiry = -1
-	}
+// fFlag wraps a function that modifies flags into an
+// implementation of the Flags interface.
+type fFlag struct {
+	f func(*flags)
+}
 
-	return &flgs
+func (fo *fFlag) set(f *flags) {
+	fo.f(f)
+}
+
+func newFuncFlag(f func(*flags)) *fFlag {
+	return &fFlag{
+		f: f,
+	}
+}
+
+// WithDefaultFlags will open DBwith some default values.
+//   Immutable: True
+//   Encryption: False
+//   BackgroundKeyExpiry: False
+func WithDefaultFlags() Flags {
+	return newFuncFlag(func(f *flags) {
+		f.Immutable = true
+		f.Encryption = false
+		f.BackgroundKeyExpiry = false
+	})
+}
+
+// WithMutable sets Immutable flag to false
+func WithMutable() Flags {
+	return newFuncFlag(func(f *flags) {
+		f.Immutable = false
+	})
+}
+
+// WithEncryption sets encryption on DB
+func WithEncryption() Flags {
+	return newFuncFlag(func(f *flags) {
+		f.Encryption = true
+	})
+}
+
+// WithBackgroundKeyExpiry sets background key expiry for DB
+func WithBackgroundKeyExpiry() Flags {
+	return newFuncFlag(func(f *flags) {
+		f.Immutable = false
+	})
 }
 
 // Options holds the optional DB parameters.

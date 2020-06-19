@@ -92,7 +92,7 @@ type (
 		dbInfo
 		timeWindow *timeWindowBucket
 		opts       *Options
-		flags      *Flags
+		flags      *flags
 		mem        *memdb.DB
 
 		//batchdb
@@ -112,9 +112,13 @@ type (
 )
 
 // Open opens or creates a new DB.
-func Open(path string, flags *Flags, opts *Options) (*DB, error) {
+func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	opts = opts.copyWithDefaults()
-	flags = flags.copyWithDefaults()
+	flags := &flags{}
+	WithDefaultFlags().set(flags)
+	for _, flg := range flgs {
+		flg.set(flags)
+	}
 	fs := opts.FileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
@@ -136,7 +140,7 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	lease := newLease(leaseFile, opts.MinimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry == 1}
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -222,7 +226,9 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 	}
 
 	// set encryption flag to encrypt messages
-	db.encryption = flags.Encryption
+	if flags.Encryption {
+		db.encryption = 1
+	}
 
 	// Create a memdb.
 	mem, err := memdb.Open(opts.MemdbSize)
@@ -264,7 +270,7 @@ func Open(path string, flags *Flags, opts *Options) (*DB, error) {
 
 	db.startSyncer(opts.BackgroundSyncInterval)
 
-	if flags.BackgroundKeyExpiry == 1 {
+	if flags.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
@@ -876,7 +882,7 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
-	case db.flags.Immutable == 1:
+	case db.flags.Immutable:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIdEmpty
@@ -904,7 +910,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(topicHash, seq uint64) error {
-	if db.flags.Immutable == 1 {
+	if db.flags.Immutable {
 		return nil
 	}
 	// Test filter block for the message id presence
