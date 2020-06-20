@@ -117,7 +117,9 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	flags := &flags{}
 	WithDefaultFlags().set(flags)
 	for _, flg := range flgs {
-		flg.set(flags)
+		if flg != nil {
+			flg.set(flags)
+		}
 	}
 	fs := opts.FileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)

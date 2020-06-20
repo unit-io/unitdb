@@ -1,8 +1,6 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Build Status](https://travis-ci.org/unit-io/unitdb.svg?branch=master)](https://travis-ci.org/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
 
-Unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Access unitdb with grpc client ot pubsub over tcp or websocket using [unitd](https://github.com/unit-io/unitd) application.
-
-Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
+Unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
 # About unitdb 
 
@@ -18,9 +16,9 @@ Unitdb can be used for online gaming and mobile apps as it satisfy the requireme
 - Queried data is returned complete and correct
 
 ## Unitd Clients
-To run unitdb as daemon service start [unitd](https://github.com/unit-io/unitd) application and copy unitd.conf to the path unitd binary is placed. Unitd supports pubsub using GRPC client or MQTT client to connect to service using tcp or websocket.
-- [unitd-go](https://github.com/unit-io/unitd-go) is Go client to pubsub messages using GRPC application
-- [unitd-ws](https://github.com/unit-io/unitd-ws) is javascript client to pubsub messages using MQTT over websocket 
+To run unitdb as daemon service start [unitd](https://github.com/unit-io/unitd) application and copy unitd.conf to the path unitd binary is placed.
+- [unitd-go](https://github.com/unit-io/unitd-go) Go client to pubsub messages over protobuf using GRPC application
+- [unitd-ws](https://github.com/unit-io/unitd-ws) Javascript client to pubsub messages over websocket using MQTT protocol. 
 
 ## Quick Start
 To build unitdb from source code use go get command.
@@ -29,7 +27,7 @@ To build unitdb from source code use go get command.
 
 ## Usage
 
-The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage/advanced.md). 
+The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
 ### Opening a database
 
@@ -74,7 +72,7 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 
 	// send message to all receivers of channel1 for team alpha
 	topic := []byte("teams.alpha.ch1.*")
-	msg := []byte("msg for team alpha channel1 receivers")
+	msg := []byte("msg for team alpha channel1 all receivers")
 	db.Put(topic, msg)
 
 	// send message to all channels for team alpha
