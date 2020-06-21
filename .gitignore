@@ -1,4 +1,3 @@
-cmd/**
 cmd/benchmark/**
 *.data
 *.index

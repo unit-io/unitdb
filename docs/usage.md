@@ -51,7 +51,6 @@ To build unitdb from source code use go get command.
 ## Usage
 
 ### Opening a database
-
 To open or create a new database, use the unitdb.Open() function:
 
 ```
@@ -104,13 +103,13 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 ```
 
 #### Store bulk messages
-Use Entry.SetPayload() method to store bulk messages and then use DB.PutEntry() method for better performance as topic is parsed on first entry into DB and subsequent entries skips parsing of the topic.
+Use DB.SetEntry() method to bulk store messages as topic is parsed on first request and subsequent requests skips parsing.
 
 ```
-	topic := []byte("teams.alpha.ch1")
-	entry := &unitdb.Entry{Topic: []byte("teams.alpha.ch1?ttl=1h")}
+	topic := []byte("teams.alpha.ch1.u1")
+	entry := &unitdb.Entry{Topic: []byte("teams.alpha.ch1.u1?ttl=1h")}
 	for j := 0; j < 50; j++ {
-		db.SetEntry(entry, []byte(fmt.Sprintf("msg for team alpha channel1 #%2d", j)))
+		db.SetEntry(entry, []byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j)))
 	}
 
 ```
@@ -163,9 +162,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 	contract, err := db.NewContract()
 
-	messageId := db.NewID()
 	err := db.PutEntry(&unitdb.Entry{
-		ID:       messageId,
 		Topic:    []byte("teams.alpha.ch1"),
 		Payload:  []byte("msg for team alpha channel1"),
 		Contract: contract,
@@ -185,11 +182,10 @@ Use Batch.Put() to write to a single topic in a batch.
 	// Writing to single topic in a batch
 	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
-		opts.Topic = []byte("teams.alpha.*?ttl=1h")
+		opts.Topic = []byte("teams.alpha.ch1.*?ttl=1h")
 		b.SetOptions(opts)
-		b.Put([]byte("msg for team alpha all channels"))
-		err := b.Write()
-		return err
+		b.Put([]byte("msg for team alpha channel1 all receivers"))
+		return b.Write()
     })
 
 ```
@@ -201,10 +197,9 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 
     // Writing to multiple topics in a batch
     err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1"), []byte("msg for team alpha channel1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch2"), []byte("msg for team alpha channel2")))
-		err := b.Write()
-		return err
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
+		return b.Write()
     })
 
 ```
@@ -214,7 +209,7 @@ All batch operations are non-blocking so client program can decide to wait for c
 
 ```
     err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1"), []byte("msg for team alpha channel1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
 		err := b.Write()
 			go func() {
 				<-completed // it signals batch has completed and fully committed to db
@@ -231,12 +226,11 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 
 ```
 
-	func print(topic []byte, db *unitdb.DB) {
-		// topic -> "teams.alpha.ch1?last=1h"
-		it, err := db.Items(&unitdb.Query{Topic: topic})
-		if err != nil {
-			log.Fatal(err)
-			return
+	topic := "teams.alpha.ch1.u1?last=1h"
+	it, err := db.Items(&unitdb.Query{Topic: topic})
+	if err != nil {
+		log.Fatal(err)
+		return
 	}
 	for it.First(); it.Valid(); it.Next() {
 		err := it.Error()
@@ -246,7 +240,6 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 		}
 		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
-}
 
 ```
 
@@ -272,12 +265,12 @@ Topic isolation can be achieved using Contract while putting messages into unitd
     // Writing to single topic in a batch
 	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
-		opts.Topic = []byte("teams.alpha.*?ttl=1h")
+		opts.Topic = []byte("teams.alpha.ch1.*?ttl=1h")
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.Put([]byte("msg for team alpha all channels #1"))
-		b.Put([]byte("msg for team alpha all channels #2"))
-		b.Put([]byte("msg for team alpha all channels #3"))
+		b.Put([]byte("msg for team alpha channel1 all receivers #1"))
+		b.Put([]byte("msg for team alpha channel1 all receivers #2"))
+		b.Put([]byte("msg for team alpha channel1 all receivers #3"))
 		return b.Write()
     })
 

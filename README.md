@@ -26,11 +26,11 @@ To build unitdb from source code use go get command.
 > go get -u github.com/unit-io/unitdb
 
 ## Usage
-
 The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, group batch operations, and writing to wildcard topics. See complete [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
-### Opening a database
+Samples are available in the cmd directory for reference.
 
+### Opening a database
 To open or create a new database, use the unitdb.Open() function:
 
 ```
@@ -88,20 +88,20 @@ Specify ttl parameter to a topic while storing messages to expire it after speci
 ```
 	topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 	msg := []byte("msg for team alpha channel1 receiver1")
-	b.PutEntry(unitdb.NewEntry(topic, msg))
+	db.PutEntry(opic, msg)
 
 ```
 
 #### Read messages
-Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from unitdb stored in last 1 hour, or "last=100" to get last 100 messages from unitdb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from unitdb stored in last 1 hour, or "last=10" to get last 10 messages from unitdb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
 
 	var err error
 	var msg [][]byte
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=100")})
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=10")})
     ....
-	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h", Limit: 100}))
+	msgs, err = db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h", Limit: 10}))
 
 ```
 
@@ -111,13 +111,13 @@ Deleting a message in unitdb is rare and it require additional steps to delete m
 ```
 
 	messageId := db.NewID()
-	err := db.PutEntry(&unitdb.Entry{
+	db.PutEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("teams.alpha.ch1.u1"),
 		Payload:  []byte("msg for team alpha channel1 receiver1"),
 	})
 	
-	err := db.DeleteEntry(&unitdb.Entry{
+	db.DeleteEntry(&unitdb.Entry{
 		ID:       messageId,
 		Topic:    []byte("teams.alpha.ch1.u1"),
 	})
@@ -130,30 +130,27 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 	contract, err := db.NewContract()
 
-	messageId := db.NewID()
-	err := db.PutEntry(&unitdb.Entry{
-		ID:       messageId,
-		Topic:    []byte("teams.alpha.ch1"),
-		Payload:  []byte("msg for team alpha channel1"),
+	db.PutEntry(&unitdb.Entry{
+		Topic:    []byte("teams.alpha.ch1.u1"),
+		Payload:  []byte("msg for team alpha channel1 receiver1"),
 		Contract: contract,
 	})
 	....
-	msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=1h", Contract: contract, Limit: 100}))
+	msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h", Contract: contract, Limit: 10}))
 
 ```
 
 ### Iterating over items
 Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from unitdb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the unitdb:
+Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from unitdb stored in last 1 hour, or "last=10" to retrieves last 10 messages from the unitdb:
 
 ```
-
-	func print(topic []byte, db *unitdb.DB) {
-		// topic -> "teams.alpha.ch1?last=1h"
-		it, err := db.Items(&unitdb.Query{Topic: topic})
-		if err != nil {
-			log.Fatal(err)
-			return
+	
+	topic := "teams.alpha.ch1.u1?last=1h"
+	it, err := db.Items(&unitdb.Query{Topic: topic})
+	if err != nil {
+		log.Fatal(err)
+		return
 	}
 	for it.First(); it.Valid(); it.Next() {
 		err := it.Error()
@@ -163,7 +160,6 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 		}
 		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
 	}
-}
 
 ```
 
