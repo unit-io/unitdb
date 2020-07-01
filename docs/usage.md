@@ -1,6 +1,6 @@
-# unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Build Status](https://travis-ci.org/unit-io/unitdb.svg?branch=master)](https://travis-ci.org/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
+# unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb)
 
-Unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
+The unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. The unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
 
 # About unitdb 
 
@@ -14,11 +14,6 @@ Unitdb is blazing fast time-series database for IoT, realtime messaging  applica
 - Supports time-to-live on message entry
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct
-
-## Unitd Clients
-To run unitdb as daemon service start [unitd](https://github.com/unit-io/unitd) application and copy unitd.conf to the path unitd binary is placed.
-- [unitd-go](https://github.com/unit-io/unitd-go) Go client to pubsub messages over protobuf using GRPC application
-- [unitd-ws](https://github.com/unit-io/unitd-ws) Javascript client to pubsub messages over websocket using MQTT protocol. 
 
 ## Table of Contents
  * [Quick Start](#Quick-Start)
@@ -348,4 +343,4 @@ The unitdb keeps a running metrics of internal operations it performs. To get un
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
 
 ## Licensing
-Copyright (c) 2016-2020 Saffat IT Solutions Pvt Ltd. This project is licensed under [Affero General Public License v3](https://github.com/unit-io/unitdb/blob/master/LICENSE).
+Copyright (c) 2016-2020 Saffat IT Solutions Pvt Ltd. This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).

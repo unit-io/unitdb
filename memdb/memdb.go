@@ -41,7 +41,6 @@ func newBlockCache(memSize int64) blockCache {
 
 // DB represents the block cache mem store.
 // All DB methods are safe for concurrent use by multiple goroutines.
-// Note: memdb is not a general purpose mem store but it designed for specific use in unitdb.
 type DB struct {
 	targetSize int64
 	resetLockC chan struct{}
@@ -194,6 +193,20 @@ func (db *DB) Set(blockId uint64, key uint64, data []byte) error {
 	}
 	cache.m[key] = off
 	return nil
+}
+
+// Keys gets all keys from block cache for the provided blockId
+func (db *DB) Keys(blockId uint64) []uint64 {
+	// Get cache
+	cache := db.getCache(blockId)
+	cache.RLock()
+	defer cache.RUnlock()
+	// Get keys from  block cache.
+	keys := make([]uint64, 0, len(cache.m))
+	for k := range cache.m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
