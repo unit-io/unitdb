@@ -1,6 +1,6 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb) [![Build Status](https://travis-ci.org/unit-io/unitdb.svg?branch=master)](https://travis-ci.org/unit-io/unitdb) [![Coverage Status](https://coveralls.io/repos/github/unit-io/unitdb/badge.svg?branch=master)](https://coveralls.io/github/unit-io/unitdb?branch=master)
 
-Unitdb is blazing fast specialized time-series database for IoT, realtime messaging  applications or AI analytics. Unitdb satisfy the requirements for low latency and binary messaging, it is a perfect time-series database for applications such as internet of things and internet connected devices.
+Unitdb is blazing fast specialized time-series database for microservices, IoT, and realtime internet connected devices. The unitdb satisfy the requirements for low latency and binary messaging, it is a perfect time-series database for applications such as internet of things and internet connected devices.
 
 # About unitdb 
 
@@ -35,10 +35,10 @@ Samples are available in the cmd directory for reference.
 Below is a list of projects that use unitdb.
 
 - [Unitd](https://github.com/unit-io/unitd) Lightweight, high performance messaging system for microservices, IoT, and internet connected devices.
-- [Unitd Go Client](https://github.com/unit-io/unitd-go) Lightweight and high performance publish-subscribe messaging system client library.
+- [Unitd Go Client](https://github.com/unit-io/unitd-go) Lightweight and high performance publish-subscribe messaging system - Go client library.
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
 
 ## Licensing
-Copyright (c) 2016-2020 Saffat IT Solutions Pvt Ltd. This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).
+This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).

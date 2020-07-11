@@ -23,10 +23,10 @@ func main() {
 	topic := []byte("teams.alpha.ch1.u1")
 	entry := &unitdb.Entry{Topic: topic}
 	for j := 0; j < 50; j++ {
-		db.SetEntry(entry, []byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j)))
+		db.PutEntry(entry.WithPayload([]byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j))))
 	}
 
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h"), Limit: 100}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h")).WithLimit(100)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -46,12 +46,12 @@ func main() {
 		return
 	}
 
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u2?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u2?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u3?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u3?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -59,8 +59,8 @@ func main() {
 
 	// Writing to multiple topics in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u3"), []byte("msg for team alpha channel1 receiver3")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2")).WithPayload([]byte("msg for team alpha channel1 receiver2")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u3")).WithPayload([]byte("msg for team alpha channel1 receiver3")))
 		err := b.Write()
 		return err
 	})
@@ -69,12 +69,12 @@ func main() {
 		return
 	}
 
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u2?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u2?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u3?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u3?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -101,10 +101,10 @@ func main() {
 		opts := unitdb.DefaultBatchOptions
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams and all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1")).WithPayload([]byte("msg for any team channel1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*")).WithPayload([]byte("msg for team alpha all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams...")).WithPayload([]byte("msg for all teams and all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("...")).WithPayload([]byte("msg broadcast to all receivers of all teams all channels")))
 		return b.Write()
 	})
 	if err != nil {
@@ -113,21 +113,21 @@ func main() {
 	}
 
 	// Get message for team alpha channel1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
 
 	// Get message for team beta channel1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.beta.ch1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.beta.ch1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
 
 	// Get message for team beta channel2 receiver1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.beta.ch2.u1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.beta.ch2.u1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}

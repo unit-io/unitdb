@@ -11,26 +11,6 @@ import (
 	"github.com/unit-io/unitdb/uid"
 )
 
-// BatchOptions is used to set options when using batch operation
-type BatchOptions struct {
-	// In concurrent batch writes order determines how to handle conflicts
-	Order           int8
-	Topic           []byte
-	Contract        uint32
-	Immutable       bool
-	Encryption      bool
-	AllowDuplicates bool
-}
-
-// DefaultBatchOptions contains default options when writing batches to unitdb topicc=>key-value store.
-var DefaultBatchOptions = &BatchOptions{
-	Order:           0,
-	Topic:           nil,
-	Contract:        message.MasterContract,
-	Encryption:      false,
-	AllowDuplicates: false,
-}
-
 func (index batchIndex) message(data []byte) (id, topic []byte) {
 	return data[:idSize], data[idSize : idSize+index.topicSize]
 }
@@ -78,14 +58,14 @@ type (
 // Client must provide Topic to the BatchOptions.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) Put(value []byte) error {
+func (b *Batch) Put(payload []byte) error {
 	switch {
 	case len(b.opts.Topic) == 0:
 		return errTopicEmpty
-	case len(b.opts.Topic) > MaxTopicLength:
+	case len(b.opts.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
-	return b.PutEntry(&Entry{Topic: b.opts.Topic, Payload: value, Contract: b.opts.Contract})
+	return b.PutEntry(NewEntry(b.opts.Topic).WithPayload(payload).WithContract(b.opts.Contract))
 }
 
 // PutEntry appends entries to a bacth for given topic->key/value pair.
@@ -95,11 +75,11 @@ func (b *Batch) PutEntry(e *Entry) error {
 	switch {
 	case len(e.Topic) == 0:
 		return errTopicEmpty
-	case len(e.Topic) > MaxTopicLength:
+	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	case len(e.Payload) == 0:
 		return errValueEmpty
-	case len(e.Payload) > MaxValueLength:
+	case len(e.Payload) > maxValueLength:
 		return errValueTooLarge
 	}
 	if e.Contract == 0 {
@@ -150,7 +130,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) Delete(id, topic []byte) error {
-	return b.DeleteEntry(&Entry{ID: id, Topic: topic})
+	return b.DeleteEntry(NewEntry(topic).WithID(id))
 }
 
 // DeleteEntry appends entry for deletion to a batch for given key.
@@ -164,7 +144,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errMsgIdEmpty
 	case len(e.Topic) == 0:
 		return errTopicEmpty
-	case len(e.Topic) > MaxTopicLength:
+	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
 	topic, _, err := b.db.parseTopic(e)

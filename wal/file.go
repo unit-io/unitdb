@@ -116,6 +116,14 @@ func (fb *fb) swap(targetSize int64) error {
 	return nil
 }
 
+func (f *file) truncate(size int64) error {
+	if err := f.Truncate(size); err != nil {
+		return err
+	}
+	f.size = size
+	return nil
+}
+
 func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")

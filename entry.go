@@ -14,53 +14,55 @@ type topic struct {
 	parsed bool
 }
 
-// Entry represents an entry which is stored into DB.
-type Entry struct {
-	contract uint64
-	topic
-	seq        uint64
-	id         []byte
-	val        []byte
-	encryption bool
-	ID         []byte // The ID of the message
-	Topic      []byte // The topic of the message
-	Payload    []byte // The payload of the message
-	ExpiresAt  uint32 // The time expiry of the message
-	Contract   uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
-}
+type (
+	internalEntry struct {
+		contract uint64
+		topic
+		seq        uint64
+		id         []byte
+		val        []byte
+		encryption bool
+	}
+	Entry struct {
+		internalEntry
+		ID        []byte // The ID of the message
+		Topic     []byte // The topic of the message
+		Payload   []byte // The payload of the message
+		ExpiresAt uint32 // The time expiry of the message
+		Contract  uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
+	}
+)
 
-// NewEntry creates a new entry structure from the topic and payload.
-func NewEntry(topic, payload []byte) *Entry {
+// NewEntry creates a new entry structure from the topic.
+func NewEntry(topic []byte) *Entry {
 	return &Entry{
-		Topic:   topic,
-		Payload: payload,
+		Topic: topic,
 	}
 }
 
-// SetID sets entry ID.
-func (e *Entry) SetID(id []byte) *Entry {
+// WithID sets entry ID
+func (e *Entry) WithID(id []byte) *Entry {
 	e.ID = id
 	return e
 }
 
-// SetPayload sets payload to put entry into DB.
-func (e *Entry) SetPayload(payload []byte) *Entry {
+// WithPayload sets payload to put entry into DB.
+func (e *Entry) WithPayload(payload []byte) *Entry {
 	e.Payload = payload
 	return e
 }
 
-// SetContract sets contract on entry.
-func (e *Entry) SetContract(contract uint32) *Entry {
+// WithContract sets contract on entry.
+func (e *Entry) WithContract(contract uint32) *Entry {
 	e.Contract = contract
 	return e
 }
 
-// SetTTL sets TTL for message expiry for the entry.
-func (e *Entry) SetTTL(ttl []byte) *Entry {
+// WithTTL sets TTL for message expiry for the entry.
+func (e *Entry) WithTTL(ttl []byte) *Entry {
 	val, err := strconv.ParseInt(unsafeToString(ttl), 10, 64)
 	if err == nil {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(int(val)) * time.Second).Unix())
-		return e
 	}
 	var duration time.Duration
 	duration, _ = time.ParseDuration(unsafeToString(ttl))
@@ -74,21 +76,6 @@ func (e *Entry) reset() {
 	e.val = nil
 	e.ID = nil
 	e.Payload = nil
-}
-
-type topics []topic
-
-// addUnique adds topic to the set.
-func (top *topics) addUnique(value topic) (added bool) {
-	for i, v := range *top {
-		if v.hash == value.hash {
-			(*top)[i].offset = value.offset
-			return false
-		}
-	}
-	*top = append(*top, value)
-	added = true
-	return
 }
 
 // unsafeToString is used to convert a slice

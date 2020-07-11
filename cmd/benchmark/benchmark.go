@@ -100,7 +100,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			}
 			for _, entry := range entries {
 				for k := 0; k < batchSize; k++ {
-					if err := db.SetEntry(&entry, vals[k]); err != nil {
+					if err := db.PutEntry(entry.WithPayload(vals[k])); err != nil {
 						return err
 					}
 				}
@@ -125,7 +125,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&unitdb.Query{Topic: topic, Limit: batchSize})
+		_, err := db.Get(unitdb.NewQuery(topic).WithLimit(batchSize))
 		if err != nil {
 			return err
 		}
@@ -301,7 +301,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for i := 0; i < concurrency; i++ {
 		topic := append(topics[i], []byte("?last=1m")...)
-		_, err := db.Get(&unitdb.Query{Topic: topic, Limit: batchSize})
+		_, err := db.Get(unitdb.NewQuery(topic).WithLimit(batchSize))
 		if err != nil {
 			return err
 		}
@@ -374,7 +374,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				for contract := range keys {
 					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1m")...)
-						b.PutEntry(&unitdb.Entry{Topic: topic, Payload: vals[i], Contract: contract})
+						b.PutEntry(unitdb.NewEntry(topic).WithPayload(vals[i]).WithContract(contract))
 					}
 				}
 				return b.Write()
@@ -400,7 +400,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	for contract := range keys {
 		for _, k := range keys[contract] {
-			_, err := db.Get(&unitdb.Query{Topic: k, Contract: contract})
+			_, err := db.Get(unitdb.NewQuery(k).WithContract(contract))
 			if err != nil {
 				return err
 			}

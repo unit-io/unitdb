@@ -2,10 +2,8 @@ package unitdb
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/rand"
 	"os"
 	"sort"
@@ -14,7 +12,6 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/crypto"
 	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/fs"
@@ -23,93 +20,46 @@ import (
 	"github.com/unit-io/unitdb/wal"
 )
 
-const (
-	entriesPerIndexBlock = 185 // (4096 i.e blocksize/26 i.e entry size)
-	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
-	// MaxBlocks       = math.MaxUint32
-	nShards       = 16
-	indexPostfix  = ".index"
-	dataPostfix   = ".data"
-	windowPostfix = ".win"
-	logPostfix    = ".log"
-	leasePostfix  = ".lease"
-	lockPostfix   = ".lock"
-	idSize        = 24
-	filterPostfix = ".filter"
-	version       = 1 // file format version
+// DB represents the message storage for topic->keys-values.
+// All DB methods are safe for concurrent use by multiple goroutines.
+type DB struct {
+	// Need 64-bit alignment.
+	mu sync.RWMutex
+	mutex
+	mac         *crypto.MAC
+	writeLockC  chan struct{}
+	syncLockC   chan struct{}
+	expiryLockC chan struct{}
+	// consistent     *hash.Consistent
+	filter     Filter
+	lock       fs.LockFile
+	index      file
+	data       dataTable
+	lease      *lease
+	wal        *wal.WAL
+	syncWrites bool
+	dbInfo
+	timeWindow *timeWindowBucket
+	opts       *Options
+	flags      *flags
+	mem        *memdb.DB
 
-	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
-	// For example if durType is Minute and maxExpDur then
-	// all expired keys are deleted from db in 1 minutes
-	maxExpDur = 1
-
-	// MaxTopicLength is the maximum size of a topic in bytes.
-	MaxTopicLength = 1 << 16
-
-	// MaxValueLength is the maximum size of a value in bytes.
-	MaxValueLength = 1 << 30
-
-	// MaxKeys is the maximum numbers of keys in the DB.
-	MaxKeys = math.MaxInt64
-
-	// MaxSeq is the maximum number of seq supported.
-	MaxSeq = uint64(1<<56 - 1)
-
-	// Maximum number of records to return
-	// maxResults = 100000
-)
-
-type (
-	dbInfo struct {
-		encryption   int8
-		seq          uint64
-		logSeq       uint64
-		count        int64
-		blockIdx     int32
-		windowIdx    int32
-		freeblockOff int64
-		cacheID      uint64
-	}
-
-	// DB represents the message storage for topic->keys-values.
-	// All DB methods are safe for concurrent use by multiple goroutines.
-	DB struct {
-		// Need 64-bit alignment.
-		mu sync.RWMutex
-		mutex
-		mac         *crypto.MAC
-		writeLockC  chan struct{}
-		syncLockC   chan struct{}
-		expiryLockC chan struct{}
-		// consistent     *hash.Consistent
-		filter     Filter
-		lock       fs.LockFile
-		index      file
-		data       dataTable
-		lease      *lease
-		wal        *wal.WAL
-		syncWrites bool
-		dbInfo
-		timeWindow *timeWindowBucket
-		opts       *Options
-		flags      *flags
-		mem        *memdb.DB
-
-		//batchdb
-		*batchdb
-		//trie
-		trie *trie
-		// The db start time
-		start time.Time
-		// The metrics to measure timeseries on message events
-		meter *Meter
-		// Close.
-		closeW sync.WaitGroup
-		closeC chan struct{}
-		closed uint32
-		closer io.Closer
-	}
-)
+	//batchdb
+	*batchdb
+	//trie
+	trie *trie
+	// sync handler
+	syncHandle syncHandle
+	// The db start time
+	start time.Time
+	// The metrics to measure timeseries on message events
+	meter *Meter
+	// Close.
+	closeW sync.WaitGroup
+	closeC chan struct{}
+	closed uint32
+	closer io.Closer
+}
 
 // Open opens or creates a new DB.
 func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
@@ -163,8 +113,7 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 		syncLockC:   make(chan struct{}, 1),
 		expiryLockC: make(chan struct{}, 1),
 		dbInfo: dbInfo{
-			blockIdx:     -1,
-			freeblockOff: -1,
+			blockIdx: -1,
 		},
 		opts:  opts,
 		flags: flags,
@@ -251,6 +200,7 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 		// return nil, err
 	}
+	db.syncHandle = syncHandle{DB: db, internal: internal{}}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
@@ -278,112 +228,11 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	return db, nil
 }
 
-func (db *DB) writeHeader(writeFreeList bool) error {
-	if writeFreeList {
-		db.lease.defrag()
-		if err := db.lease.write(); err != nil {
-			logger.Error().Err(err).Str("context", "db.writeHeader")
-			return err
-		}
-	}
-	h := header{
-		signature: signature,
-		version:   version,
-		dbInfo: dbInfo{
-			encryption:   db.encryption,
-			seq:          atomic.LoadUint64(&db.seq),
-			count:        atomic.LoadInt64(&db.count),
-			blockIdx:     db.blocks(),
-			windowIdx:    db.timeWindow.windowIndex(),
-			freeblockOff: db.freeblockOff,
-			cacheID:      db.cacheID,
-		},
-	}
-	return db.index.writeMarshalableAt(h, 0)
-}
-
-func (db *DB) readHeader() error {
-	h := &header{}
-	if err := db.index.readUnmarshalableAt(h, headerSize, 0); err != nil {
-		logger.Error().Err(err).Str("context", "db.readHeader")
-		return err
-	}
-	// if !bytes.Equal(h.signature[:], signature[:]) {
-	// 	return errCorrupted
-	// }
-	db.dbInfo = h.dbInfo
-	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
-	if err := db.lease.read(); err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		logger.Error().Err(err).Str("context", "db.readHeader")
-		return err
-	}
-	return nil
-}
-
-// loadTopicHash loads topic and offset from window file
-func (db *DB) loadTrie() error {
-	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
-		w := &curw
-		if w.entryIdx == 0 {
-			return false, nil
-		}
-		we := w.entries[w.entryIdx-1]
-		off := blockOffset(startBlockIndex(we.Seq()))
-		b := blockHandle{file: db.index, offset: off}
-		if err := b.read(); err != nil {
-			if err == io.EOF {
-				return false, nil
-			}
-			return true, err
-		}
-		entryIdx := -1
-		for i := 0; i < entriesPerIndexBlock; i++ {
-			e := b.entries[i]
-			if e.seq == we.Seq() { //record exist in db
-				entryIdx = i
-				break
-			}
-		}
-		if entryIdx == -1 {
-			return false, nil
-		}
-		e := b.entries[entryIdx]
-		rawtopic, err := db.data.readTopic(e)
-		if err != nil {
-			return true, err
-		}
-		t := new(message.Topic)
-		err = t.Unmarshal(rawtopic)
-		if err != nil {
-			return true, err
-		}
-		if ok := db.trie.add(topic{hash: w.topicHash, offset: w.offset}, t.Parts, t.Depth); !ok {
-			return true, errors.New("db.loadTrie: unable to add topic to trie")
-		}
-		return false, nil
-	})
-	return err
-}
-
 // Close closes the DB.
 func (db *DB) Close() error {
-	if !db.setClosed() {
-		return errClosed
+	if err := db.close(); err != nil {
+		db.close()
 	}
-
-	// Signal all goroutines.
-	close(db.closeC)
-	time.Sleep(db.opts.TinyBatchWriteInterval)
-
-	// Acquire lock.
-	db.writeLockC <- struct{}{}
-	db.syncLockC <- struct{}{}
-
-	// Wait for all goroutines to exit.
-	db.closeW.Wait()
 
 	if err := db.writeHeader(true); err != nil {
 		return err
@@ -403,6 +252,7 @@ func (db *DB) Close() error {
 	if err := db.lock.Unlock(); err != nil {
 		return err
 	}
+
 	//close bufferpool
 	db.bufPool.Done()
 
@@ -422,59 +272,6 @@ func (db *DB) Close() error {
 	return err
 }
 
-func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
-	cacheKey := db.cacheID ^ seq
-	e := entry{}
-	data, err := db.mem.Get(topicHash, cacheKey)
-	if err != nil {
-		return entry{}, errMsgIdDeleted
-	}
-	if data != nil {
-		e.UnmarshalBinary(data[:entrySize])
-		e.cacheBlock = make([]byte, len(data[entrySize:]))
-		copy(e.cacheBlock, data[entrySize:])
-		return e, nil
-	}
-
-	off := blockOffset(startBlockIndex(seq))
-	bh := blockHandle{file: db.index, offset: off}
-	if err := bh.read(); err != nil {
-		return entry{}, err
-	}
-
-	for i := 0; i < entriesPerIndexBlock; i++ {
-		e := bh.entries[i]
-		if e.seq == seq {
-			return e, nil
-		}
-	}
-	return entry{}, nil
-}
-
-// lookups are performed in following order
-// ilookup lookups in memory entries from timeWindow
-// lookup lookups persisted entries from timeWindow file
-func (db *DB) lookup(q *Query) error {
-	topics := db.trie.lookup(q.parts, q.depth, q.topicType)
-	sort.Slice(topics[:], func(i, j int) bool {
-		return topics[i].offset > topics[j].offset
-	})
-	for _, topic := range topics {
-		if len(q.winEntries) > q.Limit {
-			break
-		}
-		limit := q.Limit - len(q.winEntries)
-		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, limit)
-		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, winEntry{topicHash: topic.hash, seq: we.Seq()})
-		}
-	}
-	sort.Slice(q.winEntries[:], func(i, j int) bool {
-		return q.winEntries[i].seq > q.winEntries[j].seq
-	})
-	return nil
-}
-
 // Get return items matching the query paramater
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
@@ -483,7 +280,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	switch {
 	case len(q.Topic) == 0:
 		return nil, errTopicEmpty
-	case len(q.Topic) > MaxTopicLength:
+	case len(q.Topic) > maxTopicLength:
 		return nil, errTopicTooLarge
 	}
 	// // CPU profiling by default
@@ -581,7 +378,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 	switch {
 	case len(q.Topic) == 0:
 		return nil, errTopicEmpty
-	case len(q.Topic) > MaxTopicLength:
+	case len(q.Topic) > maxTopicLength:
 		return nil, errTopicTooLarge
 	}
 
@@ -608,79 +405,11 @@ func (db *DB) NewID() []byte {
 	return message.NewID(db.nextSeq(), false)
 }
 
-// newBlock adds new block to DB and it returns block offset
-func (db *DB) newBlock() (int64, error) {
-	off, err := db.index.extend(blockSize)
-	db.addBlocks(1)
-	return off, err
-}
-
-// newBlock adds new block to DB and it returns block offset
-func (db *DB) extendBlocks(nBlocks int32) error {
-	if _, err := db.index.extend(uint32(nBlocks) * blockSize); err != nil {
-		return err
-	}
-	db.addBlocks(nBlocks)
-	return nil
-}
-
-func (db *DB) parseTopic(e *Entry) (*message.Topic, uint32, error) {
-	topic := new(message.Topic)
-
-	//Parse the Key
-	topic.ParseKey(e.Topic)
-	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
-		return nil, 0, errBadRequest
-	}
-	// In case of ttl, add ttl to the msg and store to the db
-	if ttl, ok := topic.TTL(); ok {
-		return topic, ttl, nil
-	}
-	return topic, 0, nil
-}
-
-func (db *DB) setEntry(e *Entry, ttl uint32) error {
-	//message ID is the database key
-	var id message.ID
-	var seq uint64
-	e.encryption = db.encryption == 1 || e.encryption
-	if e.ExpiresAt == 0 && ttl > 0 {
-		e.ExpiresAt = ttl
-	}
-	if e.ID != nil {
-		id = message.ID(e.ID)
-		if e.encryption {
-			id.SetEncryption()
-		}
-		id.AddContract(e.contract)
-		seq = id.Seq()
-	} else {
-		if ok, s := db.data.lease.getSlot(e.contract); ok {
-			db.meter.Leased.Inc(1)
-			seq = s
-		} else {
-			seq = db.nextSeq()
-		}
-		id = message.NewID(seq, e.encryption)
-		id.AddContract(e.contract)
-	}
-	val := snappy.Encode(nil, e.Payload)
-	if seq == 0 {
-		panic("db.setEntry: seq is zero")
-	}
-	e.seq = seq
-	e.id = id
-	e.val = val
-	return nil
-}
-
 // Put puts entry into DB. It uses default Contract to put entry into DB.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (db *DB) Put(topic, value []byte) error {
-	return db.PutEntry(NewEntry(topic, value))
+func (db *DB) Put(topic, payload []byte) error {
+	return db.PutEntry(NewEntry(topic).WithPayload(payload))
 }
 
 // PutEntry puts entry into the DB, if Contract is not specified then it uses master Contract.
@@ -698,11 +427,11 @@ func (db *DB) PutEntry(e *Entry) error {
 	switch {
 	case len(e.Topic) == 0:
 		return errTopicEmpty
-	case len(e.Topic) > MaxTopicLength:
+	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	case len(e.Payload) == 0:
 		return errValueEmpty
-	case len(e.Payload) > MaxValueLength:
+	case len(e.Payload) > maxValueLength:
 		return errValueTooLarge
 	}
 	var t *message.Topic
@@ -760,123 +489,11 @@ func (db *DB) PutEntry(e *Entry) error {
 	return nil
 }
 
-// SetEntry sets payload to the provided entry and out the entry into the DB, if Contract is not specified then it uses master Contract.
-// It is safe to modify the contents of the argument after PutEntry returns but not
-// before.
-func (db *DB) SetEntry(e *Entry, payload []byte) error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-	e.SetPayload(payload)
-	return db.PutEntry(e)
-}
-
-// packEntry marshal entry and message data
-func (db *DB) packEntry(e *Entry) ([]byte, error) {
-	if db.Count() == MaxKeys {
-		return nil, errFull
-	}
-	e1 := entry{
-		seq:       e.seq,
-		topicSize: e.topic.size,
-		valueSize: uint32(len(e.val)),
-		expiresAt: e.ExpiresAt,
-
-		// topicOffset: e.topicOffset,
-	}
-	data, _ := e1.MarshalBinary()
-	mLen := idSize + int(e.topic.size) + len(e.val)
-	m := make([]byte, mLen)
-	copy(m, e.id)
-	copy(m[idSize:], e.topic.data)
-	copy(m[int(e.topic.size)+idSize:], e.val)
-	data = append(data, m...)
-
-	return data, nil
-}
-
-// tinyCommit commits tiny batch to write ahead log
-func (db *DB) tinyCommit() error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-
-	if db.tinyBatch.count() == 0 {
-		return nil
-	}
-
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
-		return err
-	}
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.closeW.Add(1)
-	db.writeLockC <- struct{}{}
-	defer func() {
-		db.tinyBatch.buffer.Reset()
-		<-db.writeLockC
-		db.closeW.Done()
-	}()
-	offset := uint32(0)
-	buf := db.tinyBatch.buffer.Bytes()
-	for i := uint32(0); i < db.tinyBatch.count(); i++ {
-		dataLen := binary.LittleEndian.Uint32(buf[offset : offset+4])
-		data := buf[offset+4 : offset+dataLen]
-		if err := <-logWriter.Append(data); err != nil {
-			return err
-		}
-		offset += dataLen
-	}
-
-	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
-	db.setLogSeq(db.Seq())
-	if err := <-logWriter.SignalInitWrite(db.LogSeq()); err != nil {
-		return err
-	}
-	db.tinyBatch.reset()
-	return nil
-}
-
-// commit commits batches to write ahead log
-func (db *DB) commit(l int, buf *bpool.Buffer) error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.writeLockC <- struct{}{}
-	db.closeW.Add(1)
-	defer func() {
-		buf.Reset()
-		<-db.writeLockC
-		db.closeW.Done()
-	}()
-
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
-		return err
-	}
-
-	offset := uint32(0)
-	data := buf.Bytes()
-	for i := 0; i < l; i++ {
-		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
-			return err
-		}
-		offset += dataLen
-	}
-
-	db.meter.Puts.Inc(int64(l))
-	db.setLogSeq(db.Seq())
-	return <-logWriter.SignalInitWrite(db.LogSeq())
-}
-
 // Delete sets entry for deletion.
 // It is safe to modify the contents of the argument after Delete returns but not
 // before.
 func (db *DB) Delete(id, topic []byte) error {
-	return db.DeleteEntry(&Entry{ID: id, Topic: topic})
+	return db.DeleteEntry(NewEntry(topic).WithID(id))
 }
 
 // DeleteEntry deletes an entry from DB. you must provide an ID to delete an entry.
@@ -890,7 +507,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		return errMsgIdEmpty
 	case len(e.Topic) == 0:
 		return errTopicEmpty
-	case len(e.Topic) > MaxTopicLength:
+	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
 	// message ID is the database key
@@ -910,35 +527,32 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	return nil
 }
 
-// delete deletes the given key from the DB.
-func (db *DB) delete(topicHash, seq uint64) error {
-	if db.flags.Immutable {
+// Sync syncs entries into DB. Sync happens synchronously.
+// Sync write window entries into summary file and write index, and data to respective index and data files.
+// In case of any error during sync operation recovery is performed on log file (write ahead log).
+func (db *DB) Sync() error {
+	// start := time.Now()
+	if ok := db.syncHandle.status(); ok {
+		// sync is in-progress
 		return nil
 	}
-	// Test filter block for the message id presence
-	if !db.filter.Test(seq) {
+
+	// Sync happens synchronously
+	db.syncLockC <- struct{}{}
+	db.closeW.Add(1)
+	defer func() {
+		<-db.syncLockC
+		db.closeW.Done()
+		// db.meter.TimeSeries.AddTime(time.Since(start))
+	}()
+
+	if ok := db.syncHandle.startSync(); !ok {
 		return nil
 	}
-	db.meter.Dels.Inc(1)
-	memseq := db.cacheID ^ seq
-	if err := db.mem.Remove(topicHash, memseq); err != nil {
-		return err
-	}
-	blockIdx := startBlockIndex(seq)
-	if blockIdx > db.blocks() {
-		return nil // no record to delete
-	}
-	blockWriter := newBlockWriter(&db.index, nil)
-	e, err := blockWriter.del(seq)
-	if err != nil {
-		return err
-	}
-	db.lease.free(e.seq, e.msgOffset, e.mSize())
-	db.decount(1)
-	if db.syncWrites {
-		return db.sync()
-	}
-	return nil
+	defer func() {
+		db.syncHandle.finish()
+	}()
+	return db.syncHandle.Sync()
 }
 
 // FileSize returns the total size of the disk storage used by the DB.
@@ -957,62 +571,7 @@ func (db *DB) FileSize() (int64, error) {
 	return is.Size() + ds.Size(), nil
 }
 
-// Seq current sequence of the DB.
-func (db *DB) Seq() uint64 {
-	return atomic.LoadUint64(&db.seq)
-}
-
-func (db *DB) nextSeq() uint64 {
-	return atomic.AddUint64(&db.seq, 1)
-}
-
-// LogSeq current log sequence of the DB.
-func (db *DB) LogSeq() uint64 {
-	return atomic.LoadUint64(&db.logSeq)
-}
-
-func (db *DB) setLogSeq(logSeq uint64) error {
-	atomic.StoreUint64(&db.logSeq, logSeq)
-	return nil
-}
-
 // Count returns the number of items in the DB.
 func (db *DB) Count() int64 {
 	return atomic.LoadInt64(&db.count)
-}
-
-// blocks returns the total blocks in the DB.
-func (db *DB) blocks() int32 {
-	return atomic.LoadInt32(&db.blockIdx)
-}
-
-// addBlock adds new block to the DB.
-func (db *DB) addBlocks(nBlocks int32) int32 {
-	return atomic.AddInt32(&db.blockIdx, nBlocks)
-}
-
-func (db *DB) incount(count int64) int64 {
-	return atomic.AddInt64(&db.count, count)
-}
-
-func (db *DB) decount(count int64) int64 {
-	return atomic.AddInt64(&db.count, -count)
-}
-
-// Set closed flag; return true if not already closed.
-func (db *DB) setClosed() bool {
-	return atomic.CompareAndSwapUint32(&db.closed, 0, 1)
-}
-
-// Check whether DB was closed.
-func (db *DB) isClosed() bool {
-	return atomic.LoadUint32(&db.closed) != 0
-}
-
-// Check read ok status.
-func (db *DB) ok() error {
-	if db.isClosed() {
-		return errors.New("wal is closed.")
-	}
-	return nil
 }

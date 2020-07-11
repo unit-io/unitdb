@@ -14,6 +14,7 @@ type File interface {
 	Stat() (os.FileInfo, error)
 	Sync() error
 	Truncate(size int64) error
+	Seek(offset int64, whence int) (ret int64, err error)
 }
 
 // FileManager is an interface to support different types of storage such file based storage or a memory-mapped file storage.

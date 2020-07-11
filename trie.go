@@ -10,6 +10,21 @@ const (
 	nul = 0x0
 )
 
+type topics []topic
+
+// addUnique adds topic to the set.
+func (top *topics) addUnique(value topic) (added bool) {
+	for i, v := range *top {
+		if v.hash == value.hash {
+			(*top)[i].offset = value.offset
+			return false
+		}
+	}
+	*top = append(*top, value)
+	added = true
+	return
+}
+
 type key struct {
 	query     uint32
 	wildchars uint8

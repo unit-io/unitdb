@@ -127,7 +127,7 @@ func (db *DB) Varz() (*Varz, error) {
 	v := &Varz{Start: db.start}
 	v.Now = time.Now()
 	v.Uptime = uptime(time.Since(db.start))
-	v.Seq = int64(db.seq)
+	v.Seq = int64(db.sequence)
 	v.Count = int64(db.Count())
 	v.Blocks = int64(db.blocks())
 	v.Gets = db.meter.Gets.Count()

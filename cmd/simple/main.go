@@ -32,21 +32,21 @@ func main() {
 	db.Put(topic, msg)
 
 	// Get message for team alpha channel1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
 
 	// Get message for team alpha channel1 receiver1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
 
 	// Get message for team alpha channel2
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch2?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch2?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -59,23 +59,17 @@ func main() {
 
 	// delete message
 	messageId := db.NewID()
-	db.PutEntry(&unitdb.Entry{
-		ID:      messageId,
-		Topic:   []byte("teams.alpha.ch1.u1"),
-		Payload: []byte("msg for team alpha channel1 receiver1"),
-	})
+	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId).WithPayload([]byte("msg for team alpha channel1 receiver1"))
+	db.PutEntry(entry)
 
-	err = db.DeleteEntry(&unitdb.Entry{
-		ID:    messageId,
-		Topic: []byte("teams.alpha.ch1.u1"),
-	})
+	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId))
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
 	// Get message for team alpha channel1 receiver1
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h"), Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -84,14 +78,10 @@ func main() {
 	// Topic isolation using contract
 	contract, err := db.NewContract()
 
-	db.PutEntry(&unitdb.Entry{
-		Topic:    []byte("teams.alpha.ch1.u1"),
-		Payload:  []byte("msg for team alpha channel1 receiver1"),
-		Contract: contract,
-	})
+	db.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithPayload([]byte("msg for team alpha channel1 receiver1")).WithContract(contract))
 
 	// Get message for team alpha channel1 receiver1 with new contract
-	if msgs, err := db.Get(&unitdb.Query{Topic: []byte("teams.alpha.ch1.u1?last=1h"), Contract: contract, Limit: 10}); err == nil {
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h")).WithContract(contract).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -99,7 +89,7 @@ func main() {
 
 	// iterating over items
 	topic = []byte("teams.alpha.ch1.u1?ttl=1m")
-	it, err := db.Items(&unitdb.Query{Topic: topic})
+	it, err := db.Items(unitdb.NewQuery(topic))
 	if err != nil {
 		log.Fatal(err)
 		return

@@ -12,7 +12,7 @@ func TestIteratorEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	_, err = db.Items(&Query{})
+	_, err = db.Items(NewQuery(nil))
 	if err == nil {
 		t.Fatal(err)
 	}
@@ -33,24 +33,23 @@ func TestIterator(t *testing.T) {
 	var n uint16 = 255
 	items := map[uint16]bool{}
 
-	entry := &Entry{Topic: []byte("unit5.test?ttl=1m"), Contract: contract}
+	entry := NewEntry([]byte("unit5.test?ttl=1m")).WithContract(contract)
 	for i = 0; i < n; i++ {
 		items[i] = false
 		val := []byte(fmt.Sprintf("msg.%2d", i))
-		entry.SetPayload(val)
+		entry.WithPayload(val)
 		if err := db.PutEntry(entry); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	syncHandle := syncHandle{DB: db, internal: internal{}}
-	if err := syncHandle.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	it, err := db.Items(&Query{Topic: []byte("unit5.test?last=1s"), Contract: contract})
+	it, err := db.Items(NewQuery([]byte("unit5.test?last=1s")).WithContract(contract))
 	if err != nil {
 		t.Fatal(err)
 	}

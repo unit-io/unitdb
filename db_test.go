@@ -38,7 +38,7 @@ func TestSimple(t *testing.T) {
 		t.Fatal()
 	}
 
-	if data, err := db.Get(&Query{Topic: topic, Contract: contract}); data != nil || err != nil {
+	if data, err := db.Get(NewQuery(topic).WithContract(contract)); data != nil || err != nil {
 		t.Fatal()
 	}
 
@@ -47,14 +47,12 @@ func TestSimple(t *testing.T) {
 	}
 	var ids [][]byte
 
-	entry := &Entry{Topic: topic}
-	entry.SetContract(contract)
-	entry.SetTTL([]byte("1m"))
+	entry := NewEntry(topic).WithContract(contract).WithTTL([]byte("1m"))
 	for i = 0; i < n; i++ {
 		messageId := db.NewID()
-		entry.SetID(messageId)
+		entry.WithID(messageId)
 		val := []byte(fmt.Sprintf("msg.%2d", i))
-		if err := db.SetEntry(entry, val); err != nil {
+		if err := db.PutEntry(entry.WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, messageId)
@@ -67,7 +65,7 @@ func TestSimple(t *testing.T) {
 			}
 		}
 		var v, vals [][]byte
-		v, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
+		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +93,7 @@ func TestSimple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Get(&Query{Topic: topic, Contract: contract, Limit: int(n)})
+	_, err = db.Get(NewQuery(topic).WithContract(contract).WithLimit(int(n)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +104,13 @@ func TestSimple(t *testing.T) {
 		if err := db.Put(topic, val); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, messageId)
 	}
 	db.tinyCommit()
-	dbsync := syncHandle{DB: db, internal: internal{}}
-	if err := dbsync.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -149,7 +146,7 @@ func TestBatch(t *testing.T) {
 			}
 		}
 		var v, vals [][]byte
-		v, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
+		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,7 +170,7 @@ func TestBatch(t *testing.T) {
 			messageId := db.NewID()
 			topic := append(topic, []byte("?ttl=1h")...)
 			val := []byte(fmt.Sprintf("msg.%2d", i))
-			if err := b.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val, Contract: contract}); err != nil {
+			if err := b.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val).WithContract(contract)); err != nil {
 				t.Fatal(err)
 			}
 			ids = append(ids, messageId)
@@ -190,8 +187,7 @@ func TestBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dbsync := syncHandle{DB: db, internal: internal{}}
-	if err := dbsync.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	verifyMsgsAndClose()
@@ -219,7 +215,7 @@ func TestBatchGroup(t *testing.T) {
 		for i = 0; i < n; i++ {
 			topic := append(topic, []byte("?ttl=1h")...)
 			val := []byte(fmt.Sprintf("msg.%2d", i))
-			if err := db.PutEntry(&Entry{Topic: topic, Payload: val, Contract: contract}); err != nil {
+			if err := db.PutEntry(NewEntry(topic).WithPayload(val).WithContract(contract)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -236,12 +232,11 @@ func TestBatchGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	syncHandle := syncHandle{DB: db, internal: internal{}}
-	if err := syncHandle.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	for i = 0; i < n; i++ {
-		_, err = db.Get(&Query{Topic: append(topic, []byte("?last=1h")...), Contract: contract})
+		_, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,14 +258,12 @@ func TestExpiry(t *testing.T) {
 	var i uint16
 	var n uint16 = 100
 
-	// var wg sync.WaitGroup
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
 		expiresAt := uint32(time.Now().Add(-1 * time.Hour).Unix())
-
+		entry := &Entry{Topic: topic, ExpiresAt: expiresAt}
 		for i = 0; i < n; i++ {
 			val := []byte(fmt.Sprintf("msg.%2d", i))
-			entry := &Entry{Topic: topic, Payload: val, Contract: contract, ExpiresAt: expiresAt}
-			if err := db.PutEntry(entry); err != nil {
+			if err := db.PutEntry(entry.WithPayload(val).WithContract(contract)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -282,10 +275,10 @@ func TestExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if data, err := db.Get(&Query{Topic: topic, Contract: contract, Limit: int(n)}); len(data) != 0 || err != nil {
+	if data, err := db.Get(NewQuery(topic).WithContract(contract).WithLimit(int(n))); len(data) != 0 || err != nil {
 		t.Fatal()
 	}
-	db.ExpireOldEntries()
+	db.expireEntries()
 }
 
 func TestAbort(t *testing.T) {
@@ -310,7 +303,7 @@ func TestAbort(t *testing.T) {
 	dbsync := syncHandle{DB: db, internal: internal{}}
 	dbabort := syncHandle{DB: db, internal: dbsync.internal}
 	dbabort.startSync()
-	if err := dbsync.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	dbabort.abort()
@@ -331,14 +324,13 @@ func TestLeasing(t *testing.T) {
 	for i = 0; i < n; i++ {
 		messageId := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
-		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, messageId)
 	}
 	db.tinyCommit()
-	dbsync := syncHandle{DB: db, internal: internal{}}
-	if err := dbsync.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -350,13 +342,13 @@ func TestLeasing(t *testing.T) {
 		if err := db.Put(topic, val); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.PutEntry(&Entry{ID: messageId, Topic: topic, Payload: val}); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, messageId)
 	}
 	db.tinyCommit()
-	if err := dbsync.Sync(); err != nil {
+	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -387,10 +379,10 @@ func TestWildcardTopics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		db.Put(tt.wtopic, tt.msg)
-		if msg, err := db.Get(&Query{Topic: tt.wtopic, Limit: 10}); len(msg) == 0 || err != nil {
+		if msg, err := db.Get(NewQuery(tt.wtopic).WithLimit(10)); len(msg) == 0 || err != nil {
 			t.Fatal(err)
 		}
-		if msg, err := db.Get(&Query{Topic: tt.topic, Limit: 10}); len(msg) == 0 || err != nil {
+		if msg, err := db.Get(NewQuery(tt.topic).WithLimit(10)); len(msg) == 0 || err != nil {
 			t.Fatal(err)
 		}
 	}

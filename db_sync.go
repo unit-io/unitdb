@@ -41,12 +41,12 @@ type (
 )
 
 func (db *syncHandle) startSync() bool {
-	if db.lastSyncSeq == db.Seq() {
+	if db.lastSyncSeq == db.seq() {
 		db.syncStatusOk = false
 		return db.syncStatusOk
 	}
 	db.startBlockIdx = db.blocks()
-	db.internal.logSeq = db.LogSeq()
+	db.internal.logSeq = db.logSeq()
 
 	db.rawWindow = db.bufPool.Get()
 	db.rawBlock = db.bufPool.Get()
@@ -133,7 +133,6 @@ func (db *syncHandle) abort() error {
 
 func (db *DB) startSyncer(interval time.Duration) {
 	syncTicker := time.NewTicker(interval)
-	syncHandle := syncHandle{DB: db, internal: internal{}}
 	go func() {
 		defer func() {
 			syncTicker.Stop()
@@ -143,11 +142,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-db.closeC:
 				return
 			case <-syncTicker.C:
-				if ok := syncHandle.status(); ok {
-					// sync is in-progress
-					continue
-				}
-				if err := syncHandle.Sync(); err != nil {
+				if err := db.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
 				}
 			}
@@ -161,7 +156,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 		for {
 			select {
 			case <-expirerTicker.C:
-				db.ExpireOldEntries()
+				db.expireEntries()
 			case <-db.closeC:
 				expirerTicker.Stop()
 				return
@@ -236,23 +231,6 @@ func (db *syncHandle) sync(recovery bool, last bool) error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *syncHandle) Sync() error {
-	// start := time.Now()
-	// Sync happens synchronously
-	db.syncLockC <- struct{}{}
-	db.closeW.Add(1)
-	defer func() {
-		<-db.syncLockC
-		db.closeW.Done()
-		// db.meter.TimeSeries.AddTime(time.Since(start))
-	}()
-
-	if ok := db.startSync(); !ok {
-		return nil
-	}
-	defer func() {
-		db.finish()
-	}()
-
 	var err1 error
 	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
 		for h, wEntries := range windowEntries {
@@ -333,7 +311,7 @@ func (db *syncHandle) Sync() error {
 }
 
 // ExpireOldEntries run expirer to delete entries from db if ttl was set on entries and it has expired
-func (db *DB) ExpireOldEntries() error {
+func (db *DB) expireEntries() error {
 	// expiry happens synchronously
 	db.syncLockC <- struct{}{}
 	defer func() {

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/unit-io/unitdb/fs"
+	"github.com/unit-io/unitdb/message"
 )
 
 // flags holds various DB flags.
@@ -108,6 +109,23 @@ type Options struct {
 	FileSystem fs.FileSystem
 }
 
+// BatchOptions is used to set options when using batch operation
+type BatchOptions struct {
+	// In concurrent batch writes order determines how to handle conflicts
+	Order           int8
+	Topic           []byte
+	Contract        uint32
+	Immutable       bool
+	Encryption      bool
+	AllowDuplicates bool
+}
+
+// QueryOptions is used to set options for DB query
+type QueryOptions struct {
+	DefaultQueryLimit int
+	MaxQueryLimit     int
+}
+
 func (src *Options) copyWithDefaults() *Options {
 	opts := Options{}
 	if src != nil {
@@ -144,4 +162,13 @@ func (src *Options) copyWithDefaults() *Options {
 		opts.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 	}
 	return &opts
+}
+
+// DefaultBatchOptions contains default options when writing batches to unitdb topicc=>key-value store.
+var DefaultBatchOptions = &BatchOptions{
+	Order:           0,
+	Topic:           nil,
+	Contract:        message.MasterContract,
+	Encryption:      false,
+	AllowDuplicates: false,
 }

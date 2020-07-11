@@ -62,6 +62,7 @@ type (
 		Path       string
 		TargetSize int64
 		BufferSize int64
+		Reset      bool
 	}
 )
 
@@ -79,6 +80,10 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
 		return wal, false, err
+	}
+	if opts.Reset {
+		wal.logFile.truncate(0)
+		wal.logFile.Seek(0, 0)
 	}
 	if wal.logFile.size == 0 {
 		if _, err = wal.logFile.allocate(headerSize); err != nil {
@@ -100,7 +105,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	go wal.startLogReleaser()
+	// go wal.startLogReleaser()
 	return wal, len(wal.logs) != 0, nil
 }
 

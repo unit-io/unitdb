@@ -16,25 +16,43 @@ type Item struct {
 	err       error
 }
 
-// QueryOptions is used to set options for DB query
-type QueryOptions struct {
-	DefaultQueryLimit int
-	MaxQueryLimit     int
+// Query represents a topic to query and optional contract information.
+type (
+	internalQuery struct {
+		parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
+		depth      uint8
+		topicType  uint8
+		contract   uint64
+		cutoff     int64 // time limit check on message Ids.
+		winEntries []winEntry
+
+		opts *QueryOptions
+	}
+	Query struct {
+		internalQuery
+		Topic    []byte // The topic of the message
+		Contract uint32 // The contract is used as prefix in the message Id
+		Limit    int    // The maximum number of elements to return.
+	}
+)
+
+// NewQuery creates a new query structure from the topic.
+func NewQuery(topic []byte) *Query {
+	return &Query{
+		Topic: topic,
+	}
 }
 
-// Query represents a topic to query and optional contract information.
-type Query struct {
-	Topic      []byte         // The topic of the message
-	Contract   uint32         // The contract is used as prefix in the message Id
-	parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
-	depth      uint8
-	topicType  uint8
-	contract   uint64
-	cutoff     int64 // time limit check on message Ids.
-	winEntries []winEntry
-	Limit      int // The maximum number of elements to return.
+// WithContract sets contract on query.
+func (q *Query) WithContract(contract uint32) *Query {
+	q.Contract = contract
+	return q
+}
 
-	opts *QueryOptions
+// WithLimit sets query limit
+func (q *Query) WithLimit(limit int) *Query {
+	q.Limit = limit
+	return q
 }
 
 // ItemIterator is an iterator over DB topic->key/value pairs. It iterates the items in an unspecified order.

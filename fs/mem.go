@@ -127,6 +127,11 @@ func (m *MemFile) Truncate(size int64) error {
 	return nil
 }
 
+func (m *MemFile) Seek(offset int64, whence int) (ret int64, err error) {
+	m.offset = offset
+	return m.offset, nil
+}
+
 // Name name of the FileSystem
 func (m *MemFile) Name() string {
 	return ""
