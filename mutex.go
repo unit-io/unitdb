@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package unitdb
 
 import (
@@ -10,13 +26,13 @@ const (
 	nMutex = 16
 )
 
-// mutex mutex to lock/unlock on contract
+// mutex mutex to lock/unlock on blockId
 type mutex struct {
 	internal   []*sync.RWMutex
 	consistent *hash.Consistent
 }
 
-// newMutex creates mutex to lock/unlock contract.
+// newMutex creates mutex to lock/unlock blockId.
 func newMutex() mutex {
 	mu := mutex{
 		internal:   make([]*sync.RWMutex, nMutex),
@@ -30,7 +46,7 @@ func newMutex() mutex {
 	return mu
 }
 
-// getMutex returns mutex under given contract
-func (mu *mutex) getMutex(contract uint64) *sync.RWMutex {
-	return mu.internal[mu.consistent.FindBlock(contract)]
+// getMutex returns mutex under given blockId
+func (mu *mutex) getMutex(blockId uint64) *sync.RWMutex {
+	return mu.internal[mu.consistent.FindBlock(blockId)]
 }

@@ -21,7 +21,7 @@ To build unitdb from source code use go get command.
 > go get -u github.com/unit-io/unitdb
 
 ## Usage
-Detailed API documentation is available using the [godoc.org](https://godoc.org/github.com/unit-io/unitd-go) service.
+Detailed API documentation is available using the [go.dev](https://pkg.go.dev/github.com/unit-io/unitdb) service.
 
 Make use of the client by importing it in your Go client source code. For example,
 

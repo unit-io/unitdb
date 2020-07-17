@@ -1,6 +1,6 @@
 # unitdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb)](https://goreportcard.com/report/github.com/unit-io/unitdb)
 
-The unitdb is blazing fast time-series database for IoT, realtime messaging  applications. Unitdb can be used for online gaming and mobile apps as it satisfy the requirements for low latency and binary messaging. The unitdb is a perfect time-series database for applications such as internet of things and internet connected devices.
+The unitdb is blazing fast specialized time-series database for microservices, IoT, and realtime internet connected devices.
 
 # About unitdb 
 
@@ -98,7 +98,7 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 ```
 
 #### Store bulk messages
-Use DB.SetEntry() method to bulk store messages as topic is parsed on first request and subsequent requests skips parsing.
+Use Entry.WithPayload() method to bulk store messages as topic is parsed on first request and subsequent requests skips parsing of it.
 
 ```
 	topic := []byte("teams.alpha.ch1.u1")

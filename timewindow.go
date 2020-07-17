@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package unitdb
 
 import (
@@ -14,7 +30,6 @@ import (
 
 type (
 	winEntry struct {
-		topicHash uint64 // topicHash used in DB query and not persisted
 		seq       uint64
 		expiresAt uint32
 	}
@@ -105,30 +120,30 @@ type timeWindow struct {
 	friezedEntries map[uint64]windowEntries
 }
 
-// A "thread" safe windows.
-// To avoid lock bottlenecks windows are divided into several shards (nShards).
-type windows struct {
+// A "thread" safe windowBlocks.
+// To avoid lock bottlenecks windowBlocks are divided into several shards (nShards).
+type windowBlocks struct {
 	sync.RWMutex
 	window     []*timeWindow
 	consistent *hash.Consistent
 }
 
 // newWindows creates a new concurrent windows.
-func newWindows() *windows {
-	w := &windows{
+func newWindowBlocks() *windowBlocks {
+	wb := &windowBlocks{
 		window:     make([]*timeWindow, nShards),
 		consistent: hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
 	for i := 0; i < nShards; i++ {
-		w.window[i] = &timeWindow{friezedEntries: make(map[uint64]windowEntries), entries: make(map[uint64]windowEntries)}
+		wb.window[i] = &timeWindow{friezedEntries: make(map[uint64]windowEntries), entries: make(map[uint64]windowEntries)}
 	}
 
-	return w
+	return wb
 }
 
 // getWindow returns shard under given key
-func (w *windows) getWindow(key uint64) *timeWindow {
+func (w *windowBlocks) getWindowBlock(key uint64) *timeWindow {
 	w.RLock()
 	defer w.RUnlock()
 	return w.window[w.consistent.FindBlock(key)]
@@ -143,7 +158,7 @@ type (
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
-		*windows
+		*windowBlocks
 		*expiryWindowBucket
 		windowIdx int32
 		opts      *timeOptions
@@ -166,7 +181,7 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	l := &timeWindowBucket{file: f, windowIdx: -1}
-	l.windows = newWindows()
+	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
 	return l
@@ -181,28 +196,28 @@ type windowWriter struct {
 	leasing map[int32][]uint64 // map[blockIdx][]seq
 }
 
-func newWindowWriter(wb *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
-	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: wb, buffer: buf, leasing: make(map[int32][]uint64)}
+func newWindowWriter(tw *timeWindowBucket, buf *bpool.Buffer) *windowWriter {
+	return &windowWriter{winBlocks: make(map[int32]winBlock), timeWindowBucket: tw, buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
-func (wb *timeWindowBucket) add(topicHash uint64, e winEntry) error {
-	// get windows shard
-	ws := wb.getWindow(topicHash)
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
+func (tw *timeWindowBucket) add(topicHash uint64, e winEntry) error {
+	// get windowBlock shard
+	wb := tw.getWindowBlock(topicHash)
+	wb.mu.Lock()
+	defer wb.mu.Unlock()
 
-	if ws.freezed {
-		if _, ok := ws.friezedEntries[topicHash]; ok {
-			ws.friezedEntries[topicHash] = append(ws.friezedEntries[topicHash], e)
+	if wb.freezed {
+		if _, ok := wb.friezedEntries[topicHash]; ok {
+			wb.friezedEntries[topicHash] = append(wb.friezedEntries[topicHash], e)
 		} else {
-			ws.friezedEntries[topicHash] = windowEntries{e}
+			wb.friezedEntries[topicHash] = windowEntries{e}
 		}
 		return nil
 	}
-	if _, ok := ws.entries[topicHash]; ok {
-		ws.entries[topicHash] = append(ws.entries[topicHash], e)
+	if _, ok := wb.entries[topicHash]; ok {
+		wb.entries[topicHash] = append(wb.entries[topicHash], e)
 	} else {
-		ws.entries[topicHash] = windowEntries{e}
+		wb.entries[topicHash] = windowEntries{e}
 	}
 	return nil
 }
@@ -227,45 +242,45 @@ func (w *timeWindow) unFreeze() error {
 }
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
-func (wb *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
+func (tw *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]windowEntries) (bool, error)) (err error) {
 	for i := 0; i < nShards; i++ {
-		ws := wb.windows.window[i]
-		ws.mu.RLock()
+		wb := tw.windowBlocks.window[i]
+		wb.mu.RLock()
 		wEntries := make(map[uint64]windowEntries)
 		if freeze {
-			ws.freeze()
+			wb.freeze()
 		}
-		for h, entries := range ws.entries {
+		for h, entries := range wb.entries {
 			wEntries[h] = entries
 		}
-		ws.mu.RUnlock()
+		wb.mu.RUnlock()
 		stop, err1 := f(wEntries)
 		if stop || err1 != nil {
 			err = err1
 			if freeze {
-				ws.mu.Lock()
-				ws.unFreeze()
-				ws.mu.Unlock()
+				wb.mu.Lock()
+				wb.unFreeze()
+				wb.mu.Unlock()
 			}
 			continue
 		}
 		if freeze {
-			ws.mu.Lock()
-			ws.reset()
-			ws.unFreeze()
-			ws.mu.Unlock()
+			wb.mu.Lock()
+			wb.reset()
+			wb.unFreeze()
+			wb.mu.Unlock()
 		}
 	}
 	return err
 }
 
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
-func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
+func (tw *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
-	nWinBlocks := wb.windowIndex()
+	nWinBlocks := tw.windowIndex()
 	for winBlockIdx < nWinBlocks {
 		off := winBlockOffset(winBlockIdx)
-		b := windowHandle{file: wb.file, offset: off}
+		b := windowHandle{file: tw.file, offset: off}
 		if err := b.read(); err != nil {
 			if err == io.EOF {
 				return nil
@@ -281,15 +296,15 @@ func (wb *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 }
 
 // ilookup lookups window entries from timeWindowBucket and not yet sync to DB
-func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries windowEntries) {
+func (tw *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries windowEntries) {
 	winEntries = make([]winEntry, 0)
-	// get windows shard
-	ws := wb.getWindow(topicHash)
-	ws.mu.RLock()
-	defer ws.mu.RUnlock()
+	// get windowBlock shard
+	wb := tw.getWindowBlock(topicHash)
+	wb.mu.RLock()
+	defer wb.mu.RUnlock()
 	var l int
 	var expiryCount int
-	wEntries := ws.friezedEntries[topicHash]
+	wEntries := wb.friezedEntries[topicHash]
 	if len(wEntries) > 0 {
 		l = limit
 		if len(wEntries) < limit {
@@ -298,7 +313,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 		for _, we := range wEntries[len(wEntries)-l:] { // most recent entries are appended to the end so get the entries from end
 			if we.isExpired() {
 				expiryCount++
-				if err := wb.addExpiry(we); err != nil {
+				if err := tw.addExpiry(we); err != nil {
 					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
 				// if id is expired it does not return an error but continue the iteration
@@ -307,7 +322,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 			winEntries = append(winEntries, we)
 		}
 	}
-	wEntries = ws.entries[topicHash]
+	wEntries = wb.entries[topicHash]
 	if len(wEntries) > 0 {
 		l = limit + expiryCount - l
 		if len(wEntries) < l {
@@ -315,7 +330,7 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 		}
 		for _, we := range wEntries[len(wEntries)-l:] {
 			if we.isExpired() {
-				if err := wb.addExpiry(we); err != nil {
+				if err := tw.addExpiry(we); err != nil {
 					expiryCount++
 					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
@@ -329,15 +344,15 @@ func (wb *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 }
 
 // lookup lookups window entries from window file.
-func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit int) (winEntries windowEntries) {
+func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit int) (winEntries windowEntries) {
 	// winEntries = make([]winEntry, 0)
-	winEntries = wb.ilookup(topicHash, limit)
+	winEntries = tw.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
 		return winEntries
 	}
 	next := func(off int64, f func(windowHandle) (bool, error)) error {
 		for {
-			b := windowHandle{file: wb.file, offset: off}
+			b := windowHandle{file: tw.file, offset: off}
 			if err := b.read(); err != nil {
 				return err
 			}
@@ -360,7 +375,7 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 			limit = limit - len(winEntries)
 			for _, we := range b.entries[b.entryIdx-uint16(limit) : b.entryIdx] {
 				if we.isExpired() {
-					if err := wb.addExpiry(we); err != nil {
+					if err := tw.addExpiry(we); err != nil {
 						expiryCount++
 						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 					}
@@ -375,7 +390,7 @@ func (wb *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 		}
 		for _, we := range b.entries[:b.entryIdx] {
 			if we.isExpired() {
-				if err := wb.addExpiry(we); err != nil {
+				if err := tw.addExpiry(we); err != nil {
 					expiryCount++
 					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
@@ -564,11 +579,11 @@ func (wb *windowWriter) rollback() error {
 	return nil
 }
 
-func (wb *timeWindowBucket) windowIndex() int32 {
-	return wb.windowIdx
+func (tw *timeWindowBucket) windowIndex() int32 {
+	return tw.windowIdx
 }
 
-func (wb *timeWindowBucket) setWindowIndex(windowIdx int32) error {
-	wb.windowIdx = windowIdx
+func (tw *timeWindowBucket) setWindowIndex(windowIdx int32) error {
+	tw.windowIdx = windowIdx
 	return nil
 }

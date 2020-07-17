@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package message
 
 import (
@@ -19,9 +35,8 @@ const (
 	TopicWildcard
 	TopicAnySeparator = '*'
 	TopicAllSeparator = "..."
-	TopicSeparator    = '.'   // The separator character.
-	MaxMessageSize    = 65536 // Maximum message size allowed.
-	TopicMaxDepth     = 100   // Maximum depth for topic using a separator
+	TopicSeparator    = '.' // The separator character.
+	TopicMaxDepth     = 100 // Maximum depth for topic using a separator
 
 	// Wildcard wildcard is hash for wildcard topic such as '*' or '...'
 	Wildcard = uint32(857445537)
@@ -49,19 +64,6 @@ type Part struct {
 	Wildchars uint8
 }
 
-// nextPart is a helper function that reads the next part from a buffer and returns the data and a bool to indicate
-// success.
-func nextPart(buf *bytes.Buffer) (Part, bool) {
-	if buf.Len() < 5 {
-		// missing length
-		return Part{}, false
-	}
-	part := Part{}
-	part.Wildchars = uint8(buf.Next(1)[0])
-	part.Query = binary.LittleEndian.Uint32(buf.Next(4))
-	return part, true
-}
-
 // AddContract adds contract to the parts of a topic.
 func (t *Topic) AddContract(contract uint32) {
 	part := Part{
@@ -82,51 +84,6 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 		h ^= i.Query
 	}
 	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
-}
-
-// Marshal serializes topic to binary
-func (t *Topic) Marshal() []byte {
-	// preallocate buffer of appropriate size
-	var size int
-	//Depth size
-	size++
-	for range t.Parts {
-		size += 5
-	}
-	buf := make([]byte, size)
-
-	var n int
-	buf[n] = byte(t.Depth)
-	n++
-	for _, part := range t.Parts {
-		buf[n] = byte(part.Wildchars)
-		n++
-		binary.LittleEndian.PutUint32(buf[n:], part.Query)
-		n += 4
-	}
-	return buf
-}
-
-// Unmarshal de-serializes topic from binary data
-func (t *Topic) Unmarshal(data []byte) error {
-	buf := bytes.NewBuffer(data)
-
-	var parts []Part
-	depth := uint8(buf.Next(1)[0])
-	for i := 0; i <= int(depth); i++ {
-		if buf.Len() == 0 {
-			break
-		}
-		wildchars := uint8(buf.Next(1)[0])
-		query := binary.LittleEndian.Uint32(buf.Next(4))
-		parts = append(parts, Part{
-			Query:     query,
-			Wildchars: wildchars,
-		})
-	}
-	t.Depth = depth
-	t.Parts = parts
-	return nil
 }
 
 // SplitFunc various split function to split topic using delimeter
@@ -352,6 +309,51 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 		topic.TopicType = TopicStatic
 	}
 	return true
+}
+
+// Marshal serializes topic to binary
+func (t *Topic) Marshal() []byte {
+	// preallocate buffer of appropriate size
+	var size int
+	//Depth size
+	size++
+	for range t.Parts {
+		size += 5
+	}
+	buf := make([]byte, size)
+
+	var n int
+	buf[n] = byte(t.Depth)
+	n++
+	for _, part := range t.Parts {
+		buf[n] = byte(part.Wildchars)
+		n++
+		binary.LittleEndian.PutUint32(buf[n:], part.Query)
+		n += 4
+	}
+	return buf
+}
+
+// Unmarshal de-serializes topic from binary data
+func (t *Topic) Unmarshal(data []byte) error {
+	buf := bytes.NewBuffer(data)
+
+	var parts []Part
+	depth := uint8(buf.Next(1)[0])
+	for i := 0; i <= int(depth); i++ {
+		if buf.Len() == 0 {
+			break
+		}
+		wildchars := uint8(buf.Next(1)[0])
+		query := binary.LittleEndian.Uint32(buf.Next(4))
+		parts = append(parts, Part{
+			Query:     query,
+			Wildchars: wildchars,
+		})
+	}
+	t.Depth = depth
+	t.Parts = parts
+	return nil
 }
 
 // unsafeToString is used to convert a slice
