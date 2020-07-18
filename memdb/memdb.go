@@ -144,15 +144,15 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// getCache returns cache under given blockId
-func (db *DB) getCache(blockId uint64) *memCache {
-	return db.blockCache[db.consistent.FindBlock(blockId)]
+// getCache returns cache under given blockID
+func (db *DB) getCache(blockID uint64) *memCache {
+	return db.blockCache[db.consistent.FindBlock(blockID)]
 }
 
-// Get gets data for the provided key under a blockId
-func (db *DB) Get(blockId uint64, key uint64) ([]byte, error) {
+// Get gets data for the provided key under a blockID
+func (db *DB) Get(blockID uint64, key uint64) ([]byte, error) {
 	// Get cache
-	cache := db.getCache(blockId)
+	cache := db.getCache(blockID)
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get item from cache.
@@ -175,10 +175,10 @@ func (db *DB) Get(blockId uint64, key uint64) ([]byte, error) {
 	return data[4:], nil
 }
 
-// Remove sets data offset to -1 for the key under a blockId
-func (db *DB) Remove(blockId uint64, key uint64) error {
+// Remove sets data offset to -1 for the key under a blockID
+func (db *DB) Remove(blockID uint64, key uint64) error {
 	// Get cache
-	cache := db.getCache(blockId)
+	cache := db.getCache(blockID)
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get item from cache.
@@ -188,10 +188,10 @@ func (db *DB) Remove(blockId uint64, key uint64) error {
 	return nil
 }
 
-// Set sets the value for the given entry for a blockId.
-func (db *DB) Set(blockId uint64, key uint64, data []byte) error {
+// Set sets the value for the given entry for a blockID.
+func (db *DB) Set(blockID uint64, key uint64, data []byte) error {
 	// Get cache.
-	cache := db.getCache(blockId)
+	cache := db.getCache(blockID)
 	cache.Lock()
 	defer cache.Unlock()
 	off, err := cache.data.allocate(uint32(len(data) + 4))
@@ -211,10 +211,10 @@ func (db *DB) Set(blockId uint64, key uint64, data []byte) error {
 	return nil
 }
 
-// Keys gets all keys from block cache for the provided blockId
-func (db *DB) Keys(blockId uint64) []uint64 {
+// Keys gets all keys from block cache for the provided blockID
+func (db *DB) Keys(blockID uint64) []uint64 {
 	// Get cache
-	cache := db.getCache(blockId)
+	cache := db.getCache(blockID)
 	cache.RLock()
 	defer cache.RUnlock()
 	// Get keys from  block cache.
@@ -226,9 +226,9 @@ func (db *DB) Keys(blockId uint64) []uint64 {
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
-func (db *DB) Free(blockId uint64, key uint64) error {
+func (db *DB) Free(blockID uint64, key uint64) error {
 	// Get cache
-	cache := db.getCache(blockId)
+	cache := db.getCache(blockID)
 	cache.Lock()
 	defer cache.Unlock()
 	if cache.freeOffset > 0 {

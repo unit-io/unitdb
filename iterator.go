@@ -138,7 +138,7 @@ func (it *ItemIterator) Next() {
 				}
 				e, err := it.db.readEntry(we.topicHash, we.seq)
 				if err != nil {
-					if err == errMsgIdDoesNotExist {
+					if err == errMsgIDDoesNotExist {
 						logger.Error().Err(err).Str("context", "db.readEntry")
 						return err
 					}
@@ -150,13 +150,13 @@ func (it *ItemIterator) Next() {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
 				}
-				msgId := message.ID(id)
-				if !msgId.EvalPrefix(it.query.Contract, it.query.cutoff) {
+				msgID := message.ID(id)
+				if !msgID.EvalPrefix(it.query.Contract, it.query.cutoff) {
 					it.invalidKeys++
 					return nil
 				}
 
-				if msgId.IsEncrypted() {
+				if msgID.IsEncrypted() {
 					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.Decrypt")

@@ -39,6 +39,7 @@ type (
 		val        []byte
 		encryption bool
 	}
+	// Entry entry is a message entry structure
 	Entry struct {
 		internalEntry
 		ID        []byte // The ID of the message

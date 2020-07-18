@@ -22,10 +22,10 @@ import (
 
 var (
 	errTopicEmpty          = errors.New("Topic is empty")
-	errMsgIdEmpty          = errors.New("Message Id is empty")
-	errMsgIdDeleted        = errors.New("Message Id is deleted")
-	errMsgIdDoesNotExist   = errors.New("Message Id does not exist in database")
-	errMsgIdPrefixMismatch = errors.New("Message Id does not match topic or Contract")
+	errMsgIDEmpty          = errors.New("Message ID is empty")
+	errMsgIDDeleted        = errors.New("Message ID is deleted")
+	errMsgIDDoesNotExist   = errors.New("Message ID does not exist in database")
+	errMsgIDPrefixMismatch = errors.New("Message ID does not match topic or Contract")
 	errTtlTooLarge         = errors.New("TTL is too large")
 	errTopicTooLarge       = errors.New("Topic is too large")
 	errMsgExpired          = errors.New("Message has expired")

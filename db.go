@@ -329,7 +329,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				}
 				e, err := db.readEntry(we.topicHash, we.seq)
 				if err != nil {
-					if err == errMsgIdDeleted {
+					if err == errMsgIDDeleted {
 						invalidCount++
 						return nil
 					}
@@ -341,13 +341,13 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
 				}
-				msgId := message.ID(id)
-				if !msgId.EvalPrefix(q.Contract, q.cutoff) {
+				msgID := message.ID(id)
+				if !msgID.EvalPrefix(q.Contract, q.cutoff) {
 					invalidCount++
 					return nil
 				}
 
-				if msgId.IsEncrypted() {
+				if msgID.IsEncrypted() {
 					val, err = db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.decrypt")
@@ -520,7 +520,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	case db.flags.Immutable:
 		return errImmutable
 	case len(e.ID) == 0:
-		return errMsgIdEmpty
+		return errMsgIDEmpty
 	case len(e.Topic) == 0:
 		return errTopicEmpty
 	case len(e.Topic) > maxTopicLength:

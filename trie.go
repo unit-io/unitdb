@@ -41,42 +41,42 @@ func (top *topics) addUnique(value topic) (added bool) {
 	return
 }
 
-type key struct {
-	query     uint32
+type part struct {
+	hash      uint32
 	wildchars uint8
 }
 
-type part struct {
-	k        key
+type node struct {
+	part     part
 	depth    uint8
-	parent   *part
-	children map[key]*part
+	parent   *node
+	children map[part]*node
 	topics   topics
 }
 
-func (p *part) orphan() {
-	if p.parent == nil {
+func (n *node) orphan() {
+	if n.parent == nil {
 		return
 	}
 
-	delete(p.parent.children, p.k)
-	if len(p.parent.children) == 0 {
-		p.parent.orphan()
+	delete(n.parent.children, n.part)
+	if len(n.parent.children) == 0 {
+		n.parent.orphan()
 	}
 }
 
-// partTrie represents an efficient collection of Trie with lookup capability.
-type partTrie struct {
-	summary map[uint64]*part // summary is map of topichash to node of tree.
-	root    *part            // The root node of the tree.
+// topicTrie represents an efficient collection of Trie with lookup capability.
+type topicTrie struct {
+	summary map[uint64]*node // summary is map of topichash to node of tree.
+	root    *node            // The root node of the tree.
 }
 
-// newPartTrie creates a new part Trie.
-func newPartTrie() *partTrie {
-	return &partTrie{
-		summary: make(map[uint64]*part),
-		root: &part{
-			children: make(map[key]*part),
+// newTrie creates a new Trie.
+func newTopicTrie() *topicTrie {
+	return &topicTrie{
+		summary: make(map[uint64]*node),
+		root: &node{
+			children: make(map[part]*node),
 		},
 	}
 }
@@ -85,15 +85,15 @@ func newPartTrie() *partTrie {
 type trie struct {
 	sync.RWMutex
 	mutex
-	partTrie *partTrie
+	topicTrie *topicTrie
 }
 
 // NewTrie new trie creates a Trie with an initialized Trie.
 // Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
 func newTrie() *trie {
 	return &trie{
-		mutex:    newMutex(),
-		partTrie: newPartTrie(),
+		mutex:     newMutex(),
+		topicTrie: newTopicTrie(),
 	}
 }
 
@@ -101,7 +101,7 @@ func newTrie() *trie {
 func (t *trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
-	return len(t.partTrie.summary)
+	return len(t.topicTrie.summary)
 }
 
 // add adds a topic to trie.
@@ -110,33 +110,33 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 	mu := t.getMutex(topic.hash)
 	mu.Lock()
 	defer mu.Unlock()
-	if _, ok := t.partTrie.summary[topic.hash]; ok {
+	if _, ok := t.topicTrie.summary[topic.hash]; ok {
 		return true
 	}
-	curr := t.partTrie.root
+	curr := t.topicTrie.root
 	for _, p := range parts {
-		k := key{
-			query:     p.Query,
+		newPart := part{
+			hash:      p.Hash,
 			wildchars: p.Wildchars,
 		}
 		t.RLock()
-		child, ok := curr.children[k]
+		child, ok := curr.children[newPart]
 		t.RUnlock()
 		if !ok {
-			child = &part{
-				k:        k,
+			child = &node{
+				part:     newPart,
 				parent:   curr,
-				children: make(map[key]*part),
+				children: make(map[part]*node),
 			}
 			t.Lock()
-			curr.children[k] = child
+			curr.children[newPart] = child
 			t.Unlock()
 		}
 		curr = child
 	}
 	t.Lock()
 	curr.topics.addUnique(topic)
-	t.partTrie.summary[topic.hash] = curr
+	t.topicTrie.summary[topic.hash] = curr
 	t.Unlock()
 	added = true
 	curr.depth = depth
@@ -148,14 +148,14 @@ func (t *trie) lookup(query []message.Part, depth, topicType uint8) (tops topics
 	t.RLock()
 	defer t.RUnlock()
 	// fmt.Println("trie.lookup: depth, parts ", depth, query)
-	t.ilookup(query, depth, topicType, &tops, t.partTrie.root)
+	t.ilookup(query, depth, topicType, &tops, t.topicTrie.root)
 	return
 }
 
-func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topics, currpart *part) {
+func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topics, currNode *node) {
 	// Add topics from the current branch
-	if currpart.depth == depth || (topicType == message.TopicStatic && currpart.k.query == message.Wildcard) {
-		for _, topic := range currpart.topics {
+	if currNode.depth == depth || (topicType == message.TopicStatic && currNode.part.hash == message.Wildcard) {
+		for _, topic := range currNode.topics {
 			tops.addUnique(topic)
 		}
 	}
@@ -167,17 +167,14 @@ func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topic
 
 	q := query[0]
 	// Go through the wildcard match branch
-	for k, p := range currpart.children {
+	for part, n := range currNode.children {
 		switch {
-		case k.query == q.Query && q.Wildchars == k.wildchars:
-			// fmt.Println("trie.lookup: wildchars, part ", k.wildchars, k.query)
-			t.ilookup(query[1:], depth, topicType, tops, p)
-		case k.query == q.Query && uint8(len(query)) >= k.wildchars+1:
-			// fmt.Println("trie.lookup: wildchar, part ", k.wildchars, k.query)
-			t.ilookup(query[k.wildchars+1:], depth, topicType, tops, p)
-		case k.query == message.Wildcard:
-			// fmt.Println("trie.lookup: wildcard, part ", k.query)
-			t.ilookup(query[:], depth, topicType, tops, p)
+		case part.hash == q.Hash && q.Wildchars == part.wildchars:
+			t.ilookup(query[1:], depth, topicType, tops, n)
+		case part.hash == q.Hash && uint8(len(query)) >= part.wildchars+1:
+			t.ilookup(query[part.wildchars+1:], depth, topicType, tops, n)
+		case part.hash == message.Wildcard:
+			t.ilookup(query[:], depth, topicType, tops, n)
 		}
 	}
 }
@@ -185,7 +182,7 @@ func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topic
 func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	t.RLock()
 	defer t.RUnlock()
-	if curr, ok := t.partTrie.summary[topicHash]; ok {
+	if curr, ok := t.topicTrie.summary[topicHash]; ok {
 		for _, topic := range curr.topics {
 			if topic.hash == topicHash {
 				return topic.offset, ok
@@ -198,7 +195,7 @@ func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
 func (t *trie) setOffset(top topic) (ok bool) {
 	t.Lock()
 	defer t.Unlock()
-	if curr, ok := t.partTrie.summary[top.hash]; ok {
+	if curr, ok := t.topicTrie.summary[top.hash]; ok {
 		curr.topics.addUnique(top)
 		return ok
 	}

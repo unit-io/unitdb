@@ -51,7 +51,7 @@ type (
 
 	// Batch is a write batch.
 	Batch struct {
-		batchId uid.LID
+		batchID uid.LID
 		opts    *BatchOptions
 		managed bool
 		grouped bool
@@ -151,7 +151,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	case b.opts.Immutable:
 		return errImmutable
 	case len(e.ID) == 0:
-		return errMsgIdEmpty
+		return errMsgIDEmpty
 	case len(e.Topic) == 0:
 		return errTopicEmpty
 	case len(e.Topic) > maxTopicLength:

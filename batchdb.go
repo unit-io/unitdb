@@ -68,7 +68,7 @@ func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
 	opts.Immutable = db.flags.Immutable
 	opts.Encryption = db.encryption == 1
-	b := &Batch{opts: opts, batchId: uid.NewLID(), db: db}
+	b := &Batch{opts: opts, batchID: uid.NewLID(), db: db}
 	b.buffer = db.bufPool.Get()
 
 	return b

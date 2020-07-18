@@ -65,13 +65,13 @@ func TestSimple(t *testing.T) {
 
 	entry := NewEntry(topic).WithContract(contract).WithTTL([]byte("1m"))
 	for i = 0; i < n; i++ {
-		messageId := db.NewID()
-		entry.WithID(messageId)
+		messageID := db.NewID()
+		entry.WithID(messageID)
 		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := db.PutEntry(entry.WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
-		ids = append(ids, messageId)
+		ids = append(ids, messageID)
 	}
 
 	verifyMsgsAndClose := func() {
@@ -115,15 +115,15 @@ func TestSimple(t *testing.T) {
 	}
 
 	for i = 0; i < n; i++ {
-		messageId := db.NewID()
+		messageID := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := db.Put(topic, val); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageID).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
-		ids = append(ids, messageId)
+		ids = append(ids, messageID)
 	}
 	db.tinyCommit()
 	if err := db.Sync(); err != nil {
@@ -183,13 +183,13 @@ func TestBatch(t *testing.T) {
 		// wg.Add(1)
 		var ids [][]byte
 		for i = 0; i < n; i++ {
-			messageId := db.NewID()
+			messageID := db.NewID()
 			topic := append(topic, []byte("?ttl=1h")...)
 			val := []byte(fmt.Sprintf("msg.%2d", i))
-			if err := b.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val).WithContract(contract)); err != nil {
+			if err := b.PutEntry(NewEntry(topic).WithID(messageID).WithPayload(val).WithContract(contract)); err != nil {
 				t.Fatal(err)
 			}
-			ids = append(ids, messageId)
+			ids = append(ids, messageID)
 		}
 		for _, id := range ids {
 			if err := b.Delete(id, topic); err != nil {
@@ -338,12 +338,12 @@ func TestLeasing(t *testing.T) {
 	topic := []byte("unit1.test")
 	var ids [][]byte
 	for i = 0; i < n; i++ {
-		messageId := db.NewID()
+		messageID := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
-		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageID).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
-		ids = append(ids, messageId)
+		ids = append(ids, messageID)
 	}
 	db.tinyCommit()
 	if err := db.Sync(); err != nil {
@@ -353,15 +353,15 @@ func TestLeasing(t *testing.T) {
 		db.Delete(id, topic)
 	}
 	for i = 0; i < n; i++ {
-		messageId := db.NewID()
+		messageID := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
 		if err := db.Put(topic, val); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.PutEntry(NewEntry(topic).WithID(messageId).WithPayload(val)); err != nil {
+		if err := db.PutEntry(NewEntry(topic).WithID(messageID).WithPayload(val)); err != nil {
 			t.Fatal(err)
 		}
-		ids = append(ids, messageId)
+		ids = append(ids, messageID)
 	}
 	db.tinyCommit()
 	if err := db.Sync(); err != nil {

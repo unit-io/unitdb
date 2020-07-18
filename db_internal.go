@@ -186,7 +186,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
 	e := entry{}
 	data, err := db.mem.Get(topicHash, cacheKey)
 	if err != nil {
-		return entry{}, errMsgIdDeleted
+		return entry{}, errMsgIDDeleted
 	}
 	if data != nil {
 		e.UnmarshalBinary(data[:entrySize])
@@ -484,7 +484,7 @@ func (db *DB) isClosed() bool {
 // Check read ok status.
 func (db *DB) ok() error {
 	if db.isClosed() {
-		return errors.New("wal is closed.")
+		return errors.New("wal is closed")
 	}
 	return nil
 }

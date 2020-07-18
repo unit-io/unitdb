@@ -60,7 +60,7 @@ type Topic struct {
 
 // Part represents a parsed topic parts broken based on topic separator.
 type Part struct {
-	Query     uint32
+	Hash      uint32
 	Wildchars uint8
 }
 
@@ -68,7 +68,7 @@ type Part struct {
 func (t *Topic) AddContract(contract uint32) {
 	part := Part{
 		Wildchars: 0,
-		Query:     contract,
+		Hash:      contract,
 	}
 	parts := []Part{part}
 	t.Parts = append(parts, t.Parts...)
@@ -79,9 +79,9 @@ func (t *Topic) GetHash(contract uint64) uint64 {
 	if len(t.Parts) == 1 {
 		return contract
 	}
-	h := t.Parts[0].Query
+	h := t.Parts[0].Hash
 	for _, i := range t.Parts[1:] {
-		h ^= i.Query
+		h ^= i.Hash
 	}
 	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
 }
@@ -106,7 +106,7 @@ func (splitFunc) splitOpsKeyValue(c rune) bool {
 
 // Target returns the topic (first element of the query, second element of Parts)
 func (t *Topic) Target() uint32 {
-	return t.Parts[0].Query
+	return t.Parts[0].Hash
 }
 
 // TTL returns a Time-To-Live option.
@@ -182,9 +182,9 @@ func (t *Topic) parseOptions(text []byte) (ok bool) {
 
 // GetHashCode combines the topic parts into a single hash.
 func (t *Topic) GetHashCode() uint32 {
-	h := t.Parts[0].Query
+	h := t.Parts[0].Hash
 	for _, i := range t.Parts[1:] {
-		h ^= i.Query
+		h ^= i.Hash
 	}
 	return h
 }
@@ -234,7 +234,7 @@ func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 	parts := bytes.FieldsFunc(topic.Topic, fn.splitTopic)
 	part = Part{}
 	for _, p := range parts {
-		part.Query = hash.WithSalt(p, contract)
+		part.Hash = hash.WithSalt(p, contract)
 		topic.Parts = append(topic.Parts, part)
 	}
 
@@ -277,14 +277,14 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 		if bytes.HasSuffix(p, q) {
 			topic.TopicType = TopicWildcard
 			if idx == 0 {
-				part.Query = hash.WithSalt(p, contract)
+				part.Hash = hash.WithSalt(p, contract)
 				topic.Parts = append(topic.Parts, part)
 			}
 			wildchars++
 			wildcharcount++
 			continue
 		}
-		part.Query = hash.WithSalt(p, contract)
+		part.Hash = hash.WithSalt(p, contract)
 		topic.Parts = append(topic.Parts, part)
 		if wildchars > 0 {
 			if idx-wildcharcount-1 >= 0 {
@@ -300,7 +300,7 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 		topic.Parts[len(topic.Parts)-1:][0].Wildchars = wildchars
 	}
 	if topic.Depth == TopicMaxDepth {
-		part.Query = Wildcard
+		part.Hash = Wildcard
 		topic.Parts = append(topic.Parts, part)
 	}
 	topic.Depth = depth
@@ -328,7 +328,7 @@ func (t *Topic) Marshal() []byte {
 	for _, part := range t.Parts {
 		buf[n] = byte(part.Wildchars)
 		n++
-		binary.LittleEndian.PutUint32(buf[n:], part.Query)
+		binary.LittleEndian.PutUint32(buf[n:], part.Hash)
 		n += 4
 	}
 	return buf
@@ -345,9 +345,9 @@ func (t *Topic) Unmarshal(data []byte) error {
 			break
 		}
 		wildchars := uint8(buf.Next(1)[0])
-		query := binary.LittleEndian.Uint32(buf.Next(4))
+		hash := binary.LittleEndian.Uint32(buf.Next(4))
 		parts = append(parts, Part{
-			Query:     query,
+			Hash:      hash,
 			Wildchars: wildchars,
 		})
 	}

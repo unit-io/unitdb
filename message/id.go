@@ -38,9 +38,9 @@ const (
 // Contract generates contract from parts and concatenate contract and first part of the topic
 func Contract(parts []Part) uint64 {
 	if len(parts) == 1 {
-		return /*uint64(Wildcard)<<32 +*/ uint64(parts[0].Query)
+		return uint64(parts[0].Hash)
 	}
-	return uint64(parts[1].Query)<<32 + uint64(parts[0].Query)
+	return uint64(parts[1].Hash)<<32 + uint64(parts[0].Hash)
 }
 
 // ID represents a message ID encoded at 128bit and lexigraphically sortable
@@ -54,7 +54,7 @@ func (id *ID) AddContract(contract uint64) {
 	*id = newid
 }
 
-// Contract gets the contract for the id.
+// Contract gets the contract for the ID.
 func (id ID) Contract() uint64 {
 	if len(id) < fixed+8 {
 		return 0
@@ -62,7 +62,7 @@ func (id ID) Contract() uint64 {
 	return binary.LittleEndian.Uint64(id[fixed:])
 }
 
-// NewID generates a new message identifier without containing a prefix. Prefix is set later when arrives.
+// NewID generates a new message identifier without containing a prefix. Prefix is set later.
 func NewID(seq uint64, encrypted bool) ID {
 	var eBit int8
 	if encrypted {
