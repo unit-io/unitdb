@@ -168,9 +168,9 @@ Use Batch.Put() to write to a single topic in a batch.
 	// Writing to single topic in a batch
 	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
-		opts.Topic = []byte("teams.alpha.ch1.*?ttl=1h")
 		b.SetOptions(opts)
-		b.Put([]byte("msg for team alpha channel1 all receivers"))
+		topic := []byte("teams.alpha.ch1.*?ttl=1h")
+		b.Put(topic, []byte("msg for team alpha channel1 all receivers"))
 		return b.Write()
     })
 
@@ -251,12 +251,12 @@ Topic isolation can be achieved using Contract while putting messages into unitd
     // Writing to single topic in a batch
 	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
-		opts.Topic = []byte("teams.alpha.ch1.*?ttl=1h")
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.Put([]byte("msg for team alpha channel1 all receivers #1"))
-		b.Put([]byte("msg for team alpha channel1 all receivers #2"))
-		b.Put([]byte("msg for team alpha channel1 all receivers #3"))
+		topic := []byte("teams.alpha.ch1.*?ttl=1h")
+		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
+		b.Put(topic, []byte("msg for team alpha channel1 all receivers #2"))
+		b.Put(topic, []byte("msg for team alpha channel1 all receivers #3"))
 		return b.Write()
     })
 
@@ -283,9 +283,9 @@ Note, encryption can also be set on entire database using DB.Open() and set encr
 	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		opts := unitdb.DefaultBatchOptions
 		opts.Encryption = true
-		opts.Topic = []byte("teams.alpha.ch1?ttl=1h")
 		b.SetOptions(opts)
-		b.Put([]byte("msg for team alpha channel1"))
+		topic := []byte("teams.alpha.ch1?ttl=1h")
+		b.Put(topic, []byte("msg for team alpha channel1"))
 		err := b.Write()
 		return err
 	})

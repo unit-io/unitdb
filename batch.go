@@ -74,14 +74,8 @@ type (
 // Client must provide Topic to the BatchOptions.
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
-func (b *Batch) Put(payload []byte) error {
-	switch {
-	case len(b.opts.Topic) == 0:
-		return errTopicEmpty
-	case len(b.opts.Topic) > maxTopicLength:
-		return errTopicTooLarge
-	}
-	return b.PutEntry(NewEntry(b.opts.Topic).WithPayload(payload).WithContract(b.opts.Contract))
+func (b *Batch) Put(topic, payload []byte) error {
+	return b.PutEntry(NewEntry(topic).WithPayload(payload).WithContract(b.opts.Contract))
 }
 
 // PutEntry appends entries to a bacth for given topic->key/value pair.

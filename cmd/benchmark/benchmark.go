@@ -185,10 +185,10 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 					db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 						opts := unitdb.DefaultBatchOptions
 						opts.AllowDuplicates = true
-						opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
 						b.SetOptions(opts)
+						topic := append(topics[i-1], []byte("?ttl=1h")...)
 						for k := 0; k < batchSize; k++ {
-							b.Put(vals[k])
+							b.Put(topic, vals[k])
 						}
 						if err := b.Write(); err != nil {
 							return err
@@ -265,10 +265,10 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 				opts := unitdb.DefaultBatchOptions
 				opts.AllowDuplicates = true
-				opts.Topic = append(topics[i-1], []byte("?ttl=1h")...)
 				b.SetOptions(opts)
+				topic := append(topics[i-1], []byte("?ttl=1h")...)
 				for k := 0; k < batchSize; k++ {
-					b.Put(vals[k])
+					b.Put(topic, vals[k])
 				}
 				return b.Write()
 			})

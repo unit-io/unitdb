@@ -129,7 +129,6 @@ type Options struct {
 type BatchOptions struct {
 	// In concurrent batch writes order determines how to handle conflicts
 	Order           int8
-	Topic           []byte
 	Contract        uint32
 	Immutable       bool
 	Encryption      bool
@@ -183,7 +182,6 @@ func (src *Options) copyWithDefaults() *Options {
 // DefaultBatchOptions contains default options when writing batches to unitdb topicc=>key-value store.
 var DefaultBatchOptions = &BatchOptions{
 	Order:           0,
-	Topic:           nil,
 	Contract:        message.MasterContract,
 	Encryption:      false,
 	AllowDuplicates: false,
