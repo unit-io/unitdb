@@ -41,7 +41,7 @@ const (
 	logPostfix    = ".log"
 	leasePostfix  = ".lease"
 	lockPostfix   = ".lock"
-	idSize        = 24
+	idSize        = 20
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
@@ -250,21 +250,21 @@ func (db *DB) extendBlocks(nBlocks int32) error {
 	return nil
 }
 
-func (db *DB) parseTopic(e *Entry) (*message.Topic, uint32, error) {
-	topic := new(message.Topic)
+func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32, error) {
+	t := new(message.Topic)
 
 	//Parse the Key
-	topic.ParseKey(e.Topic)
+	t.ParseKey(topic)
 	// Parse the topic
-	topic.Parse(e.Contract, true)
-	if topic.TopicType == message.TopicInvalid {
+	t.Parse(contract, true)
+	if t.TopicType == message.TopicInvalid {
 		return nil, 0, errBadRequest
 	}
 	// In case of ttl, add ttl to the msg and store to the db
-	if ttl, ok := topic.TTL(); ok {
-		return topic, ttl, nil
+	if ttl, ok := t.TTL(); ok {
+		return t, ttl, nil
 	}
-	return topic, 0, nil
+	return t, 0, nil
 }
 
 func (db *DB) setEntry(e *Entry, ttl uint32) error {
@@ -280,17 +280,17 @@ func (db *DB) setEntry(e *Entry, ttl uint32) error {
 		if e.encryption {
 			id.SetEncryption()
 		}
-		id.AddContract(e.contract)
+		id.AddPrefix(e.prefix)
 		seq = id.Seq()
 	} else {
-		if ok, s := db.data.lease.getSlot(e.contract); ok {
+		if ok, s := db.data.lease.getSlot(e.prefix); ok {
 			db.meter.Leased.Inc(1)
 			seq = s
 		} else {
 			seq = db.nextSeq()
 		}
 		id = message.NewID(seq, e.encryption)
-		id.AddContract(e.contract)
+		id.AddPrefix(e.prefix)
 	}
 	val := snappy.Encode(nil, e.Payload)
 	if seq == 0 {
@@ -312,8 +312,6 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 		topicSize: e.topic.size,
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
-
-		// topicOffset: e.topicOffset,
 	}
 	data, _ := e1.MarshalBinary()
 	mLen := idSize + int(e.topic.size) + len(e.val)

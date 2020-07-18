@@ -75,15 +75,15 @@ func (t *Topic) AddContract(contract uint32) {
 }
 
 // GetHash combines the parts into a single hash.
-func (t *Topic) GetHash(contract uint64) uint64 {
+func (t *Topic) GetHash(prefix uint64) uint64 {
 	if len(t.Parts) == 1 {
-		return contract
+		return prefix
 	}
 	h := t.Parts[0].Hash
 	for _, i := range t.Parts[1:] {
 		h ^= i.Hash
 	}
-	return uint64(h)<<32 + (contract << 8) | uint64(t.Depth)
+	return uint64(h)<<32 + (prefix << 8) | uint64(t.Depth)
 }
 
 // SplitFunc various split function to split topic using delimeter

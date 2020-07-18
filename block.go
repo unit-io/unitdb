@@ -35,10 +35,9 @@ type (
 		seq       uint64
 		topicSize uint16
 		valueSize uint32
-		expiresAt uint32
 		msgOffset int64
+		expiresAt uint32
 
-		// topicOffset int64
 		cacheBlock []byte
 	}
 

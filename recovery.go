@@ -99,8 +99,8 @@ func (db *syncHandle) startRecovery() error {
 			if err := t.Unmarshal(rawtopic); err != nil {
 				return true, err
 			}
-			contract := message.Contract(t.Parts)
-			topicHash := t.GetHash(contract)
+			prefix := message.Prefix(t.Parts)
+			topicHash := t.GetHash(prefix)
 			db.timeWindow.add(topicHash, winEntry{seq: logEntry.seq, expiresAt: logEntry.expiresAt})
 			if ok := db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth); !ok {
 				return true, errBadRequest

@@ -95,14 +95,14 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if e.Contract == 0 {
 		e.Contract = message.MasterContract
 	}
-	topic, ttl, err := b.db.parseTopic(e)
+	topic, ttl, err := b.db.parseTopic(e.Contract, e.Topic)
 	if err != nil {
 		return err
 	}
 	topic.AddContract(e.Contract)
 	e.topic.data = topic.Marshal()
 	e.topic.size = uint16(len(e.topic.data))
-	e.contract = message.Contract(topic.Parts)
+	e.prefix = message.Prefix(topic.Parts)
 	e.encryption = b.opts.Encryption
 	if err := b.db.setEntry(e, ttl); err != nil {
 		return err
@@ -157,7 +157,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
-	topic, _, err := b.db.parseTopic(e)
+	topic, _, err := b.db.parseTopic(e.Contract, e.Topic)
 	if err != nil {
 		return err
 	}
@@ -167,9 +167,9 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	topic.AddContract(e.Contract)
 	e.topic.data = topic.Marshal()
 	e.topic.size = uint16(len(e.topic.data))
-	e.contract = message.Contract(topic.Parts)
+	e.prefix = message.Prefix(topic.Parts)
 	id := message.ID(e.ID)
-	id.AddContract(e.contract)
+	id.AddPrefix(e.prefix)
 	e.id = id
 	e.seq = id.Seq()
 	key := topic.GetHashCode()
@@ -209,23 +209,23 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 
 		ID := message.ID(id)
 		seq := ID.Seq()
-		contract := ID.Contract()
-		if _, ok := topics[contract]; !ok {
+		prefix := ID.Prefix()
+		if _, ok := topics[prefix]; !ok {
 			t := new(message.Topic)
 			t.Unmarshal(rawTopic)
-			topics[contract] = t
-			if ok := b.db.trie.add(topic{hash: t.GetHash(contract)}, t.Parts, t.Depth); !ok {
+			topics[prefix] = t
+			if ok := b.db.trie.add(topic{hash: t.GetHash(prefix)}, t.Parts, t.Depth); !ok {
 				return errBadRequest
 			}
 		}
-		topic := topics[contract]
-		topicHash := topic.GetHash(contract)
+		topic := topics[prefix]
+		topicHash := topic.GetHash(prefix)
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			b.db.delete(contract, seq)
+			b.db.delete(prefix, seq)
 			continue
 		}
 		b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: index.expiresAt})

@@ -39,11 +39,11 @@ type (
 		seq       uint64
 	}
 	internalQuery struct {
-		parts      []message.Part // parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
+		parts      []message.Part // The parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 		depth      uint8
 		topicType  uint8
-		contract   uint64
-		cutoff     int64 // time limit check on message Ids.
+		prefix     uint64 // The prefix is generated from contract and first of the topic
+		cutoff     int64  // The cutoff is time limit check on message Ids.
 		winEntries []query
 
 		opts *QueryOptions
@@ -102,7 +102,7 @@ func (q *Query) parse() error {
 	q.parts = topic.Parts
 	q.depth = topic.Depth
 	q.topicType = topic.TopicType
-	q.contract = message.Contract(q.parts)
+	q.prefix = message.Prefix(q.parts)
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
@@ -126,7 +126,7 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.contract)
+	mu := it.db.getMutex(it.query.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil

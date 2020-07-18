@@ -32,7 +32,7 @@ type topic struct {
 
 type (
 	internalEntry struct {
-		contract uint64
+		prefix uint64 // The prefix is generated from contract and first part of topic
 		topic
 		seq        uint64
 		id         []byte

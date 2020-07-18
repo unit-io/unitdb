@@ -305,7 +305,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
-	mu := db.getMutex(q.contract)
+	mu := db.getMutex(q.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
 	db.lookup(q)
@@ -457,15 +457,15 @@ func (db *DB) PutEntry(e *Entry) error {
 		if e.Contract == 0 {
 			e.Contract = message.MasterContract
 		}
-		t, ttl, err = db.parseTopic(e)
+		t, ttl, err = db.parseTopic(e.Contract, e.Topic)
 		if err != nil {
 			return err
 		}
 		t.AddContract(e.Contract)
 		e.topic.data = t.Marshal()
 		e.topic.size = uint16(len(e.topic.data))
-		e.contract = message.Contract(t.Parts)
-		e.topic.hash = t.GetHash(e.contract)
+		e.prefix = message.Prefix(t.Parts)
+		e.topic.hash = t.GetHash(e.prefix)
 		// fmt.Println("db.PutEntry: contact, topicHash ", e.contract, e.topic.hash)
 		if ok := db.trie.add(topic{hash: e.topic.hash}, t.Parts, t.Depth); !ok {
 			return errBadRequest
@@ -528,7 +528,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 	// message ID is the database key
 	id := message.ID(e.ID)
-	topic, _, err := db.parseTopic(e)
+	topic, _, err := db.parseTopic(e.Contract, e.Topic)
 	if err != nil {
 		return err
 	}
@@ -536,8 +536,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
-	e.contract = message.Contract(topic.Parts)
-	if err := db.delete(topic.GetHash(e.contract), message.ID(id).Seq()); err != nil {
+	e.prefix = message.Prefix(topic.Parts)
+	if err := db.delete(topic.GetHash(e.prefix), message.ID(id).Seq()); err != nil {
 		return err
 	}
 	return nil

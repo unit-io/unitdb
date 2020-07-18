@@ -18,8 +18,6 @@ package message
 
 import (
 	"encoding/binary"
-	"math"
-	"sync/atomic"
 
 	"github.com/unit-io/unitdb/uid"
 )
@@ -32,30 +30,30 @@ const (
 	None      = uint32(0)      // ID has no flags.
 	Encrypted = uint32(1 << 0) // ID has encryption set.
 
-	fixed = 16
+	fixed = 12
 )
 
-// Contract generates contract from parts and concatenate contract and first part of the topic
-func Contract(parts []Part) uint64 {
+// Prefix generates prefix from parts and concatenate contract as first part of the topic
+func Prefix(parts []Part) uint64 {
 	if len(parts) == 1 {
 		return uint64(parts[0].Hash)
 	}
 	return uint64(parts[1].Hash)<<32 + uint64(parts[0].Hash)
 }
 
-// ID represents a message ID encoded at 128bit and lexigraphically sortable
+// ID represents a message ID and lexigraphically sortable
 type ID []byte
 
-// AddContract adds a Contract to ID, it is used to validate prefix.
-func (id *ID) AddContract(contract uint64) {
+// AddPrefix adds a Prefix to the ID, it is used to validate prefix.
+func (id *ID) AddPrefix(prefix uint64) {
 	newid := make(ID, fixed+8)
 	copy(newid[:fixed], *id)
-	binary.LittleEndian.PutUint64(newid[fixed:fixed+8], contract)
+	binary.LittleEndian.PutUint64(newid[fixed:fixed+8], prefix)
 	*id = newid
 }
 
-// Contract gets the contract for the ID.
-func (id ID) Contract() uint64 {
+// Prefix gets the prefix of the ID.
+func (id ID) Prefix() uint64 {
 	if len(id) < fixed+8 {
 		return 0
 	}
@@ -70,26 +68,25 @@ func NewID(seq uint64, encrypted bool) ID {
 	}
 	id := make(ID, fixed)
 	binary.LittleEndian.PutUint32(id[0:4], uid.NewApoch())
-	binary.LittleEndian.PutUint32(id[4:8], math.MaxUint32-atomic.AddUint32(&uid.Next, 1)) // Reverse order
-	binary.LittleEndian.PutUint64(id[8:16], (seq<<8)|uint64(eBit))                        //set encryption flag on id
+	binary.LittleEndian.PutUint64(id[4:12], (seq<<8)|uint64(eBit)) //set encryption flag on id
 	return id
 }
 
 // SetEncryption sets an encryption on ID
 func (id ID) SetEncryption() {
 	eBit := 1
-	id[16] = byte(eBit)
+	id[12] = byte(eBit)
 }
 
 // IsEncrypted return if an encryption is set on ID
 func (id ID) IsEncrypted() bool {
-	num := binary.LittleEndian.Uint64(id[8:16])
+	num := binary.LittleEndian.Uint64(id[4:12])
 	return num&0xff != 0
 }
 
 // Seq gets the seq for the id.
 func (id ID) Seq() uint64 {
-	num := binary.LittleEndian.Uint64(id[8:16])
+	num := binary.LittleEndian.Uint64(id[4:12])
 	return uint64(num >> 8)
 }
 
