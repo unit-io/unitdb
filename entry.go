@@ -32,7 +32,6 @@ type topic struct {
 
 type (
 	internalEntry struct {
-		prefix uint64 // The prefix is generated from contract and first part of topic
 		topic
 		seq        uint64
 		id         []byte
@@ -88,6 +87,8 @@ func (e *Entry) WithTTL(ttl []byte) *Entry {
 }
 
 func (e *Entry) reset() {
+	e.topic.size = 0
+	e.topic.data = nil
 	e.seq = 0
 	e.id = nil
 	e.val = nil

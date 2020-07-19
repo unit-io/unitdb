@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
+	"github.com/unit-io/unitdb/message"
 	"github.com/unit-io/unitdb/uid"
 	"golang.org/x/sync/errgroup"
 )
@@ -68,7 +69,7 @@ func (db *DB) batch() *Batch {
 	opts := DefaultBatchOptions
 	opts.Immutable = db.flags.Immutable
 	opts.Encryption = db.encryption == 1
-	b := &Batch{opts: opts, batchID: uid.NewLID(), db: db}
+	b := &Batch{opts: opts, batchID: uid.NewLID(), db: db, topics: make(map[uint64]*message.Topic)}
 	b.buffer = db.bufPool.Get()
 
 	return b

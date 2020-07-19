@@ -72,15 +72,15 @@ func newLease(f file, minimumSize int64) *lease {
 	return l
 }
 
-// freeSlots returns freeSlots under given contract
-func (l *lease) freeSlots(contract uint64) *freeslots {
-	return l.slots[l.consistent.FindBlock(contract)]
+// freeSlots returns freeSlots under given blockID
+func (l *lease) freeSlots(blockID uint64) *freeslots {
+	return l.slots[l.consistent.FindBlock(blockID)]
 }
 
 // get first free seq
-func (l *lease) getSlot(contract uint64) (ok bool, seq uint64) {
+func (l *lease) getSlot(blockID uint64) (ok bool, seq uint64) {
 	// Get shard
-	fss := l.freeSlots(contract)
+	fss := l.freeSlots(blockID)
 	fss.Lock()
 	defer fss.Unlock()
 	for seq, ok = range fss.fs {
@@ -107,9 +107,9 @@ func (fs *freeslots) len() int {
 	return len(fs.fs)
 }
 
-// freeBlocks returns freeBlocks under given contract
-func (l *lease) freeBlocks(contract uint64) *freeBlocks {
-	return l.blocks[l.consistent.FindBlock(contract)]
+// freeBlocks returns freeBlocks under given blockID
+func (l *lease) freeBlocks(blockID uint64) *freeBlocks {
+	return l.blocks[l.consistent.FindBlock(blockID)]
 }
 
 func (s *freeBlocks) search(size uint32) int {

@@ -41,7 +41,7 @@ const (
 	logPostfix    = ".log"
 	leasePostfix  = ".lease"
 	lockPostfix   = ".lock"
-	idSize        = 20
+	idSize        = 24
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
@@ -119,12 +119,21 @@ func (db *DB) readHeader() error {
 
 // loadTopicHash loads topic and offset from window file
 func (db *DB) loadTrie() error {
+	topics := make(map[uint64]int64) // map[topicHash]offset
 	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
 		w := &curw
 		if w.entryIdx == 0 {
 			return false, nil
 		}
-		we := w.entries[w.entryIdx-1]
+		if _, ok := topics[w.topicHash]; !ok {
+			topics[w.topicHash] = w.offset
+		}
+		if w.next != 0 {
+			// iterate till first win block of topic is found
+			return false, nil
+		}
+		// we := w.entries[w.entryIdx-1]
+		we := w.entries[0]
 		off := blockOffset(startBlockIndex(we.Seq()))
 		b := blockHandle{file: db.index, offset: off}
 		if err := b.read(); err != nil {
@@ -136,15 +145,15 @@ func (db *DB) loadTrie() error {
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
 			e := b.entries[i]
-			if e.seq == we.Seq() { //record exist in db
+			if e.seq == we.Seq() { //topic exist in db
 				entryIdx = i
 				break
 			}
 		}
-		if entryIdx == -1 {
+		e := b.entries[entryIdx]
+		if entryIdx == -1 || e.topicSize == 0 {
 			return false, nil
 		}
-		e := b.entries[entryIdx]
 		rawtopic, err := db.data.readTopic(e)
 		if err != nil {
 			return true, err
@@ -154,8 +163,10 @@ func (db *DB) loadTrie() error {
 		if err != nil {
 			return true, err
 		}
-		if ok := db.trie.add(topic{hash: w.topicHash, offset: w.offset}, t.Parts, t.Depth); !ok {
-			return true, errors.New("db.loadTrie: unable to add topic to trie")
+		if ok := db.trie.add(topic{hash: w.topicHash, offset: topics[w.topicHash]}, t.Parts, t.Depth); !ok {
+			// fmt.Println("db.loadTrie: topic exist in the trie ", w.topicHash, topics[w.topicHash])
+			logger.Info().Str("context", "db.loadTrie: topic exist in the trie")
+			return false, nil
 		}
 		return false, nil
 	})
@@ -280,18 +291,18 @@ func (db *DB) setEntry(e *Entry, ttl uint32) error {
 		if e.encryption {
 			id.SetEncryption()
 		}
-		id.AddPrefix(e.prefix)
 		seq = id.Seq()
 	} else {
-		if ok, s := db.data.lease.getSlot(e.prefix); ok {
+		if ok, s := db.data.lease.getSlot(e.topic.hash); ok {
 			db.meter.Leased.Inc(1)
 			seq = s
 		} else {
 			seq = db.nextSeq()
 		}
 		id = message.NewID(seq, e.encryption)
-		id.AddPrefix(e.prefix)
 	}
+	id.AddContract(e.Contract)
+	id.AddHash(e.topic.hash)
 	val := snappy.Encode(nil, e.Payload)
 	if seq == 0 {
 		panic("db.setEntry: seq is zero")
@@ -317,7 +328,10 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	mLen := idSize + int(e.topic.size) + len(e.val)
 	m := make([]byte, mLen)
 	copy(m, e.id)
-	copy(m[idSize:], e.topic.data)
+	// topic data is added on new topic entry and subsequent entries does not pack the topic data.
+	if e.topic.size != 0 {
+		copy(m[idSize:], e.topic.data)
+	}
 	copy(m[int(e.topic.size)+idSize:], e.val)
 	data = append(data, m...)
 

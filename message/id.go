@@ -30,7 +30,7 @@ const (
 	None      = uint32(0)      // ID has no flags.
 	Encrypted = uint32(1 << 0) // ID has encryption set.
 
-	fixed = 12
+	fixed = 16
 )
 
 // Prefix generates prefix from parts and concatenate contract as first part of the topic
@@ -44,22 +44,6 @@ func Prefix(parts []Part) uint64 {
 // ID represents a message ID and lexigraphically sortable
 type ID []byte
 
-// AddPrefix adds a Prefix to the ID, it is used to validate prefix.
-func (id *ID) AddPrefix(prefix uint64) {
-	newid := make(ID, fixed+8)
-	copy(newid[:fixed], *id)
-	binary.LittleEndian.PutUint64(newid[fixed:fixed+8], prefix)
-	*id = newid
-}
-
-// Prefix gets the prefix of the ID.
-func (id ID) Prefix() uint64 {
-	if len(id) < fixed+8 {
-		return 0
-	}
-	return binary.LittleEndian.Uint64(id[fixed:])
-}
-
 // NewID generates a new message identifier without containing a prefix. Prefix is set later.
 func NewID(seq uint64, encrypted bool) ID {
 	var eBit int8
@@ -68,33 +52,58 @@ func NewID(seq uint64, encrypted bool) ID {
 	}
 	id := make(ID, fixed)
 	binary.LittleEndian.PutUint32(id[0:4], uid.NewApoch())
-	binary.LittleEndian.PutUint64(id[4:12], (seq<<8)|uint64(eBit)) //set encryption flag on id
+	binary.LittleEndian.PutUint32(id[4:8], MasterContract)
+	binary.LittleEndian.PutUint64(id[8:16], (seq<<8)|uint64(eBit)) //set encryption flag on id
 	return id
 }
 
 // SetEncryption sets an encryption on ID
 func (id ID) SetEncryption() {
 	eBit := 1
-	id[12] = byte(eBit)
+	id[16] = byte(eBit)
 }
 
 // IsEncrypted return if an encryption is set on ID
 func (id ID) IsEncrypted() bool {
-	num := binary.LittleEndian.Uint64(id[4:12])
+	num := binary.LittleEndian.Uint64(id[8:16])
 	return num&0xff != 0
 }
 
 // Seq gets the seq for the id.
 func (id ID) Seq() uint64 {
-	num := binary.LittleEndian.Uint64(id[4:12])
+	num := binary.LittleEndian.Uint64(id[8:16])
 	return uint64(num >> 8)
+}
+
+// AddContract adds a Contract to the ID.
+func (id *ID) AddContract(contract uint32) {
+	newid := make(ID, fixed)
+	copy(newid[:fixed], *id)
+	binary.LittleEndian.PutUint32(newid[4:8], contract)
+	*id = newid
+}
+
+// AddHash adds topic hash to the ID.
+func (id *ID) AddHash(hash uint64) {
+	newid := make(ID, fixed+8)
+	copy(newid[:fixed], *id)
+	binary.LittleEndian.PutUint64(newid[fixed:fixed+8], hash)
+	*id = newid
+}
+
+// Hash gets the topic hash for the ID.
+func (id ID) Hash() uint64 {
+	if len(id) < fixed+8 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(id[fixed : fixed+8])
 }
 
 // EvalPrefix matches the prefix with the cutoff time.
 func (id ID) EvalPrefix(contract uint32, cutoff int64) bool {
 	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract was added to the ID
 	if cutoff > 0 {
-		return binary.LittleEndian.Uint32(id[fixed:fixed+4]) == contract && uid.Time(id[0:4]) >= cutoff
+		return uid.Time(id[0:4]) >= cutoff && binary.LittleEndian.Uint32(id[4:8]) == contract
 	}
-	return binary.LittleEndian.Uint32(id[fixed:fixed+4]) == contract
+	return binary.LittleEndian.Uint32(id[4:8]) == contract
 }

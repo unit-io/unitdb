@@ -111,7 +111,7 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := t.topicTrie.summary[topic.hash]; ok {
-		return true
+		return false
 	}
 	curr := t.topicTrie.root
 	for _, p := range parts {

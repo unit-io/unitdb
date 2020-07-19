@@ -462,13 +462,14 @@ func (db *DB) PutEntry(e *Entry) error {
 			return err
 		}
 		t.AddContract(e.Contract)
-		e.topic.data = t.Marshal()
-		e.topic.size = uint16(len(e.topic.data))
-		e.prefix = message.Prefix(t.Parts)
-		e.topic.hash = t.GetHash(e.prefix)
+		// e.prefix = message.Prefix(t.Parts)
+		e.topic.hash = t.GetHash(e.Contract)
 		// fmt.Println("db.PutEntry: contact, topicHash ", e.contract, e.topic.hash)
-		if ok := db.trie.add(topic{hash: e.topic.hash}, t.Parts, t.Depth); !ok {
-			return errBadRequest
+		if ok := db.trie.add(topic{hash: e.topic.hash}, t.Parts, t.Depth); ok {
+			// topic is added to index and data if it is new topic entry
+			// or else topic size is set to 0 and it is not packed.
+			e.topic.data = t.Marshal()
+			e.topic.size = uint16(len(e.topic.data))
 		}
 		e.parsed = true
 	}
@@ -536,8 +537,8 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
-	e.prefix = message.Prefix(topic.Parts)
-	if err := db.delete(topic.GetHash(e.prefix), message.ID(id).Seq()); err != nil {
+	// e.prefix = message.Prefix(topic.Parts)
+	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Seq()); err != nil {
 		return err
 	}
 	return nil

@@ -27,9 +27,9 @@ import (
 	"github.com/unit-io/unitdb/uid"
 )
 
-func (index batchIndex) message(data []byte) (id, topic []byte) {
-	return data[:idSize], data[idSize : idSize+index.topicSize]
-}
+// func (index batchIndex) message(data []byte) (id, topic []byte) {
+// 	return data[:idSize], data[idSize : idSize+index.topicSize]
+// }
 
 // SetOptions sets batch options
 func (b *Batch) SetOptions(opts *BatchOptions) {
@@ -61,6 +61,7 @@ type (
 		size   int64
 
 		db            *DB
+		topics        map[uint64]*message.Topic // map[topicHash]*message.Topic
 		index         []batchIndex
 		pendingWrites []batchIndex
 
@@ -100,9 +101,8 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return err
 	}
 	topic.AddContract(e.Contract)
+	e.topic.hash = topic.GetHash(e.Contract)
 	e.topic.data = topic.Marshal()
-	e.topic.size = uint16(len(e.topic.data))
-	e.prefix = message.Prefix(topic.Parts)
 	e.encryption = b.opts.Encryption
 	if err := b.db.setEntry(e, ttl); err != nil {
 		return err
@@ -115,7 +115,14 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if e.encryption {
 		e.val = b.db.mac.Encrypt(nil, e.val)
 	}
-
+	if _, ok := b.topics[e.topic.hash]; !ok {
+		t := new(message.Topic)
+		t.Unmarshal(e.topic.data)
+		b.topics[e.topic.hash] = t
+		// topic is added to index and data if it is new topic entry
+		// or else topic size is set to 0 and it is not packed.
+		e.topic.size = uint16(len(e.topic.data))
+	}
 	data, err := b.db.packEntry(e)
 	if err != nil {
 		return err
@@ -165,11 +172,11 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
-	e.topic.data = topic.Marshal()
-	e.topic.size = uint16(len(e.topic.data))
-	e.prefix = message.Prefix(topic.Parts)
+	// e.topic.data = topic.Marshal()
+	// e.topic.size = uint16(len(e.topic.data))
+	// e.prefix = message.Prefix(topic.Parts)
 	id := message.ID(e.ID)
-	id.AddPrefix(e.prefix)
+	id.AddContract(e.Contract)
 	e.id = id
 	e.seq = id.Seq()
 	key := topic.GetHashCode()
@@ -201,33 +208,29 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
 	buf := b.buffer.Bytes()
-	topics := make(map[uint64]*message.Topic)
+	// topics := make(map[uint64]*message.Topic)
 	for i, index := range b.pendingWrites {
 		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
 		data := buf[index.offset+4 : index.offset+int64(dataLen)]
-		id, rawTopic := index.message(data[entrySize:])
+		id := data[entrySize : entrySize+idSize]
 
 		ID := message.ID(id)
 		seq := ID.Seq()
-		prefix := ID.Prefix()
-		if _, ok := topics[prefix]; !ok {
-			t := new(message.Topic)
-			t.Unmarshal(rawTopic)
-			topics[prefix] = t
-			if ok := b.db.trie.add(topic{hash: t.GetHash(prefix)}, t.Parts, t.Depth); !ok {
-				return errBadRequest
-			}
-		}
-		topic := topics[prefix]
-		topicHash := topic.GetHash(prefix)
+		topicHash := ID.Hash()
 		if index.delFlag {
 			/// Test filter block for presence
 			if !b.db.filter.Test(seq) {
 				return nil
 			}
-			b.db.delete(prefix, seq)
+			b.db.delete(topicHash, seq)
 			continue
 		}
+		t, ok := b.topics[topicHash]
+		if !ok {
+			return errTopicEmpty
+		}
+		// topicHash := t.GetHash(contract)
+		b.db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
 		b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: index.expiresAt})
 
 		memseq := b.db.cacheID ^ seq

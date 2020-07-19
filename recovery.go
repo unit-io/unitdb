@@ -30,7 +30,7 @@ func (db *syncHandle) recoverWindowBlocks() error {
 		for h, wEntries := range windowEntries {
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
-				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie")
+				return true, errors.New(fmt.Sprintf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h))
 			}
 			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 			if err != nil {
@@ -63,6 +63,7 @@ func (db *syncHandle) startRecovery() error {
 
 	var logEntry entry
 	var logSeq uint64
+	topics := make(map[uint64]*message.Topic) // map[topicHash]*message.Topic
 	r, err := db.wal.NewReader()
 	if err != nil {
 		return err
@@ -93,18 +94,20 @@ func (db *syncHandle) startRecovery() error {
 			if exists {
 				continue
 			}
-			rawtopic := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
+			id := m[:idSize]
+			ID := message.ID(id)
+			topicHash := ID.Hash()
+			if _, ok := topics[topicHash]; !ok && logEntry.topicSize != 0 {
+				rawtopic := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
 
-			t := new(message.Topic)
-			if err := t.Unmarshal(rawtopic); err != nil {
-				return true, err
+				t := new(message.Topic)
+				if err := t.Unmarshal(rawtopic); err != nil {
+					return true, err
+				}
+				db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
+				topics[topicHash] = t
 			}
-			prefix := message.Prefix(t.Parts)
-			topicHash := t.GetHash(prefix)
 			db.timeWindow.add(topicHash, winEntry{seq: logEntry.seq, expiresAt: logEntry.expiresAt})
-			if ok := db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth); !ok {
-				return true, errBadRequest
-			}
 			db.filter.Append(logEntry.seq)
 			db.internal.count++
 			db.internal.inBytes += int64(logEntry.valueSize)
