@@ -142,11 +142,11 @@ func newWindowBlocks() *windowBlocks {
 	return wb
 }
 
-// getWindow returns shard under given key
-func (w *windowBlocks) getWindowBlock(key uint64) *timeWindow {
+// getWindow returns shard under given blockID
+func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 	w.RLock()
 	defer w.RUnlock()
-	return w.window[w.consistent.FindBlock(key)]
+	return w.window[w.consistent.FindBlock(blockID)]
 }
 
 type (
@@ -522,14 +522,15 @@ func (wb *windowWriter) write() error {
 	}
 
 	// sort blocks by blockIdx
-	var blockIdx []int
+	var blockIdx []int32
 	for bIdx := range wb.winBlocks {
 		if wb.winBlocks[bIdx].leased || !wb.winBlocks[bIdx].dirty {
 			continue
 		}
-		blockIdx = append(blockIdx, int(bIdx))
+		blockIdx = append(blockIdx, bIdx)
 	}
-	sort.Ints(blockIdx)
+
+	sort.Slice(blockIdx, func(i, j int) bool { return blockIdx[i] < blockIdx[j] })
 
 	winBlocks, err := blockRange(blockIdx)
 	if err != nil {
@@ -538,7 +539,7 @@ func (wb *windowWriter) write() error {
 	bufOff := int64(0)
 	for _, blocks := range winBlocks {
 		if len(blocks) == 1 {
-			bIdx := int32(blocks[0])
+			bIdx := blocks[0]
 			off := int64(blockSize * uint32(bIdx))
 			w := wb.winBlocks[bIdx]
 			buf := w.MarshalBinary()
@@ -550,7 +551,7 @@ func (wb *windowWriter) write() error {
 			continue
 		}
 		blockOff := int64(blockSize * uint32(blocks[0]))
-		for bIdx := int32(blocks[0]); bIdx <= int32(blocks[1]); bIdx++ {
+		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
 			w := wb.winBlocks[bIdx]
 			wb.buffer.Write(w.MarshalBinary())
 			w.dirty = false

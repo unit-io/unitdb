@@ -27,14 +27,11 @@ const (
 	// MasterContract contract is default contract used for topics if client program does not specify Contract in the request
 	MasterContract = uint32(3376684800)
 
-	None      = uint32(0)      // ID has no flags.
-	Encrypted = uint32(1 << 0) // ID has encryption set.
-
 	fixed = 16
 )
 
-// Prefix generates prefix from parts and concatenate contract as first part of the topic
-func Prefix(parts []Part) uint64 {
+// UniqueID generates unique ID from parts and concatenate contract as first part of the topic
+func UniqueID(parts []Part) uint64 {
 	if len(parts) == 1 {
 		return uint64(parts[0].Hash)
 	}
@@ -44,59 +41,39 @@ func Prefix(parts []Part) uint64 {
 // ID represents a message ID and lexigraphically sortable
 type ID []byte
 
-// NewID generates a new message identifier without containing a prefix. Prefix is set later.
-func NewID(seq uint64, encrypted bool) ID {
-	var eBit int8
-	if encrypted {
-		eBit = 1
-	}
+// NewID generates a new message identifier with a prefix. Master contract is adde to the ID and actual Contract is set later.
+func NewID(seq uint64) ID {
 	id := make(ID, fixed)
 	binary.LittleEndian.PutUint32(id[0:4], uid.NewApoch())
 	binary.LittleEndian.PutUint32(id[4:8], MasterContract)
-	binary.LittleEndian.PutUint64(id[8:16], (seq<<8)|uint64(eBit)) //set encryption flag on id
+	binary.LittleEndian.PutUint64(id[8:16], seq)
+
 	return id
 }
 
-// SetEncryption sets an encryption on ID
-func (id ID) SetEncryption() {
-	eBit := 1
-	id[16] = byte(eBit)
+// Size return fixed size of the ID.
+func (id ID) Size() int {
+	return fixed
 }
 
-// IsEncrypted return if an encryption is set on ID
-func (id ID) IsEncrypted() bool {
-	num := binary.LittleEndian.Uint64(id[8:16])
-	return num&0xff != 0
+// Sequence gets the seq for the id.
+func (id ID) Sequence() uint64 {
+	return binary.LittleEndian.Uint64(id[8:16])
 }
 
-// Seq gets the seq for the id.
-func (id ID) Seq() uint64 {
-	num := binary.LittleEndian.Uint64(id[8:16])
-	return uint64(num >> 8)
-}
-
-// AddContract adds a Contract to the ID.
-func (id *ID) AddContract(contract uint32) {
+// SetContract sets Contract on ID.
+func (id *ID) SetContract(contract uint32) {
 	newid := make(ID, fixed)
 	copy(newid[:fixed], *id)
 	binary.LittleEndian.PutUint32(newid[4:8], contract)
 	*id = newid
 }
 
-// AddHash adds topic hash to the ID.
-func (id *ID) AddHash(hash uint64) {
-	newid := make(ID, fixed+8)
-	copy(newid[:fixed], *id)
-	binary.LittleEndian.PutUint64(newid[fixed:fixed+8], hash)
-	*id = newid
-}
-
-// Hash gets the topic hash for the ID.
-func (id ID) Hash() uint64 {
-	if len(id) < fixed+8 {
-		return 0
-	}
-	return binary.LittleEndian.Uint64(id[fixed : fixed+8])
+// Prefix return message ID only containing prefix.
+func (id ID) Prefix() ID {
+	prefix := make(ID, 8)
+	copy(prefix, id[:8])
+	return prefix
 }
 
 // EvalPrefix matches the prefix with the cutoff time.

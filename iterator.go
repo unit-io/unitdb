@@ -42,7 +42,7 @@ type (
 		parts      []message.Part // The parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 		depth      uint8
 		topicType  uint8
-		prefix     uint64 // The prefix is generated from contract and first of the topic
+		uid        uint64 // The prefix is generated from contract and first of the topic
 		cutoff     int64  // The cutoff is time limit check on message Ids.
 		winEntries []query
 
@@ -102,7 +102,7 @@ func (q *Query) parse() error {
 	q.parts = topic.Parts
 	q.depth = topic.Depth
 	q.topicType = topic.TopicType
-	q.prefix = message.Prefix(q.parts)
+	q.uid = message.UniqueID(q.parts)
 	// In case of last, include it to the query
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
@@ -126,7 +126,7 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.prefix)
+	mu := it.db.getMutex(it.query.uid)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
@@ -156,7 +156,8 @@ func (it *ItemIterator) Next() {
 					return nil
 				}
 
-				if msgID.IsEncrypted() {
+				// last bit of ID is encryption flag
+				if uint8(id[idSize-1]) == 1 {
 					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.Decrypt")

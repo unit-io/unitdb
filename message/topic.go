@@ -48,6 +48,12 @@ type TopicOption struct {
 	Value string
 }
 
+// Part represents a parsed topic parts broken based on topic separator.
+type Part struct {
+	Hash      uint32
+	Wildchars uint8
+}
+
 // Topic represents a parsed topic.
 type Topic struct {
 	Topic        []byte // Gets or sets the topic string.
@@ -56,12 +62,6 @@ type Topic struct {
 	Depth        uint8
 	Options      []TopicOption // Gets or sets the options.
 	TopicType    uint8
-}
-
-// Part represents a parsed topic parts broken based on topic separator.
-type Part struct {
-	Hash      uint32
-	Wildchars uint8
 }
 
 // AddContract adds contract to the parts of a topic.

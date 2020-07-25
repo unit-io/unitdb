@@ -61,7 +61,7 @@ func (db *syncHandle) startRecovery() error {
 		db.finish()
 	}()
 
-	var logEntry entry
+	var e entry
 	var logSeq uint64
 	topics := make(map[uint64]*message.Topic) // map[topicHash]*message.Topic
 	r, err := db.wal.NewReader()
@@ -79,38 +79,35 @@ func (db *syncHandle) startRecovery() error {
 				break
 			}
 			entryData, data := logData[:entrySize], logData[entrySize:]
-			if err := logEntry.UnmarshalBinary(entryData); err != nil {
+			if err := e.UnmarshalBinary(entryData); err != nil {
 				return true, err
 			}
-			msgOffset := logEntry.mSize()
+			msgOffset := e.mSize()
 			m := data[:msgOffset]
-			if logEntry.msgOffset, err = db.dataWriter.append(m); err != nil {
+			if e.msgOffset, err = db.dataWriter.append(m); err != nil {
 				return true, err
 			}
-			exists, err := db.blockWriter.append(logEntry, db.startBlockIdx)
+			exists, err := db.blockWriter.append(e, db.startBlockIdx)
 			if err != nil {
 				return true, err
 			}
 			if exists {
 				continue
 			}
-			id := m[:idSize]
-			ID := message.ID(id)
-			topicHash := ID.Hash()
-			if _, ok := topics[topicHash]; !ok && logEntry.topicSize != 0 {
-				rawtopic := m[int64(idSize) : int64(logEntry.topicSize)+int64(idSize)]
+			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
+				rawtopic := m[int64(idSize) : int64(e.topicSize)+int64(idSize)]
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {
 					return true, err
 				}
-				db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
-				topics[topicHash] = t
+				db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
+				topics[e.topicHash] = t
 			}
-			db.timeWindow.add(topicHash, winEntry{seq: logEntry.seq, expiresAt: logEntry.expiresAt})
-			db.filter.Append(logEntry.seq)
+			db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt})
+			db.filter.Append(e.seq)
 			db.internal.count++
-			db.internal.inBytes += int64(logEntry.valueSize)
+			db.internal.inBytes += int64(e.valueSize)
 		}
 
 		if err := db.recoverWindowBlocks(); err != nil {

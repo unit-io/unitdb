@@ -75,7 +75,7 @@ func TestSimple(t *testing.T) {
 	}
 
 	verifyMsgsAndClose := func() {
-		if count := db.Count(); count != int64(n) {
+		if count := db.Count(); count != uint64(n) {
 			if err := db.recoverLog(); err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func TestBatch(t *testing.T) {
 	var n uint16 = 100
 
 	verifyMsgsAndClose := func() {
-		if count := db.Count(); count != int64(n) {
+		if count := db.Count(); count != uint64(n) {
 			if err := db.recoverLog(); err != nil {
 				t.Fatal(err)
 			}

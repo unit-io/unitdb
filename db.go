@@ -305,7 +305,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
-	mu := db.getMutex(q.prefix)
+	mu := db.getMutex(q.uid)
 	mu.RLock()
 	defer mu.RUnlock()
 	db.lookup(q)
@@ -347,7 +347,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return nil
 				}
 
-				if msgID.IsEncrypted() {
+				// last bit of ID is encryption flag
+				if uint8(id[idSize-1]) == 1 {
 					val, err = db.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.decrypt")
@@ -418,7 +419,7 @@ func (db *DB) NewContract() (uint32, error) {
 // NewID generates new ID that is later used to put entry or delete entry.
 func (db *DB) NewID() []byte {
 	db.meter.Leased.Inc(1)
-	return message.NewID(db.nextSeq(), false)
+	return message.NewID(db.nextSeq())
 }
 
 // Put puts entry into DB. It uses default Contract to put entry into DB.
@@ -476,27 +477,27 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.setEntry(e, ttl); err != nil {
 		return err
 	}
-	// Encryption.
-	if db.encryption == 1 {
-		e.val = db.mac.Encrypt(nil, e.val)
-	}
-	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq, expiresAt: e.ExpiresAt}); err != nil {
-		return err
-	}
 	data, err := db.packEntry(e)
 	if err != nil {
 		return err
 	}
+
+	blockID := startBlockIndex(e.seq)
 	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(e.topic.hash, memseq, data); err != nil {
+	if err := db.mem.Set(uint64(blockID), memseq, data); err != nil {
 		return err
 	}
+	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq, expiresAt: e.ExpiresAt}); err != nil {
+		return err
+	}
+
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
 	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
+
 	if _, err := db.tinyBatch.buffer.Write(data); err != nil {
 		return err
 	}
@@ -538,7 +539,7 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 	topic.AddContract(e.Contract)
 	// e.prefix = message.Prefix(topic.Parts)
-	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Seq()); err != nil {
+	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Sequence()); err != nil {
 		return err
 	}
 	return nil
@@ -589,6 +590,6 @@ func (db *DB) FileSize() (int64, error) {
 }
 
 // Count returns the number of items in the DB.
-func (db *DB) Count() int64 {
-	return atomic.LoadInt64(&db.count)
+func (db *DB) Count() uint64 {
+	return atomic.LoadUint64(&db.count)
 }

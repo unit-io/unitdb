@@ -59,12 +59,12 @@ func newBlockCache(memSize int64) blockCache {
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	targetSize int64
-	resetLockC chan struct{}
 	// block cache
 	consistent *hash.Consistent
 	blockCache blockCache
 
 	// close
+	closeW sync.WaitGroup
 	closeC chan struct{}
 }
 
@@ -90,8 +90,10 @@ func Open(memSize int64) (*DB, error) {
 func (db *DB) drain(interval time.Duration) {
 	shrinkerTicker := time.NewTicker(interval)
 	go func() {
+		db.closeW.Add(1)
 		defer func() {
 			shrinkerTicker.Stop()
+			db.closeW.Done()
 		}()
 		for {
 			select {
@@ -113,6 +115,7 @@ func (db *DB) shrinkDataTable() error {
 		cache.Lock()
 		if cache.freeOffset > 0 {
 			if err := cache.data.shrink(cache.freeOffset); err != nil {
+				cache.Unlock()
 				return err
 			}
 		}
@@ -132,15 +135,21 @@ func (db *DB) shrinkDataTable() error {
 
 // Close closes the memdb.
 func (db *DB) Close() error {
+	// Signal all goroutines.
+	close(db.closeC)
+
 	for i := 0; i < nShards; i++ {
 		cache := db.blockCache[i]
-		cache.RLock()
+		cache.Lock()
 		if err := cache.data.close(); err != nil {
+			cache.Unlock()
 			return err
 		}
-		cache.RUnlock()
+		cache.Unlock()
 	}
 
+	// Wait for all goroutines to exit.
+	db.closeW.Wait()
 	return nil
 }
 
@@ -226,7 +235,7 @@ func (db *DB) Keys(blockID uint64) []uint64 {
 }
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
-func (db *DB) Free(blockID uint64, key uint64) error {
+func (db *DB) Free(blockID, key uint64) error {
 	// Get cache
 	cache := db.getCache(blockID)
 	cache.Lock()

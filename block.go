@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	entrySize        = 22
+	entrySize        = 26
 	blockSize uint32 = 4096
 )
 
@@ -36,13 +36,15 @@ type (
 		topicSize uint16
 		valueSize uint32
 		msgOffset int64
-		expiresAt uint32
+		expiresAt uint32 // expiresAt for recovery from log and not persisted to Index file but persisted to the time window file
 
-		cacheBlock []byte
+		topicHash  uint64 // topicHash for recovery from log and not persisted to the DB
+		cacheBlock []byte // block from memdb if it exist
 	}
 
 	block struct {
 		entries  [entriesPerIndexBlock]entry
+		baseSeq  uint64
 		next     uint32
 		entryIdx uint16
 
@@ -83,7 +85,7 @@ func blockOffset(idx int32) int64 {
 	if idx == -1 {
 		return int64(headerSize)
 	}
-	return int64(headerSize) + (int64(blockSize) * int64(idx))
+	return int64(headerSize + (blockSize * uint32(idx)))
 }
 
 func (e entry) mSize() uint32 {
@@ -98,6 +100,7 @@ func (e entry) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
 	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
 	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[18:26], e.topicHash)
 	return data, nil
 }
 
@@ -107,13 +110,14 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
 	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
 	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
+	e.topicHash = binary.LittleEndian.Uint64(data[18:26])
 	return nil
 }
 
 func (b block) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)
 	if startBlockIdx != blockIdx {
-		return fmt.Errorf("block.write: validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
+		return fmt.Errorf("validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
 	}
 	return nil
 }
@@ -122,13 +126,21 @@ func (b block) validation(blockIdx int32) error {
 func (b block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
+
+	baseSeq := b.entries[0].seq
+	binary.LittleEndian.PutUint64(buf[:8], baseSeq)
+	buf = buf[8:]
 	for i := 0; i < entriesPerIndexBlock; i++ {
 		e := b.entries[i]
-		binary.LittleEndian.PutUint64(buf[:8], e.seq)
-		binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
-		binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
-		binary.LittleEndian.PutUint64(buf[14:22], uint64(e.msgOffset))
-		buf = buf[entrySize:]
+		if e.seq == 0 {
+			binary.LittleEndian.PutUint16(buf[:2], uint16(e.seq)) // marshal relative seq
+		} else {
+			binary.LittleEndian.PutUint16(buf[:2], uint16(int16(e.seq-baseSeq)+255)) // marshal relative seq
+		}
+		binary.LittleEndian.PutUint16(buf[2:4], e.topicSize)
+		binary.LittleEndian.PutUint32(buf[4:8], e.valueSize)
+		binary.LittleEndian.PutUint64(buf[8:16], uint64(e.msgOffset))
+		buf = buf[16:]
 	}
 	binary.LittleEndian.PutUint32(buf[:4], b.next)
 	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
@@ -137,13 +149,20 @@ func (b block) MarshalBinary() []byte {
 
 // UnmarshalBinary de-serialized entries block from binary data
 func (b *block) UnmarshalBinary(data []byte) error {
+	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
+	data = data[8:]
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		_ = data[entrySize] // bounds check hint to compiler; see golang.org/issue/14808
-		b.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
-		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[8:10])
-		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[10:14])
-		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[14:22]))
-		data = data[entrySize:]
+		_ = data[16] // bounds check hint to compiler; see golang.org/issue/14808
+		seq := int16(binary.LittleEndian.Uint16(data[:2]))
+		if seq == 0 {
+			b.entries[i].seq = uint64(seq)
+		} else {
+			b.entries[i].seq = b.baseSeq + uint64(seq) - 255 // unmarshal from relative sequence
+		}
+		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[2:4])
+		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[4:8])
+		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[8:16]))
+		data = data[16:]
 	}
 	b.next = binary.LittleEndian.Uint32(data[:4])
 	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
@@ -192,11 +211,14 @@ func (bw *blockWriter) del(seq uint64) (entry, error) {
 func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) {
 	var b block
 	var ok bool
+	if e.seq == 0 {
+		panic("unable to append zero sequence")
+	}
 	startBlockIdx := startBlockIndex(e.seq)
 	b, ok = bw.blocks[startBlockIdx]
 	if !ok {
 		if startBlockIdx <= blockIdx {
-			off := blockOffset(int32(startBlockIdx))
+			off := blockOffset(startBlockIdx)
 			bh := blockHandle{file: bw.file, offset: off}
 			if err := bh.read(); err != nil {
 				return false, err
@@ -204,6 +226,9 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 			b = bh.block
 
 			b.leased = true
+		}
+		if b.baseSeq == 0 {
+			b.baseSeq = e.seq
 		}
 	}
 	entryIdx := 0
@@ -223,10 +248,18 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 	if b.leased {
 		bw.leasing[e.seq] = struct{}{}
 	}
+	if b.entryIdx > entriesPerIndexBlock-1 {
+		var seqs []uint64
+		for _, e := range b.entries {
+			seqs = append(seqs, e.seq)
+		}
+		fmt.Println("blockWriter.append: seq, startBlockIdx, baseSeq, block ", e.seq, startBlockIdx, b.baseSeq, seqs)
+	}
 	b.entries[b.entryIdx] = e
 	b.dirty = true
 	b.entryIdx++
 	if err := b.validation(startBlockIdx); err != nil {
+		fmt.Println("block.append: seq, baseSeq  ", e.seq, b.entries[0].seq, b.baseSeq)
 		return false, err
 	}
 	bw.blocks[startBlockIdx] = b
@@ -235,7 +268,7 @@ func (bw *blockWriter) append(e entry, blockIdx int32) (exists bool, err error) 
 }
 
 func (bw *blockWriter) write() error {
-	var leasedBlocks []int32
+	// var leasedBlocks []int32
 	for bIdx, b := range bw.blocks {
 		if !b.leased || !b.dirty {
 			continue
@@ -250,26 +283,27 @@ func (bw *blockWriter) write() error {
 		}
 		b.dirty = false
 		bw.blocks[bIdx] = b
-		leasedBlocks = append(leasedBlocks, bIdx)
+		// leasedBlocks = append(leasedBlocks, bIdx)
 	}
 
 	// sort blocks by blockIdx
-	var blockIdx []int
+	var blockIdx []int32
 	for bIdx := range bw.blocks {
 		if bw.blocks[bIdx].leased || !bw.blocks[bIdx].dirty {
 			continue
 		}
-		blockIdx = append(blockIdx, int(bIdx))
+		blockIdx = append(blockIdx, bIdx)
 	}
-	sort.Ints(blockIdx)
+	sort.Slice(blockIdx, func(i, j int) bool { return blockIdx[i] < blockIdx[j] })
 	blockRange, err := blockRange(blockIdx)
 	if err != nil {
 		return err
 	}
+	// fmt.Println("block.write: leasedBlocks, blockRange ", leasedBlocks, blockRange)
 	bufOff := int64(0)
 	for _, blocks := range blockRange {
 		if len(blocks) == 1 {
-			bIdx := int32(blocks[0])
+			bIdx := blocks[0]
 			off := blockOffset(bIdx)
 			b := bw.blocks[bIdx]
 			if err := b.validation(bIdx); err != nil {
@@ -283,9 +317,9 @@ func (bw *blockWriter) write() error {
 			bw.blocks[bIdx] = b
 			continue
 		}
-		blockOff := blockOffset(int32(blocks[0]))
+		blockOff := blockOffset(blocks[0])
 		// bw.buffer.Reset()
-		for bIdx := int32(blocks[0]); bIdx <= int32(blocks[1]); bIdx++ {
+		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
 			b := bw.blocks[bIdx]
 			if err := b.validation(bIdx); err != nil {
 				return err
@@ -311,19 +345,19 @@ func (bw *blockWriter) UpperSeq() uint64 {
 	return bw.upperSeq
 }
 
-func blockRange(idx []int) ([][]int, error) {
+func blockRange(idx []int32) ([][]int32, error) {
 	if len(idx) == 0 {
 		return nil, nil
 	}
-	var parts [][]int
+	var parts [][]int32
 	for n1 := 0; ; {
 		n2 := n1 + 1
 		for n2 < len(idx) && idx[n2] == idx[n2-1]+1 {
 			n2++
 		}
-		s := []int{(idx[n1])}
+		s := []int32{(idx[n1])}
 		if n2 == n1+2 {
-			parts = append(parts, []int{idx[n2-1]})
+			parts = append(parts, []int32{idx[n2-1]})
 		} else if n2 > n1+2 {
 			s = append(s, idx[n2-1])
 		}

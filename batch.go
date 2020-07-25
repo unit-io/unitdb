@@ -27,10 +27,6 @@ import (
 	"github.com/unit-io/unitdb/uid"
 )
 
-// func (index batchIndex) message(data []byte) (id, topic []byte) {
-// 	return data[:idSize], data[idSize : idSize+index.topicSize]
-// }
-
 // SetOptions sets batch options
 func (b *Batch) SetOptions(opts *BatchOptions) {
 	b.opts = opts
@@ -42,11 +38,10 @@ type (
 	}
 
 	batchIndex struct {
-		delFlag   bool
-		key       uint32 // key is local id unique in batch and used to remove duplicate values from a topic in the batch before writing records into DB
-		topicSize uint16
-		offset    int64
-		expiresAt uint32
+		delFlag bool
+		key     uint32 // key is local id unique in batch and used to remove duplicate values from a topic in the batch before writing records into DB
+		// topicSize uint16
+		offset int64
 	}
 
 	// Batch is a write batch.
@@ -111,10 +106,6 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if !b.opts.AllowDuplicates {
 		key = hash.WithSalt(e.val, topic.GetHashCode())
 	}
-	// Encryption.
-	if e.encryption {
-		e.val = b.db.mac.Encrypt(nil, e.val)
-	}
 	if _, ok := b.topics[e.topic.hash]; !ok {
 		t := new(message.Topic)
 		t.Unmarshal(e.topic.data)
@@ -127,16 +118,18 @@ func (b *Batch) PutEntry(e *Entry) error {
 	if err != nil {
 		return err
 	}
+
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
+
 	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
-	b.index = append(b.index, batchIndex{delFlag: false, key: key, topicSize: e.topic.size, offset: b.size, expiresAt: e.ExpiresAt})
+	b.index = append(b.index, batchIndex{delFlag: false, key: key, offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
 
@@ -172,34 +165,33 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
-	// e.topic.data = topic.Marshal()
-	// e.topic.size = uint16(len(e.topic.data))
-	// e.prefix = message.Prefix(topic.Parts)
 	id := message.ID(e.ID)
-	id.AddContract(e.Contract)
+	id.SetContract(e.Contract)
 	e.id = id
-	e.seq = id.Seq()
+	e.seq = id.Sequence()
 	key := topic.GetHashCode()
 	data, err := b.db.packEntry(e)
 	if err != nil {
 		return err
 	}
+
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
+
 	if _, err := b.buffer.Write(data); err != nil {
 		return err
 	}
-	b.index = append(b.index, batchIndex{delFlag: true, key: key, topicSize: e.topic.size, offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: true, key: key, offset: b.size})
 	b.size += int64(len(data) + 4)
 	b.entryCount++
 	return nil
 }
 
-func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, topicHash uint64, seq uint64, expiresAt uint32, data []byte) error) error {
 	if err := b.db.ok(); err != nil {
 		return err
 	} // // CPU profiling by default
@@ -208,33 +200,24 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, memseq uint64, da
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
 	buf := b.buffer.Bytes()
-	// topics := make(map[uint64]*message.Topic)
+	var e entry
 	for i, index := range b.pendingWrites {
 		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
-		data := buf[index.offset+4 : index.offset+int64(dataLen)]
-		id := data[entrySize : entrySize+idSize]
-
-		ID := message.ID(id)
-		seq := ID.Seq()
-		topicHash := ID.Hash()
-		if index.delFlag {
+		entryData, data := buf[index.offset+4:index.offset+entrySize+4], buf[index.offset+4:index.offset+int64(dataLen)]
+		if err := e.UnmarshalBinary(entryData); err != nil {
+			return err
+		}
+		if index.delFlag && e.seq != 0 {
 			/// Test filter block for presence
-			if !b.db.filter.Test(seq) {
+			if !b.db.filter.Test(e.seq) {
 				return nil
 			}
-			b.db.delete(topicHash, seq)
+			b.db.delete(e.topicHash, e.seq)
 			continue
 		}
-		t, ok := b.topics[topicHash]
-		if !ok {
-			return errTopicEmpty
-		}
-		// topicHash := t.GetHash(contract)
-		b.db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
-		b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: index.expiresAt})
 
-		memseq := b.db.cacheID ^ seq
-		if err := fn(i, topicHash, memseq, data); err != nil {
+		// put packed entry without topic hash into memdb
+		if err := fn(i, e.topicHash, e.seq, e.expiresAt, data); err != nil {
 			return err
 		}
 	}
@@ -254,8 +237,18 @@ func (b *Batch) Write() error {
 		b.db.batchQueue <- b
 		return nil
 	}
-	err := b.writeInternal(func(i int, topicHash uint64, memseq uint64, data []byte) error {
-		return b.db.mem.Set(topicHash, memseq, data)
+	err := b.writeInternal(func(i int, topicHash uint64, seq uint64, expiresAt uint32, data []byte) error {
+		blockID := startBlockIndex(seq)
+		memseq := b.db.cacheID ^ seq
+		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
+			return err
+		}
+		t, ok := b.topics[topicHash]
+		if !ok {
+			return errTopicEmpty
+		}
+		b.db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
+		return b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: expiresAt})
 	})
 	if err != nil {
 		return err

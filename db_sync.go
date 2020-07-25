@@ -31,7 +31,7 @@ type (
 		startBlockIdx int32
 		lastSyncSeq   uint64
 		logSeq        uint64
-		upperCount    int64
+		upperCount    uint64
 		syncStatusOk  bool
 		syncComplete  bool
 		inBytes       int64
@@ -125,7 +125,7 @@ func (db *syncHandle) abort() error {
 	db.data.truncate(db.dataOff)
 	db.index.truncate(db.blockOff)
 	db.timeWindow.truncate(db.winOff)
-	atomic.CompareAndSwapInt32(&db.blockIdx, db.blocks(), db.startBlockIdx)
+	atomic.StoreInt32(&db.blockIdx, db.startBlockIdx)
 	db.decount(db.upperCount)
 
 	if err := db.dataWriter.rollback(); err != nil {
@@ -231,7 +231,7 @@ func (db *syncHandle) sync(recovery bool, last bool) error {
 		if err := db.DB.sync(); err != nil {
 			return err
 		}
-		db.incount(db.internal.count)
+		db.incount(uint64(db.internal.count))
 		if recovery {
 			db.meter.Recovers.Inc(db.internal.count)
 		}
@@ -254,30 +254,31 @@ func (db *syncHandle) Sync() error {
 				if we.Seq() == 0 {
 					continue
 				}
+				blockID := startBlockIndex(we.Seq())
 				mseq := db.cacheID ^ uint64(we.Seq())
-				memdata, err := db.mem.Get(h, mseq)
+				memdata, err := db.mem.Get(uint64(blockID), mseq)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "mem.Get")
 					err1 = err
 					break
 				}
-				memEntry := entry{}
-				if err = memEntry.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				var e entry
+				if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
 					err1 = err
 				}
 
-				if memEntry.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
+				if e.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
 					err1 = err
 					break
 				}
-				if exists, err := db.blockWriter.append(memEntry, db.startBlockIdx); exists || err != nil {
+				if exists, err := db.blockWriter.append(e, db.startBlockIdx); exists || err != nil {
 					err1 = err
 					continue
 				}
 
 				db.filter.Append(we.Seq())
 				db.internal.count++
-				db.internal.inBytes += int64(memEntry.valueSize)
+				db.internal.inBytes += int64(e.valueSize)
 			}
 			topicOff, ok := db.trie.getOffset(h)
 			if !ok {
@@ -290,7 +291,8 @@ func (db *syncHandle) Sync() error {
 			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			db.mem.Free(h, db.cacheID^db.upperSeq())
+			blockID := startBlockIndex(db.upperSeq())
+			db.mem.Free(uint64(blockID), db.cacheID^db.upperSeq())
 			if err1 != nil {
 				break
 			}

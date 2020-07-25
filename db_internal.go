@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	entriesPerIndexBlock = 185 // (4096 i.e blocksize/26 i.e entry size)
+	entriesPerIndexBlock = 255 // (4096 i.e blocksize - 14 fixed/16 i.e entry size)
 	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
@@ -41,7 +41,7 @@ const (
 	logPostfix    = ".log"
 	leasePostfix  = ".lease"
 	lockPostfix   = ".lock"
-	idSize        = 24
+	idSize        = 9 // message ID prefix with additional encryption bit
 	filterPostfix = ".filter"
 	version       = 1 // file format version
 
@@ -60,14 +60,14 @@ const (
 	maxKeys = math.MaxInt64
 
 	// maxSeq is the maximum number of seq supported.
-	maxSeq = uint64(1<<56 - 1)
+	maxSeq = math.MaxUint64
 )
 
 type dbInfo struct {
 	encryption  int8
 	sequence    uint64
 	logSequence uint64
-	count       int64
+	count       uint64
 	blockIdx    int32
 	windowIdx   int32
 	cacheID     uint64
@@ -87,7 +87,7 @@ func (db *DB) writeHeader(writeFreeList bool) error {
 		dbInfo: dbInfo{
 			encryption: db.encryption,
 			sequence:   atomic.LoadUint64(&db.sequence),
-			count:      atomic.LoadInt64(&db.count),
+			count:      atomic.LoadUint64(&db.count),
 			blockIdx:   db.blocks(),
 			windowIdx:  db.timeWindow.windowIndex(),
 			cacheID:    db.cacheID,
@@ -150,10 +150,16 @@ func (db *DB) loadTrie() error {
 				break
 			}
 		}
-		e := b.entries[entryIdx]
-		if entryIdx == -1 || e.topicSize == 0 {
+		if entryIdx == -1 {
 			return false, nil
 		}
+		// fmt.Println("db.loadTrie: seq, entryIdx ", we.Seq(), entryIdx)
+		e := b.entries[entryIdx]
+
+		if e.topicSize == 0 {
+			return false, nil
+		}
+
 		rawtopic, err := db.data.readTopic(e)
 		if err != nil {
 			return true, err
@@ -193,9 +199,10 @@ func (db *DB) close() error {
 }
 
 func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
-	cacheKey := db.cacheID ^ seq
+	blockID := startBlockIndex(seq)
+	memseq := db.cacheID ^ seq
 	e := entry{}
-	data, err := db.mem.Get(topicHash, cacheKey)
+	data, err := db.mem.Get(uint64(blockID), memseq)
 	if err != nil {
 		return entry{}, errMsgIDDeleted
 	}
@@ -288,25 +295,27 @@ func (db *DB) setEntry(e *Entry, ttl uint32) error {
 	}
 	if e.ID != nil {
 		id = message.ID(e.ID)
-		if e.encryption {
-			id.SetEncryption()
-		}
-		seq = id.Seq()
+		seq = id.Sequence()
 	} else {
-		if ok, s := db.data.lease.getSlot(e.topic.hash); ok {
-			db.meter.Leased.Inc(1)
-			seq = s
-		} else {
-			seq = db.nextSeq()
-		}
-		id = message.NewID(seq, e.encryption)
+		// if ok, s := db.data.lease.getSlot(e.topic.hash); ok {
+		// 	db.meter.Leased.Inc(1)
+		// 	seq = s
+		// } else {
+		seq = db.nextSeq()
+		// }
+		id = message.NewID(seq)
 	}
-	id.AddContract(e.Contract)
-	id.AddHash(e.topic.hash)
-	val := snappy.Encode(nil, e.Payload)
 	if seq == 0 {
 		panic("db.setEntry: seq is zero")
 	}
+
+	id.SetContract(e.Contract)
+
+	val := snappy.Encode(nil, e.Payload)
+	if e.encryption {
+		val = db.mac.Encrypt(nil, val)
+	}
+
 	e.seq = seq
 	e.id = id
 	e.val = val
@@ -318,16 +327,26 @@ func (db *DB) packEntry(e *Entry) ([]byte, error) {
 	if db.Count() == maxKeys {
 		return nil, errFull
 	}
+	var eBit int8
+	if e.encryption {
+		eBit = 1
+	}
 	e1 := entry{
 		seq:       e.seq,
 		topicSize: e.topic.size,
 		valueSize: uint32(len(e.val)),
 		expiresAt: e.ExpiresAt,
+		topicHash: e.topic.hash,
 	}
+	msgID := message.ID(e.id)
+	id := make(message.ID, idSize)
+	// it only pack messageID prefix that is later used in DB query for prefix validation
+	copy(id[:idSize-1], msgID.Prefix())
+	id[idSize-1] = byte(eBit)
 	data, _ := e1.MarshalBinary()
 	mLen := idSize + int(e.topic.size) + len(e.val)
 	m := make([]byte, mLen)
-	copy(m, e.id)
+	copy(m, id)
 	// topic data is added on new topic entry and subsequent entries does not pack the topic data.
 	if e.topic.size != 0 {
 		copy(m[idSize:], e.topic.data)
@@ -425,8 +444,9 @@ func (db *DB) delete(topicHash, seq uint64) error {
 		return nil
 	}
 	db.meter.Dels.Inc(1)
+	blockID := startBlockIndex(seq)
 	memseq := db.cacheID ^ seq
-	if err := db.mem.Remove(topicHash, memseq); err != nil {
+	if err := db.mem.Remove(uint64(blockID), memseq); err != nil {
 		return err
 	}
 	blockIdx := startBlockIndex(seq)
@@ -475,12 +495,12 @@ func (db *DB) addBlocks(nBlocks int32) int32 {
 	return atomic.AddInt32(&db.blockIdx, nBlocks)
 }
 
-func (db *DB) incount(count int64) int64 {
-	return atomic.AddInt64(&db.count, count)
+func (db *DB) incount(count uint64) uint64 {
+	return atomic.AddUint64(&db.count, count)
 }
 
-func (db *DB) decount(count int64) int64 {
-	return atomic.AddInt64(&db.count, -count)
+func (db *DB) decount(count uint64) uint64 {
+	return atomic.AddUint64(&db.count, -count)
 }
 
 // Set closed flag; return true if not already closed.

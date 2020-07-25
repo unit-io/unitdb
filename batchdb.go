@@ -110,6 +110,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
+	// defer b.Abort()
 	return b.Commit()
 }
 

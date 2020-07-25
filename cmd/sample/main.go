@@ -21,7 +21,7 @@ func main() {
 	// Use Entry.WithPayload() method to bulk store messages as topic is parsed on first request and subsequent requests skips parsing.
 	topic := []byte("teams.alpha.ch1.u1")
 	entry := &unitdb.Entry{Topic: topic}
-	for j := 0; j < 50; j++ {
+	for j := 0; j < 1500; j++ {
 		db.PutEntry(entry.WithPayload([]byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j))))
 	}
 
