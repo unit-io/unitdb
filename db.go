@@ -327,7 +327,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 				if we.seq == 0 {
 					return nil
 				}
-				e, err := db.readEntry(we.topicHash, we.seq)
+				s, err := db.readEntry(we.topicHash, we.seq)
 				if err != nil {
 					if err == errMsgIDDeleted {
 						invalidCount++
@@ -336,7 +336,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
-				id, val, err := db.data.readMessage(e)
+				id, val, err := db.data.readMessage(s)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -362,7 +362,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return err
 				}
 				items = append(items, val)
-				db.meter.OutBytes.Inc(int64(e.valueSize))
+				db.meter.OutBytes.Inc(int64(s.valueSize))
 				return nil
 			}()
 			if err != nil {

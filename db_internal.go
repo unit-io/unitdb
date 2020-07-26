@@ -144,8 +144,8 @@ func (db *DB) loadTrie() error {
 		}
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
-			e := b.entries[i]
-			if e.seq == we.Seq() { //topic exist in db
+			s := b.entries[i]
+			if s.seq == we.Seq() { //topic exist in db
 				entryIdx = i
 				break
 			}
@@ -154,13 +154,13 @@ func (db *DB) loadTrie() error {
 			return false, nil
 		}
 		// fmt.Println("db.loadTrie: seq, entryIdx ", we.Seq(), entryIdx)
-		e := b.entries[entryIdx]
+		s := b.entries[entryIdx]
 
-		if e.topicSize == 0 {
+		if s.topicSize == 0 {
 			return false, nil
 		}
 
-		rawtopic, err := db.data.readTopic(e)
+		rawtopic, err := db.data.readTopic(s)
 		if err != nil {
 			return true, err
 		}
@@ -198,34 +198,43 @@ func (db *DB) close() error {
 	return nil
 }
 
-func (db *DB) readEntry(topicHash uint64, seq uint64) (entry, error) {
+func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
 	blockID := startBlockIndex(seq)
 	memseq := db.cacheID ^ seq
-	e := entry{}
 	data, err := db.mem.Get(uint64(blockID), memseq)
 	if err != nil {
-		return entry{}, errMsgIDDeleted
+		return slot{}, errMsgIDDeleted
 	}
 	if data != nil {
+		var e entry
 		e.UnmarshalBinary(data[:entrySize])
-		e.cacheBlock = make([]byte, len(data[entrySize:]))
-		copy(e.cacheBlock, data[entrySize:])
-		return e, nil
+		s := slot{
+			seq:       e.seq,
+			topicSize: e.topicSize,
+			valueSize: e.valueSize,
+			// msgOffset: e.msgOffset,
+
+			cacheBlock: data[entrySize:],
+			// cacheBlock: make([]byte, len(data[entrySize:])),
+		}
+		// s.cacheBlock = make([]byte, len(data[entrySize:]))
+		// copy(s.cacheBlock, data[entrySize:])
+		return s, nil
 	}
 
 	off := blockOffset(startBlockIndex(seq))
 	bh := blockHandle{file: db.index, offset: off}
 	if err := bh.read(); err != nil {
-		return entry{}, err
+		return slot{}, err
 	}
 
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		e := bh.entries[i]
-		if e.seq == seq {
-			return e, nil
+		s := bh.entries[i]
+		if s.seq == seq {
+			return s, nil
 		}
 	}
-	return entry{}, nil
+	return slot{}, nil
 }
 
 // lookups are performed in following order

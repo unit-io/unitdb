@@ -266,12 +266,19 @@ func (db *syncHandle) Sync() error {
 				if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
 					err1 = err
 				}
+				s := slot{
+					seq:       e.seq,
+					topicSize: e.topicSize,
+					valueSize: e.valueSize,
+					// msgOffset: e.msgOffset,
 
-				if e.msgOffset, err = db.dataWriter.append(memdata[entrySize:]); err != nil {
+					cacheBlock: memdata[entrySize:],
+				}
+				if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
 					err1 = err
 					break
 				}
-				if exists, err := db.blockWriter.append(e, db.startBlockIdx); exists || err != nil {
+				if exists, err := db.blockWriter.append(s, db.startBlockIdx); exists || err != nil {
 					err1 = err
 					continue
 				}

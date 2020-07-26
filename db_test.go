@@ -178,7 +178,6 @@ func TestBatch(t *testing.T) {
 		}
 	}
 
-	// var wg sync.WaitGroup
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
 		// wg.Add(1)
 		var ids [][]byte
@@ -190,11 +189,6 @@ func TestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			ids = append(ids, messageID)
-		}
-		for _, id := range ids {
-			if err := b.Delete(id, topic); err != nil {
-				t.Fatal(err)
-			}
 		}
 		err := b.Write()
 		return err

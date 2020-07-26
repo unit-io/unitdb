@@ -78,16 +78,23 @@ func (db *syncHandle) startRecovery() error {
 			if !ok {
 				break
 			}
-			entryData, data := logData[:entrySize], logData[entrySize:]
-			if err := e.UnmarshalBinary(entryData); err != nil {
+			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
 				return true, err
 			}
-			msgOffset := e.mSize()
-			m := data[:msgOffset]
-			if e.msgOffset, err = db.dataWriter.append(m); err != nil {
+			s := slot{
+				seq:       e.seq,
+				topicSize: e.topicSize,
+				valueSize: e.valueSize,
+
+				cacheBlock: logData[entrySize:],
+			}
+			// off := s.mSize()
+			// s.cacheBlock = make([]byte, s.mSize())
+			// copy(s.cacheBlock, data[:off])
+			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
 				return true, err
 			}
-			exists, err := db.blockWriter.append(e, db.startBlockIdx)
+			exists, err := db.blockWriter.append(s, db.startBlockIdx)
 			if err != nil {
 				return true, err
 			}
@@ -95,7 +102,7 @@ func (db *syncHandle) startRecovery() error {
 				continue
 			}
 			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
-				rawtopic := m[int64(idSize) : int64(e.topicSize)+int64(idSize)]
+				rawtopic, _ := db.dataWriter.readTopic(s)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {

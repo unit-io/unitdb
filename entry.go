@@ -17,9 +17,14 @@
 package unitdb
 
 import (
+	"encoding/binary"
 	"strconv"
 	"time"
 	"unsafe"
+)
+
+const (
+	entrySize = 26
 )
 
 type topic struct {
@@ -31,6 +36,15 @@ type topic struct {
 }
 
 type (
+	entry struct {
+		seq       uint64
+		topicSize uint16
+		valueSize uint32
+		expiresAt uint32 // expiresAt for recovery from log and not persisted to Index file but persisted to the time window file
+
+		topicHash uint64 // topicHash for recovery from log and not persisted to the DB
+
+	}
 	internalEntry struct {
 		topic
 		seq        uint64
@@ -84,6 +98,32 @@ func (e *Entry) WithTTL(ttl []byte) *Entry {
 	duration, _ = time.ParseDuration(unsafeToString(ttl))
 	e.ExpiresAt = uint32(time.Now().Add(duration).Unix())
 	return e
+}
+
+func (e entry) ExpiresAt() uint32 {
+	return e.expiresAt
+}
+
+// MarshalBinary serialized entry into binary data
+func (e entry) MarshalBinary() ([]byte, error) {
+	buf := make([]byte, entrySize)
+	data := buf
+	binary.LittleEndian.PutUint64(buf[:8], e.seq)
+	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
+	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
+	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
+	binary.LittleEndian.PutUint64(buf[18:26], e.topicHash)
+	return data, nil
+}
+
+// MarshalBinary de-serialized entry from binary data
+func (e *entry) UnmarshalBinary(data []byte) error {
+	e.seq = binary.LittleEndian.Uint64(data[:8])
+	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
+	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
+	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
+	e.topicHash = binary.LittleEndian.Uint64(data[18:26])
+	return nil
 }
 
 func (e *Entry) reset() {

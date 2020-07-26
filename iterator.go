@@ -136,7 +136,7 @@ func (it *ItemIterator) Next() {
 				if we.seq == 0 {
 					return nil
 				}
-				e, err := it.db.readEntry(we.topicHash, we.seq)
+				s, err := it.db.readEntry(we.topicHash, we.seq)
 				if err != nil {
 					if err == errMsgIDDoesNotExist {
 						logger.Error().Err(err).Str("context", "db.readEntry")
@@ -145,7 +145,7 @@ func (it *ItemIterator) Next() {
 					it.invalidKeys++
 					return nil
 				}
-				id, val, err := it.db.data.readMessage(e)
+				id, val, err := it.db.data.readMessage(s)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -173,7 +173,7 @@ func (it *ItemIterator) Next() {
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
 				it.db.meter.Gets.Inc(1)
 				it.db.meter.OutMsgs.Inc(1)
-				it.db.meter.OutBytes.Inc(int64(e.valueSize))
+				it.db.meter.OutBytes.Inc(int64(s.valueSize))
 				return nil
 			}()
 			if err != nil {
