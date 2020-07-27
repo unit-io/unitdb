@@ -88,50 +88,30 @@ func (b *Batch) PutEntry(e *Entry) error {
 	case len(e.Payload) > maxValueLength:
 		return errValueTooLarge
 	}
-	if e.Contract == 0 {
-		e.Contract = message.MasterContract
-	}
-	topic, ttl, err := b.db.parseTopic(e.Contract, e.Topic)
-	if err != nil {
+	if err := b.db.setEntry(e, b.opts.Encryption); err != nil {
 		return err
 	}
-	topic.AddContract(e.Contract)
-	e.topic.hash = topic.GetHash(e.Contract)
-	e.topic.data = topic.Marshal()
-	e.encryption = b.opts.Encryption
-	if err := b.db.setEntry(e, ttl); err != nil {
-		return err
-	}
+
 	var key uint32
 	if !b.opts.AllowDuplicates {
-		key = hash.WithSalt(e.val, topic.GetHashCode())
-	}
-	if _, ok := b.topics[e.topic.hash]; !ok {
-		t := new(message.Topic)
-		t.Unmarshal(e.topic.data)
-		b.topics[e.topic.hash] = t
-		// topic is added to index and data if it is new topic entry
-		// or else topic size is set to 0 and it is not packed.
-		e.topic.size = uint16(len(e.topic.data))
-	}
-	data, err := b.db.packEntry(e)
-	if err != nil {
-		return err
+		key = hash.WithSalt(e.Payload, uint32(e.topicHash))
 	}
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-
-	if _, err := b.buffer.Write(data); err != nil {
+	if _, err := b.buffer.Write(e.cacheEntry); err != nil {
 		return err
 	}
+
 	b.index = append(b.index, batchIndex{delFlag: false, key: key, offset: b.size})
-	b.size += int64(len(data) + 4)
+	b.size += int64(len(e.cacheEntry) + 4)
 	b.entryCount++
+
+	// reset message entry
+	e.reset()
 
 	return nil
 }
@@ -157,41 +137,33 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
-	topic, _, err := b.db.parseTopic(e.Contract, e.Topic)
-	if err != nil {
+
+	if err := b.db.setEntry(e, b.opts.Encryption); err != nil {
 		return err
 	}
-	if e.Contract == 0 {
-		e.Contract = message.MasterContract
-	}
-	topic.AddContract(e.Contract)
-	id := message.ID(e.ID)
-	id.SetContract(e.Contract)
-	e.id = id
-	e.seq = id.Sequence()
-	key := topic.GetHashCode()
-	data, err := b.db.packEntry(e)
-	if err != nil {
-		return err
-	}
+
+	key := uint32(e.topicHash)
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-
-	if _, err := b.buffer.Write(data); err != nil {
+	if _, err := b.buffer.Write(e.cacheEntry); err != nil {
 		return err
 	}
+
 	b.index = append(b.index, batchIndex{delFlag: true, key: key, offset: b.size})
-	b.size += int64(len(data) + 4)
+	b.size += int64(len(e.cacheEntry) + 4)
 	b.entryCount++
+
+	// reset message entry
+	e.reset()
+
 	return nil
 }
 
-func (b *Batch) writeInternal(fn func(i int, topicHash uint64, seq uint64, expiresAt uint32, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error {
 	if err := b.db.ok(); err != nil {
 		return err
 	} // // CPU profiling by default
@@ -217,7 +189,7 @@ func (b *Batch) writeInternal(fn func(i int, topicHash uint64, seq uint64, expir
 		}
 
 		// put packed entry without topic hash into memdb
-		if err := fn(i, e.topicHash, e.seq, e.expiresAt, data); err != nil {
+		if err := fn(i, e, data); err != nil {
 			return err
 		}
 	}
@@ -237,23 +209,27 @@ func (b *Batch) Write() error {
 		b.db.batchQueue <- b
 		return nil
 	}
-	err := b.writeInternal(func(i int, topicHash uint64, seq uint64, expiresAt uint32, data []byte) error {
-		blockID := startBlockIndex(seq)
-		memseq := b.db.cacheID ^ seq
+	return b.writeInternal(func(i int, e entry, data []byte) error {
+		blockID := startBlockIndex(e.seq)
+		memseq := b.db.cacheID ^ e.seq
 		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
 			return err
 		}
-		t, ok := b.topics[topicHash]
-		if !ok {
-			return errTopicEmpty
+		if err := b.db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+			return nil
 		}
-		b.db.trie.add(topic{hash: topicHash}, t.Parts, t.Depth)
-		return b.db.timeWindow.add(topicHash, winEntry{seq: seq, expiresAt: expiresAt})
+		if e.topicSize != 0 {
+			t, ok := b.topics[e.topicHash]
+			if !ok {
+				t = new(message.Topic)
+				rawTopic := data[entrySize+idSize : entrySize+idSize+e.topicSize]
+				t.Unmarshal(rawTopic)
+				b.topics[e.topicHash] = t
+			}
+			b.db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
+		}
+		return nil
 	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 // Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
@@ -270,6 +246,7 @@ func (b *Batch) Commit() error {
 	if err := b.db.commit(b.Len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 	}
+	b.db.meter.Puts.Inc(int64(b.Len()))
 	return nil
 }
 

@@ -166,11 +166,11 @@ func (db *DB) Get(blockID uint64, key uint64) ([]byte, error) {
 	defer cache.RUnlock()
 	// Get item from cache.
 	off, ok := cache.m[key]
-	if !ok {
-		return nil, nil
-	}
 	if off == -1 {
 		return nil, errors.New("entry deleted")
+	}
+	if !ok {
+		return nil, nil
 	}
 	scratch, err := cache.data.readRaw(off, 4) // read data length
 	if err != nil {

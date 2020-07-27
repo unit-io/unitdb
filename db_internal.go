@@ -132,7 +132,6 @@ func (db *DB) loadTrie() error {
 			// iterate till first win block of topic is found
 			return false, nil
 		}
-		// we := w.entries[w.entryIdx-1]
 		we := w.entries[0]
 		off := blockOffset(startBlockIndex(we.Seq()))
 		b := blockHandle{file: db.index, offset: off}
@@ -212,13 +211,9 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
 			seq:       e.seq,
 			topicSize: e.topicSize,
 			valueSize: e.valueSize,
-			// msgOffset: e.msgOffset,
 
 			cacheBlock: data[entrySize:],
-			// cacheBlock: make([]byte, len(data[entrySize:])),
 		}
-		// s.cacheBlock = make([]byte, len(data[entrySize:]))
-		// copy(s.cacheBlock, data[entrySize:])
 		return s, nil
 	}
 
@@ -294,24 +289,42 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 	return t, 0, nil
 }
 
-func (db *DB) setEntry(e *Entry, ttl uint32) error {
+func (db *DB) setEntry(e *Entry, encr bool) error {
 	//message ID is the database key
 	var id message.ID
+	var eBit uint8
 	var seq uint64
-	e.encryption = db.encryption == 1 || e.encryption
-	if e.ExpiresAt == 0 && ttl > 0 {
-		e.ExpiresAt = ttl
+	var rawTopic []byte
+	if !e.parsed {
+		if e.Contract == 0 {
+			e.Contract = message.MasterContract
+		}
+		t, ttl, err := db.parseTopic(e.Contract, e.Topic)
+		if err != nil {
+			return err
+		}
+		if e.ExpiresAt == 0 && ttl > 0 {
+			e.ExpiresAt = ttl
+		}
+		t.AddContract(e.Contract)
+		e.topicHash = t.GetHash(e.Contract)
+		// topic is added to DB if it is new topic entry
+		if _, ok := db.trie.getOffset(e.topicHash); !ok {
+			rawTopic = t.Marshal()
+			e.topicSize = uint16(len(rawTopic))
+		}
+		e.parsed = true
 	}
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		seq = id.Sequence()
 	} else {
-		// if ok, s := db.data.lease.getSlot(e.topic.hash); ok {
-		// 	db.meter.Leased.Inc(1)
-		// 	seq = s
-		// } else {
-		seq = db.nextSeq()
-		// }
+		if ok, s := db.data.lease.getSlot(e.topicHash); ok {
+			db.meter.Leased.Inc(1)
+			seq = s
+		} else {
+			seq = db.nextSeq()
+		}
 		id = message.NewID(seq)
 	}
 	if seq == 0 {
@@ -319,51 +332,30 @@ func (db *DB) setEntry(e *Entry, ttl uint32) error {
 	}
 
 	id.SetContract(e.Contract)
-
+	e.seq = seq
+	e.expiresAt = e.ExpiresAt
 	val := snappy.Encode(nil, e.Payload)
-	if e.encryption {
+	if db.encryption == 1 || encr {
+		eBit = 1
 		val = db.mac.Encrypt(nil, val)
 	}
-
-	e.seq = seq
-	e.id = id
-	e.val = val
-	return nil
-}
-
-// packEntry marshal entry and message data
-func (db *DB) packEntry(e *Entry) ([]byte, error) {
-	if db.Count() == maxKeys {
-		return nil, errFull
+	e.valueSize = uint32(len(val))
+	mLen := entrySize + idSize + uint32(e.topicSize) + uint32(e.valueSize)
+	e.cacheEntry = make([]byte, mLen)
+	entryData, err := e.MarshalBinary()
+	if err != nil {
+		return err
 	}
-	var eBit int8
-	if e.encryption {
-		eBit = 1
-	}
-	e1 := entry{
-		seq:       e.seq,
-		topicSize: e.topic.size,
-		valueSize: uint32(len(e.val)),
-		expiresAt: e.ExpiresAt,
-		topicHash: e.topic.hash,
-	}
-	msgID := message.ID(e.id)
-	id := make(message.ID, idSize)
-	// it only pack messageID prefix that is later used in DB query for prefix validation
-	copy(id[:idSize-1], msgID.Prefix())
-	id[idSize-1] = byte(eBit)
-	data, _ := e1.MarshalBinary()
-	mLen := idSize + int(e.topic.size) + len(e.val)
-	m := make([]byte, mLen)
-	copy(m, id)
+	copy(e.cacheEntry, entryData)
+	copy(e.cacheEntry[entrySize:], id.Prefix())
+	e.cacheEntry[entrySize+idSize-1] = byte(eBit)
 	// topic data is added on new topic entry and subsequent entries does not pack the topic data.
-	if e.topic.size != 0 {
-		copy(m[idSize:], e.topic.data)
+	if e.topicSize != 0 {
+		copy(e.cacheEntry[entrySize+idSize:], rawTopic)
 	}
-	copy(m[int(e.topic.size)+idSize:], e.val)
-	data = append(data, m...)
+	copy(e.cacheEntry[entrySize+idSize+uint32(e.topicSize):], val)
 
-	return data, nil
+	return nil
 }
 
 // tinyCommit commits tiny batch to write ahead log
@@ -385,6 +377,7 @@ func (db *DB) tinyCommit() error {
 	db.writeLockC <- struct{}{}
 	defer func() {
 		db.tinyBatch.buffer.Reset()
+		db.tinyBatch.reset()
 		<-db.writeLockC
 		db.closeW.Done()
 	}()
@@ -399,12 +392,11 @@ func (db *DB) tinyCommit() error {
 		offset += dataLen
 	}
 
-	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
 	db.setLogSeq(db.seq())
 	if err := <-logWriter.SignalInitWrite(db.logSeq()); err != nil {
 		return err
 	}
-	db.tinyBatch.reset()
+	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
 	return nil
 }
 
@@ -438,7 +430,6 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 		offset += dataLen
 	}
 
-	db.meter.Puts.Inc(int64(l))
 	db.setLogSeq(db.seq())
 	return <-logWriter.SignalInitWrite(db.logSeq())
 }

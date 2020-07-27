@@ -370,13 +370,13 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 		}
 
-		if invalidCount == 0 || len(items) >= int(q.Limit) || cap(q.winEntries) == limit {
+		if invalidCount == 0 || len(items) >= int(q.Limit) || len(q.winEntries) == limit {
 			break
 		}
 
-		if cap(q.winEntries) < int(q.Limit+invalidCount) {
+		if len(q.winEntries) < int(q.Limit+invalidCount) {
 			start = limit
-			limit = cap(q.winEntries)
+			limit = len(q.winEntries)
 		} else {
 			start = limit
 			limit = limit + invalidCount
@@ -451,58 +451,38 @@ func (db *DB) PutEntry(e *Entry) error {
 	case len(e.Payload) > maxValueLength:
 		return errValueTooLarge
 	}
-	var t *message.Topic
-	var ttl uint32
-	var err error
-	if !e.parsed {
-		if e.Contract == 0 {
-			e.Contract = message.MasterContract
-		}
-		t, ttl, err = db.parseTopic(e.Contract, e.Topic)
-		if err != nil {
-			return err
-		}
-		t.AddContract(e.Contract)
-		// e.prefix = message.Prefix(t.Parts)
-		e.topic.hash = t.GetHash(e.Contract)
-		// fmt.Println("db.PutEntry: contact, topicHash ", e.contract, e.topic.hash)
-		if ok := db.trie.add(topic{hash: e.topic.hash}, t.Parts, t.Depth); ok {
-			// topic is added to index and data if it is new topic entry
-			// or else topic size is set to 0 and it is not packed.
-			e.topic.data = t.Marshal()
-			e.topic.size = uint16(len(e.topic.data))
-		}
-		e.parsed = true
-	}
-	if err := db.setEntry(e, ttl); err != nil {
-		return err
-	}
-	data, err := db.packEntry(e)
-	if err != nil {
+
+	if err := db.setEntry(e, false); err != nil {
 		return err
 	}
 
 	blockID := startBlockIndex(e.seq)
 	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(uint64(blockID), memseq, data); err != nil {
+	if err := db.mem.Set(uint64(blockID), memseq, e.cacheEntry); err != nil {
 		return err
 	}
-	if err := db.timeWindow.add(e.topic.hash, winEntry{seq: e.seq, expiresAt: e.ExpiresAt}); err != nil {
+
+	if err := db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
 		return err
+	}
+
+	if e.topicSize != 0 {
+		t := new(message.Topic)
+		rawTopic := e.cacheEntry[entrySize+idSize : entrySize+idSize+e.topicSize]
+		t.Unmarshal(rawTopic)
+		db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
 	}
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
-
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
 	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-
-	if _, err := db.tinyBatch.buffer.Write(data); err != nil {
+	if _, err := db.tinyBatch.buffer.Write(e.cacheEntry); err != nil {
 		return err
 	}
-
 	db.tinyBatch.incount()
+	// reset message entry
 	e.reset()
 	return nil
 }

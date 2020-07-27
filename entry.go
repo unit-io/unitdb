@@ -27,14 +27,6 @@ const (
 	entrySize = 26
 )
 
-type topic struct {
-	data   []byte
-	hash   uint64
-	offset int64
-	size   uint16
-	parsed bool
-}
-
 type (
 	entry struct {
 		seq       uint64
@@ -42,19 +34,14 @@ type (
 		valueSize uint32
 		expiresAt uint32 // expiresAt for recovery from log and not persisted to Index file but persisted to the time window file
 
-		topicHash uint64 // topicHash for recovery from log and not persisted to the DB
-
-	}
-	internalEntry struct {
-		topic
-		seq        uint64
-		id         []byte
-		val        []byte
-		encryption bool
+		parsed     bool
+		topicHash  uint64 // topicHash for recovery from log and not persisted to the DB
+		cacheEntry []byte // block from memdb if it exist
 	}
 	// Entry entry is a message entry structure
 	Entry struct {
-		internalEntry
+		entry
+		// internalEntry
 		ID        []byte // The ID of the message
 		Topic     []byte // The topic of the message
 		Payload   []byte // The payload of the message
@@ -100,6 +87,14 @@ func (e *Entry) WithTTL(ttl []byte) *Entry {
 	return e
 }
 
+func (e *Entry) reset() {
+	e.seq = 0
+	e.topicSize = 0
+	e.cacheEntry = nil
+	e.ID = nil
+	e.Payload = nil
+}
+
 func (e entry) ExpiresAt() uint32 {
 	return e.expiresAt
 }
@@ -124,16 +119,6 @@ func (e *entry) UnmarshalBinary(data []byte) error {
 	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
 	e.topicHash = binary.LittleEndian.Uint64(data[18:26])
 	return nil
-}
-
-func (e *Entry) reset() {
-	e.topic.size = 0
-	e.topic.data = nil
-	e.seq = 0
-	e.id = nil
-	e.val = nil
-	e.ID = nil
-	e.Payload = nil
 }
 
 // unsafeToString is used to convert a slice

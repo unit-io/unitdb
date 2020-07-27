@@ -257,7 +257,7 @@ func (db *syncHandle) Sync() error {
 				blockID := startBlockIndex(we.Seq())
 				mseq := db.cacheID ^ uint64(we.Seq())
 				memdata, err := db.mem.Get(uint64(blockID), mseq)
-				if err != nil {
+				if err != nil || memdata == nil {
 					logger.Error().Err(err).Str("context", "mem.Get")
 					err1 = err
 					break
@@ -270,7 +270,6 @@ func (db *syncHandle) Sync() error {
 					seq:       e.seq,
 					topicSize: e.topicSize,
 					valueSize: e.valueSize,
-					// msgOffset: e.msgOffset,
 
 					cacheBlock: memdata[entrySize:],
 				}

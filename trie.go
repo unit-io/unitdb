@@ -26,6 +26,11 @@ const (
 	nul = 0x0
 )
 
+type topic struct {
+	hash   uint64
+	offset int64
+}
+
 type topics []topic
 
 // addUnique adds topic to the set.
