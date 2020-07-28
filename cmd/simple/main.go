@@ -59,10 +59,10 @@ func main() {
 
 	// delete message
 	messageId := db.NewID()
-	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId).WithPayload([]byte("msg for team alpha channel1 receiver1"))
+	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")).WithID(messageId)
 	db.PutEntry(entry)
 
-	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId))
+	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), nil).WithID(messageId))
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -78,7 +78,7 @@ func main() {
 	// Topic isolation using contract
 	contract, err := db.NewContract()
 
-	db.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithPayload([]byte("msg for team alpha channel1 receiver1")).WithContract(contract))
+	db.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")).WithContract(contract))
 
 	// Get message for team alpha channel1 receiver1 with new contract
 	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h")).WithContract(contract).WithLimit(10)); err == nil {

@@ -49,7 +49,8 @@ func TestIterator(t *testing.T) {
 	var n uint16 = 255
 	items := map[uint16]bool{}
 
-	entry := NewEntry([]byte("unit5.test?ttl=1m")).WithContract(contract)
+	entry := NewEntry([]byte("unit5.test?ttl=1m"), nil)
+	entry.WithContract(contract)
 	for i = 0; i < n; i++ {
 		items[i] = false
 		val := []byte(fmt.Sprintf("msg.%2d", i))

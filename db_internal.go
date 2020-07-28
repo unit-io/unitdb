@@ -64,13 +64,13 @@ const (
 )
 
 type dbInfo struct {
-	encryption  int8
-	sequence    uint64
-	logSequence uint64
-	count       uint64
-	blockIdx    int32
-	windowIdx   int32
-	cacheID     uint64
+	encryption int8
+	sequence   uint64
+	logSeq     uint64
+	count      uint64
+	blockIdx   int32
+	windowIdx  int32
+	cacheID    uint64
 }
 
 func (db *DB) writeHeader(writeFreeList bool) error {
@@ -393,7 +393,7 @@ func (db *DB) tinyCommit() error {
 	}
 
 	db.setLogSeq(db.seq())
-	if err := <-logWriter.SignalInitWrite(db.logSeq()); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.logSequence()); err != nil {
 		return err
 	}
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
@@ -431,7 +431,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 	}
 
 	db.setLogSeq(db.seq())
-	return <-logWriter.SignalInitWrite(db.logSeq())
+	return <-logWriter.SignalInitWrite(db.logSequence())
 }
 
 // delete deletes the given key from the DB.
@@ -476,12 +476,12 @@ func (db *DB) nextSeq() uint64 {
 }
 
 // LogSeq current log sequence of the DB.
-func (db *DB) logSeq() uint64 {
-	return atomic.LoadUint64(&db.logSequence)
+func (db *DB) logSequence() uint64 {
+	return atomic.LoadUint64(&db.logSeq)
 }
 
 func (db *DB) setLogSeq(seq uint64) error {
-	atomic.StoreUint64(&db.logSequence, seq)
+	atomic.StoreUint64(&db.logSeq, seq)
 	return nil
 }
 

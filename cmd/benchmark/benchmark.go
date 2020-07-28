@@ -374,7 +374,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				for contract := range keys {
 					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1m")...)
-						b.PutEntry(unitdb.NewEntry(topic).WithPayload(vals[i]).WithContract(contract))
+						b.PutEntry(unitdb.NewEntry(topic, vals[i]).WithContract(contract))
 					}
 				}
 				return b.Write()

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -28,10 +29,12 @@ import (
 
 type (
 	internal struct {
+		*DB
+
 		startBlockIdx int32
 		lastSyncSeq   uint64
 		logSeq        uint64
-		upperCount    uint64
+		upperSeq      uint64
 		syncStatusOk  bool
 		syncComplete  bool
 		inBytes       int64
@@ -48,7 +51,6 @@ type (
 	}
 	syncHandle struct {
 		internal
-		*DB
 
 		windowWriter *windowWriter
 		blockWriter  *blockWriter
@@ -62,7 +64,7 @@ func (db *syncHandle) startSync() bool {
 		return db.syncStatusOk
 	}
 	db.startBlockIdx = db.blocks()
-	db.internal.logSeq = db.logSeq()
+	db.internal.logSeq = db.logSequence()
 
 	db.rawWindow = db.bufPool.Get()
 	db.rawBlock = db.bufPool.Get()
@@ -80,14 +82,6 @@ func (db *syncHandle) startSync() bool {
 	return db.syncStatusOk
 }
 
-func (db *syncHandle) upperSeq() uint64 {
-	return db.blockWriter.UpperSeq()
-}
-
-func (db *syncHandle) logSeq() uint64 {
-	return db.internal.logSeq
-}
-
 func (db *syncHandle) finish() error {
 	if !db.syncStatusOk {
 		return nil
@@ -97,7 +91,6 @@ func (db *syncHandle) finish() error {
 	db.bufPool.Put(db.rawBlock)
 	db.bufPool.Put(db.rawData)
 
-	db.lastSyncSeq = db.upperSeq()
 	db.syncStatusOk = false
 	return nil
 }
@@ -107,11 +100,20 @@ func (db *syncHandle) status() (ok bool) {
 }
 
 func (in *internal) reset() error {
+	in.lastSyncSeq = in.upperSeq
 	in.count = 0
 	in.inBytes = 0
+	in.upperSeq = 0
+	in.startBlockIdx = in.blocks()
+
 	in.rawWindow.Reset()
 	in.rawBlock.Reset()
 	in.rawData.Reset()
+
+	in.winOff = in.timeWindow.currSize()
+	in.blockOff = in.index.currSize()
+	in.dataOff = in.data.currSize()
+
 	return nil
 }
 
@@ -126,7 +128,7 @@ func (db *syncHandle) abort() error {
 	db.index.truncate(db.blockOff)
 	db.timeWindow.truncate(db.winOff)
 	atomic.StoreInt32(&db.blockIdx, db.startBlockIdx)
-	db.decount(db.upperCount)
+	db.decount(uint64(db.count))
 
 	if err := db.dataWriter.rollback(); err != nil {
 		return err
@@ -200,7 +202,7 @@ func (db *DB) sync() error {
 
 func (db *syncHandle) sync(recovery bool, last bool) error {
 	if last || db.rawData.Size() > db.opts.BufferSize {
-		if db.blockWriter.UpperSeq() == 0 {
+		if db.internal.upperSeq == 0 {
 			return nil
 		}
 		db.syncComplete = false
@@ -211,7 +213,7 @@ func (db *syncHandle) sync(recovery bool, last bool) error {
 			return err
 		}
 
-		nBlocks := int32((db.blockWriter.UpperSeq() - 1) / entriesPerIndexBlock)
+		nBlocks := int32((db.internal.upperSeq - 1) / entriesPerIndexBlock)
 		if nBlocks > db.blocks() {
 			// fmt.Println("db.startSync: startBlockIdx, nBlocks ", db.startBlockIdx, nBlocks)
 			if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
@@ -249,10 +251,32 @@ func (db *syncHandle) sync(recovery bool, last bool) error {
 func (db *syncHandle) Sync() error {
 	var err1 error
 	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
+		// sort topics by base seq
+		topics := make(map[uint64]uint64) // map[baseSeq]topicHash
+		var seqs []uint64                 // array of baseSeq
 		for h, wEntries := range windowEntries {
+			baseSeq := wEntries[0].Seq()
 			for _, we := range wEntries {
 				if we.Seq() == 0 {
 					continue
+				}
+				if we.Seq() < baseSeq {
+					baseSeq = we.Seq()
+				}
+			}
+			seqs = append(seqs, baseSeq)
+			topics[baseSeq] = h
+		}
+		sort.Slice(seqs[:], func(i, j int) bool { return seqs[i] < seqs[j] })
+
+		for _, baseSeq := range seqs {
+			h := topics[baseSeq]
+			for _, we := range windowEntries[h] {
+				if we.Seq() == 0 {
+					continue
+				}
+				if we.Seq() > db.internal.upperSeq {
+					db.internal.upperSeq = we.Seq()
 				}
 				blockID := startBlockIndex(we.Seq())
 				mseq := db.cacheID ^ uint64(we.Seq())
@@ -290,15 +314,15 @@ func (db *syncHandle) Sync() error {
 			if !ok {
 				return true, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
 			}
-			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
+			wOff, err := db.windowWriter.append(h, topicOff, windowEntries[h])
 			if err != nil {
 				return true, err
 			}
 			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
-			blockID := startBlockIndex(db.upperSeq())
-			db.mem.Free(uint64(blockID), db.cacheID^db.upperSeq())
+			blockID := startBlockIndex(baseSeq)
+			db.mem.Free(uint64(blockID), db.cacheID^baseSeq)
 			if err1 != nil {
 				break
 			}
@@ -306,6 +330,12 @@ func (db *syncHandle) Sync() error {
 			if err := db.sync(false, false); err != nil {
 				err1 = err
 				break
+			}
+			if db.syncComplete {
+				if err := db.wal.SignalLogApplied(baseSeq); err != nil {
+					logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
+					return false, err
+				}
 			}
 		}
 		return false, nil
@@ -325,7 +355,7 @@ func (db *syncHandle) Sync() error {
 	}
 
 	if db.syncComplete {
-		if err := db.wal.SignalLogApplied(db.logSeq()); err != nil {
+		if err := db.wal.SignalLogApplied(db.internal.lastSyncSeq); err != nil {
 			logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 			return err
 		}

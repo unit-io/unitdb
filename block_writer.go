@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package unitdb
 
 import (
@@ -8,8 +24,7 @@ import (
 )
 
 type blockWriter struct {
-	upperSeq uint64
-	blocks   map[int32]block // map[blockIdx]block
+	blocks map[int32]block // map[blockIdx]block
 
 	*file
 	buffer *bpool.Buffer
@@ -84,9 +99,6 @@ func (bw *blockWriter) append(s slot, blockIdx int32) (exists bool, err error) {
 	}
 	if entryIdx == -1 {
 		return true, nil
-	}
-	if bw.upperSeq < s.seq {
-		bw.upperSeq = s.seq
 	}
 
 	if b.leased {
@@ -175,10 +187,6 @@ func (bw *blockWriter) write() error {
 	}
 
 	return nil
-}
-
-func (bw *blockWriter) UpperSeq() uint64 {
-	return bw.upperSeq
 }
 
 func blockRange(idx []int32) ([][]int32, error) {

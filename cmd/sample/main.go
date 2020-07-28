@@ -58,8 +58,8 @@ func main() {
 
 	// Writing to multiple topics in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2")).WithPayload([]byte("msg for team alpha channel1 receiver2")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u3")).WithPayload([]byte("msg for team alpha channel1 receiver3")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u3"), []byte("msg for team alpha channel1 receiver3")))
 		err := b.Write()
 		return err
 	})
@@ -100,10 +100,10 @@ func main() {
 		opts := unitdb.DefaultBatchOptions
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1")).WithPayload([]byte("msg for any team channel1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*")).WithPayload([]byte("msg for team alpha all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams...")).WithPayload([]byte("msg for all teams and all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("...")).WithPayload([]byte("msg broadcast to all receivers of all teams all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams and all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
 		return b.Write()
 	})
 	if err != nil {

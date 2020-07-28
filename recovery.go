@@ -150,6 +150,6 @@ func (db *DB) recoverLog() error {
 		<-db.syncLockC
 	}()
 
-	syncHandle := syncHandle{DB: db, internal: internal{}}
+	syncHandle := syncHandle{internal: internal{DB: db}}
 	return syncHandle.startRecovery()
 }

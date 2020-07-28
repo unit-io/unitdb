@@ -102,7 +102,7 @@ Use Entry.WithPayload() method to bulk store messages as topic is parsed on firs
 
 ```
 	topic := []byte("teams.alpha.ch1.u1")
-	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1?ttl=1h"))
+	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1?ttl=1h"), nil)
 	for j := 0; j < 50; j++ {
 		db.PutEntry(entry.WithPayload([]byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j))))
 	}
@@ -115,7 +115,7 @@ Specify ttl parameter to a topic while storing messages to expire it after speci
 ```
 	topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 	msg := []byte("msg for team alpha channel1 receiver1")
-	b.PutEntry(unitdb.NewEntry(topic).WithPayload(msg))
+	b.PutEntry(unitdb.NewEntry(topic, msg))
 
 ```
 
@@ -138,10 +138,13 @@ Deleting a message in unitdb is rare and it require additional steps to delete m
 ```
 
 	messageId := db.NewID()
-	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId).WithPayload([]byte("msg for team alpha channel1 receiver1"))
+	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1"))
+	entry.WithID(messageId)
 	err := db.PutEntry(entry)
-	
-	err := db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithID(messageId))
+
+	entry = unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), nil)
+	entry.WithID(messageId)
+	err = db.DeleteEntry(entry)
 
 ```
 
@@ -151,10 +154,15 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 	contract, err := db.NewContract()
 
-    entry := unitdb.NewEntry([]byte("teams.alpha.ch1")).WithPayload([]byte("msg for team alpha channel1")).WithContract(contract)
+    entry := unitdb.NewEntry([]byte("teams.alpha.ch1"), []byte("msg for team alpha channel1"))
+	entry.WithContract(contract)
 	err := db.PutEntry(entry)
+	
 	....
-	msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h").WithContract(contract).WithLimit(100)))
+	query := unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h")
+	query.WithContract(contract)
+	var msgs [][]byte
+	msgs, err = db.Get(query.WithLimit(100)))
 
 ```
 
@@ -183,8 +191,8 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 
     // Writing to multiple topics in a batch
     err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithPayload([]byte("msg for team alpha channel1 receiver1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2")).WithPayload([]byte("msg for team alpha channel1 receiver2")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
 		return b.Write()
     })
 
@@ -195,7 +203,7 @@ All batch operations are non-blocking so client program can decide to wait for c
 
 ```
     err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1")).WithPayload([]byte("msg for team alpha channel1 receiver1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
 		err := b.Write()
 			go func() {
 				<-completed // it signals batch has completed and fully committed to db
@@ -235,10 +243,10 @@ Specify topic to retrieve values and use last parameter to specify duration or s
 unitdb supports writing to wildcard topics. Use "`*`" in the topic to write to wildcard topic or use "`...`" at the end of topic to write to all sub-topics. Writing to following wildcard topics are also supported, "`*`" or "`...`"
 
 ```
-	b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1")).WithPayload([]byte("msg for any team channel1")))
-	b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*")).WithPayload([]byte("msg for team alpha all channels")))
-	b.PutEntry(unitdb.NewEntry([]byte("teams...")).WithPayload([]byte("msg for all teams all channels")))
-	b.PutEntry(unitdb.NewEntry([]byte("...")).WithPayload([]byte("msg broadcast to all receivers of all teams all channels")))
+	b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
+	b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
+	b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams all channels")))
+	b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
 
 ```
 
@@ -265,10 +273,10 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 		opts := unitdb.DefaultBatchOptions
 		opts.Contract = contract
 		b.SetOptions(opts)
-		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1")).WithPayload([]byte("msg for any team channel1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*")).WithPayload([]byte("msg for team alpha all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams...")).WithPayload([]byte("msg for all teams all channels")))
-		b.PutEntry(unitdb.NewEntry([]byte("...")).WithPayload([]byte("msg broadcast to all receivers of all teams all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams all channels")))
+		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
 		return b.Write()
 	})
 
@@ -298,20 +306,20 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 ```
     g := db.NewBatchGroup()
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h")).WithPayload([]byte("msg for team alpha channel1 #1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h")).WithPayload([]byte("msg for team beta channel1 #1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #1")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #1")))
 		return b.Write()
 	})
 
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h")).WithPayload([]byte("msg for team alpha channel1 #2")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h")).WithPayload([]byte("msg for team beta channel1 #2")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #2")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #2")))
 		return b.Write()
 	})
 
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h")).WithPayload([]byte("msg for team alpha channel1 #3")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h")).WithPayload([]byte("msg for team beta channel1 #3")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #3")))
+		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #3")))
 		return b.Write()
 	})
 

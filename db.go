@@ -216,7 +216,7 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 		// return nil, err
 	}
-	db.syncHandle = syncHandle{DB: db, internal: internal{}}
+	db.syncHandle = syncHandle{internal: internal{DB: db}}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
@@ -247,8 +247,14 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 // Close closes the DB.
 func (db *DB) Close() error {
 	if err := db.close(); err != nil {
-		db.close()
+		return err
 	}
+
+	//close bufferpool
+	db.bufPool.Done()
+
+	// close memdb
+	db.mem.Close()
 
 	if err := db.writeHeader(true); err != nil {
 		return err
@@ -268,12 +274,6 @@ func (db *DB) Close() error {
 	if err := db.lock.Unlock(); err != nil {
 		return err
 	}
-
-	//close bufferpool
-	db.bufPool.Done()
-
-	// close memdb
-	db.mem.Close()
 
 	var err error
 	if db.closer != nil {
@@ -426,7 +426,7 @@ func (db *DB) NewID() []byte {
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (db *DB) Put(topic, payload []byte) error {
-	return db.PutEntry(NewEntry(topic).WithPayload(payload))
+	return db.PutEntry(NewEntry(topic, payload))
 }
 
 // PutEntry puts entry into the DB, if Contract is not specified then it uses master Contract.
@@ -491,7 +491,7 @@ func (db *DB) PutEntry(e *Entry) error {
 // It is safe to modify the contents of the argument after Delete returns but not
 // before.
 func (db *DB) Delete(id, topic []byte) error {
-	return db.DeleteEntry(NewEntry(topic).WithID(id))
+	return db.DeleteEntry(NewEntry(topic, nil).WithID(id))
 }
 
 // DeleteEntry deletes an entry from DB. you must provide an ID to delete an entry.

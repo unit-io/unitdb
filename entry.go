@@ -51,9 +51,10 @@ type (
 )
 
 // NewEntry creates a new entry structure from the topic.
-func NewEntry(topic []byte) *Entry {
+func NewEntry(topic, payload []byte) *Entry {
 	return &Entry{
-		Topic: topic,
+		Topic:   topic,
+		Payload: payload,
 	}
 }
 

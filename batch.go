@@ -71,7 +71,7 @@ type (
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) Put(topic, payload []byte) error {
-	return b.PutEntry(NewEntry(topic).WithPayload(payload).WithContract(b.opts.Contract))
+	return b.PutEntry(NewEntry(topic, payload).WithContract(b.opts.Contract))
 }
 
 // PutEntry appends entries to a bacth for given topic->key/value pair.
@@ -120,7 +120,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (b *Batch) Delete(id, topic []byte) error {
-	return b.DeleteEntry(NewEntry(topic).WithID(id))
+	return b.DeleteEntry(NewEntry(topic, nil).WithID(id))
 }
 
 // DeleteEntry appends entry for deletion to a batch for given key.
