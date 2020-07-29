@@ -9,9 +9,8 @@ import (
 
 func main() {
 	// Opening a database.
-	opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
 	// open DB with Mutable flag to allow deleting messages
-	db, err := unitdb.Open("example", opts, unitdb.WithMutable())
+	db, err := unitdb.Open("example", unitdb.WithDefaultOptions(), unitdb.WithMutable())
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -33,7 +32,7 @@ func main() {
 
 	// Writing to single topic in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.DefaultBatchOptions
+		opts := unitdb.WithDefaultBatchOptions
 		b.SetOptions(opts)
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers"))
@@ -85,8 +84,8 @@ func main() {
 
 	// Writing to single topic in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.DefaultBatchOptions
-		opts.Contract = contract
+		opts := unitdb.WithDefaultBatchOptions
+		opts.WithContract(contract)
 		b.SetOptions(opts)
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
@@ -97,8 +96,8 @@ func main() {
 
 	// Writing to multiple topics in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.DefaultBatchOptions
-		opts.Contract = contract
+		opts := unitdb.WithDefaultBatchOptions
+		opts.WithContract(contract)
 		b.SetOptions(opts)
 		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
@@ -135,8 +134,8 @@ func main() {
 	// Set encryption flag in batch options to encrypt all messages in a batch.
 	// Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter.
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.DefaultBatchOptions
-		opts.Encryption = true
+		opts := unitdb.WithDefaultBatchOptions
+		opts.WithEncryption()
 		b.SetOptions(opts)
 		topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 receiver1"))

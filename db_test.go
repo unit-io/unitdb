@@ -24,19 +24,18 @@ import (
 	"time"
 )
 
-func open(path string, opts *Options) (*DB, error) {
+func cleanup(path string) {
 	os.Remove(path + indexPostfix)
 	os.Remove(path + dataPostfix)
 	os.Remove(path + logPostfix)
 	os.Remove(path + lockPostfix)
 	os.Remove(path + windowPostfix)
 	os.Remove(path + filterPostfix)
-	return Open(path, opts, WithMutable(), WithBackgroundKeyExpiry())
 }
 
 func TestSimple(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 4, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<4), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +78,7 @@ func TestSimple(t *testing.T) {
 		}
 
 		if !reflect.DeepEqual(vals, v) {
-			// t.Fatalf("expected %v; got %v", vals, v)
+			t.Fatalf("expected %v; got %v", vals, v)
 		}
 		if size, err := db.FileSize(); err != nil || size == 0 {
 			t.Fatal(err)
@@ -137,8 +136,8 @@ func TestSimple(t *testing.T) {
 }
 
 func TestBatch(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +205,8 @@ func TestBatch(t *testing.T) {
 }
 
 func TestBatchGroup(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +255,8 @@ func TestBatchGroup(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	db, err := open("test.db", nil)
+	cleanup("test.db")
+	db, err := Open("test.db", WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,8 +297,8 @@ func TestExpiry(t *testing.T) {
 }
 
 func TestAbort(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,8 +325,8 @@ func TestAbort(t *testing.T) {
 }
 
 func TestLeasing(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 4}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,8 +372,8 @@ func TestLeasing(t *testing.T) {
 }
 
 func TestWildcardTopics(t *testing.T) {
-	opts := &Options{BufferSize: 1 << 16, MemdbSize: 1 << 16, LogSize: 1 << 16, MinimumFreeBlocksSize: 1 << 16}
-	db, err := open("test.db", opts)
+	cleanup("test.db")
+	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}

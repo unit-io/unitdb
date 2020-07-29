@@ -183,8 +183,8 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				i := 1
 				for {
 					db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-						opts := unitdb.DefaultBatchOptions
-						opts.AllowDuplicates = true
+						opts := unitdb.WithDefaultBatchOptions
+						opts.WithAllowDuplicates()
 						b.SetOptions(opts)
 						topic := append(topics[i-1], []byte("?ttl=1h")...)
 						for k := 0; k < batchSize; k++ {
@@ -263,8 +263,8 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		i := 1
 		for {
 			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-				opts := unitdb.DefaultBatchOptions
-				opts.AllowDuplicates = true
+				opts := unitdb.WithDefaultBatchOptions
+				opts.WithAllowDuplicates()
 				b.SetOptions(opts)
 				topic := append(topics[i-1], []byte("?ttl=1h")...)
 				for k := 0; k < batchSize; k++ {
@@ -368,8 +368,8 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		i := 1
 		for {
 			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-				opts := unitdb.DefaultBatchOptions
-				opts.AllowDuplicates = true
+				opts := unitdb.WithDefaultBatchOptions
+				opts.WithAllowDuplicates()
 				b.SetOptions(opts)
 				for contract := range keys {
 					for _, k := range keys[contract] {

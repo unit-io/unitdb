@@ -81,6 +81,9 @@ func (db *syncHandle) startRecovery() error {
 			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
 				return true, err
 			}
+			if e.seq > db.internal.upperSeq {
+				db.internal.upperSeq = e.seq
+			}
 			s := slot{
 				seq:       e.seq,
 				topicSize: e.topicSize,

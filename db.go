@@ -56,8 +56,7 @@ type DB struct {
 	syncWrites bool
 	dbInfo
 	timeWindow *timeWindowBucket
-	opts       *Options
-	flags      *flags
+	opts       *options
 	mem        *memdb.DB
 
 	//batchdb
@@ -78,16 +77,17 @@ type DB struct {
 }
 
 // Open opens or creates a new DB.
-func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
-	opts = opts.copyWithDefaults()
-	flags := &flags{}
-	WithDefaultFlags().set(flags)
-	for _, flg := range flgs {
-		if flg != nil {
-			flg.set(flags)
+func Open(path string, opts ...Options) (*DB, error) {
+	// opts = opts.copyWithDefaults()
+	options := &options{}
+	WithDefaultOptions().set(options)
+	WithDefaultFlags().set(options)
+	for _, opt := range opts {
+		if opt != nil {
+			opt.set(options)
 		}
 	}
-	fs := opts.FileSystem
+	fs := options.FileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
 		if err == os.ErrExist {
@@ -107,8 +107,8 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	lease := newLease(leaseFile, opts.MinimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: flags.BackgroundKeyExpiry}
+	lease := newLease(leaseFile, options.MinimumFreeBlocksSize)
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: options.BackgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -131,8 +131,7 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 		dbInfo: dbInfo{
 			blockIdx: -1,
 		},
-		opts:  opts,
-		flags: flags,
+		opts: options,
 
 		batchdb: &batchdb{},
 		trie:    newTrie(),
@@ -188,24 +187,24 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
 	// Create a new MAC from the key.
-	if db.mac, err = crypto.New(opts.EncryptionKey); err != nil {
+	if db.mac, err = crypto.New(options.EncryptionKey); err != nil {
 		return nil, err
 	}
 
 	// set encryption flag to encrypt messages
-	if flags.Encryption {
+	if db.opts.Encryption {
 		db.encryption = 1
 	}
 
 	// Create a memdb.
-	mem, err := memdb.Open(opts.MemdbSize)
+	mem, err := memdb.Open(options.MemdbSize)
 	if err != nil {
 		return nil, err
 	}
 	db.mem = mem
 
 	//initbatchdb
-	if err = db.initbatchdb(opts); err != nil {
+	if err = db.initbatchdb(options); err != nil {
 		return nil, err
 	}
 
@@ -218,7 +217,7 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 	}
 	db.syncHandle = syncHandle{internal: internal{DB: db}}
 
-	logOpts := wal.Options{Path: path + logPostfix, TargetSize: opts.LogSize, BufferSize: opts.BufferSize}
+	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.LogSize, BufferSize: options.BufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
@@ -236,9 +235,9 @@ func Open(path string, opts *Options, flgs ...Flags) (*DB, error) {
 		}
 	}
 
-	db.startSyncer(opts.BackgroundSyncInterval)
+	db.startSyncer(options.BackgroundSyncInterval)
 
-	if flags.BackgroundKeyExpiry {
+	if db.opts.BackgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
@@ -499,7 +498,7 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
-	case db.flags.Immutable:
+	case db.opts.Immutable:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIDEmpty

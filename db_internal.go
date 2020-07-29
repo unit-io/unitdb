@@ -185,8 +185,8 @@ func (db *DB) close() error {
 	}
 
 	// Signal all goroutines.
-	close(db.closeC)
 	time.Sleep(db.opts.TinyBatchWriteInterval)
+	close(db.closeC)
 
 	// Acquire lock.
 	db.writeLockC <- struct{}{}
@@ -360,18 +360,10 @@ func (db *DB) setEntry(e *Entry, encr bool) error {
 
 // tinyCommit commits tiny batch to write ahead log
 func (db *DB) tinyCommit() error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-
 	if db.tinyBatch.count() == 0 {
 		return nil
 	}
 
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
-		return err
-	}
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.closeW.Add(1)
 	db.writeLockC <- struct{}{}
@@ -381,8 +373,15 @@ func (db *DB) tinyCommit() error {
 		<-db.writeLockC
 		db.closeW.Done()
 	}()
+
 	offset := uint32(0)
 	buf := db.tinyBatch.buffer.Bytes()
+
+	logWriter, err := db.wal.NewWriter()
+	if err != nil {
+		return err
+	}
+
 	for i := uint32(0); i < db.tinyBatch.count(); i++ {
 		dataLen := binary.LittleEndian.Uint32(buf[offset : offset+4])
 		data := buf[offset+4 : offset+dataLen]
@@ -436,7 +435,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(topicHash, seq uint64) error {
-	if db.flags.Immutable {
+	if db.opts.Immutable {
 		return nil
 	}
 	// Test filter block for the message id presence
@@ -516,7 +515,7 @@ func (db *DB) isClosed() bool {
 // Check read ok status.
 func (db *DB) ok() error {
 	if db.isClosed() {
-		return errors.New("wal is closed")
+		return errors.New("db is closed")
 	}
 	return nil
 }

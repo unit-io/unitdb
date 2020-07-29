@@ -8,9 +8,8 @@ import (
 
 func main() {
 	// Opening a database.
-	opts := &unitdb.Options{BufferSize: 1 << 27, MemdbSize: 1 << 32, LogSize: 1 << 30, MinimumFreeBlocksSize: 1 << 27}
 	// open DB with Mutable flag to allow deleting messages
-	db, err := unitdb.Open("example", opts, unitdb.WithMutable())
+	db, err := unitdb.Open("example", unitdb.WithDefaultOptions(), unitdb.WithMutable())
 	if err != nil {
 		log.Fatal(err)
 		return

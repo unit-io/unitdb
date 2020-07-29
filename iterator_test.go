@@ -23,7 +23,8 @@ import (
 )
 
 func TestIteratorEmpty(t *testing.T) {
-	db, err := open("test.db", nil)
+	cleanup("test.db")
+	db, err := Open("test.db", WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,8 @@ func TestIteratorEmpty(t *testing.T) {
 }
 
 func TestIterator(t *testing.T) {
-	db, err := open("test.db", nil)
+	cleanup("test.db")
+	db, err := Open("test.db", WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
