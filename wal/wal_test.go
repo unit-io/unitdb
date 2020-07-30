@@ -36,10 +36,6 @@ func TestEmptyLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer wal.Close()
-	seq := wal.Seq()
-	if seq != 0 {
-		t.Fatal(err)
-	}
 }
 
 func TestRecovery(t *testing.T) {

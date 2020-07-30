@@ -49,7 +49,6 @@ To build unitdb from source code use go get command.
 To open or create a new database, use the unitdb.Open() function:
 
 ```
-
 	package main
 
 	import (
@@ -77,7 +76,6 @@ To open or create a new database, use the unitdb.Open() function:
 Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages to specific topic or wildcard topics.
 
 ```
-
 	topic := []byte("teams.alpha.ch1")
 	msg := []byte("msg for team alpha channel1")
 	db.Put(topic, msg)
@@ -122,7 +120,6 @@ Specify ttl parameter to a topic while storing messages to expire it after speci
 UUse DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from unitdb stored in last 1 hour, or "last=100" to get last 100 messages from unitdb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
-
 	var err error
 	var msg [][]byte
 	msgs, err = db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=100")))
@@ -135,7 +132,6 @@ UUse DB.Get() to read messages from a topic. Use last parameter to specify durat
 Deleting a message in unitdb is rare and it require additional steps to delete message from a given topic. Generate a unique message ID using DB.NewID() and use this unique message ID while putting message to the unitdb using DB.PutEntry(). To delete message provide message ID to the DB.DeleteEntry() function. If Immutable flag is set when DB is open then DB.DeleteEntry() returns an error.
 
 ```
-
 	messageId := db.NewID()
 	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1"))
 	entry.WithID(messageId)
@@ -187,7 +183,6 @@ Use Batch.Put() to write to a single topic in a batch.
 Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 
 ```
-
     // Writing to multiple topics in a batch
     err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
@@ -330,7 +325,6 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 The unitdb keeps a running metrics of internal operations it performs. To get unitdb metrics use DB.Varz() function.
 
 ```
-
 	if varz, err := db.Varz(); err == nil {
 		fmt.Printf("%+v\n", varz)
 	}

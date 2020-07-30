@@ -355,7 +355,7 @@ func (db *syncHandle) Sync() error {
 	}
 
 	if db.syncComplete {
-		if err := db.wal.SignalLogApplied(db.internal.lastSyncSeq); err != nil {
+		if err := db.wal.SignalLogApplied(db.internal.logSeq); err != nil {
 			logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 			return err
 		}

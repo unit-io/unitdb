@@ -263,7 +263,7 @@ func (tw *timeWindowBucket) foreachTimeWindow(freeze bool, f func(w map[uint64]w
 func (tw *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
 	nWinBlocks := tw.windowIndex()
-	for winBlockIdx < nWinBlocks {
+	for winBlockIdx <= nWinBlocks {
 		off := winBlockOffset(winBlockIdx)
 		b := windowHandle{file: tw.file, offset: off}
 		if err := b.read(); err != nil {

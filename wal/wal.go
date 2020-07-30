@@ -23,7 +23,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/unit-io/bpool"
 )
@@ -51,6 +50,13 @@ const (
 )
 
 type (
+	// WALInfo provides WAL stats
+	WALInfo struct {
+		logCountWritten  int64
+		logCountApplied  int64
+		logCountReleased int64
+		lastSeqWritten   uint64
+	}
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
@@ -58,9 +64,7 @@ type (
 		wg sync.WaitGroup
 		mu sync.RWMutex
 
-		// DB seq successfully written to the logfile in wal
-		seq uint64
-
+		WALInfo
 		logs []logInfo
 
 		bufPool *bpool.BufferPool
@@ -121,7 +125,6 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	// go wal.startLogReleaser()
 	return wal, len(wal.logs) != 0, nil
 }
 
@@ -129,7 +132,6 @@ func (wal *WAL) writeHeader() error {
 	h := header{
 		signature: signature,
 		version:   version,
-		seq:       atomic.LoadUint64(&wal.seq),
 		fb:        wal.logFile.fb,
 	}
 	return wal.logFile.writeMarshalableAt(h, 0)
@@ -140,7 +142,6 @@ func (wal *WAL) readHeader() error {
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
 	}
-	wal.seq = h.seq
 	wal.logFile.fb = h.fb
 	return nil
 }
@@ -181,11 +182,9 @@ func (wal *WAL) recoverWal() error {
 }
 
 func (wal *WAL) put(log logInfo) error {
-	// l := len(wal.logs)
 	log.version = version
-	if wal.seq < log.seq {
-		wal.seq = log.seq
-	}
+	wal.logCountWritten++
+	wal.lastSeqWritten = log.seq
 	wal.logs = append(wal.logs, log)
 	return nil
 }
@@ -232,22 +231,19 @@ func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 			if err := wal.signalLogApplied(i); err != nil {
 				return err
 			}
+			wal.logCountApplied++
 		}
 	}
 	for i := 0; i < l; i++ {
 		if wal.logs[i].status == logStatusReleased {
 			// Remove log from wal
+			wal.logCountReleased++
 			wal.logs = wal.logs[:i+copy(wal.logs[i:], wal.logs[i+1:])]
 			l -= 1
 			i--
 		}
 	}
 	return wal.writeHeader()
-}
-
-// Seq returns upper DB sequence successfully written to the logfile in wal
-func (wal *WAL) Seq() uint64 {
-	return atomic.LoadUint64(&wal.seq)
 }
 
 //Sync syncs log entries to disk
@@ -265,6 +261,7 @@ func (wal *WAL) Close() error {
 	close(wal.closeC)
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
+	// fmt.Println("wal.Close: WAL Info ", wal.WALInfo)
 	return wal.logFile.Close()
 }
 
@@ -309,6 +306,7 @@ func (wal *WAL) releaseLogs() error {
 		}
 		if released {
 			wal.logs[i].status = logStatusReleased
+			wal.logCountReleased++
 		}
 	}
 
@@ -327,23 +325,8 @@ func (wal *WAL) releaseLogs() error {
 	return nil
 }
 
-func (wal *WAL) startLogReleaser() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer func() {
-		ticker.Stop()
-	}()
-	for {
-		select {
-		case <-wal.closeC:
-			return
-		case <-ticker.C:
-			wal.releaseLogs()
-		}
-	}
-}
-
 // New will open a WAL. If the previous run did not shut down cleanly, a set of
-// upper seq will be returned which got committed successfully to the WAL, but
+// log entries will be returned which got committed successfully to the WAL, but
 // were never signaled as fully completed.
 //
 // If no WAL exists, a new one will be created.

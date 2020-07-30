@@ -91,9 +91,6 @@ func (db *syncHandle) startRecovery() error {
 
 				cacheBlock: logData[entrySize:],
 			}
-			// off := s.mSize()
-			// s.cacheBlock = make([]byte, s.mSize())
-			// copy(s.cacheBlock, data[:off])
 			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
 				return true, err
 			}

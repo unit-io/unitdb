@@ -95,7 +95,7 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 			start := time.Now()
 			var entries []unitdb.Entry
 			for i := 0; i < concurrency; i++ {
-				topic := append(topics[i], []byte("?ttl=1m")...)
+				topic := append(topics[i], []byte("?ttl=1h")...)
 				entries = append(entries, unitdb.Entry{Topic: topic})
 			}
 			for _, entry := range entries {
@@ -300,7 +300,7 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	start = time.Now()
 
 	for i := 0; i < concurrency; i++ {
-		topic := append(topics[i], []byte("?last=1m")...)
+		topic := append(topics[i], []byte("?last=1h")...)
 		_, err := db.Get(unitdb.NewQuery(topic).WithLimit(batchSize))
 		if err != nil {
 			return err
@@ -373,7 +373,7 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				b.SetOptions(opts)
 				for contract := range keys {
 					for _, k := range keys[contract] {
-						topic := append(k, []byte("?ttl=1m")...)
+						topic := append(k, []byte("?ttl=1h")...)
 						b.PutEntry(unitdb.NewEntry(topic, vals[i]).WithContract(contract))
 					}
 				}
