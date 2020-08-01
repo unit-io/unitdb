@@ -87,7 +87,6 @@ func TestLogApplied(t *testing.T) {
 	var i uint16
 	var n uint16 = 1000
 
-	var upperSeq uint64
 	logWriter, err := wal.NewWriter()
 	if err != nil {
 		t.Fatal(err)
@@ -116,21 +115,16 @@ func TestLogApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = r.Read(func(upSeq uint64, last bool) (bool, error) {
+	err = r.Read(func(last bool) (bool, error) {
 		for {
 			_, ok, err := r.Next()
 			if !ok || err != nil {
 				break
 			}
 		}
-		upperSeq = upSeq
 		return false, nil
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := wal.SignalLogApplied(upperSeq); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,4 +163,9 @@ func TestSimple(t *testing.T) {
 	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
 		t.Fatal(err)
 	}
+
+	if err := wal.SignalLogApplied(uint64(n)); err != nil {
+		t.Fatal(err)
+	}
+
 }

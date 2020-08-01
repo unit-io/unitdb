@@ -66,9 +66,9 @@ type batchdb struct {
 
 // Batch starts a new batch.
 func (db *DB) batch() *Batch {
-	opts := WithDefaultBatchOptions
-	opts.Immutable = db.opts.Immutable
-	opts.Encryption = db.encryption == 1
+	opts := &options{}
+	WithDefaultBatchOptions().set(opts)
+	opts.batchOptions.encryption = db.encryption == 1
 	b := &Batch{opts: opts, batchID: uid.NewLID(), db: db, topics: make(map[uint64]*message.Topic)}
 	b.buffer = db.bufPool.Get()
 
@@ -78,7 +78,7 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb(opts *options) error {
 	bdb := &batchdb{
 		// batchDB
-		bufPool:     bpool.NewBufferPool(opts.BufferSize, nil),
+		bufPool:     bpool.NewBufferPool(opts.bufferSize, nil),
 		tinyBatch:   &tinyBatch{Id: uid.NewLID()},
 		batchQueue:  make(chan *Batch, 100),
 		commitQueue: make(chan *Batch, 1),
@@ -87,7 +87,7 @@ func (db *DB) initbatchdb(opts *options) error {
 	db.batchdb = bdb
 	db.tinyBatch.buffer = db.bufPool.Get()
 
-	db.tinyBatchLoop(opts.TinyBatchWriteInterval)
+	db.tinyBatchLoop(opts.tinyBatchWriteInterval)
 	return nil
 }
 

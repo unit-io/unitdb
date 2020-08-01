@@ -87,7 +87,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 			opt.set(options)
 		}
 	}
-	fs := options.FileSystem
+	fs := options.fileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
 		if err == os.ErrExist {
@@ -107,8 +107,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	lease := newLease(leaseFile, options.MinimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: options.BackgroundKeyExpiry}
+	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
+	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: options.backgroundKeyExpiry}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
@@ -187,17 +187,17 @@ func Open(path string, opts ...Options) (*DB, error) {
 	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
 	// Create a new MAC from the key.
-	if db.mac, err = crypto.New(options.EncryptionKey); err != nil {
+	if db.mac, err = crypto.New(options.encryptionKey); err != nil {
 		return nil, err
 	}
 
 	// set encryption flag to encrypt messages
-	if db.opts.Encryption {
+	if db.opts.flags.encryption {
 		db.encryption = 1
 	}
 
 	// Create a memdb.
-	mem, err := memdb.Open(options.MemdbSize)
+	mem, err := memdb.Open(options.memdbSize)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 	db.syncHandle = syncHandle{internal: internal{DB: db}}
 
-	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.LogSize, BufferSize: options.BufferSize}
+	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize, LogReleaseInterval: options.logReleaseInterval}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
@@ -235,9 +235,9 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	db.startSyncer(options.BackgroundSyncInterval)
+	db.startSyncer(options.backgroundSyncInterval)
 
-	if db.opts.BackgroundKeyExpiry {
+	if db.opts.backgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 	return db, nil
@@ -300,7 +300,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
+	q.opts = &queryOptions{defaultQueryLimit: db.opts.defaultQueryLimit, maxQueryLimit: db.opts.maxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 		return nil, errTopicTooLarge
 	}
 
-	q.opts = &QueryOptions{DefaultQueryLimit: db.opts.DefaultQueryLimit, MaxQueryLimit: db.opts.MaxQueryLimit}
+	q.opts = &queryOptions{defaultQueryLimit: db.opts.defaultQueryLimit, maxQueryLimit: db.opts.maxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
@@ -451,7 +451,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	if err := db.setEntry(e, false); err != nil {
+	if err := db.setEntry(e); err != nil {
 		return err
 	}
 
@@ -498,7 +498,7 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
-	case db.opts.Immutable:
+	case db.opts.immutable:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIDEmpty

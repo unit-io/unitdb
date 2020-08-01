@@ -62,13 +62,12 @@ func (db *syncHandle) startRecovery() error {
 	}()
 
 	var e entry
-	var logSeq uint64
 	topics := make(map[uint64]*message.Topic) // map[topicHash]*message.Topic
 	r, err := db.wal.NewReader()
 	if err != nil {
 		return err
 	}
-	err = r.Read(func(lSeq uint64, last bool) (ok bool, err error) {
+	err = r.Read(func(last bool) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
@@ -125,7 +124,6 @@ func (db *syncHandle) startRecovery() error {
 		if err := db.sync(true, false); err != nil {
 			return true, err
 		}
-		logSeq = lSeq
 		return false, nil
 	})
 	if err != nil {
@@ -133,14 +131,8 @@ func (db *syncHandle) startRecovery() error {
 		db.abort()
 		return err
 	}
-	if err := db.sync(true, true); err != nil {
-		return err
-	}
-	if err := db.wal.SignalLogApplied(logSeq); err != nil {
-		logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-		return err
-	}
-	return nil
+
+	return db.sync(true, true)
 }
 
 func (db *DB) recoverLog() error {
@@ -151,5 +143,10 @@ func (db *DB) recoverLog() error {
 	}()
 
 	syncHandle := syncHandle{internal: internal{DB: db}}
-	return syncHandle.startRecovery()
+	if err := syncHandle.startRecovery(); err != nil {
+		return err
+	}
+
+	// reset log on successful recovery
+	return db.wal.Reset()
 }

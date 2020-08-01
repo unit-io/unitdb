@@ -25,14 +25,69 @@ import (
 
 // flags holds various DB flags.
 type flags struct {
-	// Immutable set immutable flag on database
-	Immutable bool
+	// immutable set immutable flag on database
+	immutable bool
 
-	// Encryption flag to encrypt keys
-	Encryption bool
+	// encryption flag to encrypt keys
+	encryption bool
 
-	// BackgroundKeyExpiry sets flag to run key expirer
-	BackgroundKeyExpiry bool
+	// backgroundKeyExpiry sets flag to run key expirer
+	backgroundKeyExpiry bool
+}
+
+// batchOptions is used to set options when using batch operation
+type batchOptions struct {
+	// In concurrent batch writes order determines how to handle conflicts
+	order           int8
+	contract        uint32
+	encryption      bool
+	allowDuplicates bool
+}
+
+// queryOptions is used to set options for DB query
+type queryOptions struct {
+	// defaultQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit.
+	defaultQueryLimit int
+
+	// maxQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit or specify a limit larger than MaxQueryResults.
+	maxQueryLimit int
+}
+
+// options holds the optional DB parameters.
+type options struct {
+	flags
+	batchOptions
+	queryOptions
+	// backgroundSyncInterval sets the amount of time between background fsync() calls.
+	//
+	// Setting the value to 0 disables the automatic background synchronization.
+	// Setting the value to -1 makes the DB call fsync() after every write operation.
+	backgroundSyncInterval time.Duration
+
+	// encryptionKey
+	encryptionKey []byte
+
+	// tinyBatchWriteInterval interval to group tiny batches and write into db on tiny batch interval
+	// Setting the value to 0 immediately writes entries into db.
+	tinyBatchWriteInterval time.Duration
+
+	// bufferSize sets Size of buffer to use for pooling
+	bufferSize int64
+
+	// memdbSize sets Size of memory db
+	memdbSize int64
+
+	// logSize sets Size of write ahead log
+	logSize int64
+
+	// logReleaseInterval sets interval to run log releaser schedule
+	logReleaseInterval time.Duration
+
+	// minimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
+	minimumFreeBlocksSize int64
+
+	// fileSystem file storage type
+	fileSystem fs.FileSystem
 }
 
 // Options it contains configurable options and flags for DB
@@ -57,147 +112,107 @@ func newFuncOption(f func(*options)) *fOption {
 }
 
 // WithDefaultFlags will open DB with some default values.
-//   Immutable: True
-//   Encryption: False
-//   BackgroundKeyExpiry: False
+//   immutable: True
+//   encryption: False
+//   backgroundKeyExpiry: False
 func WithDefaultFlags() Options {
 	return newFuncOption(func(o *options) {
-		o.Immutable = true
-		o.Encryption = false
-		o.BackgroundKeyExpiry = false
+		o.flags.immutable = true
+		o.flags.encryption = false
+		o.flags.backgroundKeyExpiry = false
 	})
 }
 
 // WithMutable sets Immutable flag to false
 func WithMutable() Options {
 	return newFuncOption(func(o *options) {
-		o.Immutable = false
+		o.flags.immutable = false
 	})
 }
 
 // WithEncryption sets encryption on DB
 func WithEncryption() Options {
 	return newFuncOption(func(o *options) {
-		o.Encryption = true
+		o.flags.encryption = true
 	})
 }
 
 // WithBackgroundKeyExpiry sets background key expiry for DB
 func WithBackgroundKeyExpiry() Options {
 	return newFuncOption(func(o *options) {
-		o.Immutable = false
+		o.flags.backgroundKeyExpiry = true
 	})
 }
 
-// options holds the optional DB parameters.
-type options struct {
-	flags
-	// BackgroundSyncInterval sets the amount of time between background fsync() calls.
-	//
-	// Setting the value to 0 disables the automatic background synchronization.
-	// Setting the value to -1 makes the DB call fsync() after every write operation.
-	BackgroundSyncInterval time.Duration
-
-	// EncryptionKey
-	EncryptionKey []byte
-
-	// TinyBatchWriteInterval interval to group tiny batches and write into db on tiny batch interval
-	// Setting the value to 0 immediately writes entries into db.
-	TinyBatchWriteInterval time.Duration
-
-	// DefaultQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit.
-	DefaultQueryLimit int
-
-	// MaxQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit or specify a limit larger than MaxQueryResults.
-	MaxQueryLimit int
-
-	// BufferSize sets Size of buffer to use for pooling
-	BufferSize int64
-
-	// MemdbSize sets Size of memory db
-	MemdbSize int64
-
-	// LogSize sets Size of write ahead log
-	LogSize int64
-
-	// MinimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
-	MinimumFreeBlocksSize int64
-
-	// FileSystem file storage type
-	FileSystem fs.FileSystem
+// WithDefaultBatchOptions will set some default values for Batch operation
+//   contract: MasterContract
+//   encryption: False
+//   AllowDuplicates: False
+func WithDefaultBatchOptions() Options {
+	return newFuncOption(func(o *options) {
+		o.batchOptions.order = 0
+		o.batchOptions.contract = message.MasterContract
+		o.batchOptions.encryption = false
+		o.batchOptions.allowDuplicates = false
+	})
 }
 
-// BatchOptions is used to set options when using batch operation
-type BatchOptions struct {
-	// In concurrent batch writes order determines how to handle conflicts
-	Order           int8
-	Contract        uint32
-	Immutable       bool
-	Encryption      bool
-	AllowDuplicates bool
+// WithBatchContract sets contract for batch operation
+func WithBatchContract(contract uint32) Options {
+	return newFuncOption(func(o *options) {
+		o.batchOptions.contract = contract
+	})
 }
 
-// QueryOptions is used to set options for DB query
-type QueryOptions struct {
-	DefaultQueryLimit int
-	MaxQueryLimit     int
+// WithBatchEncryption sets encryption on batch operation
+func WithBatchEncryption() Options {
+	return newFuncOption(func(o *options) {
+		o.batchOptions.encryption = true
+	})
 }
 
-// WithDefaultBatchOptions contains default options when writing batches to unitdb topic=>key-value store.
-var WithDefaultBatchOptions = &BatchOptions{
-	Order:           0,
-	Contract:        message.MasterContract,
-	Encryption:      false,
-	AllowDuplicates: false,
-}
-
-func (o *BatchOptions) WithContract(contract uint32) *BatchOptions {
-	o.Contract = contract
-	return o
-}
-
-func (o *BatchOptions) WithEncryption() *BatchOptions {
-	o.Encryption = true
-	return o
-}
-
-func (o *BatchOptions) WithAllowDuplicates() *BatchOptions {
-	o.AllowDuplicates = true
-	return o
+// WithBatchAllowDuplicates sets allow duplicate option for batch operation
+func WithBatchAllowDuplicates() Options {
+	return newFuncOption(func(o *options) {
+		o.batchOptions.allowDuplicates = true
+	})
 }
 
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
 	return newFuncOption(func(o *options) {
-		if o.FileSystem == nil {
-			o.FileSystem = fs.FileIO
+		if o.fileSystem == nil {
+			o.fileSystem = fs.FileIO
 		}
-		if o.BackgroundSyncInterval == 0 {
-			o.BackgroundSyncInterval = 1 * time.Second
+		if o.backgroundSyncInterval == 0 {
+			o.backgroundSyncInterval = 1 * time.Second
 		}
-		if o.TinyBatchWriteInterval == 0 {
-			o.TinyBatchWriteInterval = 15 * time.Millisecond
+		if o.tinyBatchWriteInterval == 0 {
+			o.tinyBatchWriteInterval = 15 * time.Millisecond
 		}
-		if o.DefaultQueryLimit == 0 {
-			o.DefaultQueryLimit = 1000
+		if o.queryOptions.defaultQueryLimit == 0 {
+			o.queryOptions.defaultQueryLimit = 1000
 		}
-		if o.MaxQueryLimit == 0 {
-			o.MaxQueryLimit = 100000
+		if o.queryOptions.maxQueryLimit == 0 {
+			o.queryOptions.maxQueryLimit = 100000
 		}
-		if o.BufferSize == 0 {
-			o.BufferSize = 1 << 27 // maximum size of a buffer in bufferpool (128MB).
+		if o.bufferSize == 0 {
+			o.bufferSize = 1 << 27 // maximum size of a buffer in bufferpool (128MB).
 		}
-		if o.MemdbSize == 0 {
-			o.MemdbSize = 1 << 31 // maximum size of memdb (2GB).
+		if o.memdbSize == 0 {
+			o.memdbSize = 1 << 31 // maximum size of memdb (2GB).
 		}
-		if o.LogSize == 0 {
-			o.LogSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
+		if o.logSize == 0 {
+			o.logSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
 		}
-		if o.MinimumFreeBlocksSize == 0 {
-			o.MinimumFreeBlocksSize = 1 << 27 // minimum size of (128MB)
+		if o.logReleaseInterval == 0 {
+			o.logReleaseInterval = 15 * time.Second
 		}
-		if o.EncryptionKey == nil {
-			o.EncryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
+		if o.minimumFreeBlocksSize == 0 {
+			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB)
+		}
+		if o.encryptionKey == nil {
+			o.encryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
 		}
 	})
 }
@@ -205,14 +220,14 @@ func WithDefaultOptions() Options {
 // WithBackgroundSyncInterval sets the amount of time between background fsync() calls.
 func WithBackgroundSyncInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *options) {
-		o.BackgroundSyncInterval = dur
+		o.backgroundSyncInterval = dur
 	})
 }
 
 // WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval
 func TinyBatchWriteInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *options) {
-		o.TinyBatchWriteInterval = dur
+		o.tinyBatchWriteInterval = dur
 	})
 }
 
@@ -220,7 +235,7 @@ func TinyBatchWriteInterval(dur time.Duration) Options {
 // if the DB Get or DB Iterator method does not specify a limit.
 func WithDefaultQueryLimit(limit int) Options {
 	return newFuncOption(func(o *options) {
-		o.DefaultQueryLimit = limit
+		o.defaultQueryLimit = limit
 	})
 }
 
@@ -229,28 +244,35 @@ func WithDefaultQueryLimit(limit int) Options {
 // a limit or specify a limit larger than MaxQueryResults.
 func WithMaxQueryLimit(limit int) Options {
 	return newFuncOption(func(o *options) {
-		o.MaxQueryLimit = limit
+		o.maxQueryLimit = limit
 	})
 }
 
 // WithBufferSize sets Size of buffer to use for pooling
 func WithBufferSize(size int64) Options {
 	return newFuncOption(func(o *options) {
-		o.BufferSize = size
+		o.bufferSize = size
 	})
 }
 
 // WithMemdbSize sets Size of memory db
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *options) {
-		o.MemdbSize = size
+		o.memdbSize = size
 	})
 }
 
 // WithLogSize sets Size of write ahead log
 func WithLogSize(size int64) Options {
 	return newFuncOption(func(o *options) {
-		o.LogSize = size
+		o.logSize = size
+	})
+}
+
+// WithLogReleaseInterval sets log release interval to run log releaser schedule
+func WithLogReleaseInterval(dur time.Duration) Options {
+	return newFuncOption(func(o *options) {
+		o.logReleaseInterval = dur
 	})
 }
 
@@ -258,13 +280,13 @@ func WithLogSize(size int64) Options {
 // before free blocks are allocated and reused.
 func WithMinimumFreeBlocksSize(size int64) Options {
 	return newFuncOption(func(o *options) {
-		o.MinimumFreeBlocksSize = size
+		o.minimumFreeBlocksSize = size
 	})
 }
 
 // WithEncryptionKey sets encryption key to use for data encryption
 func WithEncryptionKey(key []byte) Options {
 	return newFuncOption(func(o *options) {
-		o.EncryptionKey = key
+		o.encryptionKey = key
 	})
 }

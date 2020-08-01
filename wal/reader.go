@@ -33,8 +33,7 @@ type Reader struct {
 
 	entryCount uint32
 
-	buffer  *bpool.Buffer
-	bufSize int64
+	buffer *bpool.Buffer
 
 	wal *WAL
 }
@@ -50,16 +49,20 @@ func (wal *WAL) NewReader() (*Reader, error) {
 	}
 
 	r.buffer = wal.bufPool.Get()
-	r.bufSize = wal.opts.BufferSize
 	return r, nil
 }
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator
-func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
-	// release and merge logs before read
+func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
+	// release and merge logs before read and after read
 	r.wal.releaseLogs()
 	r.wal.mu.RLock()
-	defer r.wal.mu.RUnlock()
+	defer func() {
+		r.wal.mu.RUnlock()
+		r.wal.releaseLogs()
+		r.wal.bufPool.Put(r.buffer)
+	}()
+	readCount := uint32(0)
 	idx := 0
 	l := len(r.wal.logs)
 	if l == 0 {
@@ -67,14 +70,14 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 	}
 	fileOff := r.wal.logs[0].offset
 	size := r.wal.logFile.Size() - fileOff
-
+	if size > r.wal.opts.BufferSize {
+		size = r.wal.opts.BufferSize
+	}
 	for {
 		r.buffer.Reset()
 		offset := int64(0)
-		if size <= r.bufSize {
-			r.bufSize = size
-		}
-		if _, err := r.buffer.Extend(r.bufSize); err != nil {
+
+		if _, err := r.buffer.Extend(size); err != nil {
 			return err
 		}
 		if _, err := r.wal.logFile.readAt(r.buffer.Internal(), fileOff); err != nil {
@@ -86,11 +89,11 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 				idx++
 				continue
 			}
-			if r.bufSize < ul.size {
-				r.bufSize += ul.size
+			if size < ul.size {
+				size = ul.size
 				break
 			}
-			if r.bufSize-offset < ul.size {
+			if size-offset < ul.size {
 				fileOff = ul.offset
 				size = r.wal.logFile.Size() - ul.offset
 				break
@@ -99,21 +102,25 @@ func (r *Reader) Read(f func(uint64, bool) (bool, error)) (err error) {
 			if err != nil {
 				return err
 			}
+			readCount += ul.entryCount
 			r.entryCount = ul.entryCount
 			r.logData = data
 			r.blockOffset = 0
-			if stop, err := f(ul.seq, idx == l-1); stop || err != nil {
+			if stop, err := f(idx == l-1); stop || err != nil {
 				return err
 			}
 			offset += ul.size
-			offset += r.wal.logFile.fb.freeSize(ul.offset + ul.size)
-
+			offset += r.wal.logFile.segments.freeSize(ul.offset + ul.size)
+			if r.wal.logSeqApplied < ul.seq {
+				r.wal.logSeqApplied = ul.seq
+			}
 			idx++
 		}
 		if idx == l {
 			break
 		}
 	}
+	// fmt.Println("wal.Read: readCount ", readCount)
 	return nil
 }
 

@@ -103,7 +103,7 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// time.Sleep(100 * time.Millisecond)
 	verifyMsgsAndClose()
 
 	db, err = Open("test.db", nil, nil)

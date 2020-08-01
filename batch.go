@@ -28,8 +28,12 @@ import (
 )
 
 // SetOptions sets batch options
-func (b *Batch) SetOptions(opts *BatchOptions) {
-	b.opts = opts
+func (b *Batch) SetOptions(opts ...Options) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt.set(b.opts)
+		}
+	}
 }
 
 type (
@@ -47,7 +51,7 @@ type (
 	// Batch is a write batch.
 	Batch struct {
 		batchID uid.LID
-		opts    *BatchOptions
+		opts    *options
 		managed bool
 		grouped bool
 		order   int8
@@ -71,7 +75,7 @@ type (
 // It is safe to modify the contents of the argument after Put returns but not
 // before.
 func (b *Batch) Put(topic, payload []byte) error {
-	return b.PutEntry(NewEntry(topic, payload).WithContract(b.opts.Contract))
+	return b.PutEntry(NewEntry(topic, payload).WithContract(b.opts.batchOptions.contract))
 }
 
 // PutEntry appends entries to a bacth for given topic->key/value pair.
@@ -88,12 +92,13 @@ func (b *Batch) PutEntry(e *Entry) error {
 	case len(e.Payload) > maxValueLength:
 		return errValueTooLarge
 	}
-	if err := b.db.setEntry(e, b.opts.Encryption); err != nil {
+	e.Encryption = e.Encryption || b.opts.batchOptions.encryption
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
 
 	var key uint32
-	if !b.opts.AllowDuplicates {
+	if !b.opts.batchOptions.allowDuplicates {
 		key = hash.WithSalt(e.Payload, uint32(e.topicHash))
 	}
 
@@ -128,7 +133,7 @@ func (b *Batch) Delete(id, topic []byte) error {
 // not before.
 func (b *Batch) DeleteEntry(e *Entry) error {
 	switch {
-	case b.opts.Immutable:
+	case b.db.opts.immutable:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIDEmpty
@@ -138,7 +143,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 
-	if err := b.db.setEntry(e, b.opts.Encryption); err != nil {
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
 
@@ -268,7 +273,7 @@ func (b *Batch) Reset() {
 }
 
 func (b *Batch) uniq() []batchIndex {
-	if b.opts.AllowDuplicates {
+	if b.opts.batchOptions.allowDuplicates {
 		b.pendingWrites = append(make([]batchIndex, 0, len(b.index)), b.index...)
 		return b.pendingWrites
 	}

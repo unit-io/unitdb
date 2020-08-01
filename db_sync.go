@@ -201,7 +201,7 @@ func (db *DB) sync() error {
 }
 
 func (db *syncHandle) sync(recovery bool, last bool) error {
-	if last || db.rawData.Size() > db.opts.BufferSize {
+	if last || db.rawData.Size() > db.opts.bufferSize {
 		if db.internal.upperSeq == 0 {
 			return nil
 		}
@@ -371,7 +371,7 @@ func (db *DB) expireEntries() error {
 	defer func() {
 		<-db.syncLockC
 	}()
-	expiredEntries := db.timeWindow.expireOldEntries(db.opts.DefaultQueryLimit)
+	expiredEntries := db.timeWindow.expireOldEntries(db.opts.defaultQueryLimit)
 	for _, expiredEntry := range expiredEntries {
 		we := expiredEntry.(winEntry)
 		/// Test filter block if message hash presence

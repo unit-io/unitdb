@@ -24,19 +24,19 @@ import (
 )
 
 type (
-	freeBlock struct {
+	segment struct {
 		offset int64
 		size   int64
 	}
 	file struct {
 		fs.FileManager
-		fb         fb
+		segments
 		size       int64
 		targetSize int64
 	}
 )
 
-type fb [3]freeBlock
+type segments [3]segment
 
 func openFile(name string, targetSize int64) (file, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
@@ -60,74 +60,74 @@ func openFile(name string, targetSize int64) (file, error) {
 	return f, err
 }
 
-func newFreeBlock() fb {
-	var fb fb
-	fb[0] = freeBlock{offset: int64(headerSize), size: 0}
-	fb[1] = freeBlock{offset: int64(headerSize), size: 0}
-	return fb
+func newSegments() segments {
+	segments := segments{}
+	segments[0] = segment{offset: int64(headerSize), size: 0}
+	segments[1] = segment{offset: int64(headerSize), size: 0}
+	return segments
 }
 
-func (fb *fb) currSize() int64 {
-	return fb[1].size
+func (sg *segments) currSize() int64 {
+	return sg[1].size
 }
 
-func (fb *fb) recoveryOffset(offset int64) int64 {
-	if offset == fb[0].offset {
-		offset += fb[0].size
+func (sg *segments) recoveryOffset(offset int64) int64 {
+	if offset == sg[0].offset {
+		offset += sg[0].size
 	}
-	if offset == fb[1].offset {
-		offset += fb[1].size
+	if offset == sg[1].offset {
+		offset += sg[1].size
 	}
-	if offset == fb[2].offset {
-		offset += fb[2].size
+	if offset == sg[2].offset {
+		offset += sg[2].size
 	}
 	return offset
 }
 
-func (fb *fb) freeSize(offset int64) int64 {
-	if offset == fb[0].offset {
-		return fb[0].size
+func (sg *segments) freeSize(offset int64) int64 {
+	if offset == sg[0].offset {
+		return sg[0].size
 	}
-	if offset == fb[1].offset {
-		return fb[1].size
+	if offset == sg[1].offset {
+		return sg[1].size
 	}
-	if offset == fb[2].offset {
-		return fb[2].size
+	if offset == sg[2].offset {
+		return sg[2].size
 	}
 	return 0
 }
 
-func (fb *fb) allocate(size uint32) int64 {
-	off := fb[1].offset
-	fb[1].size -= int64(size)
-	fb[1].offset += int64(size)
+func (sg *segments) allocate(size uint32) int64 {
+	off := sg[1].offset
+	sg[1].size -= int64(size)
+	sg[1].offset += int64(size)
 	return off
 }
 
-func (fb *fb) free(offset, size int64) (ok bool) {
-	if fb[1].offset+fb[1].size == offset {
+func (sg *segments) free(offset, size int64) (ok bool) {
+	if sg[1].offset+sg[1].size == offset {
 		ok = true
-		fb[1].size += size
+		sg[1].size += size
 	} else {
-		if fb[0].offset+fb[0].size == offset {
+		if sg[0].offset+sg[0].size == offset {
 			ok = true
-			fb[0].size += size
+			sg[0].size += size
 		}
 	}
 	return ok
 }
 
-func (fb *fb) swap(targetSize int64) error {
-	if fb[1].size != 0 && fb[1].offset+fb[1].size == fb[2].offset {
-		fb[1].size += fb[2].size
-		fb[2].size = 0
+func (sg *segments) swap(targetSize int64) error {
+	if sg[1].size != 0 && sg[1].offset+sg[1].size == sg[2].offset {
+		sg[1].size += sg[2].size
+		sg[2].size = 0
 	}
-	if fb[0].size > targetSize {
-		fb[2].offset = fb[1].offset
-		fb[2].size = fb[1].size
-		fb[1].offset = fb[0].offset
-		fb[1].size = fb[0].size
-		fb[0].size = 0
+	if sg[0].size > targetSize {
+		sg[2].offset = sg[1].offset
+		sg[2].size = sg[1].size
+		sg[1].offset = sg[0].offset
+		sg[1].size = sg[0].size
+		sg[0].size = 0
 	}
 	return nil
 }
@@ -140,12 +140,22 @@ func (f *file) truncate(size int64) error {
 	return nil
 }
 
+func (f *file) reset() error {
+	if err := f.truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
 	// do not allocate freeblocks until target size has reached of the log to avoid fragmentation
-	if f.targetSize > (f.size+int64(size)) || f.fb.currSize() < int64(size) {
+	if f.targetSize > (f.size+int64(size)) || f.segments.currSize() < int64(size) {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {
 			return 0, err
@@ -153,7 +163,7 @@ func (f *file) allocate(size uint32) (int64, error) {
 		f.size += int64(size)
 		return off, nil
 	}
-	off := f.fb.allocate(size)
+	off := f.segments.allocate(size)
 
 	return off, nil
 }

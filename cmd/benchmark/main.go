@@ -34,9 +34,6 @@ func main() {
 	if err := benchmark3(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
 	}
-	if err := benchmark4(*dir, *numKeys, *minKeySize, *maxKeySize, *minValueSize, *maxValueSize, *concurrency); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running benchmark: %v\n", err)
-	}
 	if err := recovery(*dir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running recovery: %v\n", err)
 	}

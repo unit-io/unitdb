@@ -42,11 +42,12 @@ type (
 	Entry struct {
 		entry
 		// internalEntry
-		ID        []byte // The ID of the message
-		Topic     []byte // The topic of the message
-		Payload   []byte // The payload of the message
-		ExpiresAt uint32 // The time expiry of the message
-		Contract  uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
+		ID         []byte // The ID of the message
+		Topic      []byte // The topic of the message
+		Payload    []byte // The payload of the message
+		ExpiresAt  uint32 // The time expiry of the message
+		Contract   uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
+		Encryption bool
 	}
 )
 
@@ -85,6 +86,12 @@ func (e *Entry) WithTTL(ttl []byte) *Entry {
 	var duration time.Duration
 	duration, _ = time.ParseDuration(unsafeToString(ttl))
 	e.ExpiresAt = uint32(time.Now().Add(duration).Unix())
+	return e
+}
+
+// WithEncryption sets encryption on entry.
+func (e *Entry) WithEncryption() *Entry {
+	e.Encryption = true
 	return e
 }
 

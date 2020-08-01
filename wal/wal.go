@@ -23,6 +23,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/unit-io/bpool"
 )
@@ -45,17 +46,18 @@ const (
 	// Logs with this status are removed from the WAL.
 	logStatusReleased
 
-	defaultBufferSize = 1 << 27
-	version           = 1 // file format version
+	defaultLogReleaseInterval = 15 * time.Second
+	defaultBufferSize         = 1 << 27
+	version                   = 1 // file format version
 )
 
 type (
 	// WALInfo provides WAL stats
 	WALInfo struct {
-		logCountWritten  int64
-		logCountApplied  int64
-		logCountReleased int64
-		lastSeqWritten   uint64
+		logCountWritten int64
+		logCountApplied int64
+		logSeqWritten   uint64
+		logSeqApplied   uint64
 	}
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
@@ -79,10 +81,11 @@ type (
 	// Options wal options to create new WAL. WAL logs uses cyclic rotation to avoid fragmentation.
 	// It allocates free blocks only when log reaches target size
 	Options struct {
-		Path       string
-		TargetSize int64
-		BufferSize int64
-		Reset      bool
+		Path               string
+		TargetSize         int64
+		BufferSize         int64
+		LogReleaseInterval time.Duration
+		Reset              bool
 	}
 )
 
@@ -102,14 +105,15 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		return wal, false, err
 	}
 	if opts.Reset {
-		wal.logFile.truncate(0)
-		wal.logFile.Seek(0, 0)
+		if err := wal.logFile.reset(); err != nil {
+			return wal, false, err
+		}
 	}
 	if wal.logFile.size == 0 {
 		if _, err = wal.logFile.allocate(headerSize); err != nil {
 			return nil, false, err
 		}
-		wal.logFile.fb = newFreeBlock()
+		wal.logFile.segments = newSegments()
 		if err := wal.writeHeader(); err != nil {
 			return nil, false, err
 		}
@@ -125,6 +129,11 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
+	if wal.opts.LogReleaseInterval == 0 {
+		wal.opts.LogReleaseInterval = defaultLogReleaseInterval
+	}
+	wal.releaser(wal.opts.LogReleaseInterval)
+
 	return wal, len(wal.logs) != 0, nil
 }
 
@@ -132,7 +141,7 @@ func (wal *WAL) writeHeader() error {
 	h := header{
 		signature: signature,
 		version:   version,
-		fb:        wal.logFile.fb,
+		segments:  wal.logFile.segments,
 	}
 	return wal.logFile.writeMarshalableAt(h, 0)
 }
@@ -142,7 +151,7 @@ func (wal *WAL) readHeader() error {
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
 	}
-	wal.logFile.fb = h.fb
+	wal.logFile.segments = h.segments
 	return nil
 }
 
@@ -150,7 +159,7 @@ func (wal *WAL) recoverLogHeaders() error {
 	offset := int64(headerSize)
 	l := logInfo{}
 	for {
-		offset = wal.logFile.fb.recoveryOffset(offset)
+		offset = wal.logFile.segments.recoveryOffset(offset)
 		if err := wal.logFile.readUnmarshalableAt(&l, uint32(logHeaderSize), offset); err != nil {
 			if err == io.EOF {
 				// Expected error.
@@ -159,7 +168,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			return err
 		}
 		if l.offset < 0 || l.status > logStatusReleased {
-			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.fb, l)
+			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.segments, l)
 			return nil
 		}
 		wal.logs = append(wal.logs, l)
@@ -184,7 +193,7 @@ func (wal *WAL) recoverWal() error {
 func (wal *WAL) put(log logInfo) error {
 	log.version = version
 	wal.logCountWritten++
-	wal.lastSeqWritten = log.seq
+	wal.logSeqWritten = log.seq
 	wal.logs = append(wal.logs, log)
 	return nil
 }
@@ -193,8 +202,8 @@ func (wal *WAL) logMerge(log logInfo) (released bool, err error) {
 	if log.status == logStatusWritten {
 		return false, nil
 	}
-	released = wal.logFile.fb.free(log.offset, log.size)
-	wal.logFile.fb.swap(wal.opts.TargetSize)
+	released = wal.logFile.segments.free(log.offset, log.size)
+	wal.logFile.segments.swap(wal.opts.TargetSize)
 	return released, nil
 }
 
@@ -206,44 +215,37 @@ func (wal *WAL) signalLogApplied(i int) error {
 	}
 	if released {
 		wal.logs[i].status = logStatusReleased
-	} else {
-		wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 	}
+	wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 	return nil
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
 func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
 	wal.mu.Lock()
-	wal.wg.Add(1)
 	defer func() {
-		wal.wg.Done()
 		wal.mu.Unlock()
 	}()
 
-	// sort wal logs by offset so that adjacent free blocks can be merged
-	sort.Slice(wal.logs[:], func(i, j int) bool {
-		return wal.logs[i].offset < wal.logs[j].offset
-	})
-	l := len(wal.logs)
-	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= upperSeq {
-			if err := wal.signalLogApplied(i); err != nil {
-				return err
-			}
-			wal.logCountApplied++
-		}
+	if wal.logSeqApplied < upperSeq {
+		wal.logSeqApplied = upperSeq
 	}
-	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusReleased {
-			// Remove log from wal
-			wal.logCountReleased++
-			wal.logs = wal.logs[:i+copy(wal.logs[i:], wal.logs[i+1:])]
-			l -= 1
-			i--
-		}
+	return nil
+}
+
+// Reset resets log file and log segments
+func (wal *WAL) Reset() error {
+	if err := wal.logFile.reset(); err != nil {
+		return err
 	}
-	return wal.writeHeader()
+	if _, err := wal.logFile.allocate(headerSize); err != nil {
+		return err
+	}
+	wal.logFile.segments = newSegments()
+	if err := wal.writeHeader(); err != nil {
+		return err
+	}
+	return nil
 }
 
 //Sync syncs log entries to disk
@@ -300,13 +302,11 @@ func (wal *WAL) releaseLogs() error {
 	})
 	l := len(wal.logs)
 	for i := 0; i < l; i++ {
-		released, err := wal.logMerge(wal.logs[i])
-		if err != nil {
-			return err
-		}
-		if released {
-			wal.logs[i].status = logStatusReleased
-			wal.logCountReleased++
+		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= wal.logSeqApplied {
+			if err := wal.signalLogApplied(i); err != nil {
+				return err
+			}
+			wal.logCountApplied++
 		}
 	}
 
@@ -323,6 +323,23 @@ func (wal *WAL) releaseLogs() error {
 		}
 	}
 	return nil
+}
+
+func (wal *WAL) releaser(interval time.Duration) {
+	releaserTicker := time.NewTicker(interval)
+	go func() {
+		defer func() {
+			releaserTicker.Stop()
+		}()
+		for {
+			select {
+			case <-wal.closeC:
+				return
+			case <-releaserTicker.C:
+				wal.releaseLogs()
+			}
+		}
+	}()
 }
 
 // New will open a WAL. If the previous run did not shut down cleanly, a set of

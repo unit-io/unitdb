@@ -46,7 +46,7 @@ type (
 		cutoff     int64  // The cutoff is time limit check on message Ids.
 		winEntries []query
 
-		opts *QueryOptions
+		opts *queryOptions
 	}
 	Query struct {
 		internalQuery
@@ -108,15 +108,15 @@ func (q *Query) parse() error {
 		q.cutoff = from.Unix()
 		switch {
 		case (q.Limit == 0 && limit == 0):
-			q.Limit = q.opts.DefaultQueryLimit
-		case q.Limit > q.opts.MaxQueryLimit || limit > q.opts.MaxQueryLimit:
-			q.Limit = q.opts.MaxQueryLimit
+			q.Limit = q.opts.defaultQueryLimit
+		case q.Limit > q.opts.maxQueryLimit || limit > q.opts.maxQueryLimit:
+			q.Limit = q.opts.maxQueryLimit
 		case limit > q.Limit:
 			q.Limit = limit
 		}
 	}
 	if q.Limit == 0 {
-		q.Limit = q.opts.DefaultQueryLimit
+		q.Limit = q.opts.defaultQueryLimit
 	}
 	return nil
 }

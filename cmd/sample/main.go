@@ -32,8 +32,6 @@ func main() {
 
 	// Writing to single topic in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.WithDefaultBatchOptions
-		b.SetOptions(opts)
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers"))
 		err := b.Write()
@@ -84,9 +82,7 @@ func main() {
 
 	// Writing to single topic in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.WithDefaultBatchOptions
-		opts.WithContract(contract)
-		b.SetOptions(opts)
+		b.SetOptions(unitdb.WithBatchContract(contract))
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #2"))
@@ -96,9 +92,7 @@ func main() {
 
 	// Writing to multiple topics in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.WithDefaultBatchOptions
-		opts.WithContract(contract)
-		b.SetOptions(opts)
+		b.SetOptions(unitdb.WithBatchContract(contract))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams and all channels")))
@@ -134,9 +128,7 @@ func main() {
 	// Set encryption flag in batch options to encrypt all messages in a batch.
 	// Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter.
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		opts := unitdb.WithDefaultBatchOptions
-		opts.WithEncryption()
-		b.SetOptions(opts)
+		b.SetOptions(unitdb.WithBatchEncryption())
 		topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 receiver1"))
 		return b.Write()

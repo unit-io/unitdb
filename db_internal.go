@@ -185,7 +185,7 @@ func (db *DB) close() error {
 	}
 
 	// Signal all goroutines.
-	time.Sleep(db.opts.TinyBatchWriteInterval)
+	time.Sleep(db.opts.tinyBatchWriteInterval)
 	close(db.closeC)
 
 	// Acquire lock.
@@ -289,7 +289,7 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 	return t, 0, nil
 }
 
-func (db *DB) setEntry(e *Entry, encr bool) error {
+func (db *DB) setEntry(e *Entry) error {
 	//message ID is the database key
 	var id message.ID
 	var eBit uint8
@@ -335,7 +335,7 @@ func (db *DB) setEntry(e *Entry, encr bool) error {
 	e.seq = seq
 	e.expiresAt = e.ExpiresAt
 	val := snappy.Encode(nil, e.Payload)
-	if db.encryption == 1 || encr {
+	if db.encryption == 1 || e.Encryption {
 		eBit = 1
 		val = db.mac.Encrypt(nil, val)
 	}
@@ -435,7 +435,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(topicHash, seq uint64) error {
-	if db.opts.Immutable {
+	if db.opts.immutable {
 		return nil
 	}
 	// Test filter block for the message id presence
