@@ -23,7 +23,6 @@ import (
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/message"
-	"github.com/unit-io/unitdb/uid"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -33,16 +32,20 @@ type (
 	}
 
 	tinyBatch struct {
-		Id uid.LID
+		ID int64
 		tinyBatchInfo
 		buffer *bpool.Buffer
 	}
 )
 
-func (b *tinyBatch) reset() {
-	b.Id = uid.NewLID()
+func (b *tinyBatch) reset(timeID int64) {
+	b.ID = timeID
 	b.entryCount = 0
 	atomic.StoreUint32(&b.entryCount, 0)
+}
+
+func (b *tinyBatch) timeID() int64 {
+	return atomic.LoadInt64(&b.ID)
 }
 
 func (b *tinyBatch) count() uint32 {
@@ -69,7 +72,7 @@ func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
-	b := &Batch{opts: opts, batchID: uid.NewLID(), db: db, topics: make(map[uint64]*message.Topic)}
+	b := &Batch{ID: db.timeWindow.timeID(), opts: opts, db: db, topics: make(map[uint64]*message.Topic)}
 	b.buffer = db.bufPool.Get()
 
 	return b
@@ -79,7 +82,7 @@ func (db *DB) initbatchdb(opts *options) error {
 	bdb := &batchdb{
 		// batchDB
 		bufPool:     bpool.NewBufferPool(opts.bufferSize, nil),
-		tinyBatch:   &tinyBatch{Id: uid.NewLID()},
+		tinyBatch:   &tinyBatch{ID: db.timeWindow.timeID()},
 		batchQueue:  make(chan *Batch, 100),
 		commitQueue: make(chan *Batch, 1),
 	}

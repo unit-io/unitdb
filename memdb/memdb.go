@@ -28,9 +28,6 @@ import (
 const (
 	nShards = 32
 
-	// maxTableSize value for maximum memory use for memdb.
-	maxTableSize = (int64(1) << 40) - 1
-
 	drainInterval         = 1 * time.Second
 	memShrinkFactor       = 0.7
 	dataTableShrinkFactor = 0.33 // shrinker try to free 33% of total memdb size
@@ -42,12 +39,12 @@ type blockCache []*memCache
 type memCache struct {
 	data         dataTable
 	freeOffset   int64            // mem cache keep lowest offset that can be free.
-	m            map[uint64]int64 // map[seq]offset
+	m            map[uint64]int64 // map[key]offset
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
 
 // newBlockCache creates a new concurrent block cache.
-func newBlockCache(memSize int64) blockCache {
+func newBlockCache() blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
 		m[i] = &memCache{data: dataTable{}, m: make(map[uint64]int64)}
@@ -70,12 +67,8 @@ type DB struct {
 
 // Open opens or creates a new DB of given size.
 func Open(memSize int64) (*DB, error) {
-	if memSize > maxTableSize {
-		memSize = maxTableSize
-	}
 	db := &DB{
-		targetSize: memSize,
-		blockCache: newBlockCache(memSize),
+		blockCache: newBlockCache(),
 		// Close
 		closeC: make(chan struct{}),
 	}

@@ -26,7 +26,7 @@ import (
 type (
 	segment struct {
 		offset int64
-		size   int64
+		size   uint32
 	}
 	file struct {
 		fs.FileManager
@@ -67,24 +67,24 @@ func newSegments() segments {
 	return segments
 }
 
-func (sg *segments) currSize() int64 {
+func (sg *segments) currSize() uint32 {
 	return sg[1].size
 }
 
 func (sg *segments) recoveryOffset(offset int64) int64 {
 	if offset == sg[0].offset {
-		offset += sg[0].size
+		offset += int64(sg[0].size)
 	}
 	if offset == sg[1].offset {
-		offset += sg[1].size
+		offset += int64(sg[1].size)
 	}
 	if offset == sg[2].offset {
-		offset += sg[2].size
+		offset += int64(sg[2].size)
 	}
 	return offset
 }
 
-func (sg *segments) freeSize(offset int64) int64 {
+func (sg *segments) freeSize(offset int64) uint32 {
 	if offset == sg[0].offset {
 		return sg[0].size
 	}
@@ -99,30 +99,30 @@ func (sg *segments) freeSize(offset int64) int64 {
 
 func (sg *segments) allocate(size uint32) int64 {
 	off := sg[1].offset
-	sg[1].size -= int64(size)
+	sg[1].size -= size
 	sg[1].offset += int64(size)
 	return off
 }
 
-func (sg *segments) free(offset, size int64) (ok bool) {
-	if sg[1].offset+sg[1].size == offset {
-		ok = true
+func (sg *segments) free(offset int64, size uint32) (ok bool) {
+	if sg[1].offset+int64(sg[1].size) == offset {
 		sg[1].size += size
+		return true
 	} else {
-		if sg[0].offset+sg[0].size == offset {
-			ok = true
+		if sg[0].offset+int64(sg[0].size) == offset {
 			sg[0].size += size
+			return true
 		}
 	}
 	return ok
 }
 
 func (sg *segments) swap(targetSize int64) error {
-	if sg[1].size != 0 && sg[1].offset+sg[1].size == sg[2].offset {
+	if sg[1].size != 0 && sg[1].offset+int64(sg[1].size) == sg[2].offset {
 		sg[1].size += sg[2].size
 		sg[2].size = 0
 	}
-	if sg[0].size > targetSize {
+	if targetSize < int64(sg[0].size) {
 		sg[2].offset = sg[1].offset
 		sg[2].size = sg[1].size
 		sg[1].offset = sg[0].offset
@@ -141,6 +141,7 @@ func (f *file) truncate(size int64) error {
 }
 
 func (f *file) reset() error {
+	f.size = 0
 	if err := f.truncate(0); err != nil {
 		return err
 	}
@@ -154,8 +155,8 @@ func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	// do not allocate freeblocks until target size has reached of the log to avoid fragmentation
-	if f.targetSize > (f.size+int64(size)) || f.segments.currSize() < int64(size) {
+	// Allocation to free segment happens when log reaches its target size to avoid fragmentation
+	if f.targetSize > (f.size+int64(size)) || f.segments.currSize() < size {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {
 			return 0, err

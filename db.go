@@ -87,6 +87,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 			opt.set(options)
 		}
 	}
+
 	fs := options.fileSystem
 	lock, err := fs.CreateLockFile(path + lockPostfix)
 	if err != nil {
@@ -95,28 +96,39 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 		return nil, err
 	}
+
 	index, err := newFile(fs, path+indexPostfix)
 	if err != nil {
 		return nil, err
 	}
+
 	data, err := newFile(fs, path+dataPostfix)
 	if err != nil {
 		return nil, err
 	}
+
 	leaseFile, err := newFile(fs, path+leasePostfix)
 	if err != nil {
 		return nil, err
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
-	timeOptions := &timeOptions{expDurationType: time.Minute, maxExpDurations: maxExpDur, backgroundKeyExpiry: options.backgroundKeyExpiry}
+
+	timeOptions := &timeOptions{
+		timeSlotDuration:    timeSlotDur,
+		expDurationType:     time.Minute,
+		maxExpDurations:     maxExpDur,
+		backgroundKeyExpiry: options.backgroundKeyExpiry,
+	}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
 		return nil, err
 	}
+
 	filter, err := newFile(fs, path+filterPostfix)
 	if err != nil {
 		return nil, err
 	}
+
 	db := &DB{
 		mutex:       newMutex(),
 		lock:        lock,
@@ -215,19 +227,16 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 		// return nil, err
 	}
-	db.syncHandle = syncHandle{internal: internal{DB: db}}
 
-	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize, LogReleaseInterval: options.logReleaseInterval}
+	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
 		logger.Error().Err(err).Str("context", "wal.New")
 		return nil, err
 	}
-
 	db.closer = wal
 	db.wal = wal
-
 	if needLogRecovery {
 		if err := db.recoverLog(); err != nil {
 			// if unable to recover db then close db
@@ -235,11 +244,14 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	db.startSyncer(options.backgroundSyncInterval)
+	// db.syncHandle = syncHandle{internal: internal{DB: db, entries: make(map[uint64]struct{}), syncEntries: make(map[uint64]struct{})}}
+	db.syncHandle = syncHandle{internal: internal{DB: db}}
+	db.startSyncer(options.syncDurationType * time.Duration(options.maxSyncDurations))
 
 	if db.opts.backgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
+
 	return db, nil
 }
 
@@ -248,7 +260,6 @@ func (db *DB) Close() error {
 	if err := db.close(); err != nil {
 		return err
 	}
-
 	//close bufferpool
 	db.bufPool.Done()
 
@@ -461,7 +472,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 
-	if err := db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
 		return err
 	}
 
@@ -517,7 +528,6 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
-	// e.prefix = message.Prefix(topic.Parts)
 	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Sequence()); err != nil {
 		return err
 	}
@@ -540,7 +550,6 @@ func (db *DB) Sync() error {
 	defer func() {
 		<-db.syncLockC
 		db.closeW.Done()
-		// db.meter.TimeSeries.AddTime(time.Since(start))
 	}()
 
 	if ok := db.syncHandle.startSync(); !ok {

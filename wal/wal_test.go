@@ -64,7 +64,7 @@ func TestRecovery(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
+	if err := <-logWriter.SignalInitWrite(int64(n)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,7 +99,7 @@ func TestLogApplied(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
+	if err := <-logWriter.SignalInitWrite(int64(n)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,12 +128,9 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := wal.Close(); err != nil {
-		t.Fatal(err)
-	}
+	r.wal.releaseLogs()
 
-	wal, needRecovery, err = newTestWal("test.db", false)
-	if needRecovery || err != nil {
+	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -160,11 +157,11 @@ func TestSimple(t *testing.T) {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(uint64(n)); err != nil {
+	if err := <-logWriter.SignalInitWrite(int64(n)); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := wal.SignalLogApplied(uint64(n)); err != nil {
+	if err := wal.SignalLogApplied(int64(n)); err != nil {
 		t.Fatal(err)
 	}
 

@@ -86,9 +86,6 @@ func (bw *blockWriter) append(s slot, blockIdx int32) (exists bool, err error) {
 
 			b.leased = true
 		}
-		if b.baseSeq == 0 {
-			b.baseSeq = s.seq
-		}
 	}
 	entryIdx := 0
 	for i := 0; i < int(b.entryIdx); i++ {
@@ -116,7 +113,6 @@ func (bw *blockWriter) append(s slot, blockIdx int32) (exists bool, err error) {
 }
 
 func (bw *blockWriter) write() error {
-	// var leasedBlocks []int32
 	for bIdx, b := range bw.blocks {
 		if !b.leased || !b.dirty {
 			continue
@@ -131,7 +127,6 @@ func (bw *blockWriter) write() error {
 		}
 		b.dirty = false
 		bw.blocks[bIdx] = b
-		// leasedBlocks = append(leasedBlocks, bIdx)
 	}
 
 	// sort blocks by blockIdx
@@ -147,7 +142,6 @@ func (bw *blockWriter) write() error {
 	if err != nil {
 		return err
 	}
-	// fmt.Println("block.write: leasedBlocks, blockRange ", leasedBlocks, blockRange)
 	bufOff := int64(0)
 	for _, blocks := range blockRange {
 		if len(blocks) == 1 {
@@ -166,7 +160,6 @@ func (bw *blockWriter) write() error {
 			continue
 		}
 		blockOff := blockOffset(blocks[0])
-		// bw.buffer.Reset()
 		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
 			b := bw.blocks[bIdx]
 			if err := b.validation(bIdx); err != nil {

@@ -25,24 +25,21 @@ import (
 	"github.com/unit-io/unitdb/message"
 )
 
-func (db *syncHandle) recoverWindowBlocks() error {
-	err := db.timeWindow.foreachTimeWindow(true, func(windowEntries map[uint64]windowEntries) (bool, error) {
-		for h, wEntries := range windowEntries {
-			topicOff, ok := db.trie.getOffset(h)
-			if !ok {
-				return true, errors.New(fmt.Sprintf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h))
-			}
-			wOff, err := db.windowWriter.append(h, topicOff, wEntries)
-			if err != nil {
-				return true, err
-			}
-			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
-				return true, errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
-			}
+func (db *syncHandle) recoverWindowBlocks(windowEntries map[uint64]windowEntries) error {
+	for h, wEntries := range windowEntries {
+		topicOff, ok := db.trie.getOffset(h)
+		if !ok {
+			return errors.New(fmt.Sprintf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h))
 		}
-		return false, nil
-	})
-	return err
+		wOff, err := db.windowWriter.append(h, topicOff, wEntries)
+		if err != nil {
+			return err
+		}
+		if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
+			return errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
+		}
+	}
+	return nil
 }
 
 func (db *syncHandle) startRecovery() error {
@@ -69,6 +66,7 @@ func (db *syncHandle) startRecovery() error {
 	}
 	err = r.Read(func(last bool) (ok bool, err error) {
 		l := r.Count()
+		winEntries := make(map[uint64]windowEntries)
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {
@@ -110,18 +108,22 @@ func (db *syncHandle) startRecovery() error {
 				db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
 				topics[e.topicHash] = t
 			}
-			db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt})
+			if _, ok := winEntries[e.topicHash]; ok {
+				winEntries[e.topicHash] = append(winEntries[e.topicHash], winEntry{seq: e.seq, expiresAt: e.expiresAt})
+			} else {
+				winEntries[e.topicHash] = windowEntries{winEntry{seq: e.seq, expiresAt: e.expiresAt}}
+			}
 			db.filter.Append(e.seq)
 			db.internal.count++
 			db.internal.inBytes += int64(e.valueSize)
 		}
 
-		if err := db.recoverWindowBlocks(); err != nil {
+		if err := db.recoverWindowBlocks(winEntries); err != nil {
 			logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
 			return true, err
 		}
 
-		if err := db.sync(true, false); err != nil {
+		if err := db.sync(true); err != nil {
 			return true, err
 		}
 		return false, nil
@@ -132,7 +134,7 @@ func (db *syncHandle) startRecovery() error {
 		return err
 	}
 
-	return db.sync(true, true)
+	return db.sync(true)
 }
 
 func (db *DB) recoverLog() error {

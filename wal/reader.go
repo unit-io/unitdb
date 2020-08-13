@@ -27,9 +27,9 @@ import (
 // Reader reads logs from WAL.
 // Reader reader is a simple iterator over log data
 type Reader struct {
-	Id          uid.LID
-	logData     []byte
-	blockOffset int64
+	Id      uid.LID
+	logData []byte
+	offset  int64
 
 	entryCount uint32
 
@@ -54,15 +54,12 @@ func (wal *WAL) NewReader() (*Reader, error) {
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator
 func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
-	// release and merge logs before read and after read
-	r.wal.releaseLogs()
+	// r.wal.releaseLogs()
 	r.wal.mu.RLock()
 	defer func() {
 		r.wal.mu.RUnlock()
-		r.wal.releaseLogs()
 		r.wal.bufPool.Put(r.buffer)
 	}()
-	readCount := uint32(0)
 	idx := 0
 	l := len(r.wal.logs)
 	if l == 0 {
@@ -77,7 +74,7 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 		r.buffer.Reset()
 		offset := int64(0)
 
-		if _, err := r.buffer.Extend(size); err != nil {
+		if _, err := r.buffer.Extend(int64(size)); err != nil {
 			return err
 		}
 		if _, err := r.wal.logFile.readAt(r.buffer.Internal(), fileOff); err != nil {
@@ -86,41 +83,45 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 		for i := idx; i < l; i++ {
 			ul := r.wal.logs[i]
 			if ul.entryCount == 0 || ul.status != logStatusWritten {
+				offset += int64(ul.size)
+				offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
 				idx++
 				continue
 			}
-			if size < ul.size {
-				size = ul.size
+			if size < int64(ul.size) {
+				size = int64(ul.size)
 				break
 			}
-			if size-offset < ul.size {
+			if size-offset < int64(ul.size) {
 				fileOff = ul.offset
 				size = r.wal.logFile.Size() - ul.offset
 				break
 			}
-			data, err := r.buffer.Slice(offset+int64(logHeaderSize), offset+ul.size)
+			data, err := r.buffer.Slice(offset+int64(logHeaderSize), offset+int64(ul.size))
 			if err != nil {
 				return err
 			}
-			readCount += ul.entryCount
 			r.entryCount = ul.entryCount
 			r.logData = data
-			r.blockOffset = 0
+			r.offset = 0
 			if stop, err := f(idx == l-1); stop || err != nil {
 				return err
 			}
-			offset += ul.size
-			offset += r.wal.logFile.segments.freeSize(ul.offset + ul.size)
-			if r.wal.logSeqApplied < ul.seq {
-				r.wal.logSeqApplied = ul.seq
+			r.wal.logs[i].status = logStatusReleased
+			if err := r.wal.logFile.writeMarshalableAt(r.wal.logs[i], r.wal.logs[i].offset); err != nil {
+				return err
 			}
+			offset += int64(ul.size)
+			offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
 			idx++
 		}
 		if idx == l {
 			break
 		}
 	}
-	// fmt.Println("wal.Read: readCount ", readCount)
+	if err := r.wal.writeHeader(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -135,11 +136,11 @@ func (r *Reader) Next() ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	r.entryCount--
-	logData := r.logData[r.blockOffset:]
+	logData := r.logData[r.offset:]
 	dataLen := binary.LittleEndian.Uint32(logData[0:4])
 	if uint32(len(logData)) < dataLen {
 		return nil, false, errors.New("logData error")
 	}
-	r.blockOffset += int64(dataLen)
+	r.offset += int64(dataLen)
 	return logData[4:dataLen], true, nil
 }

@@ -58,11 +58,15 @@ type options struct {
 	flags
 	batchOptions
 	queryOptions
-	// backgroundSyncInterval sets the amount of time between background fsync() calls.
+	// maxSyncDurations sets the amount of time between background fsync() calls.
 	//
 	// Setting the value to 0 disables the automatic background synchronization.
 	// Setting the value to -1 makes the DB call fsync() after every write operation.
-	backgroundSyncInterval time.Duration
+	maxSyncDurations int
+
+	// syncDurationType set duration type to run sync for example syncDurationType is Second and maxSyncDuration is 5 then
+	// all entries are sync to DB in 5 seconds
+	syncDurationType time.Duration
 
 	// encryptionKey
 	encryptionKey []byte
@@ -79,9 +83,6 @@ type options struct {
 
 	// logSize sets Size of write ahead log
 	logSize int64
-
-	// logReleaseInterval sets interval to run log releaser schedule
-	logReleaseInterval time.Duration
 
 	// minimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
 	minimumFreeBlocksSize int64
@@ -184,8 +185,11 @@ func WithDefaultOptions() Options {
 		if o.fileSystem == nil {
 			o.fileSystem = fs.FileIO
 		}
-		if o.backgroundSyncInterval == 0 {
-			o.backgroundSyncInterval = 1 * time.Second
+		if o.maxSyncDurations == 0 {
+			o.maxSyncDurations = 10
+		}
+		if o.syncDurationType == 0 {
+			o.syncDurationType = time.Second
 		}
 		if o.tinyBatchWriteInterval == 0 {
 			o.tinyBatchWriteInterval = 15 * time.Millisecond
@@ -205,9 +209,6 @@ func WithDefaultOptions() Options {
 		if o.logSize == 0 {
 			o.logSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
 		}
-		if o.logReleaseInterval == 0 {
-			o.logReleaseInterval = 15 * time.Second
-		}
 		if o.minimumFreeBlocksSize == 0 {
 			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB)
 		}
@@ -218,9 +219,10 @@ func WithDefaultOptions() Options {
 }
 
 // WithBackgroundSyncInterval sets the amount of time between background fsync() calls.
-func WithBackgroundSyncInterval(dur time.Duration) Options {
+func WithMaxSyncDuration(dur time.Duration, interval int) Options {
 	return newFuncOption(func(o *options) {
-		o.backgroundSyncInterval = dur
+		o.maxSyncDurations = interval
+		o.syncDurationType = dur
 	})
 }
 
@@ -266,13 +268,6 @@ func WithMemdbSize(size int64) Options {
 func WithLogSize(size int64) Options {
 	return newFuncOption(func(o *options) {
 		o.logSize = size
-	})
-}
-
-// WithLogReleaseInterval sets log release interval to run log releaser schedule
-func WithLogReleaseInterval(dur time.Duration) Options {
-	return newFuncOption(func(o *options) {
-		o.logReleaseInterval = dur
 	})
 }
 

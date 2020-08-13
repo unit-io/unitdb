@@ -11,7 +11,7 @@ The unitdb is blazing fast specialized time-series database for microservices, I
 - Data is safely written to disk with accuracy and high performant block sync technique
 - Supports opening database with immutable flag
 - Supports database encryption
-- Supports time-to-live on message entry
+- Supports time-to-live on message entries
 - Supports writing to wildcard topics
 - Queried data is returned complete and correct
 
@@ -29,7 +29,6 @@ The unitdb is blazing fast specialized time-series database for microservices, I
  + [Batch operation](#Batch-operation)
    - [Writing to a batch](#Writing-to-a-batch)
    - [Writing to multiple topics in a batch](#Writing-to-multiple-topics-in-a-batch)
-   - [Non-blocking batch operation](#Non-blocking-batch-operation)
  * [Iterating over items](#Iterating-over-items)
  + [Advanced](#Advanced)
    - [Writing to wildcard topics](#Writing-to-wildcard-topics)
@@ -82,12 +81,12 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 
 	or
 
-	// send message to all receivers of channel1 for team alpha
+	// send message to all receivers of team alpha channel1
 	topic := []byte("teams.alpha.ch1.*")
-	msg := []byte("msg for team alpha channel1 receivers")
+	msg := []byte("msg for team alpha channel1 all receivers")
 	db.Put(topic, msg)
 
-	// send message to all channels for team alpha
+	// send message to all channels of team alpha
 	topic := []byte("teams.alpha...")
 	msg := []byte("msg for team alpha all channels")
 	db.Put(topic, msg)
@@ -95,13 +94,14 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 ```
 
 #### Store bulk messages
-Use Entry.WithPayload() method to bulk store messages as topic is parsed on first request and subsequent requests skips parsing of it.
+Use Entry.WithPayload() method to bulk store messages as topic is parsed only on first request.
 
 ```
 	topic := []byte("teams.alpha.ch1.u1")
 	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1?ttl=1h"), nil)
 	for j := 0; j < 50; j++ {
-		db.PutEntry(entry.WithPayload([]byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j))))
+		entry.WithPayload([]byte(fmt.Sprintf("msg for team alpha channel1 receiver1 #%2d", j)))
+		db.PutEntry(entry)
 	}
 
 ```
@@ -112,18 +112,17 @@ Specify ttl parameter to a topic while storing messages to expire it after speci
 ```
 	topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 	msg := []byte("msg for team alpha channel1 receiver1")
-	b.PutEntry(unitdb.NewEntry(topic, msg))
+	entry := unitdb.NewEntry(topic, msg)
+	b.PutEntry(entry)
 
 ```
 
 #### Read messages
-UUse DB.Get() to read messages from a topic. Use last parameter to specify duration or specify number of recent messages to read from a topic. for example, "last=1h" gets messages from unitdb stored in last 1 hour, or "last=100" to get last 100 messages from unitdb. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
+Use DB.Get() to read messages from a topic. Use last parameter to specify duration to read messages from a topic, for example, "last=1h" gets messages from unitdb stored in last 1 hour. Specify an optional parameter Query.Limit to retrieve messages from a topic with a limit.
 
 ```
 	var err error
 	var msg [][]byte
-	msgs, err = db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=100")))
-    ....
 	msgs, err = db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.u1?last=1h").WithLimit(100)))
 
 ```
@@ -133,13 +132,15 @@ Deleting a message in unitdb is rare and it require additional steps to delete m
 
 ```
 	messageId := db.NewID()
-	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1"))
+	topic := []byte("teams.alpha.ch1.u1")
+	msg := []byte("msg for team alpha channel1 receiver1")
+	entry := unitdb.NewEntry(topic, msg)
 	entry.WithID(messageId)
-	err := db.PutEntry(entry)
+	db.PutEntry(entry)
 
-	entry = unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), nil)
+	entry = unitdb.NewEntry(topic, nil)
 	entry.WithID(messageId)
-	err = db.DeleteEntry(entry)
+	db.DeleteEntry(entry)
 
 ```
 
@@ -149,29 +150,32 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 	contract, err := db.NewContract()
 
-    entry := unitdb.NewEntry([]byte("teams.alpha.ch1"), []byte("msg for team alpha channel1"))
+    topic := []byte("teams.alpha.ch1.u1")
+	msg := []byte("msg for team alpha channel1 receiver1")
+	entry := unitdb.NewEntry(topic, msg)
 	entry.WithContract(contract)
-	err := db.PutEntry(entry)
+	db.PutEntry(entry)
 	
 	....
-	query := unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h")
+	query := unitdb.NewQuery(topic)
 	query.WithContract(contract)
 	var msgs [][]byte
-	msgs, err = db.Get(query.WithLimit(100)))
+	msgs, err := db.Get(query.WithLimit(100)))
 
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into unitdb or bulk delete records from unitdb. See benchmark examples and run it locally to see performance of running batches concurrently.
+Use batch operation to bulk insert records into unitdb or bulk delete records from unitdb. See examples under cmd/benchmark folder.
 
 #### Writing to a batch
 Use Batch.Put() to write to a single topic in a batch.
 
 ```
 	// Writing to single topic in a batch
-	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+	db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
-		b.Put(topic, []byte("msg for team alpha channel1 all receivers"))
+		msg := []byte("msg for team alpha channel1 all receivers")
+		b.Put(topic, msg)
 		return b.Write()
     })
 
@@ -182,26 +186,10 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 
 ```
     // Writing to multiple topics in a batch
-    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+    db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
 		return b.Write()
-    })
-
-```
-
-#### Non-blocking batch operation
-All batch operations are non-blocking so client program can decide to wait for completed signal and further execute any additional tasks.
-
-```
-    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
-		err := b.Write()
-			go func() {
-				<-completed // it signals batch has completed and fully committed to db
-				...
-			}()
-		return err
     })
 
 ```
@@ -249,7 +237,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 	contract, err := db.NewContract()
 
     // Writing to single topic in a batch
-	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+	db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.SetOptions(unitdb.WithBatchContract(contract))
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
@@ -259,7 +247,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
     })
 
     // Writing to multiple topics in a batch
-    err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+    db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.SetOptions(unitdb.WithBatchContract(contract))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.*.ch1"), []byte("msg for any team channel1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
@@ -276,7 +264,7 @@ Set encryption flag in batch options to encrypt all messages in a batch.
 Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter. 
 
 ```
-	err := db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+	db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.SetOptions(unitdb.WithBatchEncryption())
 		topic := []byte("teams.alpha.ch1?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1"))
@@ -309,7 +297,7 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 		return b.Write()
 	})
 
-	err = g.Run()
+	g.Run()
 
 ```
 

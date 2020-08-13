@@ -23,8 +23,8 @@ import (
 )
 
 func TestSimple(t *testing.T) {
-	size := 1 << 4
-	mdb, err := Open(int64(size))
+	size := int64(1 << 4)
+	mdb, err := Open(size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestSimple(t *testing.T) {
 				t.Fatalf("expected %v; got %v", val, v)
 			}
 		}
-		if size, err := mdb.Size(); err != nil || size > maxTableSize {
+		if _, err := mdb.Size(); err != nil {
 			t.Fatal(err)
 		}
 	}

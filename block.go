@@ -24,23 +24,11 @@ import (
 )
 
 const (
-	// entrySize        = 26
 	slotSize         = 16
 	blockSize uint32 = 4096
 )
 
 type (
-	// entry struct {
-	// 	seq       uint64
-	// 	topicSize uint16
-	// 	valueSize uint32
-	// 	msgOffset int64
-	// 	expiresAt uint32 // expiresAt for recovery from log and not persisted to Index file but persisted to the time window file
-
-	// 	topicHash  uint64 // topicHash for recovery from log and not persisted to the DB
-	// 	cacheBlock []byte // block from memdb if it exist
-	// }
-
 	slot struct {
 		seq       uint64
 		topicSize uint16
@@ -67,10 +55,6 @@ type (
 	}
 )
 
-// func (s slot) ExpiresAt() uint32 {
-// 	return s.expiresAt
-// }
-
 func startBlockIndex(seq uint64) int32 {
 	return int32(float64(seq-1) / float64(entriesPerIndexBlock))
 }
@@ -85,28 +69,6 @@ func blockOffset(idx int32) int64 {
 func (s slot) mSize() uint32 {
 	return idSize + uint32(s.topicSize) + s.valueSize
 }
-
-// // MarshalBinary serialized entry into binary data
-// func (e entry) MarshalBinary() ([]byte, error) {
-// 	buf := make([]byte, entrySize)
-// 	data := buf
-// 	binary.LittleEndian.PutUint64(buf[:8], e.seq)
-// 	binary.LittleEndian.PutUint16(buf[8:10], e.topicSize)
-// 	binary.LittleEndian.PutUint32(buf[10:14], e.valueSize)
-// 	binary.LittleEndian.PutUint32(buf[14:18], e.expiresAt)
-// 	binary.LittleEndian.PutUint64(buf[18:26], e.topicHash)
-// 	return data, nil
-// }
-
-// // MarshalBinary de-serialized entry from binary data
-// func (e *entry) UnmarshalBinary(data []byte) error {
-// 	e.seq = binary.LittleEndian.Uint64(data[:8])
-// 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
-// 	e.valueSize = binary.LittleEndian.Uint32(data[10:14])
-// 	e.expiresAt = binary.LittleEndian.Uint32(data[14:18])
-// 	e.topicHash = binary.LittleEndian.Uint64(data[18:26])
-// 	return nil
-// }
 
 func (b block) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)

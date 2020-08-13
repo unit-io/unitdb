@@ -41,7 +41,7 @@ type expiryWindows struct {
 func newExpiryWindows() *expiryWindows {
 	w := &expiryWindows{
 		expiry:     make([]*expiryWindow, nShards),
-		consistent: hash.InitConsistent(int(nShards), int(nShards)),
+		consistent: hash.InitConsistent(nShards, nShards),
 	}
 
 	for i := 0; i < nShards; i++ {
@@ -79,7 +79,7 @@ func newExpiryWindowBucket(bgKeyExp bool, expDurType time.Duration, maxExpDur in
 	return ex
 }
 
-func (wb *expiryWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry {
+func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntry {
 	if !wb.backgroundKeyExpiry {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (wb *expiryWindowBucket) expireOldEntries(maxResults int) []timeWindowEntry
 		return expiredEntries
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i < wb.maxExpDurations; i++ {
 		// get windows shard
 		ws := wb.expiryWindows.expiry[i]
 		ws.mu.Lock()

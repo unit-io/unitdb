@@ -41,7 +41,6 @@ type (
 	// Entry entry is a message entry structure
 	Entry struct {
 		entry
-		// internalEntry
 		ID         []byte // The ID of the message
 		Topic      []byte // The topic of the message
 		Payload    []byte // The payload of the message

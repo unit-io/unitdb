@@ -24,7 +24,6 @@ import (
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/hash"
 	"github.com/unit-io/unitdb/message"
-	"github.com/unit-io/unitdb/uid"
 )
 
 // SetOptions sets batch options
@@ -50,7 +49,7 @@ type (
 
 	// Batch is a write batch.
 	Batch struct {
-		batchID uid.LID
+		ID      int64
 		opts    *options
 		managed bool
 		grouped bool
@@ -220,7 +219,7 @@ func (b *Batch) Write() error {
 		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
 			return err
 		}
-		if err := b.db.timeWindow.add(e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+		if err := b.db.timeWindow.add(b.timeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
 			return nil
 		}
 		if e.topicSize != 0 {
@@ -248,7 +247,7 @@ func (b *Batch) Commit() error {
 	defer func() {
 		close(b.commitComplete)
 	}()
-	if err := b.db.commit(b.Len(), b.buffer); err != nil {
+	if err := b.db.commit(b.timeID(), b.Len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 	}
 	b.db.meter.Puts.Inc(int64(b.Len()))
@@ -315,6 +314,11 @@ func _assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
 		panic(fmt.Sprintf("assertion failed: "+msg, v...))
 	}
+}
+
+// timeID returns timeID of the batch.
+func (b *Batch) timeID() int64 {
+	return b.ID
 }
 
 // Len returns number of records in the batch.

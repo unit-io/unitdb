@@ -50,6 +50,9 @@ const (
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
 
+	// timeSlotDur to store timeWindow entries into slots for better sync performance
+	timeSlotDur = 100 * time.Millisecond
+
 	// maxTopicLength is the maximum size of a topic in bytes.
 	maxTopicLength = 1 << 16
 
@@ -66,7 +69,6 @@ const (
 type dbInfo struct {
 	encryption int8
 	sequence   uint64
-	logSeq     uint64
 	count      uint64
 	blockIdx   int32
 	windowIdx  int32
@@ -152,7 +154,6 @@ func (db *DB) loadTrie() error {
 		if entryIdx == -1 {
 			return false, nil
 		}
-		// fmt.Println("db.loadTrie: seq, entryIdx ", we.Seq(), entryIdx)
 		s := b.entries[entryIdx]
 
 		if s.topicSize == 0 {
@@ -169,7 +170,6 @@ func (db *DB) loadTrie() error {
 			return true, err
 		}
 		if ok := db.trie.add(topic{hash: w.topicHash, offset: topics[w.topicHash]}, t.Parts, t.Depth); !ok {
-			// fmt.Println("db.loadTrie: topic exist in the trie ", w.topicHash, topics[w.topicHash])
 			logger.Info().Str("context", "db.loadTrie: topic exist in the trie")
 			return false, nil
 		}
@@ -194,6 +194,7 @@ func (db *DB) close() error {
 
 	// Wait for all goroutines to exit.
 	db.closeW.Wait()
+
 	return nil
 }
 
@@ -354,25 +355,24 @@ func (db *DB) setEntry(e *Entry) error {
 		copy(e.cacheEntry[entrySize+idSize:], rawTopic)
 	}
 	copy(e.cacheEntry[entrySize+idSize+uint32(e.topicSize):], val)
-
 	return nil
 }
 
 // tinyCommit commits tiny batch to write ahead log
 func (db *DB) tinyCommit() error {
-	if db.tinyBatch.count() == 0 {
-		return nil
-	}
-
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.closeW.Add(1)
 	db.writeLockC <- struct{}{}
 	defer func() {
 		db.tinyBatch.buffer.Reset()
-		db.tinyBatch.reset()
+		db.tinyBatch.reset(db.timeWindow.timeID())
 		<-db.writeLockC
 		db.closeW.Done()
 	}()
+
+	if db.tinyBatch.count() == 0 {
+		return nil
+	}
 
 	offset := uint32(0)
 	buf := db.tinyBatch.buffer.Bytes()
@@ -391,8 +391,7 @@ func (db *DB) tinyCommit() error {
 		offset += dataLen
 	}
 
-	db.setLogSeq(db.seq())
-	if err := <-logWriter.SignalInitWrite(db.logSequence()); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.tinyBatch.timeID()); err != nil {
 		return err
 	}
 	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
@@ -400,7 +399,7 @@ func (db *DB) tinyCommit() error {
 }
 
 // commit commits batches to write ahead log
-func (db *DB) commit(l int, buf *bpool.Buffer) error {
+func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
@@ -429,8 +428,7 @@ func (db *DB) commit(l int, buf *bpool.Buffer) error {
 		offset += dataLen
 	}
 
-	db.setLogSeq(db.seq())
-	return <-logWriter.SignalInitWrite(db.logSequence())
+	return <-logWriter.SignalInitWrite(timeID)
 }
 
 // delete deletes the given key from the DB.
@@ -472,16 +470,6 @@ func (db *DB) seq() uint64 {
 
 func (db *DB) nextSeq() uint64 {
 	return atomic.AddUint64(&db.sequence, 1)
-}
-
-// LogSeq current log sequence of the DB.
-func (db *DB) logSequence() uint64 {
-	return atomic.LoadUint64(&db.logSeq)
-}
-
-func (db *DB) setLogSeq(seq uint64) error {
-	atomic.StoreUint64(&db.logSeq, seq)
-	return nil
 }
 
 // blocks returns the total blocks in the DB.

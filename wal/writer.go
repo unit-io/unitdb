@@ -34,7 +34,7 @@ type Writer struct {
 	entryCount uint32
 
 	buffer  *bpool.Buffer
-	logSize int64
+	logSize uint32
 
 	wal *WAL
 
@@ -71,7 +71,7 @@ func (w *Writer) append(data []byte) error {
 	if _, err := w.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	w.logSize += int64(dataLen)
+	w.logSize += dataLen
 
 	if _, err := w.buffer.Write(data); err != nil {
 		return err
@@ -95,7 +95,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 }
 
 // writeLog writes log by setting correct header and status
-func (w *Writer) writeLog(seq uint64) error {
+func (w *Writer) writeLog(id int64) error {
 	w.writeCompleted <- struct{}{}
 	w.wal.mu.Lock()
 	w.wal.wg.Add(1)
@@ -109,7 +109,7 @@ func (w *Writer) writeLog(seq uint64) error {
 	if w.logSize == 0 {
 		return nil
 	}
-	dataLen := w.logSize + int64(logHeaderSize)
+	dataLen := w.logSize + uint32(logHeaderSize)
 	off, err := w.wal.logFile.allocate(uint32(dataLen))
 	if off < int64(headerSize) || err != nil {
 		return err
@@ -117,11 +117,10 @@ func (w *Writer) writeLog(seq uint64) error {
 	h := logInfo{
 		status:     logStatusWritten,
 		entryCount: w.entryCount,
-		seq:        seq,
 		size:       dataLen,
 		offset:     int64(off),
 	}
-	if err := w.wal.put(h); err != nil {
+	if err := w.wal.put(id, h); err != nil {
 		return err
 	}
 	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
@@ -141,7 +140,7 @@ func (w *Writer) writeLog(seq uint64) error {
 // SignalInitWrite will signal to the WAL that log append has
 // completed, and that the WAL can safely write log and being
 // applied atomically.
-func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
+func (w *Writer) SignalInitWrite(id int64) <-chan error {
 	done := make(chan error, 1)
 	if w.writeComplete || w.releaseComplete {
 		done <- errors.New("misuse of log write - call each of the signaling methods exactly ones, in serial, in order")
@@ -150,7 +149,7 @@ func (w *Writer) SignalInitWrite(seq uint64) <-chan error {
 
 	// Write the log non-blocking
 	go func() {
-		done <- w.writeLog(seq)
+		done <- w.writeLog(id)
 	}()
 	return done
 }

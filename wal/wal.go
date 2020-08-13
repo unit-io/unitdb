@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,13 +50,12 @@ const (
 	version                   = 1 // file format version
 )
 
+type logs []logInfo
 type (
 	// WALInfo provides WAL stats
 	WALInfo struct {
 		logCountWritten int64
 		logCountApplied int64
-		logSeqWritten   uint64
-		logSeqApplied   uint64
 	}
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
@@ -67,12 +65,14 @@ type (
 		mu sync.RWMutex
 
 		WALInfo
-		logs []logInfo
+		logs
+		pendingLogs map[int64]logs // map[id]logs
 
 		bufPool *bpool.BufferPool
 		logFile file
 
 		opts Options
+
 		// close
 		closed uint32
 		closeC chan struct{}
@@ -81,11 +81,10 @@ type (
 	// Options wal options to create new WAL. WAL logs uses cyclic rotation to avoid fragmentation.
 	// It allocates free blocks only when log reaches target size
 	Options struct {
-		Path               string
-		TargetSize         int64
-		BufferSize         int64
-		LogReleaseInterval time.Duration
-		Reset              bool
+		Path       string
+		TargetSize int64
+		BufferSize int64
+		Reset      bool
 	}
 )
 
@@ -95,8 +94,9 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		opts.BufferSize = defaultBufferSize
 	}
 	wal = &WAL{
-		bufPool: bpool.NewBufferPool(opts.TargetSize, nil),
-		opts:    opts,
+		pendingLogs: make(map[int64]logs),
+		bufPool:     bpool.NewBufferPool(opts.TargetSize, nil),
+		opts:        opts,
 		// close
 		closeC: make(chan struct{}, 1),
 	}
@@ -114,7 +114,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 			return nil, false, err
 		}
 		wal.logFile.segments = newSegments()
-		if err := wal.writeHeader(); err != nil {
+		if err := wal.Sync(); err != nil {
 			return nil, false, err
 		}
 	} else {
@@ -129,10 +129,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	if wal.opts.LogReleaseInterval == 0 {
-		wal.opts.LogReleaseInterval = defaultLogReleaseInterval
-	}
-	wal.releaser(wal.opts.LogReleaseInterval)
+	wal.releaser(defaultLogReleaseInterval)
 
 	return wal, len(wal.logs) != 0, nil
 }
@@ -171,8 +168,10 @@ func (wal *WAL) recoverLogHeaders() error {
 			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.segments, l)
 			return nil
 		}
-		wal.logs = append(wal.logs, l)
-		offset = l.offset + l.size
+		if l.status == logStatusWritten {
+			wal.logs = append(wal.logs, l)
+		}
+		offset = l.offset + int64(l.size)
 	}
 }
 
@@ -183,58 +182,66 @@ func (wal *WAL) recoverWal() error {
 		return err
 	}
 
-	if err := wal.recoverLogHeaders(); err != nil {
-		return err
-	}
-
-	return wal.releaseLogs()
+	return wal.recoverLogHeaders()
 }
 
-func (wal *WAL) put(log logInfo) error {
+func (wal *WAL) put(id int64, log logInfo) error {
 	log.version = version
 	wal.logCountWritten++
-	wal.logSeqWritten = log.seq
-	wal.logs = append(wal.logs, log)
+	if _, ok := wal.pendingLogs[id]; ok {
+		wal.pendingLogs[id] = append(wal.pendingLogs[id], log)
+	} else {
+		wal.pendingLogs[id] = logs{log}
+	}
 	return nil
 }
 
-func (wal *WAL) logMerge(log logInfo) (released bool, err error) {
+func (wal *WAL) logMerge(log logInfo) error {
 	if log.status == logStatusWritten {
-		return false, nil
+		return nil
 	}
-	released = wal.logFile.segments.free(log.offset, log.size)
+	released := wal.logFile.segments.free(log.offset, log.size)
 	wal.logFile.segments.swap(wal.opts.TargetSize)
-	return released, nil
-}
-
-func (wal *WAL) signalLogApplied(i int) error {
-	wal.logs[i].status = logStatusApplied
-	released, err := wal.logMerge(wal.logs[i])
-	if err != nil {
-		return err
-	}
 	if released {
-		wal.logs[i].status = logStatusReleased
+		log.status = logStatusReleased
 	}
-	wal.logFile.writeMarshalableAt(wal.logs[i], wal.logs[i].offset)
 	return nil
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
-func (wal *WAL) SignalLogApplied(upperSeq uint64) error {
+func (wal *WAL) SignalLogApplied(id int64) error {
+	wal.wg.Add(1)
 	wal.mu.Lock()
 	defer func() {
 		wal.mu.Unlock()
+		wal.wg.Done()
 	}()
 
-	if wal.logSeqApplied < upperSeq {
-		wal.logSeqApplied = upperSeq
+	var err1 error
+	logs := wal.pendingLogs[id]
+	for i := range logs {
+		logs[i].status = logStatusApplied
+		if err := wal.logMerge(logs[i]); err != nil {
+			err1 = err
+			continue
+		}
+		if logs[i].status == logStatusReleased {
+			continue
+		}
+		if err := wal.logFile.writeMarshalableAt(logs[i], logs[i].offset); err != nil {
+			err1 = err
+			continue
+		}
 	}
-	return nil
+	if err := wal.writeHeader(); err != nil {
+		return err
+	}
+	return err1
 }
 
 // Reset resets log file and log segments
 func (wal *WAL) Reset() error {
+	wal.pendingLogs = make(map[int64]logs)
 	if err := wal.logFile.reset(); err != nil {
 		return err
 	}
@@ -242,7 +249,7 @@ func (wal *WAL) Reset() error {
 		return err
 	}
 	wal.logFile.segments = newSegments()
-	if err := wal.writeHeader(); err != nil {
+	if err := wal.Sync(); err != nil {
 		return err
 	}
 	return nil
@@ -261,9 +268,10 @@ func (wal *WAL) Close() error {
 		return errors.New("wal is closed")
 	}
 	close(wal.closeC)
+
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
-	// fmt.Println("wal.Close: WAL Info ", wal.WALInfo)
+
 	return wal.logFile.Close()
 }
 
@@ -289,39 +297,25 @@ func (wal *WAL) ok() error {
 }
 
 func (wal *WAL) releaseLogs() error {
-	wal.mu.Lock()
 	wal.wg.Add(1)
+	wal.mu.Lock()
 	defer func() {
-		wal.wg.Done()
 		wal.mu.Unlock()
+		wal.wg.Done()
 	}()
 
-	// sort wal logs by offset so that adjacent free blocks can be merged
-	sort.Slice(wal.logs[:], func(i, j int) bool {
-		return wal.logs[i].offset < wal.logs[j].offset
-	})
-	l := len(wal.logs)
-	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusWritten && wal.logs[i].seq <= wal.logSeqApplied {
-			if err := wal.signalLogApplied(i); err != nil {
-				return err
+	for id, logs := range wal.pendingLogs {
+		l := len(logs)
+		for i := 0; i < l; i++ {
+			if logs[i].status == logStatusReleased {
+				// Remove log from wal
+				wal.pendingLogs[id] = wal.pendingLogs[id][:i+copy(wal.pendingLogs[id][i:], wal.pendingLogs[id][i+1:])]
+				l -= 1
+				i--
 			}
-			wal.logCountApplied++
 		}
 	}
 
-	if err := wal.writeHeader(); err != nil {
-		return err
-	}
-
-	for i := 0; i < l; i++ {
-		if wal.logs[i].status == logStatusReleased {
-			// Remove log from wal
-			wal.logs = wal.logs[:i+copy(wal.logs[i:], wal.logs[i+1:])]
-			l -= 1
-			i--
-		}
-	}
 	return nil
 }
 
