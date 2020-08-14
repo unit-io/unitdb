@@ -61,8 +61,9 @@ type (
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown
-		wg sync.WaitGroup
-		mu sync.RWMutex
+		wg           sync.WaitGroup
+		mu           sync.RWMutex
+		releaseLockC chan struct{}
 
 		WALInfo
 		logs
@@ -94,9 +95,10 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		opts.BufferSize = defaultBufferSize
 	}
 	wal = &WAL{
-		pendingLogs: make(map[int64]logs),
-		bufPool:     bpool.NewBufferPool(opts.TargetSize, nil),
-		opts:        opts,
+		releaseLockC: make(chan struct{}, 1),
+		pendingLogs:  make(map[int64]logs),
+		bufPool:      bpool.NewBufferPool(opts.TargetSize, nil),
+		opts:         opts,
 		// close
 		closeC: make(chan struct{}, 1),
 	}
@@ -269,6 +271,9 @@ func (wal *WAL) Close() error {
 	}
 	close(wal.closeC)
 
+	// acquire Lock
+	wal.releaseLockC <- struct{}{}
+
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
 
@@ -299,8 +304,10 @@ func (wal *WAL) ok() error {
 func (wal *WAL) releaseLogs() error {
 	wal.wg.Add(1)
 	wal.mu.Lock()
+	wal.releaseLockC <- struct{}{}
 	defer func() {
 		wal.mu.Unlock()
+		<-wal.releaseLockC
 		wal.wg.Done()
 	}()
 

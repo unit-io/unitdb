@@ -405,8 +405,8 @@ func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
 	}
 
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.writeLockC <- struct{}{}
 	db.closeW.Add(1)
+	db.writeLockC <- struct{}{}
 	defer func() {
 		buf.Reset()
 		<-db.writeLockC

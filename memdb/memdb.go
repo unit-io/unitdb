@@ -29,7 +29,7 @@ const (
 	nShards = 32
 
 	drainInterval         = 1 * time.Second
-	memShrinkFactor       = 0.7
+	drainFactor           = 0.7
 	dataTableShrinkFactor = 0.33 // shrinker try to free 33% of total memdb size
 )
 
@@ -56,6 +56,8 @@ func newBlockCache() blockCache {
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	targetSize int64
+	drainLockC chan struct{}
+
 	// block cache
 	consistent *hash.Consistent
 	blockCache blockCache
@@ -65,9 +67,11 @@ type DB struct {
 	closeC chan struct{}
 }
 
-// Open opens or creates a new DB of given size.
+// Open opens or creates a new DB.
 func Open(memSize int64) (*DB, error) {
 	db := &DB{
+		targetSize: memSize,
+		drainLockC: make(chan struct{}, 1),
 		blockCache: newBlockCache(),
 		// Close
 		closeC: make(chan struct{}),
@@ -81,20 +85,18 @@ func Open(memSize int64) (*DB, error) {
 }
 
 func (db *DB) drain(interval time.Duration) {
-	shrinkerTicker := time.NewTicker(interval)
+	drainTicker := time.NewTicker(interval)
 	go func() {
-		db.closeW.Add(1)
 		defer func() {
-			shrinkerTicker.Stop()
-			db.closeW.Done()
+			drainTicker.Stop()
 		}()
 		for {
 			select {
 			case <-db.closeC:
 				return
-			case <-shrinkerTicker.C:
+			case <-drainTicker.C:
 				memSize, err := db.Size()
-				if err == nil && float64(memSize) > float64(db.targetSize)*memShrinkFactor {
+				if err == nil && float64(memSize) > float64(db.targetSize)*drainFactor {
 					db.shrinkDataTable()
 				}
 			}
@@ -103,6 +105,13 @@ func (db *DB) drain(interval time.Duration) {
 }
 
 func (db *DB) shrinkDataTable() error {
+	db.closeW.Add(1)
+	db.drainLockC <- struct{}{}
+	defer func() {
+		<-db.drainLockC
+		db.closeW.Done()
+	}()
+
 	for i := 0; i < nShards; i++ {
 		cache := db.blockCache[i]
 		cache.Lock()
@@ -131,15 +140,8 @@ func (db *DB) Close() error {
 	// Signal all goroutines.
 	close(db.closeC)
 
-	for i := 0; i < nShards; i++ {
-		cache := db.blockCache[i]
-		cache.Lock()
-		if err := cache.data.close(); err != nil {
-			cache.Unlock()
-			return err
-		}
-		cache.Unlock()
-	}
+	// Acquire lock.
+	db.drainLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
 	db.closeW.Wait()
