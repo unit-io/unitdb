@@ -54,14 +54,24 @@ func (wal *WAL) NewReader() (*Reader, error) {
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator
 func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
-	// r.wal.releaseLogs()
+	// release log before read
+	l := len(r.wal.logs)
+	for i := 0; i < l; i++ {
+		if r.wal.logs[i].status == logStatusReleased {
+			// Remove log from wal
+			r.wal.logs = r.wal.logs[:i+copy(r.wal.logs[i:], r.wal.logs[i+1:])]
+			l -= 1
+			i--
+		}
+	}
+
 	r.wal.mu.RLock()
 	defer func() {
 		r.wal.mu.RUnlock()
 		r.wal.bufPool.Put(r.buffer)
 	}()
 	idx := 0
-	l := len(r.wal.logs)
+	l = len(r.wal.logs)
 	if l == 0 {
 		return nil
 	}

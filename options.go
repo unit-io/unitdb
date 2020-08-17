@@ -38,10 +38,9 @@ type flags struct {
 // batchOptions is used to set options when using batch operation
 type batchOptions struct {
 	// In concurrent batch writes order determines how to handle conflicts
-	order           int8
-	contract        uint32
-	encryption      bool
-	allowDuplicates bool
+	order      int8
+	contract   uint32
+	encryption bool
 }
 
 // queryOptions is used to set options for DB query
@@ -154,7 +153,6 @@ func WithDefaultBatchOptions() Options {
 		o.batchOptions.order = 0
 		o.batchOptions.contract = message.MasterContract
 		o.batchOptions.encryption = false
-		o.batchOptions.allowDuplicates = false
 	})
 }
 
@@ -172,13 +170,6 @@ func WithBatchEncryption() Options {
 	})
 }
 
-// WithBatchAllowDuplicates sets allow duplicate option for batch operation
-func WithBatchAllowDuplicates() Options {
-	return newFuncOption(func(o *options) {
-		o.batchOptions.allowDuplicates = true
-	})
-}
-
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
 	return newFuncOption(func(o *options) {
@@ -186,7 +177,7 @@ func WithDefaultOptions() Options {
 			o.fileSystem = fs.FileIO
 		}
 		if o.maxSyncDurations == 0 {
-			o.maxSyncDurations = 10
+			o.maxSyncDurations = 15
 		}
 		if o.syncDurationType == 0 {
 			o.syncDurationType = time.Second

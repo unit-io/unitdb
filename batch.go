@@ -20,9 +20,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/hash"
 	"github.com/unit-io/unitdb/message"
 )
 
@@ -36,33 +36,23 @@ func (b *Batch) SetOptions(opts ...Options) {
 }
 
 type (
-	batchInfo struct {
-		entryCount int
-	}
-
 	batchIndex struct {
 		delFlag bool
-		key     uint32 // key is local id unique in batch and used to remove duplicate values from a topic in the batch before writing records into DB
-		// topicSize uint16
-		offset int64
+		offset  int64
 	}
 
 	// Batch is a write batch.
 	Batch struct {
 		ID      int64
+		db      *DB
 		opts    *options
 		managed bool
 		grouped bool
 		order   int8
-		batchInfo
-		buffer *bpool.Buffer
-		size   int64
+		buffer  *bpool.Buffer
 
-		db            *DB
-		topics        map[uint64]*message.Topic // map[topicHash]*message.Topic
-		index         []batchIndex
-		pendingWrites []batchIndex
-
+		index []batchIndex
+		size  int64
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
 		commitW        sync.WaitGroup
 		commitComplete chan struct{}
@@ -96,11 +86,6 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return err
 	}
 
-	var key uint32
-	if !b.opts.batchOptions.allowDuplicates {
-		key = hash.WithSalt(e.Payload, uint32(e.topicHash))
-	}
-
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
@@ -110,9 +95,8 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return err
 	}
 
-	b.index = append(b.index, batchIndex{delFlag: false, key: key, offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: false, offset: b.size})
 	b.size += int64(len(e.cacheEntry) + 4)
-	b.entryCount++
 
 	// reset message entry
 	e.reset()
@@ -146,8 +130,6 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return err
 	}
 
-	key := uint32(e.topicHash)
-
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
@@ -157,9 +139,8 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return err
 	}
 
-	b.index = append(b.index, batchIndex{delFlag: true, key: key, offset: b.size})
+	b.index = append(b.index, batchIndex{delFlag: true, offset: b.size})
 	b.size += int64(len(e.cacheEntry) + 4)
-	b.entryCount++
 
 	// reset message entry
 	e.reset()
@@ -170,16 +151,19 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error {
 	if err := b.db.ok(); err != nil {
 		return err
-	} // // CPU profiling by default
+	}
+	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	// start := time.Now()
 	// defer logger.Debug().Str("context", "batch.writeInternal").Dur("duration", time.Since(start)).Msg("")
 
-	buf := b.buffer.Bytes()
+	data := b.buffer.Bytes()
 	var e entry
-	for i, index := range b.pendingWrites {
-		dataLen := binary.LittleEndian.Uint32(buf[index.offset : index.offset+4])
-		entryData, data := buf[index.offset+4:index.offset+entrySize+4], buf[index.offset+4:index.offset+int64(dataLen)]
+
+	for i, index := range b.index {
+		off := index.offset
+		dataLen := binary.LittleEndian.Uint32(data[off : off+4])
+		entryData := data[off+4 : off+entrySize+4]
 		if err := e.UnmarshalBinary(entryData); err != nil {
 			return err
 		}
@@ -193,7 +177,7 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 		}
 
 		// put packed entry without topic hash into memdb
-		if err := fn(i, e, data); err != nil {
+		if err := fn(i, e, data[off+4:off+int64(dataLen)]); err != nil {
 			return err
 		}
 	}
@@ -207,13 +191,21 @@ func (b *Batch) Write() error {
 	defer func() {
 		<-b.db.writeLockC
 	}()
-	b.uniq()
 	if b.grouped {
 		// append batch to batchgroup
 		b.db.batchQueue <- b
 		return nil
 	}
+
+	batchTicker := time.NewTicker(timeSlotDur)
+	topics := make(map[uint64]*message.Topic)
+
 	return b.writeInternal(func(i int, e entry, data []byte) error {
+		select {
+		case <-batchTicker.C:
+			b.ID = b.db.timeID()
+		default:
+		}
 		blockID := startBlockIndex(e.seq)
 		memseq := b.db.cacheID ^ e.seq
 		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
@@ -223,12 +215,12 @@ func (b *Batch) Write() error {
 			return nil
 		}
 		if e.topicSize != 0 {
-			t, ok := b.topics[e.topicHash]
+			t, ok := topics[e.topicHash]
 			if !ok {
 				t = new(message.Topic)
 				rawTopic := data[entrySize+idSize : entrySize+idSize+e.topicSize]
 				t.Unmarshal(rawTopic)
-				b.topics[e.topicHash] = t
+				topics[e.topicHash] = t
 			}
 			b.db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
 		}
@@ -240,17 +232,17 @@ func (b *Batch) Write() error {
 // On Commit complete batch operation signal to the cliend if the batch is fully commmited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
-	if len(b.pendingWrites) == 0 || b.buffer.Size() == 0 {
+	if b.len() == 0 || b.buffer.Size() == 0 {
 		b.Abort()
 		return nil
 	}
 	defer func() {
 		close(b.commitComplete)
 	}()
-	if err := b.db.commit(b.timeID(), b.Len(), b.buffer); err != nil {
+	if err := b.db.commit(b.timeID(), b.len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 	}
-	b.db.meter.Puts.Inc(int64(b.Len()))
+
 	return nil
 }
 
@@ -264,40 +256,12 @@ func (b *Batch) Abort() {
 
 // Reset resets the batch.
 func (b *Batch) Reset() {
-	b.entryCount = 0
 	b.size = 0
 	b.index = b.index[:0]
-	b.pendingWrites = b.pendingWrites[:0]
-	// b.buffer.Reset()
-}
-
-func (b *Batch) uniq() []batchIndex {
-	if b.opts.batchOptions.allowDuplicates {
-		b.pendingWrites = append(make([]batchIndex, 0, len(b.index)), b.index...)
-		return b.pendingWrites
-	}
-	type indices struct {
-		idx    int
-		newidx int
-	}
-	uniqueSet := make(map[uint32]indices, len(b.index))
-	i := 0
-	for idx := len(b.index) - 1; idx >= 0; idx-- {
-		if _, ok := uniqueSet[b.index[idx].key]; !ok {
-			uniqueSet[b.index[idx].key] = indices{idx, i}
-			i++
-		}
-	}
-
-	b.pendingWrites = make([]batchIndex, len(uniqueSet))
-	for _, i := range uniqueSet {
-		b.pendingWrites[len(uniqueSet)-i.newidx-1] = b.index[i.idx]
-	}
-	return b.pendingWrites
 }
 
 func (b *Batch) append(new *Batch) {
-	if new.Len() == 0 {
+	if new.len() == 0 {
 		return
 	}
 	off := b.size
@@ -321,9 +285,9 @@ func (b *Batch) timeID() int64 {
 	return b.ID
 }
 
-// Len returns number of records in the batch.
-func (b *Batch) Len() int {
-	return len(b.pendingWrites)
+// len returns number of records in the batch.
+func (b *Batch) len() int {
+	return len(b.index)
 }
 
 // setManaged sets batch managed.

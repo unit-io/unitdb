@@ -244,6 +244,8 @@ func (db *syncHandle) sync(recovery bool) error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *syncHandle) Sync() error {
+	// // CPU profiling by default
+	// defer profile.Start().Stop()
 	var err1 error
 	baseSeq := db.internal.lastSyncSeq
 	err := db.timeWindow.foreachTimeWindow(func(timeID int64, wEntries windowEntries) (bool, error) {

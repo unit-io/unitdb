@@ -183,13 +183,11 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				i := 1
 				for {
 					db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-						b.SetOptions(unitdb.WithBatchAllowDuplicates())
 						topic := append(topics[i-1], []byte("?ttl=1h")...)
 						for k := 0; k < batchSize; k++ {
-							b.Put(topic, vals[k])
-						}
-						if err := b.Write(); err != nil {
-							return err
+							if err := b.Put(topic, vals[k]); err != nil {
+								return err
+							}
 						}
 						return nil
 					})
@@ -261,12 +259,13 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		i := 1
 		for {
 			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-				b.SetOptions(unitdb.WithBatchAllowDuplicates())
 				topic := append(topics[i-1], []byte("?ttl=1h")...)
 				for k := 0; k < batchSize; k++ {
-					b.Put(topic, vals[k])
+					if err := b.Put(topic, vals[k]); err != nil {
+						return err
+					}
 				}
-				return b.Write()
+				return nil
 			})
 			if i >= concurrent {
 				return nil
@@ -364,14 +363,15 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 		i := 1
 		for {
 			db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
-				b.SetOptions(unitdb.WithBatchAllowDuplicates())
 				for contract := range keys {
 					for _, k := range keys[contract] {
 						topic := append(k, []byte("?ttl=1h")...)
-						b.PutEntry(unitdb.NewEntry(topic, vals[i]).WithContract(contract))
+						if err := b.PutEntry(unitdb.NewEntry(topic, vals[i]).WithContract(contract)); err != nil {
+							return err
+						}
 					}
 				}
-				return b.Write()
+				return nil
 			})
 			if i >= concurrent {
 				return nil

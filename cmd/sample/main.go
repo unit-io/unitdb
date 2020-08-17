@@ -34,8 +34,7 @@ func main() {
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers"))
-		err := b.Write()
-		return err
+		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -57,8 +56,7 @@ func main() {
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u3"), []byte("msg for team alpha channel1 receiver3")))
-		err := b.Write()
-		return err
+		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -87,7 +85,7 @@ func main() {
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #2"))
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #3"))
-		return b.Write()
+		return nil
 	})
 
 	// Writing to multiple topics in a batch
@@ -97,7 +95,7 @@ func main() {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams and all channels")))
 		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
-		return b.Write()
+		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -131,7 +129,7 @@ func main() {
 		b.SetOptions(unitdb.WithBatchEncryption())
 		topic := []byte("teams.alpha.ch1.u1?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1 receiver1"))
-		return b.Write()
+		return nil
 	})
 
 	if err != nil {

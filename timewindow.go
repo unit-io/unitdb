@@ -22,6 +22,7 @@ import (
 	"io"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/unitdb/hash"
@@ -119,6 +120,7 @@ type (
 	}
 	timeWindowBucket struct {
 		sync.RWMutex
+		timeID int64
 		file
 		*windowBlocks
 		*expiryWindowBucket
@@ -221,14 +223,13 @@ func (w *timeWindow) reset() error {
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
 func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntries) (bool, error)) (err error) {
 	var keys []key
-	curTimeID := int64(time.Unix(tw.timeID(), 0).Add(-tw.opts.timeSlotDuration).Unix())
 	wEntries := make(map[int64]windowEntries)
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
 		wb.mu.RLock()
 		for key := range wb.entries {
 			// skip window entries for current timeID
-			if key.timeID >= curTimeID {
+			if key.timeID > tw.TimeID() {
 				continue
 			}
 			if _, ok := wEntries[key.timeID]; ok {
@@ -258,7 +259,7 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 		wb.mu.Lock()
 		for key := range wb.entries {
 			// skip window entries for current timeID
-			if key.timeID >= curTimeID {
+			if key.timeID > tw.TimeID() {
 				continue
 			}
 			delete(wb.entries, key)
@@ -401,8 +402,12 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-func (tw *timeWindowBucket) timeID() int64 {
-	return int64(time.Now().Truncate(tw.opts.timeSlotDuration).Add(tw.opts.timeSlotDuration).Unix())
+func (tw *timeWindowBucket) TimeID() int64 {
+	return atomic.LoadInt64(&tw.timeID)
+}
+
+func (tw *timeWindowBucket) setTimeID(timeID int64) {
+	atomic.StoreInt64(&tw.timeID, timeID)
 }
 
 func (tw *timeWindowBucket) windowIndex() int32 {

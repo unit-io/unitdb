@@ -101,9 +101,9 @@ func (w *Writer) writeLog(id int64) error {
 	w.wal.wg.Add(1)
 	defer func() {
 		w.wal.bufPool.Put(w.buffer)
-		<-w.writeCompleted
-		defer w.wal.mu.Unlock()
 		w.wal.wg.Done()
+		w.wal.mu.Unlock()
+		<-w.writeCompleted
 	}()
 
 	if w.logSize == 0 {

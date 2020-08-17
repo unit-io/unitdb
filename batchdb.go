@@ -22,21 +22,14 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/message"
 	"golang.org/x/sync/errgroup"
 )
 
-type (
-	tinyBatchInfo struct {
-		entryCount uint32
-	}
-
-	tinyBatch struct {
-		ID int64
-		tinyBatchInfo
-		buffer *bpool.Buffer
-	}
-)
+type tinyBatch struct {
+	ID         int64
+	entryCount uint32
+	buffer     *bpool.Buffer
+}
 
 func (b *tinyBatch) reset(timeID int64) {
 	b.ID = timeID
@@ -48,7 +41,7 @@ func (b *tinyBatch) timeID() int64 {
 	return atomic.LoadInt64(&b.ID)
 }
 
-func (b *tinyBatch) count() uint32 {
+func (b *tinyBatch) len() uint32 {
 	return atomic.LoadUint32(&b.entryCount)
 }
 
@@ -59,8 +52,8 @@ func (b *tinyBatch) incount() uint32 {
 // batchdb manages the batch execution
 type batchdb struct {
 	// batchDB.
-	batchQueue  chan *Batch
-	commitQueue chan *Batch
+	commitTimeID int64 // Time ID committed to WAL
+	batchQueue   chan *Batch
 
 	bufPool *bpool.BufferPool
 	//tiny Batch
@@ -72,7 +65,7 @@ func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
-	b := &Batch{ID: db.timeWindow.timeID(), opts: opts, db: db, topics: make(map[uint64]*message.Topic)}
+	b := &Batch{ID: db.timeID(), opts: opts, db: db}
 	b.buffer = db.bufPool.Get()
 
 	return b
@@ -81,10 +74,9 @@ func (db *DB) batch() *Batch {
 func (db *DB) initbatchdb(opts *options) error {
 	bdb := &batchdb{
 		// batchDB
-		bufPool:     bpool.NewBufferPool(opts.bufferSize, nil),
-		tinyBatch:   &tinyBatch{ID: db.timeWindow.timeID()},
-		batchQueue:  make(chan *Batch, 100),
-		commitQueue: make(chan *Batch, 1),
+		bufPool:    bpool.NewBufferPool(opts.bufferSize, nil),
+		tinyBatch:  &tinyBatch{ID: db.timeID()},
+		batchQueue: make(chan *Batch, nPoolSize),
 	}
 
 	db.batchdb = bdb
@@ -196,12 +188,8 @@ func (g *BatchGroup) writeBatchGroup() error {
 	b.commitComplete = make(chan struct{})
 	for _, batch := range batches {
 		logger.Debug().Str("Context", "batchdb.writeBatchGroup").Int8("oder", batch.order).Int("length", len(g.batchQueue))
-		batch.index = append(batch.index, batch.pendingWrites...)
+		// batch.index = append(batch.index, batch.pendingWrites...)
 		b.append(batch)
-	}
-	err := b.Write()
-	if err != nil {
-		return err
 	}
 	return b.Commit()
 }

@@ -170,9 +170,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.segments, l)
 			return nil
 		}
-		if l.status == logStatusWritten {
-			wal.logs = append(wal.logs, l)
-		}
+		wal.logs = append(wal.logs, l)
 		offset = l.offset + int64(l.size)
 	}
 }
@@ -212,11 +210,11 @@ func (wal *WAL) logMerge(log logInfo) error {
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
 func (wal *WAL) SignalLogApplied(id int64) error {
-	wal.wg.Add(1)
 	wal.mu.Lock()
+	wal.wg.Add(1)
 	defer func() {
-		wal.mu.Unlock()
 		wal.wg.Done()
+		wal.mu.Unlock()
 	}()
 
 	var err1 error

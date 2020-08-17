@@ -105,11 +105,11 @@ func (db *DB) drain(interval time.Duration) {
 }
 
 func (db *DB) shrinkDataTable() error {
-	db.closeW.Add(1)
 	db.drainLockC <- struct{}{}
+	db.closeW.Add(1)
 	defer func() {
-		<-db.drainLockC
 		db.closeW.Done()
+		<-db.drainLockC
 	}()
 
 	for i := 0; i < nShards; i++ {

@@ -35,6 +35,7 @@ const (
 	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
 	// MaxBlocks       = math.MaxUint32
 	nShards       = 16
+	nPoolSize     = 27
 	indexPostfix  = ".index"
 	dataPostfix   = ".data"
 	windowPostfix = ".win"
@@ -361,31 +362,30 @@ func (db *DB) setEntry(e *Entry) error {
 // tinyCommit commits tiny batch to write ahead log
 func (db *DB) tinyCommit() error {
 	// commit writes batches into write ahead log. The write happen synchronously.
-	db.closeW.Add(1)
 	db.writeLockC <- struct{}{}
+	db.closeW.Add(1)
 	defer func() {
 		db.tinyBatch.buffer.Reset()
-		db.tinyBatch.reset(db.timeWindow.timeID())
-		<-db.writeLockC
+		db.tinyBatch.reset(db.timeID())
 		db.closeW.Done()
+		<-db.writeLockC
 	}()
 
-	if db.tinyBatch.count() == 0 {
+	if db.tinyBatch.len() == 0 {
 		return nil
 	}
 
 	offset := uint32(0)
-	buf := db.tinyBatch.buffer.Bytes()
+	data := db.tinyBatch.buffer.Bytes()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
 	}
 
-	for i := uint32(0); i < db.tinyBatch.count(); i++ {
-		dataLen := binary.LittleEndian.Uint32(buf[offset : offset+4])
-		data := buf[offset+4 : offset+dataLen]
-		if err := <-logWriter.Append(data); err != nil {
+	for i := uint32(0); i < db.tinyBatch.len(); i++ {
+		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
+		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			return err
 		}
 		offset += dataLen
@@ -394,7 +394,8 @@ func (db *DB) tinyCommit() error {
 	if err := <-logWriter.SignalInitWrite(db.tinyBatch.timeID()); err != nil {
 		return err
 	}
-	db.meter.Puts.Inc(int64(db.tinyBatch.count()))
+	db.timeWindow.setTimeID(db.tinyBatch.timeID())
+	db.meter.Puts.Inc(int64(db.tinyBatch.len()))
 	return nil
 }
 
@@ -428,7 +429,13 @@ func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
 		offset += dataLen
 	}
 
-	return <-logWriter.SignalInitWrite(timeID)
+	if err := <-logWriter.SignalInitWrite(timeID); err != nil {
+		return err
+	}
+
+	db.timeWindow.setTimeID(timeID)
+	db.meter.Puts.Inc(int64(l))
+	return nil
 }
 
 // delete deletes the given key from the DB.
@@ -488,6 +495,10 @@ func (db *DB) incount(count uint64) uint64 {
 
 func (db *DB) decount(count uint64) uint64 {
 	return atomic.AddUint64(&db.count, -count)
+}
+
+func (db *DB) timeID() int64 {
+	return time.Now().UTC().Truncate(timeSlotDur).Add(timeSlotDur).Round(time.Millisecond).Unix()
 }
 
 // Set closed flag; return true if not already closed.

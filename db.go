@@ -40,7 +40,6 @@ import (
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
 	// Need 64-bit alignment.
-	mu sync.RWMutex
 	mutex
 	mac         *crypto.MAC
 	writeLockC  chan struct{}
@@ -548,8 +547,8 @@ func (db *DB) Sync() error {
 	db.syncLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {
-		<-db.syncLockC
 		db.closeW.Done()
+		<-db.syncLockC
 	}()
 
 	if ok := db.syncHandle.startSync(); !ok {
@@ -563,8 +562,6 @@ func (db *DB) Sync() error {
 
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
 	var err error
 	is, err := db.index.Stat()
 	if err != nil {

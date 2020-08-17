@@ -128,11 +128,14 @@ func TestLogApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r.wal.releaseLogs()
-
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
+
+	// wal, needRecovery, err = newTestWal("test.db", false)
+	// if needRecovery || err != nil {
+	// 	t.Fatal(err)
+	// }
 }
 
 func TestSimple(t *testing.T) {
