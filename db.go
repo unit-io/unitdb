@@ -113,7 +113,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
 	timeOptions := &timeOptions{
-		timeSlotDuration:    timeSlotDur,
 		expDurationType:     time.Minute,
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.backgroundKeyExpiry,
@@ -244,7 +243,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// db.syncHandle = syncHandle{internal: internal{DB: db, entries: make(map[uint64]struct{}), syncEntries: make(map[uint64]struct{})}}
-	db.syncHandle = syncHandle{internal: internal{DB: db}}
+	db.syncHandle = syncHandle{internal: internal{timeIDs: make(map[int64]uint32), DB: db}}
 	db.startSyncer(options.syncDurationType * time.Duration(options.maxSyncDurations))
 
 	if db.opts.backgroundKeyExpiry {

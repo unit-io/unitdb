@@ -22,7 +22,6 @@ import (
 	"io"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/unitdb/hash"
@@ -113,19 +112,21 @@ func (wh *windowHandle) read() error {
 
 type (
 	timeOptions struct {
-		timeSlotDuration    time.Duration
 		expDurationType     time.Duration
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
+	timeInfo struct {
+		windowIdx int32
+	}
 	timeWindowBucket struct {
 		sync.RWMutex
-		timeID int64
 		file
+		timeInfo
+		timeIDs map[int64]struct{} // map of timeID pending commit to WAL
 		*windowBlocks
 		*expiryWindowBucket
-		windowIdx int32
-		opts      *timeOptions
+		opts *timeOptions
 	}
 )
 
@@ -133,9 +134,6 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 	opts := timeOptions{}
 	if src != nil {
 		opts = *src
-	}
-	if opts.timeSlotDuration == 0 {
-		opts.timeSlotDuration = 100 * time.Millisecond
 	}
 	if opts.expDurationType == 0 {
 		opts.expDurationType = time.Minute
@@ -188,7 +186,7 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{file: f, windowIdx: -1}
+	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]struct{})}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -209,6 +207,7 @@ func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) erro
 		wb.entries[key] = append(wb.entries[key], e)
 	} else {
 		wb.entries[key] = windowEntries{e}
+		// wb.pendingSync[tw.TimeStamp()] = append(wb.pendingSync[tw.TimeStamp()], key)
 	}
 	return nil
 }
@@ -223,46 +222,37 @@ func (w *timeWindow) reset() error {
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
 func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntries) (bool, error)) (err error) {
 	var keys []key
-	wEntries := make(map[int64]windowEntries)
+	// reset timeStamp
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
-		wb.mu.RLock()
+		wb.mu.Lock()
 		for key := range wb.entries {
-			// skip window entries for current timeID
-			if key.timeID > tw.TimeID() {
+			// skip current timeID those are not committed to WAL
+			if ok := tw.timeID(key.timeID); ok {
 				continue
 			}
-			if _, ok := wEntries[key.timeID]; ok {
-				wEntries[key.timeID] = append(wEntries[key.timeID], wb.entries[key]...)
-			} else {
-				keys = append(keys, key)
-				wEntries[key.timeID] = wb.entries[key]
-			}
+			keys = append(keys, key)
 		}
-		wb.mu.RUnlock()
+		wb.mu.Unlock()
 	}
 
 	sort.Slice(keys[:], func(i, j int) bool {
 		return keys[i].timeID < keys[j].timeID
 	})
 
-	for _, key := range keys {
-		stop, err1 := f(key.timeID, wEntries[key.timeID])
-		if stop || err != nil {
-			err = err1
-			continue
-		}
-	}
 	// delete window entries except for the current timeID
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
 		wb.mu.Lock()
-		for key := range wb.entries {
-			// skip window entries for current timeID
-			if key.timeID > tw.TimeID() {
-				continue
+		for _, key := range keys {
+			if _, ok := wb.entries[key]; ok {
+				stop, err1 := f(key.timeID, wb.entries[key])
+				if stop || err != nil {
+					err = err1
+					continue
+				}
+				delete(wb.entries, key)
 			}
-			delete(wb.entries, key)
 		}
 		wb.mu.Unlock()
 	}
@@ -402,12 +392,25 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-func (tw *timeWindowBucket) TimeID() int64 {
-	return atomic.LoadInt64(&tw.timeID)
+func (tw *timeWindowBucket) timeID(timeID int64) bool {
+	tw.RLock()
+	defer tw.RUnlock()
+	_, ok := tw.timeIDs[timeID]
+	return ok
 }
 
-func (tw *timeWindowBucket) setTimeID(timeID int64) {
-	atomic.StoreInt64(&tw.timeID, timeID)
+func (tw *timeWindowBucket) newTimeID() int64 {
+	timeID := time.Now().UTC().Truncate(timeSlotDur).Unix()
+	tw.Lock()
+	defer tw.Unlock()
+	tw.timeIDs[timeID] = struct{}{}
+	return timeID
+}
+
+func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
+	tw.Lock()
+	defer tw.Unlock()
+	delete(tw.timeIDs, timeID)
 }
 
 func (tw *timeWindowBucket) windowIndex() int32 {

@@ -56,6 +56,8 @@ type (
 	WALInfo struct {
 		logCountWritten int64
 		logCountApplied int64
+		entriesWritten  int64
+		entriesApplied  int64
 	}
 	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
 	WAL struct {
@@ -188,6 +190,7 @@ func (wal *WAL) recoverWal() error {
 func (wal *WAL) put(id int64, log logInfo) error {
 	log.version = version
 	wal.logCountWritten++
+	wal.entriesWritten += int64(log.entryCount)
 	if _, ok := wal.pendingLogs[id]; ok {
 		wal.pendingLogs[id] = append(wal.pendingLogs[id], log)
 	} else {
@@ -220,6 +223,10 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 	var err1 error
 	logs := wal.pendingLogs[id]
 	for i := range logs {
+		if logs[i].status == logStatusWritten {
+			wal.logCountApplied++
+			wal.entriesApplied += int64(logs[i].entryCount)
+		}
 		logs[i].status = logStatusApplied
 		if err := wal.logMerge(logs[i]); err != nil {
 			err1 = err
@@ -274,7 +281,6 @@ func (wal *WAL) Close() error {
 
 	// Make sure sync thread isn't running
 	wal.wg.Wait()
-
 	return wal.logFile.Close()
 }
 
@@ -311,6 +317,9 @@ func (wal *WAL) releaseLogs() error {
 
 	for id, logs := range wal.pendingLogs {
 		l := len(logs)
+		for i := 0; i < l; i++ {
+			wal.logMerge(logs[i])
+		}
 		for i := 0; i < l; i++ {
 			if logs[i].status == logStatusReleased {
 				// Remove log from wal

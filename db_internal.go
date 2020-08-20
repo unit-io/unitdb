@@ -394,8 +394,9 @@ func (db *DB) tinyCommit() error {
 	if err := <-logWriter.SignalInitWrite(db.tinyBatch.timeID()); err != nil {
 		return err
 	}
-	db.timeWindow.setTimeID(db.tinyBatch.timeID())
+	db.releaseTimeID(db.tinyBatch.timeID())
 	db.meter.Puts.Inc(int64(db.tinyBatch.len()))
+	db.syncHandle.timeIDs[db.tinyBatch.timeID()] = db.tinyBatch.len()
 	return nil
 }
 
@@ -433,7 +434,7 @@ func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
 		return err
 	}
 
-	db.timeWindow.setTimeID(timeID)
+	db.releaseTimeID(timeID)
 	db.meter.Puts.Inc(int64(l))
 	return nil
 }
@@ -498,7 +499,11 @@ func (db *DB) decount(count uint64) uint64 {
 }
 
 func (db *DB) timeID() int64 {
-	return time.Now().UTC().Truncate(timeSlotDur).Add(timeSlotDur).Round(time.Millisecond).Unix()
+	return db.timeWindow.newTimeID()
+}
+
+func (db *DB) releaseTimeID(timeID int64) {
+	db.timeWindow.releaseTimeID(timeID)
 }
 
 // Set closed flag; return true if not already closed.

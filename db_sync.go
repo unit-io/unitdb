@@ -30,14 +30,15 @@ type (
 	internal struct {
 		*DB
 
-		startBlockIdx int32
-		lastSyncSeq   uint64
-		upperSeq      uint64
-		syncStatusOk  bool
-		syncComplete  bool
-		inBytes       int64
-		count         int64
-		errCount      uint64
+		timeIDs        map[int64]uint32
+		startBlockIdx  int32
+		lastSyncSeq    uint64
+		upperSeq       uint64
+		syncStatusOk   bool
+		syncComplete   bool
+		inBytes        int64
+		count          int64
+		entriesInvalid uint64
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
@@ -121,12 +122,12 @@ func (db *syncHandle) abort() error {
 		return nil
 	}
 	// rollback blocks
-	// fmt.Println("syncHandle.abort: abort blocks sync")
-	db.data.truncate(db.dataOff)
-	db.index.truncate(db.blockOff)
-	db.timeWindow.truncate(db.winOff)
-	atomic.StoreInt32(&db.blockIdx, db.startBlockIdx)
-	db.decount(uint64(db.count))
+	fmt.Println("syncHandle.abort: count ", db.internal.count)
+	db.data.truncate(db.internal.dataOff)
+	db.index.truncate(db.internal.blockOff)
+	db.timeWindow.truncate(db.internal.winOff)
+	atomic.StoreInt32(&db.blockIdx, db.internal.startBlockIdx)
+	db.decount(uint64(db.internal.count))
 
 	if err := db.dataWriter.rollback(); err != nil {
 		return err
@@ -252,7 +253,7 @@ func (db *syncHandle) Sync() error {
 		winEntries := make(map[uint64]windowEntries)
 		for _, we := range wEntries {
 			if we.Seq() == 0 {
-				db.errCount++
+				db.entriesInvalid++
 				continue
 			}
 			if we.Seq() < baseSeq {
@@ -265,13 +266,16 @@ func (db *syncHandle) Sync() error {
 			mseq := db.cacheID ^ uint64(we.Seq())
 			memdata, err := db.mem.Get(uint64(blockID), mseq)
 			if err != nil || memdata == nil {
+				db.entriesInvalid++
 				logger.Error().Err(err).Str("context", "mem.Get")
 				err1 = err
-				break
+				continue
 			}
 			var e entry
 			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				db.entriesInvalid++
 				err1 = err
+				continue
 			}
 			s := slot{
 				seq:       e.seq,
@@ -281,15 +285,13 @@ func (db *syncHandle) Sync() error {
 				cacheBlock: memdata[entrySize:],
 			}
 			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
-				err1 = err
-				break
+				return true, err
 			}
 			if exists, err := db.blockWriter.append(s, db.startBlockIdx); exists || err != nil {
 				if err != nil {
-					err1 = err
-					break
+					return true, err
 				}
-				db.errCount++
+				db.entriesInvalid++
 				continue
 			}
 
@@ -319,21 +321,23 @@ func (db *syncHandle) Sync() error {
 		blockID := startBlockIndex(baseSeq)
 		db.mem.Free(uint64(blockID), db.cacheID^baseSeq)
 		if err1 != nil {
-			return false, err1
+			return true, err1
 		}
 
 		if err := db.sync(false); err != nil {
-			return false, err
+			return true, err
 		}
 		if db.syncComplete {
 			if err := db.wal.SignalLogApplied(timeID); err != nil {
 				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
-				return false, err
+				return true, err
 			}
+			delete(db.internal.timeIDs, timeID)
 		}
 		return false, nil
 	})
 	if err != nil || err1 != nil {
+		fmt.Println("db.Sync: error ", err, err1)
 		db.syncComplete = false
 		db.abort()
 		// run db recovery if an error occur with the db sync

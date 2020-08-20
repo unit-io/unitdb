@@ -129,6 +129,7 @@ func (db *syncHandle) startRecovery() error {
 		return false, nil
 	})
 	if err != nil {
+		fmt.Println("db.Sync: error ", err)
 		db.syncComplete = false
 		db.abort()
 		return err

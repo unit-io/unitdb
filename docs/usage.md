@@ -176,7 +176,7 @@ Use Batch.Put() to write to a single topic in a batch.
 		topic := []byte("teams.alpha.ch1.*?ttl=1h")
 		msg := []byte("msg for team alpha channel1 all receivers")
 		b.Put(topic, msg)
-		return b.Write()
+		return nil
     })
 
 ```
@@ -189,7 +189,7 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
     db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
-		return b.Write()
+		return nil
     })
 
 ```
@@ -243,7 +243,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #1"))
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #2"))
 		b.Put(topic, []byte("msg for team alpha channel1 all receivers #3"))
-		return b.Write()
+		return nil
     })
 
     // Writing to multiple topics in a batch
@@ -253,7 +253,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.*"), []byte("msg for team alpha all channels")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams..."), []byte("msg for all teams all channels")))
 		b.PutEntry(unitdb.NewEntry([]byte("..."), []byte("msg broadcast to all receivers of all teams all channels")))
-		return b.Write()
+		return nil
 	})
 
 ```
@@ -268,8 +268,7 @@ Note, encryption can also be set on entire database using DB.Open() and set encr
 		b.SetOptions(unitdb.WithBatchEncryption())
 		topic := []byte("teams.alpha.ch1?ttl=1h")
 		b.Put(topic, []byte("msg for team alpha channel1"))
-		err := b.Write()
-		return err
+		return nil
 	})
 
 ```
@@ -282,19 +281,19 @@ Use BatchGroup.Add() function to group batches and run concurrently without caus
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #1")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #1")))
-		return b.Write()
+		return nil
 	})
 
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #2")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #2")))
-		return b.Write()
+		return nil
 	})
 
 	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #3")))
 		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #3")))
-		return b.Write()
+		return nil
 	})
 
 	g.Run()

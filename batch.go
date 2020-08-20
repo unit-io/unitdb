@@ -184,8 +184,8 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 	return nil
 }
 
-// Write starts writing entries into DB. It returns an error if batch write fails.
-func (b *Batch) Write() error {
+// commit starts writing entries into DB. It returns an error if batch write fails.
+func (b *Batch) commit() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
 	defer func() {
@@ -239,6 +239,9 @@ func (b *Batch) Commit() error {
 	defer func() {
 		close(b.commitComplete)
 	}()
+	if err := b.commit(); err != nil {
+		return err
+	}
 	if err := b.db.commit(b.timeID(), b.len(), b.buffer); err != nil {
 		logger.Error().Err(err).Str("context", "commit").Msgf("Error committing batch")
 	}
