@@ -30,7 +30,6 @@ type (
 	internal struct {
 		*DB
 
-		timeIDs        map[int64]uint32
 		startBlockIdx  int32
 		lastSyncSeq    uint64
 		upperSeq       uint64
@@ -332,7 +331,6 @@ func (db *syncHandle) Sync() error {
 				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 				return true, err
 			}
-			delete(db.internal.timeIDs, timeID)
 		}
 		return false, nil
 	})

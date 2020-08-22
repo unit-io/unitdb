@@ -197,7 +197,7 @@ func (b *Batch) commit() error {
 		return nil
 	}
 
-	batchTicker := time.NewTicker(timeSlotDur)
+	batchTicker := time.NewTicker(slotDur)
 	topics := make(map[uint64]*message.Topic)
 
 	return b.writeInternal(func(i int, e entry, data []byte) error {

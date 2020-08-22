@@ -113,6 +113,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
 	timeOptions := &timeOptions{
+		slotDuration:        slotDur,
 		expDurationType:     time.Minute,
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.backgroundKeyExpiry,
@@ -242,8 +243,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	// db.syncHandle = syncHandle{internal: internal{DB: db, entries: make(map[uint64]struct{}), syncEntries: make(map[uint64]struct{})}}
-	db.syncHandle = syncHandle{internal: internal{timeIDs: make(map[int64]uint32), DB: db}}
+	db.syncHandle = syncHandle{internal: internal{DB: db}}
 	db.startSyncer(options.syncDurationType * time.Duration(options.maxSyncDurations))
 
 	if db.opts.backgroundKeyExpiry {
@@ -470,7 +470,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 
-	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+	if err := db.timeWindow.add(db.getOrSetTimeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
 		return err
 	}
 

@@ -31,15 +31,15 @@ type tinyBatch struct {
 	buffer     *bpool.Buffer
 }
 
-func (b *tinyBatch) reset(timeID int64) {
-	b.ID = timeID
+func (b *tinyBatch) reset() {
 	b.entryCount = 0
+	atomic.StoreInt64(&b.ID, 0)
 	atomic.StoreUint32(&b.entryCount, 0)
 }
 
-func (b *tinyBatch) timeID() int64 {
-	return atomic.LoadInt64(&b.ID)
-}
+// func (b *tinyBatch) timeID() int64 {
+// 	return atomic.LoadInt64(&b.ID)
+// }
 
 func (b *tinyBatch) len() uint32 {
 	return atomic.LoadUint32(&b.entryCount)

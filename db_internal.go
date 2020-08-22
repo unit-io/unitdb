@@ -51,8 +51,8 @@ const (
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
 
-	// timeSlotDur to store timeWindow entries into slots for better sync performance
-	timeSlotDur = 100 * time.Millisecond
+	// slotDur to store timeWindow entries into slots for better sync performance
+	slotDur = 100 * time.Millisecond
 
 	// maxTopicLength is the maximum size of a topic in bytes.
 	maxTopicLength = 1 << 16
@@ -366,7 +366,7 @@ func (db *DB) tinyCommit() error {
 	db.closeW.Add(1)
 	defer func() {
 		db.tinyBatch.buffer.Reset()
-		db.tinyBatch.reset(db.timeID())
+		db.tinyBatch.reset()
 		db.closeW.Done()
 		<-db.writeLockC
 	}()
@@ -391,12 +391,11 @@ func (db *DB) tinyCommit() error {
 		offset += dataLen
 	}
 
-	if err := <-logWriter.SignalInitWrite(db.tinyBatch.timeID()); err != nil {
+	if err := <-logWriter.SignalInitWrite(db.getOrSetTimeID()); err != nil {
 		return err
 	}
-	db.releaseTimeID(db.tinyBatch.timeID())
+	db.releaseTimeID(db.getOrSetTimeID())
 	db.meter.Puts.Inc(int64(db.tinyBatch.len()))
-	db.syncHandle.timeIDs[db.tinyBatch.timeID()] = db.tinyBatch.len()
 	return nil
 }
 
@@ -500,6 +499,15 @@ func (db *DB) decount(count uint64) uint64 {
 
 func (db *DB) timeID() int64 {
 	return db.timeWindow.newTimeID()
+}
+
+func (db *DB) getOrSetTimeID() int64 {
+	timeID := atomic.LoadInt64(&db.tinyBatch.ID)
+	if timeID == 0 {
+		timeID = db.timeID()
+		atomic.StoreInt64(&db.tinyBatch.ID, timeID)
+	}
+	return timeID
 }
 
 func (db *DB) releaseTimeID(timeID int64) {

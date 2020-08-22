@@ -112,18 +112,26 @@ func (wh *windowHandle) read() error {
 
 type (
 	timeOptions struct {
+		slotDuration        time.Duration
 		expDurationType     time.Duration
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
+	timeID struct {
+		refs      uint
+		lastUnref int64
+	}
 	timeInfo struct {
 		windowIdx int32
+		incount   int64
+		wincount  int64
 	}
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
 		timeInfo
-		timeIDs map[int64]struct{} // map of timeID pending commit to WAL
+		timeIDs         map[int64]timeID // map of timeID pending commit to WAL
+		releasedTimeIDs map[int64]timeID // map of timeID applied to WAL
 		*windowBlocks
 		*expiryWindowBucket
 		opts *timeOptions
@@ -135,6 +143,9 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 	if src != nil {
 		opts = *src
 	}
+	if opts.slotDuration == 0 {
+		opts.slotDuration = 100 * time.Millisecond
+	}
 	if opts.expDurationType == 0 {
 		opts.expDurationType = time.Minute
 	}
@@ -144,14 +155,20 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 	return &opts
 }
 
+func (id timeID) isExpired(slotDurations int64) bool {
+	if id.lastUnref > 0 && id.lastUnref+slotDurations < time.Now().UTC().UnixNano() {
+		return true
+	}
+	return false
+}
+
 type windowEntries []winEntry
 type key struct {
 	timeID    int64
 	topicHash uint64
 }
 type timeWindow struct {
-	mu sync.RWMutex
-
+	mu      sync.RWMutex
 	entries map[key]windowEntries
 }
 
@@ -186,7 +203,7 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]struct{})}
+	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]timeID), releasedTimeIDs: make(map[int64]timeID)}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -207,8 +224,8 @@ func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) erro
 		wb.entries[key] = append(wb.entries[key], e)
 	} else {
 		wb.entries[key] = windowEntries{e}
-		// wb.pendingSync[tw.TimeStamp()] = append(wb.pendingSync[tw.TimeStamp()], key)
 	}
+	// tw.incount++
 	return nil
 }
 
@@ -222,40 +239,48 @@ func (w *timeWindow) reset() error {
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
 func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntries) (bool, error)) (err error) {
 	var keys []key
-	// reset timeStamp
+	winEntries := make(map[key]windowEntries)
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
-		wb.mu.Lock()
+		wb.mu.RLock()
 		for key := range wb.entries {
+			// tw.wincount += int64(len(wb.entries[key]))
 			// skip current timeID those are not committed to WAL
 			if ok := tw.timeID(key.timeID); ok {
 				continue
 			}
 			keys = append(keys, key)
+			if _, ok := winEntries[key]; ok {
+				winEntries[key] = append(winEntries[key], wb.entries[key]...)
+			} else {
+				winEntries[key] = wb.entries[key]
+			}
+		}
+		wb.mu.RUnlock()
+		wb.mu.Lock()
+		for _, key := range keys {
+			delete(wb.entries, key)
 		}
 		wb.mu.Unlock()
 	}
+
+	// fmt.Println("timeWindow.Sync: timeIDs, incount, wincount", len(tw.timeIDs), tw.incount, tw.wincount)
 
 	sort.Slice(keys[:], func(i, j int) bool {
 		return keys[i].timeID < keys[j].timeID
 	})
 
-	// delete window entries except for the current timeID
-	for i := 0; i < nShards; i++ {
-		wb := tw.windowBlocks.window[i]
-		wb.mu.Lock()
-		for _, key := range keys {
-			if _, ok := wb.entries[key]; ok {
-				stop, err1 := f(key.timeID, wb.entries[key])
-				if stop || err != nil {
-					err = err1
-					continue
-				}
-				delete(wb.entries, key)
+	for _, key := range keys {
+		if _, ok := winEntries[key]; ok {
+			stop, err1 := f(key.timeID, winEntries[key])
+			if stop || err != nil {
+				err = err1
+				continue
 			}
+
 		}
-		wb.mu.Unlock()
 	}
+
 	return err
 }
 
@@ -392,25 +417,47 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-func (tw *timeWindowBucket) timeID(timeID int64) bool {
+func (tw *timeWindowBucket) timeID(timeMark int64) bool {
 	tw.RLock()
 	defer tw.RUnlock()
-	_, ok := tw.timeIDs[timeID]
+	if timeID, ok := tw.releasedTimeIDs[timeMark]; ok {
+		if timeID.isExpired(tw.opts.slotDuration.Nanoseconds()) {
+			delete(tw.releasedTimeIDs, timeMark)
+			return false
+		}
+		return true
+	}
+	_, ok := tw.timeIDs[timeMark]
 	return ok
 }
 
 func (tw *timeWindowBucket) newTimeID() int64 {
-	timeID := time.Now().UTC().Truncate(timeSlotDur).Unix()
 	tw.Lock()
 	defer tw.Unlock()
-	tw.timeIDs[timeID] = struct{}{}
-	return timeID
+	timeMark := time.Now().UTC().Truncate(tw.opts.slotDuration).Unix()
+	if timeID, ok := tw.timeIDs[timeMark]; ok {
+		timeID.refs++
+		return timeMark
+	}
+	tw.timeIDs[timeMark] = timeID{refs: 1}
+	return timeMark
 }
 
-func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
+func (tw *timeWindowBucket) releaseTimeID(timeMark int64) {
 	tw.Lock()
 	defer tw.Unlock()
-	delete(tw.timeIDs, timeID)
+	timeID, ok := tw.timeIDs[timeMark]
+	if !ok {
+		return
+	}
+	timeID.refs--
+	if timeID.refs > 0 {
+		tw.timeIDs[timeMark] = timeID
+	} else {
+		delete(tw.timeIDs, timeMark)
+		timeID.lastUnref = time.Now().UTC().UnixNano()
+		tw.releasedTimeIDs[timeMark] = timeID
+	}
 }
 
 func (tw *timeWindowBucket) windowIndex() int32 {
