@@ -25,7 +25,7 @@ import (
 	"github.com/unit-io/unitdb/metrics"
 )
 
-// Meter meter provides various db statistics
+// Meter meter provides various db statistics.
 type Meter struct {
 	Metrics    metrics.Metrics
 	TimeSeries metrics.TimeSeries
@@ -41,7 +41,7 @@ type Meter struct {
 	OutBytes   metrics.Counter
 }
 
-// NewMeter provide meter to capture statistics
+// NewMeter provide meter to capture statistics.
 func NewMeter() *Meter {
 	Metrics := metrics.NewMetrics()
 	c := &Meter{
@@ -74,7 +74,7 @@ func NewMeter() *Meter {
 	return c
 }
 
-// UnregisterAll unregister all metrics from meter
+// UnregisterAll unregister all metrics from meter.
 func (m *Meter) UnregisterAll() {
 	m.Metrics.UnregisterAll()
 }
@@ -98,7 +98,7 @@ type Varz struct {
 	InBytes  int64     `json:"in_bytes"`
 	OutBytes int64     `json:"out_bytes"`
 	HMean    float64   `json:"hmean"` // Event duration harmonic mean.
-	P50      float64   `json:"p50"`   // Event duration nth percentiles ..
+	P50      float64   `json:"p50"`   // Event duration nth percentiles.
 	P75      float64   `json:"p75"`
 	P95      float64   `json:"p95"`
 	P99      float64   `json:"p99"`
@@ -114,7 +114,7 @@ type Varz struct {
 }
 
 func uptime(d time.Duration) string {
-	// Just use total seconds for uptime, and display days / years
+	// Just use total seconds for uptime, and display days / years.
 	tsecs := d / time.Second
 	tmins := tsecs / 60
 	thrs := tmins / 60
@@ -138,8 +138,6 @@ func uptime(d time.Duration) string {
 
 // Varz returns a Varz struct containing the unitdb information.
 func (db *DB) Varz() (*Varz, error) {
-	// Snapshot options.
-
 	v := &Varz{Start: db.start}
 	v.Now = time.Now()
 	v.Uptime = uptime(time.Since(db.start))
@@ -174,7 +172,7 @@ func (db *DB) Varz() (*Varz, error) {
 
 // HandleVarz will process HTTP requests for unitdb stats information.
 func (db *DB) HandleVarz(w http.ResponseWriter, r *http.Request) {
-	// As of now, no error is ever returned
+	// As of now, no error is ever returned.
 	v, _ := db.Varz()
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -185,9 +183,9 @@ func (db *DB) HandleVarz(w http.ResponseWriter, r *http.Request) {
 	ResponseHandler(w, r, b)
 }
 
-// ResponseHandler handles responses for monitoring routes
+// ResponseHandler handles responses for monitoring routes.
 func ResponseHandler(w http.ResponseWriter, r *http.Request, data []byte) {
-	// Get callback from request
+	// Get callback from request.
 	callback := r.URL.Query().Get("callback")
 	// If callback is not empty then
 	if callback != "" {

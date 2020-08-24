@@ -5,7 +5,7 @@ const (
 	bloomBits   uint64 = 160000
 )
 
-// Generator bloom filter generator
+// Generator bloom filter generator.
 type Generator struct {
 	filter *Filter
 }
@@ -25,7 +25,7 @@ func (b *Generator) Finish() []byte {
 	return b.filter.Bytes()
 }
 
-// Block filter blocks is a block filter block
+// Block is a filter block
 type Block struct {
 	filter *Filter
 }
@@ -37,7 +37,7 @@ func NewFilterBlock(b []byte) *Block {
 	}
 }
 
-// Test is used to test for key presence in the filter
+// Test is used to test for key presence in the filter.
 func (b *Block) Test(h uint64) bool {
 	return b.filter.Test(h)
 }

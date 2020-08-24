@@ -129,7 +129,7 @@ func (bw *blockWriter) write() error {
 		bw.blocks[bIdx] = b
 	}
 
-	// sort blocks by blockIdx
+	// sort blocks by blockIdx.
 	var blockIdx []int32
 	for bIdx := range bw.blocks {
 		if bw.blocks[bIdx].leased || !bw.blocks[bIdx].dirty {

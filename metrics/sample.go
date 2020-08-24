@@ -31,7 +31,7 @@ type Sample interface {
 	Cumulative() time.Duration // Cumulative time of all sampled events.
 	HMean() time.Duration      // Event duration harmonic mean.
 	Avg() time.Duration        // Event duration average.
-	P50() time.Duration        // Event duration nth percentiles ..
+	P50() time.Duration        // Event duration nth percentiles.
 	P75() time.Duration
 	P95() time.Duration
 	P99() time.Duration
@@ -93,19 +93,19 @@ func (s *sample) HMean() time.Duration { return s.Times.hMean() }
 // Avg returns average of number of events recorded.
 func (s *sample) Avg() time.Duration { return s.Times.avg() }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (s *sample) P50() time.Duration { return s.Times[s.Times.Len()/2] }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (s *sample) P75() time.Duration { return s.Times.p(0.75) }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (s *sample) P95() time.Duration { return s.Times.p(0.95) }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (s *sample) P99() time.Duration { return s.Times.p(0.99) }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (s *sample) P999() time.Duration { return s.Times.p(0.999) }
 
 // StdDev returns standard deviation.
@@ -185,19 +185,19 @@ func (s *SampleSnapshot) HMean() time.Duration { return s.timeSlice.hMean() }
 // Avg returns average of number of events recorded.
 func (s *SampleSnapshot) Avg() time.Duration { return s.timeSlice.avg() }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (s *SampleSnapshot) P50() time.Duration { return s.timeSlice[s.timeSlice.Len()/2] }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (s *SampleSnapshot) P75() time.Duration { return s.timeSlice.p(0.75) }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (s *SampleSnapshot) P95() time.Duration { return s.timeSlice.p(0.95) }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (s *SampleSnapshot) P99() time.Duration { return s.timeSlice.p(0.99) }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (s *SampleSnapshot) P999() time.Duration { return s.timeSlice.p(0.999) }
 
 // StdDev returns standard deviation.

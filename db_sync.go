@@ -43,7 +43,7 @@ type (
 		rawBlock  *bpool.Buffer
 		rawData   *bpool.Buffer
 
-		// offsets for rollback in case of sync error
+		// offsets for rollback in case of sync error.
 		winOff   int64
 		blockOff int64
 		dataOff  int64
@@ -120,8 +120,7 @@ func (db *syncHandle) abort() error {
 	if db.syncComplete {
 		return nil
 	}
-	// rollback blocks
-	fmt.Println("syncHandle.abort: count ", db.internal.count)
+	// rollback blocks.
 	db.data.truncate(db.internal.dataOff)
 	db.index.truncate(db.internal.blockOff)
 	db.timeWindow.truncate(db.internal.winOff)
@@ -182,7 +181,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 }
 
 func (db *DB) sync() error {
-	// writeHeader information to persist correct seq information to disk, also sync freeblocks to disk
+	// writeHeader information to persist correct seq information to disk, also sync freeblocks to disk.
 	if err := db.writeHeader(false); err != nil {
 		return err
 	}
@@ -251,18 +250,18 @@ func (db *syncHandle) Sync() error {
 	err := db.timeWindow.foreachTimeWindow(func(timeID int64, wEntries windowEntries) (bool, error) {
 		winEntries := make(map[uint64]windowEntries)
 		for _, we := range wEntries {
-			if we.Seq() == 0 {
+			if we.seq() == 0 {
 				db.entriesInvalid++
 				continue
 			}
-			if we.Seq() < baseSeq {
-				baseSeq = we.Seq()
+			if we.seq() < baseSeq {
+				baseSeq = we.seq()
 			}
-			if we.Seq() > db.internal.upperSeq {
-				db.internal.upperSeq = we.Seq()
+			if we.seq() > db.internal.upperSeq {
+				db.internal.upperSeq = we.seq()
 			}
-			blockID := startBlockIndex(we.Seq())
-			mseq := db.cacheID ^ uint64(we.Seq())
+			blockID := startBlockIndex(we.seq())
+			mseq := db.cacheID ^ uint64(we.seq())
 			memdata, err := db.mem.Get(uint64(blockID), mseq)
 			if err != nil || memdata == nil {
 				db.entriesInvalid++
@@ -300,7 +299,7 @@ func (db *syncHandle) Sync() error {
 				winEntries[e.topicHash] = windowEntries{we}
 			}
 
-			db.filter.Append(we.Seq())
+			db.filter.Append(we.seq())
 			db.internal.count++
 			db.internal.inBytes += int64(e.valueSize)
 		}
@@ -338,9 +337,9 @@ func (db *syncHandle) Sync() error {
 		fmt.Println("db.Sync: error ", err, err1)
 		db.syncComplete = false
 		db.abort()
-		// run db recovery if an error occur with the db sync
+		// run db recovery if an error occur with the db sync.
 		if err := db.startRecovery(); err != nil {
-			// if unable to recover db then close db
+			// if unable to recover db then close db.
 			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
 		}
 	}
@@ -348,9 +347,9 @@ func (db *syncHandle) Sync() error {
 	return db.sync(false)
 }
 
-// expireEntries run expirer to delete entries from db if ttl was set on entries and that has expired
+// expireEntries run expirer to delete entries from db if ttl was set on entries and that has expired.
 func (db *DB) expireEntries() error {
-	// sync happens synchronously
+	// sync happens synchronously.
 	db.syncLockC <- struct{}{}
 	defer func() {
 		<-db.syncLockC
@@ -358,11 +357,11 @@ func (db *DB) expireEntries() error {
 	expiredEntries := db.timeWindow.getExpiredEntries(db.opts.defaultQueryLimit)
 	for _, expiredEntry := range expiredEntries {
 		we := expiredEntry.(winEntry)
-		/// Test filter block if message hash presence
-		if !db.filter.Test(we.seq) {
+		/// Test filter block if message hash presence.
+		if !db.filter.Test(we.seq()) {
 			continue
 		}
-		off := blockOffset(startBlockIndex(we.Seq()))
+		off := blockOffset(startBlockIndex(we.seq()))
 		b := blockHandle{file: db.index, offset: off}
 		if err := b.read(); err != nil {
 			if err == io.EOF {
@@ -373,7 +372,7 @@ func (db *DB) expireEntries() error {
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
 			e := b.entries[i]
-			if e.seq == we.Seq() { //record exist in db
+			if e.seq == we.seq() { //record exist in db.
 				entryIdx = i
 				break
 			}

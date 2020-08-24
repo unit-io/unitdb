@@ -20,7 +20,7 @@ import (
 	"os"
 )
 
-// IOFile is file system based store for DB
+// IOFile is file system based store.
 type IOFile struct {
 	*os.File
 }
@@ -30,7 +30,7 @@ type iofs struct{}
 // FileIO is a file system backed by the io package.
 var FileIO = &iofs{}
 
-// Open opens file is exist or create new file
+// Open opens file is exist or create new file.
 func (fs *iofs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f, err := os.OpenFile(name, flag, perm)
 	if err != nil {
@@ -40,49 +40,49 @@ func (fs *iofs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, 
 	return iof, err
 }
 
-// CreateLockFile to create lock file for db
+// CreateLockFile to create lock file.
 func (fs *iofs) CreateLockFile(name string) (LockFile, error) {
 	return newLockFile(name)
 }
 
-// State provides DB state and size of the file
+// State provides state and size of the file.
 func (fs *iofs) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
-// Remove removes the file
+// Remove removes the file.
 func (fs *iofs) Remove(name string) error {
 	return os.Remove(name)
 }
 
-// Type indicate type of filesystem
+// Type indicate type of filesystem.
 func (f *IOFile) Type() string {
 	return "FileIO"
 }
 
-// Slice provide the data for start and end offset
+// Slice provide the data for start and end offset.
 func (f *IOFile) Slice(start int64, end int64) ([]byte, error) {
 	buf := make([]byte, end-start)
 	_, err := f.ReadAt(buf, start)
 	return buf, err
 }
 
-// Close closes file on DB close
+// Close closes file.
 func (f *IOFile) Close() error {
 	return f.File.Close()
 }
 
-// ReadAt reads data from file at offset
+// ReadAt reads data from file at offset.
 func (f *IOFile) ReadAt(p []byte, off int64) (int, error) {
 	return f.File.ReadAt(p, off)
 }
 
-// WriteAt writes data to file at the given offset
+// WriteAt writes data to file at the given offset.
 func (f *IOFile) WriteAt(p []byte, off int64) (int, error) {
 	return f.File.WriteAt(p, off)
 }
 
-// Sync flush the changes from file to disk
+// Sync flush the changes from file to disk.
 func (f *IOFile) Sync() error {
 	if err := f.File.Sync(); err != nil {
 		return err

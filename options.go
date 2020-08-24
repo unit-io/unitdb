@@ -25,25 +25,25 @@ import (
 
 // flags holds various DB flags.
 type flags struct {
-	// immutable set immutable flag on database
+	// immutable set immutable flag on database.
 	immutable bool
 
-	// encryption flag to encrypt keys
+	// encryption flag to encrypt keys.
 	encryption bool
 
-	// backgroundKeyExpiry sets flag to run key expirer
+	// backgroundKeyExpiry sets flag to run key expirer.
 	backgroundKeyExpiry bool
 }
 
-// batchOptions is used to set options when using batch operation
+// batchOptions is used to set options when using batch operation.
 type batchOptions struct {
-	// In concurrent batch writes order determines how to handle conflicts
+	// In concurrent batch writes order determines how to handle conflicts.
 	order      int8
 	contract   uint32
 	encryption bool
 }
 
-// queryOptions is used to set options for DB query
+// queryOptions is used to set options for DB query.
 type queryOptions struct {
 	// defaultQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit.
 	defaultQueryLimit int
@@ -64,33 +64,33 @@ type options struct {
 	maxSyncDurations int
 
 	// syncDurationType set duration type to run sync for example syncDurationType is Second and maxSyncDuration is 5 then
-	// all entries are sync to DB in 5 seconds
+	// all entries are sync to DB in 5 seconds.
 	syncDurationType time.Duration
 
-	// encryptionKey
+	// encryptionKey is used for message encryption.
 	encryptionKey []byte
 
-	// tinyBatchWriteInterval interval to group tiny batches and write into db on tiny batch interval
+	// tinyBatchWriteInterval interval to group tiny batches and write into db on tiny batch interval.
 	// Setting the value to 0 immediately writes entries into db.
 	tinyBatchWriteInterval time.Duration
 
-	// bufferSize sets Size of buffer to use for pooling
+	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
 
-	// memdbSize sets Size of memory db
+	// memdbSize sets Size of memory db.
 	memdbSize int64
 
-	// logSize sets Size of write ahead log
+	// logSize sets Size of write ahead log.
 	logSize int64
 
 	// minimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
 	minimumFreeBlocksSize int64
 
-	// fileSystem file storage type
+	// fileSystem file storage type.
 	fileSystem fs.FileSystem
 }
 
-// Options it contains configurable options and flags for DB
+// Options it contains configurable options and flags for DB.
 type Options interface {
 	set(*options)
 }
@@ -123,28 +123,28 @@ func WithDefaultFlags() Options {
 	})
 }
 
-// WithMutable sets Immutable flag to false
+// WithMutable sets Immutable flag to false.
 func WithMutable() Options {
 	return newFuncOption(func(o *options) {
 		o.flags.immutable = false
 	})
 }
 
-// WithEncryption sets encryption on DB
+// WithEncryption sets encryption on DB.
 func WithEncryption() Options {
 	return newFuncOption(func(o *options) {
 		o.flags.encryption = true
 	})
 }
 
-// WithBackgroundKeyExpiry sets background key expiry for DB
+// WithBackgroundKeyExpiry sets background key expiry for DB.
 func WithBackgroundKeyExpiry() Options {
 	return newFuncOption(func(o *options) {
 		o.flags.backgroundKeyExpiry = true
 	})
 }
 
-// WithDefaultBatchOptions will set some default values for Batch operation
+// WithDefaultBatchOptions will set some default values for Batch operation.
 //   contract: MasterContract
 //   encryption: False
 //   AllowDuplicates: False
@@ -156,14 +156,14 @@ func WithDefaultBatchOptions() Options {
 	})
 }
 
-// WithBatchContract sets contract for batch operation
+// WithBatchContract sets contract for batch operation.
 func WithBatchContract(contract uint32) Options {
 	return newFuncOption(func(o *options) {
 		o.batchOptions.contract = contract
 	})
 }
 
-// WithBatchEncryption sets encryption on batch operation
+// WithBatchEncryption sets encryption on batch operation.
 func WithBatchEncryption() Options {
 	return newFuncOption(func(o *options) {
 		o.batchOptions.encryption = true
@@ -192,16 +192,16 @@ func WithDefaultOptions() Options {
 			o.queryOptions.maxQueryLimit = 100000
 		}
 		if o.bufferSize == 0 {
-			o.bufferSize = 1 << 27 // maximum size of a buffer in bufferpool (128MB).
+			o.bufferSize = 1 << 27 // maximum size of a buffer to use in bufferpool (128MB).
 		}
 		if o.memdbSize == 0 {
 			o.memdbSize = 1 << 31 // maximum size of memdb (2GB).
 		}
 		if o.logSize == 0 {
-			o.logSize = 1 << 30 // maximum size of log to grow before freelist allocation is started (1GB).
+			o.logSize = 1 << 30 // maximum size of log to grow before allocating free segments (1GB).
 		}
 		if o.minimumFreeBlocksSize == 0 {
-			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB)
+			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB).
 		}
 		if o.encryptionKey == nil {
 			o.encryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
@@ -217,7 +217,7 @@ func WithMaxSyncDuration(dur time.Duration, interval int) Options {
 	})
 }
 
-// WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval
+// WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
 func TinyBatchWriteInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *options) {
 		o.tinyBatchWriteInterval = dur
@@ -241,21 +241,21 @@ func WithMaxQueryLimit(limit int) Options {
 	})
 }
 
-// WithBufferSize sets Size of buffer to use for pooling
+// WithBufferSize sets Size of buffer to use for pooling.
 func WithBufferSize(size int64) Options {
 	return newFuncOption(func(o *options) {
 		o.bufferSize = size
 	})
 }
 
-// WithMemdbSize sets Size of memory db
+// WithMemdbSize sets Size of memory DB.
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *options) {
 		o.memdbSize = size
 	})
 }
 
-// WithLogSize sets Size of write ahead log
+// WithLogSize sets Size of write ahead log.
 func WithLogSize(size int64) Options {
 	return newFuncOption(func(o *options) {
 		o.logSize = size
@@ -270,7 +270,7 @@ func WithMinimumFreeBlocksSize(size int64) Options {
 	})
 }
 
-// WithEncryptionKey sets encryption key to use for data encryption
+// WithEncryptionKey sets encryption key to use for data encryption.
 func WithEncryptionKey(key []byte) Options {
 	return newFuncOption(func(o *options) {
 		o.encryptionKey = key

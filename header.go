@@ -32,7 +32,7 @@ type header struct {
 	_ [12]byte
 }
 
-// MarshalBinary serializes header into binary data
+// MarshalBinary serializes header into binary data.
 func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:7], h.signature[:])
@@ -46,7 +46,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalBinary de-serializes header from binary data
+// UnmarshalBinary de-serializes header from binary data.
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:7])
 	h.encryption = int8(data[7])

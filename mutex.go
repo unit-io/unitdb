@@ -26,13 +26,13 @@ const (
 	nMutex = 16
 )
 
-// mutex mutex to lock/unlock on blockID
+// mutex mutex to lock/unlock.
 type mutex struct {
 	internal   []*sync.RWMutex
 	consistent *hash.Consistent
 }
 
-// newMutex creates mutex to lock/unlock blockID.
+// newMutex creates mutex to lock/unlock.
 func newMutex() mutex {
 	mu := mutex{
 		internal:   make([]*sync.RWMutex, nMutex),

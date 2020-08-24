@@ -68,19 +68,19 @@ func (h *HistogramSnapshot) HMean() time.Duration { return h.sample.HMean() }
 // Avg returns average of number of events recorded.
 func (h *HistogramSnapshot) Avg() time.Duration { return h.sample.Avg() }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (h *HistogramSnapshot) P50() time.Duration { return h.sample.P50() }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (h *HistogramSnapshot) P75() time.Duration { return h.sample.P75() }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (h *HistogramSnapshot) P95() time.Duration { return h.sample.P95() }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (h *HistogramSnapshot) P99() time.Duration { return h.sample.P99() }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (h *HistogramSnapshot) P999() time.Duration { return h.sample.P999() }
 
 // StdDev returns standard deviation.
@@ -130,19 +130,19 @@ func (h *histogram) HMean() time.Duration { return h.sample.HMean() }
 // Avg returns average of number of events recorded.
 func (h *histogram) Avg() time.Duration { return h.sample.Avg() }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (h *histogram) P50() time.Duration { return h.sample.P50() }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (h *histogram) P75() time.Duration { return h.sample.P75() }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (h *histogram) P95() time.Duration { return h.sample.P95() }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (h *histogram) P99() time.Duration { return h.sample.P99() }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (h *histogram) P999() time.Duration { return h.sample.P999() }
 
 // StdDev returns standard deviation.

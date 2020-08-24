@@ -8,15 +8,15 @@ import (
 )
 
 const (
-	// MMin is the minimum Filter filter bits count
+	// MMin is the minimum Filter filter bits count.
 	MMin = 2
-	// KMin is the minimum number of keys
+	// KMin is the minimum number of keys.
 	KMin = 1
-	// Uint64Bytes is the number of bytes in type uint64
+	// Uint64Bytes is the number of bytes in type uint64.
 	Uint64Bytes = 8
 )
 
-// Filter is an opaque Filter filter type
+// Filter is an opaque Filter filter type.
 type Filter struct {
 	lock sync.RWMutex
 	bits []uint64
@@ -57,7 +57,7 @@ func newFilterFromBytes(b []byte, m, k uint64) *Filter {
 	}
 }
 
-// Bytes returns the bytes backing the Filter filter.
+// Bytes returns the bytes backing the filter.
 func (b *Filter) Bytes() []byte {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
@@ -77,7 +77,7 @@ func (b *Filter) hash(h uint64) []uint64 {
 	return hashes
 }
 
-// Add adds `key` to the Filter filter.
+// Add adds `key` to the filter.
 func (b *Filter) Add(h uint64) {
 	b.lock.Lock()
 	defer b.lock.Unlock()

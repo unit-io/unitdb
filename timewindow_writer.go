@@ -46,13 +46,13 @@ func (wb *windowWriter) del(seq uint64, bIdx int32) error {
 	entryIdx := -1
 	for i := 0; i < int(w.entryIdx); i++ {
 		e := w.entries[i]
-		if e.seq == seq { //record exist in db
+		if e.sequence == seq { //record exist in db.
 			entryIdx = i
 			break
 		}
 	}
 	if entryIdx == -1 {
-		return nil // no entry in db to delete
+		return nil // no entry in db to delete.
 	}
 	w.entryIdx--
 
@@ -65,7 +65,7 @@ func (wb *windowWriter) del(seq uint64, bIdx int32) error {
 	return nil
 }
 
-// append appends window entries to buffer
+// append appends window entries to buffer.
 func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntries) (newOff int64, err error) {
 	var w winBlock
 	var ok bool
@@ -90,13 +90,13 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 	}
 	w.topicHash = topicHash
 	for _, we := range wEntries {
-		if we.seq == 0 {
+		if we.sequence == 0 {
 			continue
 		}
 		entryIdx := 0
 		for i := 0; i < seqsPerWindowBlock; i++ {
 			e := w.entries[i]
-			if e.seq == we.seq { //record exist in db
+			if e.sequence == we.sequence { //record exist in db.
 				entryIdx = -1
 				break
 			}
@@ -107,17 +107,17 @@ func (wb *windowWriter) append(topicHash uint64, off int64, wEntries windowEntri
 		if w.entryIdx == seqsPerWindowBlock {
 			topicHash := w.topicHash
 			next := int64(blockSize * uint32(winIdx))
-			// set approximate cutoff on winBlock
-			w.cutoff = time.Now().Unix()
+			// set approximate cutoff on winBlock.
+			w.cutoffTime = time.Now().Unix()
 			wb.winBlocks[winIdx] = w
 			wb.windowIdx++
 			winIdx = wb.windowIdx
 			w = winBlock{topicHash: topicHash, next: next}
 		}
 		if w.leased {
-			wb.leasing[winIdx] = append(wb.leasing[winIdx], we.seq)
+			wb.leasing[winIdx] = append(wb.leasing[winIdx], we.sequence)
 		}
-		w.entries[w.entryIdx] = winEntry{seq: we.seq, expiresAt: we.expiresAt}
+		w.entries[w.entryIdx] = winEntry{sequence: we.sequence, expiresAt: we.expiresAt}
 		w.dirty = true
 		w.entryIdx++
 	}
@@ -139,7 +139,7 @@ func (wb *windowWriter) write() error {
 		wb.winBlocks[bIdx] = w
 	}
 
-	// sort blocks by blockIdx
+	// sort blocks by blockIdx.
 	var blockIdx []int32
 	for bIdx := range wb.winBlocks {
 		if wb.winBlocks[bIdx].leased || !wb.winBlocks[bIdx].dirty {

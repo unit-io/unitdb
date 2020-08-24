@@ -22,7 +22,7 @@ import (
 	"sync"
 )
 
-// Metrics implementation is copied from github.com/rcrowley/go-metrics and it is simplified for tracking Trace metrics
+// Metrics implementation is copied from github.com/rcrowley/go-metrics and it is simplified for tracking Trace metrics.
 
 // DuplicateMetric is the error returned by Registry.Register when a metric
 // already exists.  If you mean to Register that metric you must first

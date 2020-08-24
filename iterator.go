@@ -24,7 +24,7 @@ import (
 	"github.com/unit-io/unitdb/message"
 )
 
-// Item items returned by the iterator
+// Item items returned by the iterator.
 type Item struct {
 	topic     []byte
 	value     []byte
@@ -42,16 +42,16 @@ type (
 		parts      []message.Part // The parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 		depth      uint8
 		topicType  uint8
-		uid        uint64 // The prefix is generated from contract and first of the topic
-		cutoff     int64  // The cutoff is time limit check on message Ids.
+		uid        uint64 // The prefix is generated from contract and first of the topic.
+		cutoff     int64  // The cutoff is time limit check on message IDs.
 		winEntries []query
 
 		opts *queryOptions
 	}
 	Query struct {
 		internalQuery
-		Topic    []byte // The topic of the message
-		Contract uint32 // The contract is used as prefix in the message Id
+		Topic    []byte // The topic of the message.
+		Contract uint32 // The contract is used as prefix in the message ID.
 		Limit    int    // The maximum number of elements to return.
 	}
 )
@@ -69,7 +69,7 @@ func (q *Query) WithContract(contract uint32) *Query {
 	return q
 }
 
-// WithLimit sets query limit
+// WithLimit sets query limit.
 func (q *Query) WithLimit(limit int) *Query {
 	q.Limit = limit
 	return q
@@ -91,9 +91,9 @@ func (q *Query) parse() error {
 		q.Contract = message.MasterContract
 	}
 	topic := new(message.Topic)
-	//Parse the Key
+	//Parse the Key.
 	topic.ParseKey(q.Topic)
-	// Parse the topic
+	// Parse the topic.
 	topic.Parse(q.Contract, true)
 	if topic.TopicType == message.TopicInvalid {
 		return errBadRequest
@@ -103,7 +103,7 @@ func (q *Query) parse() error {
 	q.depth = topic.Depth
 	q.topicType = topic.TopicType
 	q.uid = message.UniqueID(q.parts)
-	// In case of last, include it to the query
+	// In case of last, include it to the query.
 	if from, limit, ok := topic.Last(); ok {
 		q.cutoff = from.Unix()
 		switch {
@@ -156,7 +156,7 @@ func (it *ItemIterator) Next() {
 					return nil
 				}
 
-				// last bit of ID is encryption flag
+				// last bit of ID is an encryption flag.
 				if uint8(id[idSize-1]) == 1 {
 					val, err = it.db.mac.Decrypt(nil, val)
 					if err != nil {

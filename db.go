@@ -64,9 +64,9 @@ type DB struct {
 	trie *trie
 	// sync handler
 	syncHandle syncHandle
-	// The db start time
+	// The db start time.
 	start time.Time
-	// The metrics to measure timeseries on message events
+	// The metrics to measure timeseries on message events.
 	meter *Meter
 	// Close.
 	closeW sync.WaitGroup
@@ -77,7 +77,6 @@ type DB struct {
 
 // Open opens or creates a new DB.
 func Open(path string, opts ...Options) (*DB, error) {
-	// opts = opts.copyWithDefaults()
 	options := &options{}
 	WithDefaultOptions().set(options)
 	WithDefaultFlags().set(options)
@@ -166,7 +165,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 			// Data file exists, but index is missing.
 			return nil, errCorrupted
 		}
-		// memdb blockcache id
+		// memdb blockcache id.
 		db.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 		if err != nil {
 			return nil, err
@@ -202,7 +201,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	// set encryption flag to encrypt messages
+	// set encryption flag to encrypt messages.
 	if db.opts.flags.encryption {
 		db.encryption = 1
 	}
@@ -224,7 +223,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
-		// return nil, err
 	}
 
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize}
@@ -238,7 +236,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	db.wal = wal
 	if needLogRecovery {
 		if err := db.recoverLog(); err != nil {
-			// if unable to recover db then close db
+			// if unable to recover db then close db.
 			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
 		}
 	}
@@ -258,10 +256,10 @@ func (db *DB) Close() error {
 	if err := db.close(); err != nil {
 		return err
 	}
-	//close bufferpool
+	//close bufferpool.
 	db.bufPool.Done()
 
-	// close memdb
+	// close memdb.
 	db.mem.Close()
 
 	if err := db.writeHeader(true); err != nil {
@@ -296,7 +294,7 @@ func (db *DB) Close() error {
 	return err
 }
 
-// Get return items matching the query paramater
+// Get return items matching the query paramater.
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := db.ok(); err != nil {
 		return nil, err
@@ -355,7 +353,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return nil
 				}
 
-				// last bit of ID is encryption flag
+				// last bit of ID is an encryption flag.
 				if uint8(id[idSize-1]) == 1 {
 					val, err = db.mac.Decrypt(nil, val)
 					if err != nil {
@@ -466,31 +464,31 @@ func (db *DB) PutEntry(e *Entry) error {
 
 	blockID := startBlockIndex(e.seq)
 	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(uint64(blockID), memseq, e.cacheEntry); err != nil {
+	if err := db.mem.Set(uint64(blockID), memseq, e.cache); err != nil {
 		return err
 	}
 
-	if err := db.timeWindow.add(db.getOrSetTimeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+	if err := db.timeWindow.add(db.getOrSetTimeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
 		return err
 	}
 
 	if e.topicSize != 0 {
 		t := new(message.Topic)
-		rawTopic := e.cacheEntry[entrySize+idSize : entrySize+idSize+e.topicSize]
+		rawTopic := e.cache[entrySize+idSize : entrySize+idSize+e.topicSize]
 		t.Unmarshal(rawTopic)
-		db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
+		db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 	}
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cache)+4))
 	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := db.tinyBatch.buffer.Write(e.cacheEntry); err != nil {
+	if _, err := db.tinyBatch.buffer.Write(e.cache); err != nil {
 		return err
 	}
 	db.tinyBatch.incount()
-	// reset message entry
+	// reset message entry.
 	e.reset()
 	return nil
 }
@@ -516,7 +514,6 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	case len(e.Topic) > maxTopicLength:
 		return errTopicTooLarge
 	}
-	// message ID is the database key
 	id := message.ID(e.ID)
 	topic, _, err := db.parseTopic(e.Contract, e.Topic)
 	if err != nil {
@@ -538,11 +535,11 @@ func (db *DB) DeleteEntry(e *Entry) error {
 func (db *DB) Sync() error {
 	// start := time.Now()
 	if ok := db.syncHandle.status(); ok {
-		// sync is in-progress
+		// sync is in-progress.
 		return nil
 	}
 
-	// Sync happens synchronously
+	// Sync happens synchronously.
 	db.syncLockC <- struct{}{}
 	db.closeW.Add(1)
 	defer func() {

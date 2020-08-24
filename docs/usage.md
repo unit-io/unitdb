@@ -94,7 +94,7 @@ Use DB.Put() or DB.PutEntry() to store message to a topic. You can send messages
 ```
 
 #### Store bulk messages
-Use Entry.WithPayload() method to bulk store messages as topic is parsed only on first request.
+Use Entry.WithPayload() method to bulk store messages as topic is parsed onetime on first request.
 
 ```
 	topic := []byte("teams.alpha.ch1.u1")

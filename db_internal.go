@@ -42,16 +42,16 @@ const (
 	logPostfix    = ".log"
 	leasePostfix  = ".lease"
 	lockPostfix   = ".lock"
-	idSize        = 9 // message ID prefix with additional encryption bit
+	idSize        = 9 // message ID prefix with additional encryption bit.
 	filterPostfix = ".filter"
-	version       = 1 // file format version
+	version       = 1 // file format version.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
 
-	// slotDur to store timeWindow entries into slots for better sync performance
+	// slotDur to store timeWindow entries into slots for better sync performance.
 	slotDur = 100 * time.Millisecond
 
 	// maxTopicLength is the maximum size of a topic in bytes.
@@ -120,24 +120,11 @@ func (db *DB) readHeader() error {
 	return nil
 }
 
-// loadTopicHash loads topic and offset from window file
+// loadTopicHash loads topic and offset from window file.
 func (db *DB) loadTrie() error {
-	topics := make(map[uint64]int64) // map[topicHash]offset
-	err := db.timeWindow.foreachWindowBlock(func(curw windowHandle) (bool, error) {
-		w := &curw
-		if w.entryIdx == 0 {
-			return false, nil
-		}
-		if _, ok := topics[w.topicHash]; !ok {
-			topics[w.topicHash] = w.offset
-		}
-		if w.next != 0 {
-			// iterate till first win block of topic is found
-			return false, nil
-		}
-		we := w.entries[0]
-		off := blockOffset(startBlockIndex(we.Seq()))
-		b := blockHandle{file: db.index, offset: off}
+	err := db.timeWindow.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
+		blockOff := blockOffset(startBlockIndex(startSeq))
+		b := blockHandle{file: db.index, offset: blockOff}
 		if err := b.read(); err != nil {
 			if err == io.EOF {
 				return false, nil
@@ -147,7 +134,7 @@ func (db *DB) loadTrie() error {
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
 			s := b.entries[i]
-			if s.seq == we.Seq() { //topic exist in db
+			if s.seq == startSeq { //topic exist in db
 				entryIdx = i
 				break
 			}
@@ -170,7 +157,7 @@ func (db *DB) loadTrie() error {
 		if err != nil {
 			return true, err
 		}
-		if ok := db.trie.add(topic{hash: w.topicHash, offset: topics[w.topicHash]}, t.Parts, t.Depth); !ok {
+		if ok := db.trie.add(newTopic(topicHash, off), t.Parts, t.Depth); !ok {
 			logger.Info().Str("context", "db.loadTrie: topic exist in the trie")
 			return false, nil
 		}
@@ -236,7 +223,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
 
 // lookups are performed in following order
 // ilookup lookups in memory entries from timeWindow
-// lookup lookups persisted entries from timeWindow file
+// lookup lookups persisted entries from timeWindow file.
 func (db *DB) lookup(q *Query) error {
 	topics := db.trie.lookup(q.parts, q.depth, q.topicType)
 	sort.Slice(topics[:], func(i, j int) bool {
@@ -249,7 +236,7 @@ func (db *DB) lookup(q *Query) error {
 		limit := q.Limit - len(q.winEntries)
 		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, limit)
 		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, query{topicHash: topic.hash, seq: we.Seq()})
+			q.winEntries = append(q.winEntries, query{topicHash: topic.hash, seq: we.seq()})
 		}
 	}
 	sort.Slice(q.winEntries[:], func(i, j int) bool {
@@ -258,14 +245,14 @@ func (db *DB) lookup(q *Query) error {
 	return nil
 }
 
-// newBlock adds new block to DB and it returns block offset
+// newBlock adds new block to DB and it returns block offset.
 func (db *DB) newBlock() (int64, error) {
 	off, err := db.index.extend(blockSize)
 	db.addBlocks(1)
 	return off, err
 }
 
-// newBlock adds new block to DB and it returns block offset
+// extendBlocks adds blocks to DB.
 func (db *DB) extendBlocks(nBlocks int32) error {
 	if _, err := db.index.extend(uint32(nBlocks) * blockSize); err != nil {
 		return err
@@ -277,14 +264,14 @@ func (db *DB) extendBlocks(nBlocks int32) error {
 func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32, error) {
 	t := new(message.Topic)
 
-	//Parse the Key
+	//Parse the Key.
 	t.ParseKey(topic)
-	// Parse the topic
+	// Parse the topic.
 	t.Parse(contract, true)
 	if t.TopicType == message.TopicInvalid {
 		return nil, 0, errBadRequest
 	}
-	// In case of ttl, add ttl to the msg and store to the db
+	// In case of ttl, add ttl to the msg and store to the db.
 	if ttl, ok := t.TTL(); ok {
 		return t, ttl, nil
 	}
@@ -292,7 +279,6 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 }
 
 func (db *DB) setEntry(e *Entry) error {
-	//message ID is the database key
 	var id message.ID
 	var eBit uint8
 	var seq uint64
@@ -310,7 +296,7 @@ func (db *DB) setEntry(e *Entry) error {
 		}
 		t.AddContract(e.Contract)
 		e.topicHash = t.GetHash(e.Contract)
-		// topic is added to DB if it is new topic entry
+		// topic is packed if it is new topic entry
 		if _, ok := db.trie.getOffset(e.topicHash); !ok {
 			rawTopic = t.Marshal()
 			e.topicSize = uint16(len(rawTopic))
@@ -343,23 +329,23 @@ func (db *DB) setEntry(e *Entry) error {
 	}
 	e.valueSize = uint32(len(val))
 	mLen := entrySize + idSize + uint32(e.topicSize) + uint32(e.valueSize)
-	e.cacheEntry = make([]byte, mLen)
+	e.cache = make([]byte, mLen)
 	entryData, err := e.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	copy(e.cacheEntry, entryData)
-	copy(e.cacheEntry[entrySize:], id.Prefix())
-	e.cacheEntry[entrySize+idSize-1] = byte(eBit)
-	// topic data is added on new topic entry and subsequent entries does not pack the topic data.
+	copy(e.cache, entryData)
+	copy(e.cache[entrySize:], id.Prefix())
+	e.cache[entrySize+idSize-1] = byte(eBit)
+	// topic data is added on first entry for the topic.
 	if e.topicSize != 0 {
-		copy(e.cacheEntry[entrySize+idSize:], rawTopic)
+		copy(e.cache[entrySize+idSize:], rawTopic)
 	}
-	copy(e.cacheEntry[entrySize+idSize+uint32(e.topicSize):], val)
+	copy(e.cache[entrySize+idSize+uint32(e.topicSize):], val)
 	return nil
 }
 
-// tinyCommit commits tiny batch to write ahead log
+// tinyCommit commits tiny batch to write ahead log.
 func (db *DB) tinyCommit() error {
 	// commit writes batches into write ahead log. The write happen synchronously.
 	db.writeLockC <- struct{}{}
@@ -399,13 +385,13 @@ func (db *DB) tinyCommit() error {
 	return nil
 }
 
-// commit commits batches to write ahead log
+// commit commits batches to DB.
 func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
 
-	// commit writes batches into write ahead log. The write happen synchronously.
+	// commit writes batches into DB. The write happen synchronously.
 	db.closeW.Add(1)
 	db.writeLockC <- struct{}{}
 	defer func() {
@@ -443,7 +429,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if db.opts.immutable {
 		return nil
 	}
-	// Test filter block for the message id presence
+	// Test filter block for the message id presence.
 	if !db.filter.Test(seq) {
 		return nil
 	}
@@ -455,7 +441,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	}
 	blockIdx := startBlockIndex(seq)
 	if blockIdx > db.blocks() {
-		return nil // no record to delete
+		return nil // no record to delete.
 	}
 	blockWriter := newBlockWriter(&db.index, nil)
 	e, err := blockWriter.del(seq)
@@ -514,17 +500,17 @@ func (db *DB) releaseTimeID(timeID int64) {
 	db.timeWindow.releaseTimeID(timeID)
 }
 
-// Set closed flag; return true if not already closed.
+// setClosed flag; return true if not already closed.
 func (db *DB) setClosed() bool {
 	return atomic.CompareAndSwapUint32(&db.closed, 0, 1)
 }
 
-// Check whether DB was closed.
+// isClosed checks whether DB was closed.
 func (db *DB) isClosed() bool {
 	return atomic.LoadUint32(&db.closed) != 0
 }
 
-// Check read ok status.
+// ok checks read ok status.
 func (db *DB) ok() error {
 	if db.isClosed() {
 		return errors.New("db is closed")

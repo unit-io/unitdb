@@ -155,7 +155,7 @@ func (f *file) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
-	// Allocation to free segment happens when log reaches its target size to avoid fragmentation
+	// Allocation to free segment happens when log reaches its target size to avoid fragmentation.
 	if f.targetSize > (f.size+int64(size)) || f.segments.currSize() < size {
 		off := f.size
 		if err := f.Truncate(off + int64(size)); err != nil {

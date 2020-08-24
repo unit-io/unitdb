@@ -123,9 +123,3 @@ func (ring *Ring) Get(key string) string {
 func (ring *Ring) Signature() string {
 	return ring.signature
 }
-
-// func (ring *Ring) dump() {
-// 	for _, e := range ring.keys {
-// 		log.ErrLogger.Debug().Str("key", e.key).Uint32("hash", e.hash)
-// 	}
-// }

@@ -34,20 +34,20 @@ const (
 )
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
-type blockCache []*memCache
+type blockCache []*block
 
-type memCache struct {
+type block struct {
 	data         dataTable
-	freeOffset   int64            // mem cache keep lowest offset that can be free.
+	freeOffset   int64            // mem cache keep lowest offset that can be free
 	m            map[uint64]int64 // map[key]offset
-	sync.RWMutex                  // Read Write mutex, guards access to internal map.
+	sync.RWMutex                  // Read Write mutex, guards access to internal map
 }
 
 // newBlockCache creates a new concurrent block cache.
 func newBlockCache() blockCache {
 	m := make(blockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		m[i] = &memCache{data: dataTable{}, m: make(map[uint64]int64)}
+		m[i] = &block{data: dataTable{}, m: make(map[uint64]int64)}
 	}
 	return m
 }
@@ -73,6 +73,7 @@ func Open(memSize int64) (*DB, error) {
 		targetSize: memSize,
 		drainLockC: make(chan struct{}, 1),
 		blockCache: newBlockCache(),
+
 		// Close
 		closeC: make(chan struct{}),
 	}
@@ -113,23 +114,23 @@ func (db *DB) shrinkDataTable() error {
 	}()
 
 	for i := 0; i < nShards; i++ {
-		cache := db.blockCache[i]
-		cache.Lock()
-		if cache.freeOffset > 0 {
-			if err := cache.data.shrink(cache.freeOffset); err != nil {
-				cache.Unlock()
+		block := db.blockCache[i]
+		block.Lock()
+		if block.freeOffset > 0 {
+			if err := block.data.shrink(block.freeOffset); err != nil {
+				block.Unlock()
 				return err
 			}
 		}
-		for seq, off := range cache.m {
-			if off < cache.freeOffset {
-				delete(cache.m, seq)
+		for seq, off := range block.m {
+			if off < block.freeOffset {
+				delete(block.m, seq)
 			} else {
-				cache.m[seq] = off - cache.freeOffset
+				block.m[seq] = off - block.freeOffset
 			}
 		}
-		cache.freeOffset = 0
-		cache.Unlock()
+		block.freeOffset = 0
+		block.Unlock()
 	}
 
 	return nil
@@ -148,82 +149,82 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// getCache returns cache under given blockID
-func (db *DB) getCache(blockID uint64) *memCache {
+// getBlock returns block under given blockID.
+func (db *DB) getBlock(blockID uint64) *block {
 	return db.blockCache[db.consistent.FindBlock(blockID)]
 }
 
-// Get gets data for the provided key under a blockID
+// Get gets data for the provided key under a blockID.
 func (db *DB) Get(blockID uint64, key uint64) ([]byte, error) {
-	// Get cache
-	cache := db.getCache(blockID)
-	cache.RLock()
-	defer cache.RUnlock()
-	// Get item from cache.
-	off, ok := cache.m[key]
+	// Get block
+	block := db.getBlock(blockID)
+	block.RLock()
+	defer block.RUnlock()
+	// Get item from block.
+	off, ok := block.m[key]
 	if off == -1 {
 		return nil, errors.New("entry deleted")
 	}
 	if !ok {
 		return nil, nil
 	}
-	scratch, err := cache.data.readRaw(off, 4) // read data length
+	scratch, err := block.data.readRaw(off, 4) // read data length
 	if err != nil {
 		return nil, err
 	}
 	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := cache.data.readRaw(off, dataLen)
+	data, err := block.data.readRaw(off, dataLen)
 	if err != nil {
 		return nil, err
 	}
 	return data[4:], nil
 }
 
-// Remove sets data offset to -1 for the key under a blockID
+// Remove sets data offset to -1 for the key under a blockID.
 func (db *DB) Remove(blockID uint64, key uint64) error {
-	// Get cache
-	cache := db.getCache(blockID)
-	cache.RLock()
-	defer cache.RUnlock()
-	// Get item from cache.
-	if _, ok := cache.m[key]; ok {
-		cache.m[key] = -1
+	// Get block
+	block := db.getBlock(blockID)
+	block.RLock()
+	defer block.RUnlock()
+	// Get item from block.
+	if _, ok := block.m[key]; ok {
+		block.m[key] = -1
 	}
 	return nil
 }
 
 // Set sets the value for the given entry for a blockID.
 func (db *DB) Set(blockID uint64, key uint64, data []byte) error {
-	// Get cache.
-	cache := db.getCache(blockID)
-	cache.Lock()
-	defer cache.Unlock()
-	off, err := cache.data.allocate(uint32(len(data) + 4))
+	// Get block
+	block := db.getBlock(blockID)
+	block.Lock()
+	defer block.Unlock()
+	off, err := block.data.allocate(uint32(len(data) + 4))
 	if err != nil {
 		return err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(data)+4))
 
-	if _, err := cache.data.writeAt(scratch[:], off); err != nil {
+	if _, err := block.data.writeAt(scratch[:], off); err != nil {
 		return err
 	}
-	if _, err := cache.data.writeAt(data, off+4); err != nil {
+	if _, err := block.data.writeAt(data, off+4); err != nil {
 		return err
 	}
-	cache.m[key] = off
+	block.m[key] = off
 	return nil
 }
 
-// Keys gets all keys from block cache for the provided blockID
+// Keys gets all keys from block cache for the provided blockID.
 func (db *DB) Keys(blockID uint64) []uint64 {
-	// Get cache
-	cache := db.getCache(blockID)
-	cache.RLock()
-	defer cache.RUnlock()
-	// Get keys from  block cache.
-	keys := make([]uint64, 0, len(cache.m))
-	for k := range cache.m {
+	// Get block
+	block := db.getBlock(blockID)
+	block.RLock()
+	defer block.RUnlock()
+	// Get keys from  block.
+	keys := make([]uint64, 0, len(block.m))
+	for k := range block.m {
 		keys = append(keys, k)
 	}
 	return keys
@@ -231,18 +232,18 @@ func (db *DB) Keys(blockID uint64) []uint64 {
 
 // Free free keeps first offset that can be free if memdb exceeds target size.
 func (db *DB) Free(blockID, key uint64) error {
-	// Get cache
-	cache := db.getCache(blockID)
-	cache.Lock()
-	defer cache.Unlock()
-	if cache.freeOffset > 0 {
+	// Get block
+	block := db.getBlock(blockID)
+	block.Lock()
+	defer block.Unlock()
+	if block.freeOffset > 0 {
 		return nil
 	}
-	off, ok := cache.m[key]
-	// Get item from cache.
+	off, ok := block.m[key]
+	// Get item from block.
 	if ok {
-		if (cache.freeOffset == 0 || cache.freeOffset < off) && float64(off) > float64(cache.data.size)*dataTableShrinkFactor {
-			cache.freeOffset = off
+		if (block.freeOffset == 0 || block.freeOffset < off) && float64(off) > float64(block.data.size)*dataTableShrinkFactor {
+			block.freeOffset = off
 		}
 	}
 
@@ -253,10 +254,10 @@ func (db *DB) Free(blockID, key uint64) error {
 func (db *DB) Count() uint64 {
 	count := 0
 	for i := 0; i < nShards; i++ {
-		cache := db.blockCache[i]
-		cache.RLock()
-		count += len(cache.m)
-		cache.RUnlock()
+		block := db.blockCache[i]
+		block.RLock()
+		count += len(block.m)
+		block.RUnlock()
 	}
 	return uint64(count)
 }
@@ -265,10 +266,10 @@ func (db *DB) Count() uint64 {
 func (db *DB) Size() (int64, error) {
 	size := int64(0)
 	for i := 0; i < nShards; i++ {
-		cache := db.blockCache[i]
-		cache.RLock()
-		size += int64(cache.data.size)
-		cache.RUnlock()
+		block := db.blockCache[i]
+		block.RLock()
+		size += int64(block.data.size)
+		block.RUnlock()
 	}
 	return size, nil
 }

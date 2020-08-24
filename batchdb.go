@@ -37,10 +37,6 @@ func (b *tinyBatch) reset() {
 	atomic.StoreUint32(&b.entryCount, 0)
 }
 
-// func (b *tinyBatch) timeID() int64 {
-// 	return atomic.LoadInt64(&b.ID)
-// }
-
 func (b *tinyBatch) len() uint32 {
 	return atomic.LoadUint32(&b.entryCount)
 }
@@ -49,10 +45,10 @@ func (b *tinyBatch) incount() uint32 {
 	return atomic.AddUint32(&b.entryCount, 1)
 }
 
-// batchdb manages the batch execution
+// batchdb manages the batch execution.
 type batchdb struct {
 	// batchDB.
-	commitTimeID int64 // Time ID committed to WAL
+	commitTimeID int64 // Time ID committed to WAL.
 	batchQueue   chan *Batch
 
 	bufPool *bpool.BufferPool
@@ -60,7 +56,7 @@ type batchdb struct {
 	tinyBatch *tinyBatch
 }
 
-// Batch starts a new batch.
+// batch starts a new batch.
 func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
@@ -109,14 +105,13 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
-// BatchGroup runs multiple batches concurrently without causing conflicts
+// BatchGroup runs multiple batches concurrently without causing conflicts.
 type BatchGroup struct {
 	fn []func(*Batch, <-chan struct{}) error
 	*DB
-	// batches []Batch
 }
 
-// NewBatchGroup create new group to runs multiple batches concurrently without causing conflicts
+// NewBatchGroup create new group to runs multiple batches concurrently without causing conflicts.
 func (db *DB) NewBatchGroup() *BatchGroup {
 	return &BatchGroup{DB: db}
 }
@@ -194,7 +189,7 @@ func (g *BatchGroup) writeBatchGroup() error {
 	return b.Commit()
 }
 
-// tinyBatchLoop handles tiny bacthes write
+// tinyBatchLoop handles tiny bacthes write.
 func (db *DB) tinyBatchLoop(interval time.Duration) {
 	tinyBatchWriterTicker := time.NewTicker(interval)
 	go func() {
@@ -214,7 +209,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 	}()
 }
 
-//Abort abort is a batch cleanup operation on batch group complete
+//Abort abort is a batch cleanup operation on batch group complete.
 func (g *BatchGroup) Abort() {
 	for b := range g.batchQueue {
 		b.unsetManaged()

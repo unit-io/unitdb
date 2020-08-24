@@ -25,7 +25,7 @@ import (
 )
 
 // Reader reads logs from WAL.
-// Reader reader is a simple iterator over log data
+// Reader reader is a simple iterator over log data.
 type Reader struct {
 	Id      uid.LID
 	logData []byte
@@ -38,7 +38,7 @@ type Reader struct {
 	wal *WAL
 }
 
-// NewReader returns new log reader to read logs from WAL
+// NewReader returns new log reader to read logs from WAL.
 func (wal *WAL) NewReader() (*Reader, error) {
 	if err := wal.ok(); err != nil {
 		return &Reader{wal: wal}, err
@@ -52,13 +52,13 @@ func (wal *WAL) NewReader() (*Reader, error) {
 	return r, nil
 }
 
-// Read reads log written to the WAL but fully applied. It returns Reader iterator
+// Read reads log written to the WAL but fully applied. It returns Reader iterator.
 func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
-	// release log before read
+	// release log before read.
 	l := len(r.wal.logs)
 	for i := 0; i < l; i++ {
 		if r.wal.logs[i].status == logStatusReleased {
-			// Remove log from wal
+			// Remove log from wal.
 			r.wal.logs = r.wal.logs[:i+copy(r.wal.logs[i:], r.wal.logs[i+1:])]
 			l -= 1
 			i--
@@ -135,12 +135,12 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 	return nil
 }
 
-// Count returns entry count in the current reader
+// Count returns entry count in the current reader.
 func (r *Reader) Count() uint32 {
 	return r.entryCount
 }
 
-// Next returns next record from the log data iterator or false if iteration is done
+// Next returns next record from the log data iterator or false if iteration is done.
 func (r *Reader) Next() ([]byte, bool, error) {
 	if r.entryCount == 0 {
 		return nil, false, nil

@@ -25,7 +25,7 @@ import (
 )
 
 type freeslots struct {
-	fs           map[uint64]bool // map[seq]bool
+	fs           map[uint64]bool // map[seq]bool.
 	sync.RWMutex                 // Read Write mutex, guards access to internal collection.
 }
 
@@ -35,8 +35,8 @@ type lease struct {
 	file
 	slots                 []*freeslots
 	blocks                []*freeBlocks
-	size                  int64 // total size of free blocks
-	minimumFreeBlocksSize int64 // minimum free blocks size before free blocks are reused for new allocation.
+	size                  int64 // Total size of free blocks.
+	minimumFreeBlocksSize int64 // Minimum free blocks size before free blocks are reused for new allocation.
 	consistent            *hash.Consistent
 }
 
@@ -47,7 +47,7 @@ type freeblock struct {
 
 type freeBlocks struct {
 	fb           []freeblock
-	cache        map[int64]bool // cache free offset
+	cache        map[int64]bool // cache free offset.
 	sync.RWMutex                // Read Write mutex, guards access to internal collection.
 }
 
@@ -72,14 +72,14 @@ func newLease(f file, minimumSize int64) *lease {
 	return l
 }
 
-// freeSlots returns freeSlots under given blockID
+// freeSlots returns freeSlots under given blockID.
 func (l *lease) freeSlots(blockID uint64) *freeslots {
 	return l.slots[l.consistent.FindBlock(blockID)]
 }
 
-// get first free seq
+// getSlot gets seq from free slot.
 func (l *lease) getSlot(blockID uint64) (ok bool, seq uint64) {
-	// Get shard
+	// Get shard.
 	fss := l.freeSlots(blockID)
 	fss.Lock()
 	defer fss.Unlock()
@@ -92,7 +92,7 @@ func (l *lease) getSlot(blockID uint64) (ok bool, seq uint64) {
 }
 
 func (l *lease) freeSlot(seq uint64) (ok bool) {
-	// Get shard
+	// Get shard.
 	fss := l.freeSlots(seq)
 	fss.Lock()
 	defer fss.Unlock()
@@ -107,13 +107,12 @@ func (fs *freeslots) len() int {
 	return len(fs.fs)
 }
 
-// freeBlocks returns freeBlocks under given blockID
+// freeBlocks returns freeBlocks under given blockID.
 func (l *lease) freeBlocks(blockID uint64) *freeBlocks {
 	return l.blocks[l.consistent.FindBlock(blockID)]
 }
 
 func (s *freeBlocks) search(size uint32) int {
-	// limit search to first 100 freeblocks
 	return sort.Search(len(s.fb), func(i int) bool {
 		return s.fb[i].size >= size
 	})
@@ -203,7 +202,7 @@ func (l *lease) allocate(size uint32) int64 {
 	return off
 }
 
-// MarshalBinary serializes lease into binary data
+// MarshalBinary serializes lease into binary data.
 func (s *freeBlocks) MarshalBinary() ([]byte, error) {
 	size := s.binarySize()
 	buf := make([]byte, size)
@@ -219,7 +218,7 @@ func (s *freeBlocks) MarshalBinary() ([]byte, error) {
 }
 
 func (s *freeBlocks) binarySize() uint32 {
-	return uint32((4 + (8+4)*len(s.fb))) // FIXME: this is ugly
+	return uint32((4 + (8+4)*len(s.fb)))
 }
 
 func (l *lease) read() error {
@@ -259,7 +258,6 @@ func (l *lease) write() error {
 	var buf []byte
 	for i := 0; i < nShards; i++ {
 		fbs := l.blocks[i]
-		// marshaledSize += align(fbs.binarySize())
 		marshaledSize += fbs.binarySize()
 		data, err := fbs.MarshalBinary()
 		buf = append(buf, data...)

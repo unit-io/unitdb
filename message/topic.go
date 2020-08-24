@@ -28,7 +28,7 @@ import (
 
 var zeroTime = time.Unix(0, 0)
 
-// Various constant on Topic
+// Various constant on Topic.
 const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
@@ -86,7 +86,7 @@ func (t *Topic) GetHash(contract uint32) uint64 {
 	return uint64(h)<<32 + uint64((contract<<8)|uint32(t.Depth))
 }
 
-// SplitFunc various split function to split topic using delimeter
+// SplitFunc various split function to split topic using delimeter.
 type splitFunc struct{}
 
 func (splitFunc) splitTopic(c rune) bool {
@@ -102,11 +102,6 @@ func (splitFunc) splitOptions(c rune) bool {
 }
 func (splitFunc) splitOpsKeyValue(c rune) bool {
 	return c == '='
-}
-
-// Target returns the topic (first element of the query, second element of Parts)
-func (t *Topic) Target() uint32 {
-	return t.Parts[0].Hash
 }
 
 // TTL returns a Time-To-Live option.
@@ -146,7 +141,7 @@ func toUnix(t int64) time.Time {
 	return time.Unix(t, 0)
 }
 
-// getOption retrieves a Uint option
+// getOption retrieves a Uint option.
 func (t *Topic) getOption(name string) (string, int, bool) {
 	for i := 0; i < len(t.Options); i++ {
 		if t.Options[i].Key == name {
@@ -160,7 +155,7 @@ func (t *Topic) getOption(name string) (string, int, bool) {
 	return "", 0, false
 }
 
-// parseOptions parse the options from the topic
+// parseOptions parse the options from the topic.
 func (t *Topic) parseOptions(text []byte) (ok bool) {
 	//Parse Options
 	var fn splitFunc
@@ -189,7 +184,7 @@ func (t *Topic) GetHashCode() uint32 {
 	return h
 }
 
-// ParseKey attempts to parse the key
+// ParseKey attempts to parse the key.
 func (t *Topic) ParseKey(text []byte) {
 	var fn splitFunc
 
@@ -205,7 +200,7 @@ func (t *Topic) ParseKey(text []byte) {
 	t.Topic = parts[0]
 }
 
-// Parse attempts to parse the static vs wildcard topic
+// Parse attempts to parse the static vs wildcard topic.
 func (t *Topic) Parse(contract uint32, wildcard bool) {
 	if wildcard {
 		parseWildcardTopic(contract, t)
@@ -311,7 +306,7 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	return true
 }
 
-// Marshal serializes topic to binary
+// Marshal serializes topic to binary.
 func (t *Topic) Marshal() []byte {
 	// preallocate buffer of appropriate size
 	var size int
@@ -334,7 +329,7 @@ func (t *Topic) Marshal() []byte {
 	return buf
 }
 
-// Unmarshal de-serializes topic from binary data
+// Unmarshal de-serializes topic from binary data.
 func (t *Topic) Unmarshal(data []byte) error {
 	buf := bytes.NewBuffer(data)
 

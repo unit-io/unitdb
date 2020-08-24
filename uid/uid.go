@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	// Offset is used to create new apoch from current time
+	// Offset is used to create new apoch from current time.
 	Offset = 1555770000
 )
 
@@ -40,13 +40,13 @@ var (
 // LID represents a process-wide unique ID.
 type LID uint64
 
-// NewApoch creates an appoch to generate unique id
+// NewApoch creates an appoch to generate unique id.
 func NewApoch() uint32 {
 	now := uint32(time.Now().Unix() - Offset)
 	return math.MaxUint32 - now
 }
 
-// NewUnique return unique value to use generating unique id
+// NewUnique return unique value to use generating unique id.
 func NewUnique() uint32 {
 	b := make([]byte, 4)
 	random := rand.New(rand.NewSource(int64(NewApoch())))
@@ -55,7 +55,7 @@ func NewUnique() uint32 {
 	return u
 }
 
-// Time returns time portion of ID
+// Time returns time portion of ID.
 func Time(id []byte) int64 {
 	return int64(math.MaxUint32-binary.LittleEndian.Uint32(id)) + Offset
 }

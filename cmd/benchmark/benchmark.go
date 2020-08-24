@@ -21,11 +21,6 @@ func randKey(minL int, maxL int) string {
 	return string(buf)
 }
 
-// func forceGC() {
-// 	runtime.GC()
-// 	time.Sleep(time.Millisecond * 500)
-// }
-
 func generateTopics(count int, minL int, maxL int) [][]byte {
 	topics := make([][]byte, 0, count)
 	seen := make(map[string]struct{}, count)
@@ -87,7 +82,6 @@ func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
-	// forceGC()
 
 	func(retry int) error {
 		r := 1
@@ -250,8 +244,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	topics := generateTopics(concurrency, minKS, maxKS)
 	vals := generateVals(numKeys, minVS, maxVS)
 
-	// forceGC()
-
 	start := time.Now()
 	eg := &errgroup.Group{}
 
@@ -289,8 +281,6 @@ func benchmark3(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 	}
 	fmt.Printf("File size: %s\n", byteSize(sz))
 	printStats(db)
-
-	// forceGC()
 
 	start = time.Now()
 
@@ -354,7 +344,6 @@ func benchmark4(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 
 	keys := generateKeys(batchSize, minKS, maxKS, db)
 	vals := generateVals(batchSize, minVS, maxVS)
-	// forceGC()
 
 	start := time.Now()
 	eg := &errgroup.Group{}

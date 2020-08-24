@@ -26,7 +26,7 @@ import (
 )
 
 type expiryWindow struct {
-	windows map[int64]expiryWindowEntries // map[expiryHash]windowEntries
+	windows map[int64]expiryWindowEntries // map[expiryHash]windowEntries.
 
 	mu sync.RWMutex // Read Write mutex, guards access to internal collection.
 }
@@ -52,11 +52,12 @@ func newExpiryWindows() *expiryWindows {
 }
 
 type expiryWindowEntries []timeWindowEntry
+
 type timeWindowEntry interface {
-	ExpiresAt() uint32
+	expiryTime() uint32
 }
 
-// getWindows returns shard under given key
+// getWindows returns shard under given key.
 func (w *expiryWindows) getWindows(key uint64) *expiryWindow {
 	w.RLock()
 	defer w.RUnlock()
@@ -91,7 +92,7 @@ func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntr
 	}
 
 	for i := 0; i < wb.maxExpDurations; i++ {
-		// get windows shard
+		// get windows shard.
 		ws := wb.expiryWindows.expiry[i]
 		ws.mu.Lock()
 		defer ws.mu.Unlock()
@@ -108,7 +109,7 @@ func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntr
 			expiredEntriesCount := 0
 			for i := range windowEntries {
 				entry := windowEntries[i]
-				if entry.ExpiresAt() < startTime {
+				if entry.expiryTime() < startTime {
 					expiredEntries = append(expiredEntries, entry)
 					expiredEntriesCount++
 				}
@@ -122,16 +123,16 @@ func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntr
 	return expiredEntries
 }
 
-// addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window
+// addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window.
 func (wb *expiryWindowBucket) addExpiry(e timeWindowEntry) error {
 	if !wb.backgroundKeyExpiry {
 		return nil
 	}
-	timeExpiry := int64(time.Unix(int64(e.ExpiresAt()), 0).Truncate(wb.expDurationType).Add(1 * wb.expDurationType).Unix())
+	timeExpiry := int64(time.Unix(int64(e.expiryTime()), 0).Truncate(wb.expDurationType).Add(1 * wb.expDurationType).Unix())
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
 
-	// get windows shard
-	ws := wb.getWindows(uint64(e.ExpiresAt()))
+	// get windows shard.
+	ws := wb.getWindows(uint64(e.expiryTime()))
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	if expiryWindow, ok := ws.windows[timeExpiry]; ok {

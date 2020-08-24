@@ -39,6 +39,7 @@ type windowsFileLock struct {
 	name string
 }
 
+// Unlock removes the lock from file.
 func (fl *windowsFileLock) Unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err

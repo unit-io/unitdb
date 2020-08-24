@@ -21,7 +21,7 @@ import (
 	"github.com/unit-io/unitdb/memdb"
 )
 
-// Filter filter is bloom filter generator
+// Filter filter is bloom filter generator.
 type Filter struct {
 	file
 	filterBlock *filter.Generator
@@ -29,14 +29,14 @@ type Filter struct {
 	cacheID     uint64
 }
 
-// Append appends an entry to bloom filter
+// Append appends an entry to bloom filter.
 func (f *Filter) Append(h uint64) {
 	f.filterBlock.Append(h)
 }
 
-// Test tests entry in bloom filter. It returns false if entry definitely does not exist or entry maybe existing in DB
+// Test tests entry in bloom filter. It returns false if entry definitely does not exist or entry maybe existing in DB.
 func (f *Filter) Test(h uint64) bool {
-	/// Test filter block for presence
+	/// Test filter block for presence.
 	fltr, _ := f.getFilterBlock(true)
 	if fltr != nil && !fltr.Test(h) {
 		return false

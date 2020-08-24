@@ -105,13 +105,13 @@ func (db *syncHandle) startRecovery() error {
 				if err := t.Unmarshal(rawtopic); err != nil {
 					return true, err
 				}
-				db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
+				db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 				topics[e.topicHash] = t
 			}
 			if _, ok := winEntries[e.topicHash]; ok {
-				winEntries[e.topicHash] = append(winEntries[e.topicHash], winEntry{seq: e.seq, expiresAt: e.expiresAt})
+				winEntries[e.topicHash] = append(winEntries[e.topicHash], newWinEntry(e.seq, e.expiresAt))
 			} else {
-				winEntries[e.topicHash] = windowEntries{winEntry{seq: e.seq, expiresAt: e.expiresAt}}
+				winEntries[e.topicHash] = windowEntries{newWinEntry(e.seq, e.expiresAt)}
 			}
 			db.filter.Append(e.seq)
 			db.internal.count++
@@ -139,7 +139,7 @@ func (db *syncHandle) startRecovery() error {
 }
 
 func (db *DB) recoverLog() error {
-	// Sync happens synchronously
+	// Sync happens synchronously.
 	db.syncLockC <- struct{}{}
 	defer func() {
 		<-db.syncLockC
@@ -150,6 +150,6 @@ func (db *DB) recoverLog() error {
 		return err
 	}
 
-	// reset log on successful recovery
+	// reset log on successful recovery.
 	return db.wal.Reset()
 }

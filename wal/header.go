@@ -36,7 +36,7 @@ type logInfo struct {
 	_ [20]byte
 }
 
-// MarshalBinary serialized logInfo into binary data
+// MarshalBinary serialized logInfo into binary data.
 func (l logInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
 	binary.LittleEndian.PutUint16(buf[:2], l.version)
@@ -47,7 +47,7 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalBinary deserialized logInfo from binary data
+// UnmarshalBinary deserialized logInfo from binary data.
 func (l *logInfo) UnmarshalBinary(data []byte) error {
 	l.version = binary.LittleEndian.Uint16(data[:2])
 	l.status = LogStatus(binary.LittleEndian.Uint16(data[2:4]))
@@ -64,7 +64,7 @@ type header struct {
 	_ [2]byte
 }
 
-// MarshalBinary serialized header into binary data
+// MarshalBinary serialized header into binary data.
 func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:8], h.signature[:])
@@ -76,7 +76,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalBinary deserialized header from binary data
+// UnmarshalBinary deserialized header from binary data.
 func (h *header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:8])
 	h.version = binary.LittleEndian.Uint32(data[8:12])

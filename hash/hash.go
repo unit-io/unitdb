@@ -28,7 +28,7 @@ const (
 	Init = offset32
 )
 
-// WithSalt returns the hash of bytes. it uses salt to shuffle the slice before calculating hash
+// WithSalt returns the hash of bytes. it uses salt to shuffle the slice before calculating hash.
 func WithSalt(text []byte, salt uint32) uint32 {
 	b := shuffleInPlace(text, salt)
 	return New(b)
@@ -59,7 +59,7 @@ func New(b []byte) uint32 {
 	return h
 }
 
-// shuffleInPlace shuffle the slice
+// shuffleInPlace shuffle the slice.
 func shuffleInPlace(text []byte, contract uint32) []byte {
 	if contract == 0 {
 		return text
@@ -77,7 +77,7 @@ func shuffleInPlace(text []byte, contract uint32) []byte {
 	return result
 }
 
-// duplicateSlice get a copy of slice
+// duplicateSlice get a copy of slice.
 func duplicateSlice(data []byte) []byte {
 	result := make([]byte, len(data))
 	copy(result, data)

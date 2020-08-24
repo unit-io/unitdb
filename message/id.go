@@ -24,13 +24,13 @@ import (
 
 // Various constant parts of the ID.
 const (
-	// MasterContract contract is default contract used for topics if client program does not specify Contract in the request
+	// MasterContract contract is default contract used for topics if client program does not specify Contract in the request.
 	MasterContract = uint32(3376684800)
 
 	fixed = 16
 )
 
-// UniqueID generates unique ID from parts and concatenate contract as first part of the topic
+// UniqueID generates unique ID from topic parts and concatenate contract as first part of the topic.
 func UniqueID(parts []Part) uint64 {
 	if len(parts) == 1 {
 		return uint64(parts[0].Hash)
@@ -38,7 +38,7 @@ func UniqueID(parts []Part) uint64 {
 	return uint64(parts[1].Hash)<<32 + uint64(parts[0].Hash)
 }
 
-// ID represents a message ID and lexigraphically sortable
+// ID represents a message ID and lexigraphically sortable.
 type ID []byte
 
 // NewID generates a new message identifier with a prefix. Master contract is adde to the ID and actual Contract is set later.
@@ -78,7 +78,7 @@ func (id ID) Prefix() ID {
 
 // EvalPrefix matches the prefix with the cutoff time.
 func (id ID) EvalPrefix(contract uint32, cutoff int64) bool {
-	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract was added to the ID
+	// wild card topic (i.e. "*" or "...") will match first 4 byte of contract was added to the ID.
 	if cutoff > 0 {
 		return uid.Time(id[0:4]) >= cutoff && binary.LittleEndian.Uint32(id[4:8]) == contract
 	}

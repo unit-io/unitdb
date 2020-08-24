@@ -28,6 +28,7 @@ type unixFileLock struct {
 	name string
 }
 
+// Unlock removes the lock from file.
 func (fl *unixFileLock) Unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err

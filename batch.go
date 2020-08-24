@@ -20,13 +20,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/message"
 )
 
-// SetOptions sets batch options
+// SetOptions sets batch options.
 func (b *Batch) SetOptions(opts ...Options) {
 	for _, opt := range opts {
 		if opt != nil {
@@ -53,7 +52,7 @@ type (
 
 		index []batchIndex
 		size  int64
-		// commitComplete is used to signal if batch commit is complete and batch is fully written to write ahead log
+		// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 		commitW        sync.WaitGroup
 		commitComplete chan struct{}
 	}
@@ -87,16 +86,16 @@ func (b *Batch) PutEntry(e *Entry) error {
 	}
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cache)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.buffer.Write(e.cacheEntry); err != nil {
+	if _, err := b.buffer.Write(e.cache); err != nil {
 		return err
 	}
 
 	b.index = append(b.index, batchIndex{delFlag: false, offset: b.size})
-	b.size += int64(len(e.cacheEntry) + 4)
+	b.size += int64(len(e.cache) + 4)
 
 	// reset message entry
 	e.reset()
@@ -131,16 +130,16 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	}
 
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cacheEntry)+4))
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cache)+4))
 	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.buffer.Write(e.cacheEntry); err != nil {
+	if _, err := b.buffer.Write(e.cache); err != nil {
 		return err
 	}
 
 	b.index = append(b.index, batchIndex{delFlag: true, offset: b.size})
-	b.size += int64(len(e.cacheEntry) + 4)
+	b.size += int64(len(e.cache) + 4)
 
 	// reset message entry
 	e.reset()
@@ -168,7 +167,7 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 			return err
 		}
 		if index.delFlag && e.seq != 0 {
-			/// Test filter block for presence
+			/// Test filter block for presence.
 			if !b.db.filter.Test(e.seq) {
 				return nil
 			}
@@ -176,7 +175,7 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 			continue
 		}
 
-		// put packed entry without topic hash into memdb
+		// put packed entry into memdb.
 		if err := fn(i, e, data[off+4:off+int64(dataLen)]); err != nil {
 			return err
 		}
@@ -184,7 +183,7 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 	return nil
 }
 
-// commit starts writing entries into DB. It returns an error if batch write fails.
+// commit starts writing entries into DB. It returns an error if batch commit fails.
 func (b *Batch) commit() error {
 	// The write happen synchronously.
 	b.db.writeLockC <- struct{}{}
@@ -192,26 +191,20 @@ func (b *Batch) commit() error {
 		<-b.db.writeLockC
 	}()
 	if b.grouped {
-		// append batch to batchgroup
+		// append batch to batchgroup.
 		b.db.batchQueue <- b
 		return nil
 	}
 
-	batchTicker := time.NewTicker(slotDur)
 	topics := make(map[uint64]*message.Topic)
 
 	return b.writeInternal(func(i int, e entry, data []byte) error {
-		select {
-		case <-batchTicker.C:
-			b.ID = b.db.timeID()
-		default:
-		}
 		blockID := startBlockIndex(e.seq)
 		memseq := b.db.cacheID ^ e.seq
 		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
 			return err
 		}
-		if err := b.db.timeWindow.add(b.timeID(), e.topicHash, winEntry{seq: e.seq, expiresAt: e.expiresAt}); err != nil {
+		if err := b.db.timeWindow.add(b.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
 			return nil
 		}
 		if e.topicSize != 0 {
@@ -222,14 +215,14 @@ func (b *Batch) commit() error {
 				t.Unmarshal(rawTopic)
 				topics[e.topicHash] = t
 			}
-			b.db.trie.add(topic{hash: e.topicHash}, t.Parts, t.Depth)
+			b.db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 		}
 		return nil
 	})
 }
 
 // Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
-// On Commit complete batch operation signal to the cliend if the batch is fully commmited to DB.
+// On Commit complete batch operation signal to the caller if the batch is fully commited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed tx commit not allowed")
 	if b.len() == 0 || b.buffer.Size() == 0 {
@@ -249,7 +242,7 @@ func (b *Batch) Commit() error {
 	return nil
 }
 
-//Abort abort is a batch cleanup operation on batch complete
+//Abort abort is a batch cleanup operation on batch complete.
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed tx abort not allowed")
 	b.Reset()

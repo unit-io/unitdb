@@ -26,7 +26,7 @@ type TimeSeries interface {
 	Cumulative() time.Duration // Cumulative time of all sampled events.
 	HMean() time.Duration      // Event duration harmonic mean.
 	Avg() time.Duration        // Event duration average.
-	P50() time.Duration        // Event duration nth percentiles ..
+	P50() time.Duration        // Event duration nth percentiles.
 	P75() time.Duration
 	P95() time.Duration
 	P99() time.Duration
@@ -82,27 +82,27 @@ func (t *timeseries) Avg() time.Duration {
 	return t.histogram.Avg()
 }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (t *timeseries) P50() time.Duration {
 	return t.histogram.P50()
 }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (t *timeseries) P75() time.Duration {
 	return t.histogram.P75()
 }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (t *timeseries) P95() time.Duration {
 	return t.histogram.P95()
 }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (t *timeseries) P99() time.Duration {
 	return t.histogram.P99()
 }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (t *timeseries) P999() time.Duration {
 	return t.histogram.P999()
 }
@@ -186,27 +186,27 @@ func (t *TimeSeriesSnapshot) Avg() time.Duration {
 	return t.histogram.Avg()
 }
 
-// P50 returns event duration nth percentiles ..
+// P50 returns event duration nth percentiles.
 func (t *TimeSeriesSnapshot) P50() time.Duration {
 	return t.histogram.P50()
 }
 
-// P75 returns event duration nth percentiles ..
+// P75 returns event duration nth percentiles.
 func (t *TimeSeriesSnapshot) P75() time.Duration {
 	return t.histogram.P75()
 }
 
-// P95 returns event duration nth percentiles ..
+// P95 returns event duration nth percentiles.
 func (t *TimeSeriesSnapshot) P95() time.Duration {
 	return t.histogram.P95()
 }
 
-// P99 returns event duration nth percentiles ..
+// P99 returns event duration nth percentiles.
 func (t *TimeSeriesSnapshot) P99() time.Duration {
 	return t.histogram.P99()
 }
 
-// P999 returns event duration nth percentiles ..
+// P999 returns event duration nth percentiles.
 func (t *TimeSeriesSnapshot) P999() time.Duration {
 	return t.histogram.P999()
 }

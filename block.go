@@ -78,7 +78,7 @@ func (b block) validation(blockIdx int32) error {
 	return nil
 }
 
-// MarshalBinary serialized entries block into binary data
+// MarshalBinary serialized entries block into binary data.
 func (b block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
@@ -103,7 +103,7 @@ func (b block) MarshalBinary() []byte {
 	return data
 }
 
-// UnmarshalBinary de-serialized entries block from binary data
+// UnmarshalBinary de-serialized entries block from binary data.
 func (b *block) UnmarshalBinary(data []byte) error {
 	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
 	data = data[8:]

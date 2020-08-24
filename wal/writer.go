@@ -38,11 +38,11 @@ type Writer struct {
 
 	wal *WAL
 
-	// writeCompleted is used to signal if log is fully written
+	// writeCompleted is used to signal if log is fully written.
 	writeCompleted chan struct{}
 }
 
-// NewWriter returns new log writer to write to WAL
+// NewWriter returns new log writer to write to WAL.
 func (wal *WAL) NewWriter() (*Writer, error) {
 	if err := wal.ok(); err != nil {
 		return &Writer{wal: wal}, err
@@ -80,7 +80,7 @@ func (w *Writer) append(data []byte) error {
 	return nil
 }
 
-// Append appends records into WAL
+// Append appends records to the WAL.
 func (w *Writer) Append(data []byte) <-chan error {
 	done := make(chan error, 1)
 
@@ -94,7 +94,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 	return done
 }
 
-// writeLog writes log by setting correct header and status
+// writeLog writes log by setting correct header and status.
 func (w *Writer) writeLog(id int64) error {
 	w.writeCompleted <- struct{}{}
 	w.wal.mu.Lock()
@@ -147,7 +147,7 @@ func (w *Writer) SignalInitWrite(id int64) <-chan error {
 		return done
 	}
 
-	// Write the log non-blocking
+	// Write the log non-blocking.
 	go func() {
 		done <- w.writeLog(id)
 	}()

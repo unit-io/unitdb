@@ -8,7 +8,7 @@ import (
 
 func main() {
 	// Opening a database.
-	// open DB with Mutable flag to allow deleting messages
+	// Open DB with Mutable flag to allow deleting messages
 	db, err := unitdb.Open("example", unitdb.WithDefaultOptions(), unitdb.WithMutable())
 	if err != nil {
 		log.Fatal(err)
@@ -20,12 +20,12 @@ func main() {
 	msg := []byte("msg for team alpha channel1")
 	db.Put(topic, msg)
 
-	// send message to all receivers of channel1 for team alpha
+	// Send message to all receivers of channel1 for team alpha
 	topic = []byte("teams.alpha.ch1.*")
 	msg = []byte("msg for team alpha channel1 all receivers")
 	db.Put(topic, msg)
 
-	// send message to all channels for team alpha
+	// Send message to all channels for team alpha
 	topic = []byte("teams.alpha...")
 	msg = []byte("msg for team alpha all channels")
 	db.Put(topic, msg)
@@ -51,12 +51,12 @@ func main() {
 		}
 	}
 
-	// specify time to live so if you run the program again after 1 min you will not receive this messages
+	// Specify time to live so if you run the program again after 1 min you will not receive this messages
 	topic = []byte("teams.alpha.ch1.u1?ttl=1m")
 	msg = []byte("msg with 1m ttl for team alpha channel1 receiver1")
 	db.Put(topic, msg)
 
-	// delete message
+	// Delete message
 	messageId := db.NewID()
 	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")).WithID(messageId)
 	db.PutEntry(entry)
@@ -86,7 +86,7 @@ func main() {
 		}
 	}
 
-	// iterating over items
+	// Iterating over items
 	topic = []byte("teams.alpha.ch1.u1?ttl=1m")
 	it, err := db.Items(unitdb.NewQuery(topic))
 	if err != nil {

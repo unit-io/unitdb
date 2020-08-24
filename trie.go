@@ -33,6 +33,10 @@ type topic struct {
 
 type topics []topic
 
+func newTopic(hash uint64, off int64) topic {
+	return topic{hash: hash, offset: off}
+}
+
 // addUnique adds topic to the set.
 func (top *topics) addUnique(value topic) (added bool) {
 	for i, v := range *top {
@@ -76,7 +80,7 @@ type topicTrie struct {
 	root    *node            // The root node of the tree.
 }
 
-// newTrie creates a new Trie.
+// newTopicTrie creates a new Trie.
 func newTopicTrie() *topicTrie {
 	return &topicTrie{
 		summary: make(map[uint64]*node),
@@ -93,7 +97,7 @@ type trie struct {
 	topicTrie *topicTrie
 }
 
-// NewTrie new trie creates a Trie with an initialized Trie.
+// newTrie new trie creates a Trie with an initialized Trie.
 // Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
 func newTrie() *trie {
 	return &trie{
@@ -152,26 +156,25 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 func (t *trie) lookup(query []message.Part, depth, topicType uint8) (tops topics) {
 	t.RLock()
 	defer t.RUnlock()
-	// fmt.Println("trie.lookup: depth, parts ", depth, query)
 	t.ilookup(query, depth, topicType, &tops, t.topicTrie.root)
 	return
 }
 
 func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topics, currNode *node) {
-	// Add topics from the current branch
+	// Add topics from the current branch.
 	if currNode.depth == depth || (topicType == message.TopicStatic && currNode.part.hash == message.Wildcard) {
 		for _, topic := range currNode.topics {
 			tops.addUnique(topic)
 		}
 	}
 
-	// if done then stop
+	// If done then stop.
 	if len(query) == 0 {
 		return
 	}
 
 	q := query[0]
-	// Go through the wildcard match branch
+	// Go through the wildcard match branch.
 	for part, n := range currNode.children {
 		switch {
 		case part.hash == q.Hash && q.Wildchars == part.wildchars:

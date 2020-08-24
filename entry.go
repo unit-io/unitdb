@@ -32,20 +32,20 @@ type (
 		seq       uint64
 		topicSize uint16
 		valueSize uint32
-		expiresAt uint32 // expiresAt for recovery from log and not persisted to Index file but persisted to the time window file
+		expiresAt uint32 // expiresAt for recovery from log and not persisted to index file but persisted to the time window file.
 
-		parsed     bool
-		topicHash  uint64 // topicHash for recovery from log and not persisted to the DB
-		cacheEntry []byte // block from memdb if it exist
+		parsed    bool
+		topicHash uint64 // topicHash for recovery from log and not persisted to the DB.
+		cache     []byte // entry from memdb if it exist.
 	}
-	// Entry entry is a message entry structure
+	// Entry entry is a message entry structure.
 	Entry struct {
 		entry
-		ID         []byte // The ID of the message
-		Topic      []byte // The topic of the message
-		Payload    []byte // The payload of the message
-		ExpiresAt  uint32 // The time expiry of the message
-		Contract   uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message Id
+		ID         []byte // The ID of the message.
+		Topic      []byte // The topic of the message.
+		Payload    []byte // The payload of the message.
+		ExpiresAt  uint32 // The time expiry of the message.
+		Contract   uint32 // The contract is used to as salt to hash topic parts and also used as prefix in the message ID.
 		Encryption bool
 	}
 )
@@ -58,7 +58,7 @@ func NewEntry(topic, payload []byte) *Entry {
 	}
 }
 
-// WithID sets entry ID
+// WithID sets entry ID.
 func (e *Entry) WithID(id []byte) *Entry {
 	e.ID = id
 	return e
@@ -97,7 +97,7 @@ func (e *Entry) WithEncryption() *Entry {
 func (e *Entry) reset() {
 	e.seq = 0
 	e.topicSize = 0
-	e.cacheEntry = nil
+	e.cache = nil
 	e.ID = nil
 	e.Payload = nil
 }
@@ -106,7 +106,7 @@ func (e entry) ExpiresAt() uint32 {
 	return e.expiresAt
 }
 
-// MarshalBinary serialized entry into binary data
+// MarshalBinary serialized entry into binary data.
 func (e entry) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
@@ -118,7 +118,7 @@ func (e entry) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
-// MarshalBinary de-serialized entry from binary data
+// MarshalBinary de-serialized entry from binary data.
 func (e *entry) UnmarshalBinary(data []byte) error {
 	e.seq = binary.LittleEndian.Uint64(data[:8])
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])

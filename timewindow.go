@@ -29,26 +29,30 @@ import (
 
 type (
 	winEntry struct {
-		seq       uint64
+		sequence  uint64
 		expiresAt uint32
 	}
 	winBlock struct {
-		topicHash uint64
-		entries   [seqsPerWindowBlock]winEntry
-		next      int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order)
-		cutoff    int64
-		entryIdx  uint16
+		topicHash  uint64
+		entries    [seqsPerWindowBlock]winEntry
+		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order).
+		cutoffTime int64
+		entryIdx   uint16
 
-		dirty  bool // dirty used during timeWindow append and not persisted
-		leased bool // leased used in timeWindow write and not persisted
+		dirty  bool // dirty used during timeWindow append and not persisted.
+		leased bool // leased used in timeWindow write and not persisted.
 	}
 )
 
-func (e winEntry) Seq() uint64 {
-	return e.seq
+func newWinEntry(seq uint64, expiresAt uint32) winEntry {
+	return winEntry{sequence: seq, expiresAt: expiresAt}
 }
 
-func (e winEntry) ExpiresAt() uint32 {
+func (e winEntry) seq() uint64 {
+	return e.sequence
+}
+
+func (e winEntry) expiryTime() uint32 {
 	return e.expiresAt
 }
 
@@ -56,36 +60,36 @@ func (e winEntry) isExpired() bool {
 	return e.expiresAt != 0 && e.expiresAt <= uint32(time.Now().Unix())
 }
 
-func (w winBlock) Cutoff(cutoff int64) bool {
-	return w.cutoff != 0 && w.cutoff < cutoff
+func (w winBlock) cutoff(cutoff int64) bool {
+	return w.cutoffTime != 0 && w.cutoffTime < cutoff
 }
 
-// MarshalBinary serialized window block into binary data
+// MarshalBinary serialized window block into binary data.
 func (w winBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 	for i := 0; i < seqsPerWindowBlock; i++ {
 		e := w.entries[i]
-		binary.LittleEndian.PutUint64(buf[:8], e.seq)
+		binary.LittleEndian.PutUint64(buf[:8], e.sequence)
 		binary.LittleEndian.PutUint32(buf[8:12], e.expiresAt)
 		buf = buf[12:]
 	}
-	binary.LittleEndian.PutUint64(buf[:8], uint64(w.cutoff))
+	binary.LittleEndian.PutUint64(buf[:8], uint64(w.cutoffTime))
 	binary.LittleEndian.PutUint64(buf[8:16], w.topicHash)
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(w.next))
 	binary.LittleEndian.PutUint16(buf[24:26], w.entryIdx)
 	return data
 }
 
-// UnmarshalBinary de-serialized window block from binary data
+// UnmarshalBinary de-serialized window block from binary data.
 func (w *winBlock) UnmarshalBinary(data []byte) error {
 	for i := 0; i < seqsPerWindowBlock; i++ {
-		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808
-		w.entries[i].seq = binary.LittleEndian.Uint64(data[:8])
+		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
+		w.entries[i].sequence = binary.LittleEndian.Uint64(data[:8])
 		w.entries[i].expiresAt = binary.LittleEndian.Uint32(data[8:12])
 		data = data[12:]
 	}
-	w.cutoff = int64(binary.LittleEndian.Uint64(data[:8]))
+	w.cutoffTime = int64(binary.LittleEndian.Uint64(data[:8]))
 	w.topicHash = binary.LittleEndian.Uint64(data[8:16])
 	w.next = int64(binary.LittleEndian.Uint64(data[16:24]))
 	w.entryIdx = binary.LittleEndian.Uint16(data[24:26])
@@ -117,21 +121,19 @@ type (
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
-	timeID struct {
+	timeMark struct {
 		refs      uint
 		lastUnref int64
 	}
 	timeInfo struct {
 		windowIdx int32
-		incount   int64
-		wincount  int64
 	}
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
 		timeInfo
-		timeIDs         map[int64]timeID // map of timeID pending commit to WAL
-		releasedTimeIDs map[int64]timeID // map of timeID applied to WAL
+		timeIDs         map[int64]timeMark // map of timeID pending commit.
+		releasedTimeIDs map[int64]timeMark // map of timeID commit applied.
 		*windowBlocks
 		*expiryWindowBucket
 		opts *timeOptions
@@ -155,8 +157,8 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 	return &opts
 }
 
-func (id timeID) isExpired(slotDurations int64) bool {
-	if id.lastUnref > 0 && id.lastUnref+slotDurations < time.Now().UTC().UnixNano() {
+func (tm timeMark) isReleased(slotDurations int64) bool {
+	if tm.lastUnref > 0 && tm.lastUnref+slotDurations < time.Now().UTC().UnixNano() {
 		return true
 	}
 	return false
@@ -180,7 +182,7 @@ type windowBlocks struct {
 	consistent *hash.Consistent
 }
 
-// newWindows creates a new concurrent windows.
+// newWindowBlocks creates a new concurrent windows.
 func newWindowBlocks() *windowBlocks {
 	wb := &windowBlocks{
 		window:     make([]*timeWindow, nShards),
@@ -194,7 +196,7 @@ func newWindowBlocks() *windowBlocks {
 	return wb
 }
 
-// getWindow returns shard under given blockID
+// getWindowBlock returns shard under given blockID.
 func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 	w.RLock()
 	defer w.RUnlock()
@@ -203,7 +205,7 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]timeID), releasedTimeIDs: make(map[int64]timeID)}
+	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]timeMark), releasedTimeIDs: make(map[int64]timeMark)}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -211,7 +213,7 @@ func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 }
 
 func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) error {
-	// get windowBlock shard
+	// get windowBlock shard.
 	wb := tw.getWindowBlock(topicHash)
 	wb.mu.Lock()
 	defer wb.mu.Unlock()
@@ -225,7 +227,6 @@ func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) erro
 	} else {
 		wb.entries[key] = windowEntries{e}
 	}
-	// tw.incount++
 	return nil
 }
 
@@ -236,7 +237,7 @@ func (w *timeWindow) reset() error {
 	return nil
 }
 
-// foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file
+// foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file.
 func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntries) (bool, error)) (err error) {
 	var keys []key
 	winEntries := make(map[key]windowEntries)
@@ -244,8 +245,7 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 		wb := tw.windowBlocks.window[i]
 		wb.mu.RLock()
 		for key := range wb.entries {
-			// tw.wincount += int64(len(wb.entries[key]))
-			// skip current timeID those are not committed to WAL
+			// skip timeIDs if not committed.
 			if ok := tw.timeID(key.timeID); ok {
 				continue
 			}
@@ -263,8 +263,6 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 		}
 		wb.mu.Unlock()
 	}
-
-	// fmt.Println("timeWindow.Sync: timeIDs, incount, wincount", len(tw.timeIDs), tw.incount, tw.wincount)
 
 	sort.Slice(keys[:], func(i, j int) bool {
 		return keys[i].timeID < keys[j].timeID
@@ -285,7 +283,7 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 }
 
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
-func (tw *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error)) (err error) {
+func (tw *timeWindowBucket) foreachWindowBlock(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
 	nWinBlocks := tw.windowIndex()
 	for winBlockIdx <= nWinBlocks {
@@ -297,18 +295,21 @@ func (tw *timeWindowBucket) foreachWindowBlock(f func(windowHandle) (bool, error
 			}
 			return err
 		}
-		if stop, err := f(b); stop || err != nil {
+		winBlockIdx++
+		if b.entryIdx == 0 || b.next != 0 {
+			continue
+		}
+		if stop, err := f(b.entries[0].sequence, b.topicHash, b.offset); stop || err != nil {
 			return err
 		}
-		winBlockIdx++
 	}
 	return nil
 }
 
-// ilookup lookups window entries from timeWindowBucket and not yet sync to DB
+// ilookup lookups window entries from timeWindowBucket and not yet sync to DB.
 func (tw *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries windowEntries) {
 	winEntries = make([]winEntry, 0)
-	// get windowBlock shard
+	// get windowBlock shard.
 	wb := tw.getWindowBlock(topicHash)
 	wb.mu.RLock()
 	defer wb.mu.RUnlock()
@@ -331,7 +332,7 @@ func (tw *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 						expiryCount++
 						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 					}
-					// if id is expired it does not return an error but continue the iteration
+					// if id is expired it does not return an error but continue the iteration.
 					continue
 				}
 				winEntries = append(winEntries, we)
@@ -348,9 +349,9 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 	if len(winEntries) >= limit {
 		return winEntries
 	}
-	next := func(off int64, f func(windowHandle) (bool, error)) error {
+	next := func(blockOff int64, f func(windowHandle) (bool, error)) error {
 		for {
-			b := windowHandle{file: tw.file, offset: off}
+			b := windowHandle{file: tw.file, offset: blockOff}
 			if err := b.read(); err != nil {
 				return err
 			}
@@ -360,7 +361,7 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 			if b.next == 0 {
 				return nil
 			}
-			off = b.next
+			blockOff = b.next
 		}
 	}
 	expiryCount := 0
@@ -377,7 +378,7 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 						expiryCount++
 						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 					}
-					// if id is expired it does not return an error but continue the iteration
+					// if id is expired it does not return an error but continue the iteration.
 					continue
 				}
 				winEntries = append(winEntries, we)
@@ -392,13 +393,13 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 					expiryCount++
 					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
-				// if id is expired it does not return an error but continue the iteration
+				// if id is expired it does not return an error but continue the iteration.
 				continue
 			}
 			winEntries = append(winEntries, we)
 
 		}
-		if b.Cutoff(cutoff) {
+		if b.cutoff(cutoff) {
 			return true, nil
 		}
 		return false, nil
@@ -417,46 +418,46 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-func (tw *timeWindowBucket) timeID(timeMark int64) bool {
+func (tw *timeWindowBucket) timeID(timeID int64) bool {
 	tw.RLock()
 	defer tw.RUnlock()
-	if timeID, ok := tw.releasedTimeIDs[timeMark]; ok {
-		if timeID.isExpired(tw.opts.slotDuration.Nanoseconds()) {
-			delete(tw.releasedTimeIDs, timeMark)
+	if timeMark, ok := tw.releasedTimeIDs[timeID]; ok {
+		if timeMark.isReleased(tw.opts.slotDuration.Nanoseconds()) {
+			delete(tw.releasedTimeIDs, timeID)
 			return false
 		}
 		return true
 	}
-	_, ok := tw.timeIDs[timeMark]
+	_, ok := tw.timeIDs[timeID]
 	return ok
 }
 
 func (tw *timeWindowBucket) newTimeID() int64 {
 	tw.Lock()
 	defer tw.Unlock()
-	timeMark := time.Now().UTC().Truncate(tw.opts.slotDuration).Unix()
-	if timeID, ok := tw.timeIDs[timeMark]; ok {
-		timeID.refs++
-		return timeMark
+	timeID := time.Now().UTC().Truncate(tw.opts.slotDuration).Unix()
+	if timeMark, ok := tw.timeIDs[timeID]; ok {
+		timeMark.refs++
+		return timeID
 	}
-	tw.timeIDs[timeMark] = timeID{refs: 1}
-	return timeMark
+	tw.timeIDs[timeID] = timeMark{refs: 1}
+	return timeID
 }
 
-func (tw *timeWindowBucket) releaseTimeID(timeMark int64) {
+func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
 	tw.Lock()
 	defer tw.Unlock()
-	timeID, ok := tw.timeIDs[timeMark]
+	timeMark, ok := tw.timeIDs[timeID]
 	if !ok {
 		return
 	}
-	timeID.refs--
-	if timeID.refs > 0 {
-		tw.timeIDs[timeMark] = timeID
+	timeMark.refs--
+	if timeMark.refs > 0 {
+		tw.timeIDs[timeID] = timeMark
 	} else {
-		delete(tw.timeIDs, timeMark)
-		timeID.lastUnref = time.Now().UTC().UnixNano()
-		tw.releasedTimeIDs[timeMark] = timeID
+		delete(tw.timeIDs, timeID)
+		timeMark.lastUnref = time.Now().UTC().UnixNano()
+		tw.releasedTimeIDs[timeID] = timeMark
 	}
 }
 

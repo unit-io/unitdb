@@ -18,7 +18,6 @@ package wal
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -27,7 +26,7 @@ import (
 	"github.com/unit-io/bpool"
 )
 
-// LogStatus represents the state of log, written to applied
+// LogStatus represents the state of log, written to applied.
 type LogStatus uint16
 
 const (
@@ -52,17 +51,17 @@ const (
 
 type logs []logInfo
 type (
-	// WALInfo provides WAL stats
+	// WALInfo provides WAL stats.
 	WALInfo struct {
 		logCountWritten int64
 		logCountApplied int64
 		entriesWritten  int64
 		entriesApplied  int64
 	}
-	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors
+	// WAL write ahead logs to recover db commit failure dues to db crash or other unexpected errors.
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
-		// ensure a clean shutdown
+		// ensure a clean shutdown.
 		wg           sync.WaitGroup
 		mu           sync.RWMutex
 		releaseLockC chan struct{}
@@ -82,7 +81,7 @@ type (
 	}
 
 	// Options wal options to create new WAL. WAL logs uses cyclic rotation to avoid fragmentation.
-	// It allocates free blocks only when log reaches target size
+	// It allocates free blocks only when log reaches target size.
 	Options struct {
 		Path       string
 		TargetSize int64
@@ -169,7 +168,6 @@ func (wal *WAL) recoverLogHeaders() error {
 			return err
 		}
 		if l.offset < 0 || l.status > logStatusReleased {
-			fmt.Println("wal.recoverLogHeader: logInfo ", wal.logFile.segments, l)
 			return nil
 		}
 		wal.logs = append(wal.logs, l)
@@ -177,7 +175,7 @@ func (wal *WAL) recoverLogHeaders() error {
 	}
 }
 
-// recoverWal recovers a WAL for the log written but not released. It also updates free blocks
+// recoverWal recovers a WAL for the log written but not released. It also updates free blocks.
 func (wal *WAL) recoverWal() error {
 	// Truncate log file.
 	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
@@ -246,7 +244,7 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 	return err1
 }
 
-// Reset resets log file and log segments
+// Reset resets log file and log segments.
 func (wal *WAL) Reset() error {
 	wal.pendingLogs = make(map[int64]logs)
 	if err := wal.logFile.reset(); err != nil {
@@ -262,7 +260,7 @@ func (wal *WAL) Reset() error {
 	return nil
 }
 
-//Sync syncs log entries to disk
+//Sync syncs log entries to disk.
 func (wal *WAL) Sync() error {
 	wal.writeHeader()
 	return wal.logFile.Sync()
@@ -276,15 +274,15 @@ func (wal *WAL) Close() error {
 	}
 	close(wal.closeC)
 
-	// acquire Lock
+	// acquire Lock.
 	wal.releaseLockC <- struct{}{}
 
-	// Make sure sync thread isn't running
+	// Make sure sync thread isn't running.
 	wal.wg.Wait()
 	return wal.logFile.Close()
 }
 
-// Set closed flag; return true if not already closed.
+// setClosed flag; return true if not already closed.
 func (wal *WAL) setClosed() bool {
 	if wal == nil {
 		return false
@@ -292,12 +290,12 @@ func (wal *WAL) setClosed() bool {
 	return atomic.CompareAndSwapUint32(&wal.closed, 0, 1)
 }
 
-// Check whether WAL was closed.
+// isClosed Checks whether WAL was closed.
 func (wal *WAL) isClosed() bool {
 	return atomic.LoadUint32(&wal.closed) != 0
 }
 
-// Check read ok status.
+// Ok checks read ok status.
 func (wal *WAL) ok() error {
 	if wal.isClosed() {
 		return errors.New("wal is closed.")
