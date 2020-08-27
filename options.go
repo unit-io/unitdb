@@ -37,10 +37,9 @@ type flags struct {
 
 // batchOptions is used to set options when using batch operation.
 type batchOptions struct {
-	// In concurrent batch writes order determines how to handle conflicts.
-	order      int8
-	contract   uint32
-	encryption bool
+	contract      uint32
+	encryption    bool
+	writeInterval time.Duration
 }
 
 // queryOptions is used to set options for DB query.
@@ -147,10 +146,8 @@ func WithBackgroundKeyExpiry() Options {
 // WithDefaultBatchOptions will set some default values for Batch operation.
 //   contract: MasterContract
 //   encryption: False
-//   AllowDuplicates: False
 func WithDefaultBatchOptions() Options {
 	return newFuncOption(func(o *options) {
-		o.batchOptions.order = 0
 		o.batchOptions.contract = message.MasterContract
 		o.batchOptions.encryption = false
 	})
@@ -167,6 +164,13 @@ func WithBatchContract(contract uint32) Options {
 func WithBatchEncryption() Options {
 	return newFuncOption(func(o *options) {
 		o.batchOptions.encryption = true
+	})
+}
+
+// WithBatchWriteInterval sets batch write interval to partial write large batch.
+func WithBatchWriteInterval(dur time.Duration) Options {
+	return newFuncOption(func(o *options) {
+		o.batchOptions.writeInterval = dur
 	})
 }
 

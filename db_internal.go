@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/message"
 )
 
@@ -175,6 +174,7 @@ func (db *DB) close() error {
 	// Signal all goroutines.
 	time.Sleep(db.opts.tinyBatchWriteInterval)
 	close(db.closeC)
+	db.batchPool.stopWait()
 
 	// Acquire lock.
 	db.writeLockC <- struct{}{}
@@ -345,31 +345,17 @@ func (db *DB) setEntry(e *Entry) error {
 	return nil
 }
 
-// tinyCommit commits tiny batch to write ahead log.
-func (db *DB) tinyCommit() error {
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.writeLockC <- struct{}{}
-	db.closeW.Add(1)
-	defer func() {
-		db.tinyBatch.buffer.Reset()
-		db.tinyBatch.reset()
-		db.closeW.Done()
-		<-db.writeLockC
-	}()
-
-	if db.tinyBatch.len() == 0 {
-		return nil
-	}
-
+// tinyWrite writes tiny batch to DB WAL.
+func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	offset := uint32(0)
-	data := db.tinyBatch.buffer.Bytes()
+	data := tinyBatch.buffer.Bytes()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
 	}
 
-	for i := uint32(0); i < db.tinyBatch.len(); i++ {
+	for i := uint32(0); i < tinyBatch.len(); i++ {
 		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
 		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
 			return err
@@ -377,50 +363,28 @@ func (db *DB) tinyCommit() error {
 		offset += dataLen
 	}
 
-	if err := <-logWriter.SignalInitWrite(db.getOrSetTimeID()); err != nil {
+	if err := <-logWriter.SignalInitWrite(tinyBatch.timeID()); err != nil {
 		return err
 	}
-	db.releaseTimeID(db.getOrSetTimeID())
-	db.meter.Puts.Inc(int64(db.tinyBatch.len()))
 	return nil
 }
 
-// commit commits batches to DB.
-func (db *DB) commit(timeID int64, l int, buf *bpool.Buffer) error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-
-	// commit writes batches into DB. The write happen synchronously.
+// tinyCommit commits tiny batch to DB.
+func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 	db.closeW.Add(1)
-	db.writeLockC <- struct{}{}
 	defer func() {
-		buf.Reset()
-		<-db.writeLockC
+		db.bufPool.Put(tinyBatch.buffer)
+		tinyBatch.abort()
 		db.closeW.Done()
 	}()
-
-	logWriter, err := db.wal.NewWriter()
-	if err != nil {
+	if err := db.tinyWrite(tinyBatch); err != nil {
 		return err
 	}
 
-	offset := uint32(0)
-	data := buf.Bytes()
-	for i := 0; i < l; i++ {
-		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
-			return err
-		}
-		offset += dataLen
+	if !tinyBatch.managed {
+		db.releaseTimeID(tinyBatch.timeID())
 	}
-
-	if err := <-logWriter.SignalInitWrite(timeID); err != nil {
-		return err
-	}
-
-	db.releaseTimeID(timeID)
-	db.meter.Puts.Inc(int64(l))
+	db.meter.Puts.Inc(int64(tinyBatch.len()))
 	return nil
 }
 
@@ -485,15 +449,6 @@ func (db *DB) decount(count uint64) uint64 {
 
 func (db *DB) timeID() int64 {
 	return db.timeWindow.newTimeID()
-}
-
-func (db *DB) getOrSetTimeID() int64 {
-	timeID := atomic.LoadInt64(&db.tinyBatch.ID)
-	if timeID == 0 {
-		timeID = db.timeID()
-		atomic.StoreInt64(&db.tinyBatch.ID, timeID)
-	}
-	return timeID
 }
 
 func (db *DB) releaseTimeID(timeID int64) {

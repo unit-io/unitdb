@@ -177,6 +177,7 @@ func benchmark2(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS 
 				i := 1
 				for {
 					db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
+						b.SetOptions(unitdb.WithBatchWriteInterval(1 * time.Second))
 						topic := append(topics[i-1], []byte("?ttl=1h")...)
 						for k := 0; k < batchSize; k++ {
 							if err := b.Put(topic, vals[k]); err != nil {

@@ -442,11 +442,7 @@ func (db *DB) PutEntry(e *Entry) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
-	// The write happen synchronously.
-	db.writeLockC <- struct{}{}
-	defer func() {
-		<-db.writeLockC
-	}()
+
 	switch {
 	case len(e.Topic) == 0:
 		return errTopicEmpty
@@ -468,7 +464,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 
-	if err := db.timeWindow.add(db.getOrSetTimeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
+	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
 		return err
 	}
 
@@ -479,6 +475,10 @@ func (db *DB) PutEntry(e *Entry) error {
 		db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 	}
 
+	db.tinyBatchLockC <- struct{}{}
+	defer func() {
+		<-db.tinyBatchLockC
+	}()
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cache)+4))
 	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {

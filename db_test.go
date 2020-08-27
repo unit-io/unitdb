@@ -126,7 +126,7 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	db.tinyCommit()
+	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -203,55 +203,6 @@ func TestBatch(t *testing.T) {
 	verifyMsgsAndClose()
 }
 
-func TestBatchGroup(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	contract, err := db.NewContract()
-	if err != nil {
-		t.Fatal(err)
-	}
-	topic := []byte("unit3.test")
-
-	var i uint16
-	var n uint16 = 50
-
-	// var wg sync.WaitGroup
-	batch := func(b *Batch, completed <-chan struct{}) error {
-		// wg.Add(1)
-		for i = 0; i < n; i++ {
-			topic := append(topic, []byte("?ttl=1h")...)
-			val := []byte(fmt.Sprintf("msg.%2d", i))
-			if err := db.PutEntry(NewEntry(topic, val).WithContract(contract)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return err
-	}
-
-	g := db.NewBatchGroup()
-	g.Add(batch)
-	g.Add(batch)
-	g.Add(batch)
-
-	if err := g.Run(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := db.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	for i = 0; i < n; i++ {
-		_, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestExpiry(t *testing.T) {
 	cleanup("test.db")
 	db, err := Open("test.db", WithMutable(), WithBackgroundKeyExpiry())
@@ -311,7 +262,7 @@ func TestAbort(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	db.tinyCommit()
+	// db.tinyCommit()
 	dbsync := syncHandle{internal: internal{DB: db}}
 	dbabort := syncHandle{internal: dbsync.internal}
 	dbabort.startSync()
@@ -341,7 +292,7 @@ func TestLeasing(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	db.tinyCommit()
+	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +310,7 @@ func TestLeasing(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	db.tinyCommit()
+	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}

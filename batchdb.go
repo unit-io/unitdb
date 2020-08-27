@@ -17,24 +17,36 @@
 package unitdb
 
 import (
-	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/bpool"
-	"golang.org/x/sync/errgroup"
 )
 
-type tinyBatch struct {
-	ID         int64
-	entryCount uint32
-	buffer     *bpool.Buffer
-}
+type (
+	batchIndex struct {
+		delFlag bool
+		offset  int64
+	}
+	tinyBatch struct {
+		sync.RWMutex
+		ID      int64
+		managed bool
+		buffer  *bpool.Buffer
 
-func (b *tinyBatch) reset() {
-	b.entryCount = 0
-	atomic.StoreInt64(&b.ID, 0)
-	atomic.StoreUint32(&b.entryCount, 0)
+		entryCount uint32
+		size       int64
+		index      []batchIndex
+
+		doneChan chan struct{}
+	}
+)
+
+func (b *tinyBatch) timeID() int64 {
+	b.RLock()
+	defer b.RUnlock()
+	return b.ID
 }
 
 func (b *tinyBatch) len() uint32 {
@@ -45,15 +57,125 @@ func (b *tinyBatch) incount() uint32 {
 	return atomic.AddUint32(&b.entryCount, 1)
 }
 
+func (b *tinyBatch) abort() {
+	b.Lock()
+	defer b.Unlock()
+	b.ID = 0
+	b.entryCount = 0
+}
+
+// setManaged sets batch managed.
+func (b *tinyBatch) setManaged() {
+	b.managed = true
+}
+
+// unsetManaged sets batch unmanaged.
+func (b *tinyBatch) unsetManaged() {
+	b.managed = false
+}
+
+type batchPool struct {
+	db           *DB
+	maxBatches   int
+	writeQueue   chan *tinyBatch
+	batchQueue   chan *tinyBatch
+	waitingQueue queue
+	stoppedChan  chan struct{}
+	stopOnce     sync.Once
+	stopped      int32
+	waiting      int32
+	wait         bool
+}
+
 // batchdb manages the batch execution.
 type batchdb struct {
-	// batchDB.
-	commitTimeID int64 // Time ID committed to WAL.
-	batchQueue   chan *Batch
-
+	*batchPool
 	bufPool *bpool.BufferPool
+
 	//tiny Batch
-	tinyBatch *tinyBatch
+	tinyBatchLockC chan struct{}
+	tinyBatch      *tinyBatch
+}
+
+func (db *DB) newBatchPool(maxBatches int) *batchPool {
+	// There must be at least one batch.
+	if maxBatches < 1 {
+		maxBatches = 1
+	}
+
+	pool := &batchPool{
+		db:          db,
+		maxBatches:  maxBatches,
+		writeQueue:  make(chan *tinyBatch, 1),
+		batchQueue:  make(chan *tinyBatch),
+		stoppedChan: make(chan struct{}),
+	}
+
+	// start the batch dispatcher
+	go pool.dispatch()
+
+	return pool
+}
+
+func (db *DB) initbatchdb(opts *options) error {
+	bdb := &batchdb{
+		bufPool:        bpool.NewBufferPool(opts.bufferSize, nil),
+		tinyBatchLockC: make(chan struct{}, 1),
+	}
+
+	db.batchdb = bdb
+	bdb.batchPool = db.newBatchPool(nPoolSize)
+	bdb.tinyBatch = &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+
+	go db.tinyBatchLoop(opts.tinyBatchWriteInterval)
+	return nil
+}
+
+// size returns maximum number of concurrent batches.
+func (p *batchPool) size() int {
+	return p.maxBatches
+}
+
+// stop tells dispatcher to exit, and wether or not complete queued batches.
+func (p *batchPool) stop(wait bool) {
+	p.stopOnce.Do(func() {
+		atomic.StoreInt32(&p.stopped, 1)
+		p.wait = wait
+		// Close write queue and wait for currently running batches to finish
+		close(p.writeQueue)
+	})
+	<-p.stoppedChan
+}
+
+// stopWait stops batch pool and wait for all queued batches to complete.
+func (p *batchPool) stopWait() {
+	p.stop(true)
+}
+
+// stopped returns true if batch pool has been stopped.
+func (p *batchPool) isStopped() bool {
+	return atomic.LoadInt32(&p.stopped) != 0
+}
+
+// waitQueueSize returns count of batches in waitingQueue.
+func (p *batchPool) waiQueueSize() int {
+	return int(atomic.LoadInt32(&p.waiting))
+}
+
+// write enqueues a batch to write.
+func (p *batchPool) write(tinyBatch *tinyBatch) {
+	if tinyBatch != nil {
+		p.writeQueue <- tinyBatch
+	}
+}
+
+// witeWait enqueues the given batch and waits for it to be executed.
+func (p *batchPool) writeWait(tinyBatch *tinyBatch) {
+	if tinyBatch == nil {
+		return
+	}
+	p.writeQueue <- tinyBatch
+	<-tinyBatch.doneChan
 }
 
 // batch starts a new batch.
@@ -61,25 +183,9 @@ func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
-	b := &Batch{ID: db.timeID(), opts: opts, db: db}
-	b.buffer = db.bufPool.Get()
-
+	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1)}
+	b.tinyBatch = &tinyBatch{ID: db.timeID(), managed: true, buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
 	return b
-}
-
-func (db *DB) initbatchdb(opts *options) error {
-	bdb := &batchdb{
-		// batchDB
-		bufPool:    bpool.NewBufferPool(opts.bufferSize, nil),
-		tinyBatch:  &tinyBatch{ID: db.timeID()},
-		batchQueue: make(chan *Batch, nPoolSize),
-	}
-
-	db.batchdb = bdb
-	db.tinyBatch.buffer = db.bufPool.Get()
-
-	db.tinyBatchLoop(opts.tinyBatchWriteInterval)
-	return nil
 }
 
 // Batch executes a function within the context of a read-write managed transaction.
@@ -94,6 +200,9 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 
 	b.setManaged()
 	b.commitComplete = make(chan struct{})
+	if b.opts.writeInterval != 0 {
+		go b.writeLoop(b.opts.writeInterval)
+	}
 	// If an error is returned from the function then rollback and return error.
 	if err := fn(b, b.commitComplete); err != nil {
 		b.Abort()
@@ -105,114 +214,219 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
-// BatchGroup runs multiple batches concurrently without causing conflicts.
-type BatchGroup struct {
-	fn []func(*Batch, <-chan struct{}) error
-	*DB
-}
-
-// NewBatchGroup create new group to runs multiple batches concurrently without causing conflicts.
-func (db *DB) NewBatchGroup() *BatchGroup {
-	return &BatchGroup{DB: db}
-}
-
-// Add adds a function to the Group.
-// The function will be executed in its own goroutine when Run is called.
-// Add must be called before Run.
-func (g *BatchGroup) Add(fn func(*Batch, <-chan struct{}) error) {
-	g.fn = append(g.fn, fn)
-}
-
-// Run exectues each function registered via Add in its own goroutine.
-// Run blocks until all functions have returned.
-// The first function to return will trigger the closure of the channel
-// passed to each function, who should in turn, return.
-// The return value from the first function to exit will be returned to
-// the caller of Run.
-func (g *BatchGroup) Run() error {
-	// if there are no registered functions, return immediately.
-	if len(g.fn) < 1 {
-		return nil
-	}
-
-	stop := make(chan struct{})
-	eg := &errgroup.Group{}
-	g.batchQueue = make(chan *Batch, len(g.fn))
-	for i, fn := range g.fn {
-		func(order int, fn func(*Batch, <-chan struct{}) error) {
-			b := g.batch()
-			b.setManaged()
-			b.setGrouped(g)
-			b.setOrder(int8(order))
-			eg.Go(func() error {
-				return fn(b, stop)
-			})
-		}(i, fn)
-	}
-
-	// Check whether any of the goroutines failed. Since eg is accumulating the
-	// errors, we don't need to send them (or check for them) in the individual
-	// results sent on the channel.
-	if err := eg.Wait(); err != nil {
-		return err
-	}
-
-	close(g.batchQueue)
-	eg.Go(func() error {
-		defer func() {
-			g.Abort()
-			close(stop)
-		}()
-		return g.writeBatchGroup()
-	})
-
-	return eg.Wait()
-}
-
-func (g *BatchGroup) writeBatchGroup() error {
-	g.closeW.Add(1)
-	defer g.closeW.Done()
-	var batches []*Batch
-	for batch := range g.batchQueue {
-		batches = append(batches, batch)
-	}
-	sort.Slice(batches[:], func(i, j int) bool {
-		return batches[i].order < batches[j].order
-	})
-	b := g.batch()
-	b.commitComplete = make(chan struct{})
-	for _, batch := range batches {
-		logger.Debug().Str("Context", "batchdb.writeBatchGroup").Int8("oder", batch.order).Int("length", len(g.batchQueue))
-		// batch.index = append(batch.index, batch.pendingWrites...)
-		b.append(batch)
-	}
-	return b.Commit()
-}
-
-// tinyBatchLoop handles tiny bacthes write.
+// tinyBatchLoop handles tiny batches.
 func (db *DB) tinyBatchLoop(interval time.Duration) {
-	tinyBatchWriterTicker := time.NewTicker(interval)
-	go func() {
-		defer func() {
-			tinyBatchWriterTicker.Stop()
-		}()
-		for {
-			select {
-			case <-db.closeC:
-				return
-			case <-tinyBatchWriterTicker.C:
-				if err := db.tinyCommit(); err != nil {
-					logger.Error().Err(err).Str("context", "tinyBatchLoop").Msgf("Error committing tinyBatch")
-				}
+	db.closeW.Add(1)
+	defer db.closeW.Done()
+	tinyBatchTicker := time.NewTicker(interval)
+	for {
+		select {
+		case <-db.closeC:
+			tinyBatchTicker.Stop()
+			return
+		case <-tinyBatchTicker.C:
+			if db.tinyBatch.len() != 0 {
+				db.tinyBatchLockC <- struct{}{}
+				db.batchPool.write(db.tinyBatch)
+				db.tinyBatch = &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+				<-db.tinyBatchLockC
 			}
 		}
-	}()
+	}
 }
 
-//Abort abort is a batch cleanup operation on batch group complete.
-func (g *BatchGroup) Abort() {
-	for b := range g.batchQueue {
-		b.unsetManaged()
-		b.Abort()
+// dispatch handles tiny batch commit for the batches queue.
+func (p *batchPool) dispatch() {
+	defer close(p.stoppedChan)
+	timeout := time.NewTimer(2 * time.Second)
+	var batchCount int
+	var idle bool
+Loop:
+	for {
+		// As long as batches are in waiting queue, incoming
+		// batch are put into the waiting queueand batches to run are taken from waiting queue.
+		if p.waitingQueue.len() != 0 {
+			if !p.processWaitingQueue() {
+				break Loop
+			}
+			continue
+		}
+
+		select {
+		case tinyBatch, ok := <-p.writeQueue:
+			if !ok {
+				break Loop
+			}
+			select {
+			case p.batchQueue <- tinyBatch:
+			default:
+				if batchCount < nPoolSize {
+					go p.commit(tinyBatch, p.batchQueue)
+					batchCount++
+				} else {
+					// Enqueue batch to be executed later.
+					p.waitingQueue.push(tinyBatch)
+					atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
+				}
+			}
+			idle = false
+		case <-timeout.C:
+			if idle && batchCount > 0 {
+				if p.killIdleBatch() {
+					batchCount--
+				}
+			}
+			idle = true
+			timeout.Reset(2 * time.Second)
+		}
 	}
+
+	// If instructed to wait, then run batches that are already in queue.
+	if p.wait {
+		p.runQueuedBatches()
+	}
+
+	// Stop all remaining tinyBatch as it become ready.
+	for batchCount > 0 {
+		p.batchQueue <- nil
+		batchCount--
+	}
+
+	timeout.Stop()
+}
+
+// commit run initial tinyBatch commit, then start tinyBatch waiting for more.
+func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
+	if err := p.db.tinyCommit(tinyBatch); err != nil {
+		logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
+	}
+	close(tinyBatch.doneChan)
+
+	go p.tinyCommit(batchQueue)
+}
+
+// tinyCommit commits batch and stops when it receive a nil batch.
+func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
+	for tinyBatch := range batchQueue {
+		if tinyBatch == nil {
+			return
+		}
+
+		if err := p.db.tinyCommit(tinyBatch); err != nil {
+			logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
+		}
+		close(tinyBatch.doneChan)
+	}
+}
+
+// processWaiting queue puts new batches onto the waiting queue,
+// removes batches from the waiting queue. Returns false if batchPool is stopped.
+func (p *batchPool) processWaitingQueue() bool {
+	select {
+	case b, ok := <-p.writeQueue:
+		if !ok {
+			return false
+		}
+		p.waitingQueue.push(b)
+	case p.batchQueue <- p.waitingQueue.front():
+		p.waitingQueue.pop()
+	}
+	atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
+	return true
+}
+
+func (p *batchPool) killIdleBatch() bool {
+	select {
+	case p.batchQueue <- nil:
+		return true
+	default:
+		return false
+	}
+}
+
+// runQueuedBatches removes each batch from the waiting queue and
+// process it until queue is empty.
+func (p *batchPool) runQueuedBatches() {
+	if p.waitingQueue.len() != 0 {
+		p.batchQueue <- p.waitingQueue.pop()
+		atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
+	}
+}
+
+type queue struct {
+	buf   []*tinyBatch
+	head  int
+	tail  int
+	count int
+}
+
+// len returns the number of elements currently stored in the queue.
+func (q *queue) len() int {
+	return q.count
+}
+
+// push appends an element to the back of the queue.
+func (q *queue) push(elem *tinyBatch) {
+	q.grow()
+
+	q.buf[q.tail] = elem
+	// calculate new tail position.
+	q.tail = (q.tail + 1) & (len(q.buf) - 1) // bitwise modulus
+	q.count++
+}
+
+// pop removes and return an element from front of the queue.
+func (q *queue) pop() *tinyBatch {
+	if q.count <= 0 {
+		panic("batchPool: pop called on empty queue")
+	}
+	elem := q.buf[q.head]
+	q.buf[q.head] = nil
+	// Calculate new head position.
+	q.head = (q.head + 1) & (len(q.buf) - 1) // bitwise modulus
+	q.count--
+	q.shrink()
+	return elem
+}
+
+// front returns element at the front of the queue. This is the element
+// that would be returned by pop().
+func (q *queue) front() *tinyBatch {
+	if q.count <= 0 {
+		panic("batchPool: pop called on empty queue")
+	}
+	return q.buf[q.head]
+}
+
+// grow resizes the queue to fit exactly twice its current content.
+func (q *queue) grow() {
+	if len(q.buf) == 0 {
+		q.buf = make([]*tinyBatch, nPoolSize)
+		return
+	}
+	if q.count == len(q.buf) {
+		q.resize()
+	}
+}
+
+// shrink resizes the queue down if bugger if 1/4 full.
+func (q *queue) shrink() {
+	if len(q.buf) > nPoolSize && (q.count<<2) == len(q.buf) {
+		q.resize()
+	}
+}
+
+// resize resizes the queue to fit exactly twice its current content.
+func (q *queue) resize() {
+	newBuf := make([]*tinyBatch, q.count<<1)
+	if q.tail > q.head {
+		copy(newBuf, q.buf[q.head:q.tail])
+	} else {
+		n := copy(newBuf, q.buf[q.head:])
+		copy(newBuf[n:], q.buf[:q.tail])
+	}
+
+	q.head = 0
+	q.tail = q.count
+	q.buf = newBuf
 }
