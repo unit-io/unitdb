@@ -34,7 +34,6 @@ The unitdb is blazing fast specialized time-series database for microservices, I
    - [Writing to wildcard topics](#Writing-to-wildcard-topics)
    - [Topic isolation in batch operation](#Topic-isolation-in-batch-operation)
    - [Message encryption](#Message-encryption)
-   - [Batch group](#Batch-group)
  * [Statistics](#Statistics)
 
 ## Quick Start
@@ -270,33 +269,6 @@ Note, encryption can also be set on entire database using DB.Open() and set encr
 		b.Put(topic, []byte("msg for team alpha channel1"))
 		return nil
 	})
-
-```
-
-#### Batch group
-Use BatchGroup.Add() function to group batches and run concurrently without causing write conflict. Use the BatchGroup.Run to run group of batches concurrently. See usage example in below code snippet.
-
-```
-    g := db.NewBatchGroup()
-	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #1")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #1")))
-		return nil
-	})
-
-	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #2")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #2")))
-		return nil
-	})
-
-	g.Add(func(b *unitdb.Batch, completed <-chan struct{}) error {
-		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1?ttl=1h"), []byte("msg for team alpha channel1 #3")))
-		b.PutEntry(unitdb.NewEntry([]byte("teams.beta.ch1?ttl=1h"), []byte("msg for team beta channel1 #3")))
-		return nil
-	})
-
-	g.Run()
 
 ```
 

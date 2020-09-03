@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	nMutex = 16
+	nMutex = 100000
 )
 
 // mutex mutex to lock/unlock.

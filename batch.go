@@ -158,13 +158,20 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 		return err
 	}
 
-	data := b.tinyBatch.buffer.Bytes()
+	// data := b.tinyBatch.buffer.Bytes()
 	var e entry
 
 	for i, index := range b.tinyBatch.index {
 		off := index.offset
-		dataLen := binary.LittleEndian.Uint32(data[off : off+4])
-		entryData := data[off+4 : off+entrySize+4]
+		data, err := b.tinyBatch.buffer.Slice(off, off+4)
+		if err != nil {
+			return err
+		}
+		dataLen := int64(binary.LittleEndian.Uint32(data))
+		entryData, err := b.tinyBatch.buffer.Slice(off+4, off+entrySize+4)
+		if err != nil {
+			return err
+		}
 		if err := e.UnmarshalBinary(entryData); err != nil {
 			return err
 		}
@@ -178,9 +185,16 @@ func (b *Batch) writeInternal(fn func(i int, e entry, data []byte) error) error 
 		}
 
 		// put packed entry into memdb.
-		if err := fn(i, e, data[off+4:off+int64(dataLen)]); err != nil {
+		data = data[:0]
+		data, err = b.tinyBatch.buffer.Slice(off+4, off+dataLen)
+		if err != nil {
 			return err
 		}
+		if err := fn(i, e, data); err != nil {
+			return err
+		}
+		entryData = nil
+		data = nil
 	}
 	return nil
 }
@@ -191,17 +205,11 @@ func (b *Batch) Write() error {
 		return nil
 	}
 
+	defer b.db.bufPool.Put(b.tinyBatch.buffer)
+
 	topics := make(map[uint64]*message.Topic)
 
 	b.writeInternal(func(i int, e entry, data []byte) error {
-		blockID := startBlockIndex(e.seq)
-		memseq := b.db.cacheID ^ e.seq
-		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
-			return err
-		}
-		if err := b.db.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
-			return nil
-		}
 		if e.topicSize != 0 {
 			t, ok := topics[e.topicHash]
 			if !ok {
@@ -212,14 +220,24 @@ func (b *Batch) Write() error {
 			}
 			b.db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 		}
+		blockID := startBlockIndex(e.seq)
+		memseq := b.db.cacheID ^ e.seq
+		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
+			return err
+		}
+		if err := b.db.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
+			return nil
+		}
+		b.tinyBatch.entries = append(b.tinyBatch.entries, e.seq)
 		return nil
 	})
 
 	b.commmitTimeIDs = append(b.commmitTimeIDs, b.tinyBatch.timeID())
+	// fmt.Println("Batch: batch written ", b.tinyBatch.timeID())
 
 	b.tinyBatchLockC <- struct{}{}
 	b.db.batchPool.write(b.tinyBatch)
-	b.tinyBatch = &tinyBatch{ID: b.db.timeID(), managed: true, buffer: b.db.bufPool.Get(), doneChan: make(chan struct{})}
+	b.tinyBatch = b.db.newTinyBatch()
 	<-b.tinyBatchLockC
 	return nil
 }
@@ -249,9 +267,10 @@ func (b *Batch) writeLoop(interval time.Duration) {
 // On Commit complete batch operation signal to the caller if the batch is fully commited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed batch commit not allowed")
-
+	b.db.closeW.Add(1)
 	defer func() {
 		close(b.commitComplete)
+		b.db.closeW.Done()
 	}()
 
 	// Write if any pending entries in batch

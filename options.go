@@ -196,7 +196,7 @@ func WithDefaultOptions() Options {
 			o.queryOptions.maxQueryLimit = 100000
 		}
 		if o.bufferSize == 0 {
-			o.bufferSize = 1 << 27 // maximum size of a buffer to use in bufferpool (128MB).
+			o.bufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
 		}
 		if o.memdbSize == 0 {
 			o.memdbSize = 1 << 31 // maximum size of memdb (2GB).

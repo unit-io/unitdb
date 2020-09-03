@@ -39,6 +39,8 @@ type (
 		count          int64
 		entriesInvalid uint64
 
+		// buffer pool
+		// bufPool   *bpool.BufferPool
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
 		rawData   *bpool.Buffer
@@ -64,9 +66,9 @@ func (db *syncHandle) startSync() bool {
 	}
 	db.startBlockIdx = db.blocks()
 
-	db.rawWindow = db.bufPool.Get()
-	db.rawBlock = db.bufPool.Get()
-	db.rawData = db.bufPool.Get()
+	db.rawWindow = db.internal.bufPool.Get()
+	db.rawBlock = db.internal.bufPool.Get()
+	db.rawData = db.internal.bufPool.Get()
 
 	db.windowWriter = newWindowWriter(db.timeWindow, db.rawWindow)
 	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
@@ -85,9 +87,9 @@ func (db *syncHandle) finish() error {
 		return nil
 	}
 
-	db.bufPool.Put(db.rawWindow)
-	db.bufPool.Put(db.rawBlock)
-	db.bufPool.Put(db.rawData)
+	db.internal.bufPool.Put(db.rawWindow)
+	db.internal.bufPool.Put(db.rawBlock)
+	db.internal.bufPool.Put(db.rawData)
 
 	db.syncStatusOk = false
 	return nil

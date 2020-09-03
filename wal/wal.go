@@ -19,6 +19,7 @@ package wal
 import (
 	"errors"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,10 +31,11 @@ import (
 type LogStatus uint16
 
 const (
+	logStatusNone LogStatus = iota
 	// logStatusWritten indicates that the log has been written,
 	// but not completed. During recovery, logs with this status
 	// should be loaded and their updates should be provided to the user.
-	logStatusWritten LogStatus = iota
+	logStatusWritten
 
 	// logStatusApplied indicates that the logs has been written and
 	// applied. Logs with this status can be ignored during recovery,
@@ -98,7 +100,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	wal = &WAL{
 		releaseLockC: make(chan struct{}, 1),
 		pendingLogs:  make(map[int64]logs),
-		bufPool:      bpool.NewBufferPool(opts.TargetSize, nil),
+		bufPool:      bpool.NewBufferPool(opts.BufferSize, nil),
 		opts:         opts,
 		// close
 		closeC: make(chan struct{}, 1),
@@ -132,7 +134,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	wal.releaser(defaultLogReleaseInterval)
+	// wal.releaser(defaultLogReleaseInterval)
 
 	return wal, len(wal.logs) != 0, nil
 }
@@ -220,6 +222,11 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 
 	var err1 error
 	logs := wal.pendingLogs[id]
+
+	// sort wal logs by offset so that adjacent free blocks can be merged
+	sort.Slice(logs[:], func(i, j int) bool {
+		return logs[i].offset < logs[j].offset
+	})
 	for i := range logs {
 		if logs[i].status == logStatusWritten {
 			wal.logCountApplied++
@@ -260,7 +267,7 @@ func (wal *WAL) Reset() error {
 	return nil
 }
 
-//Sync syncs log entries to disk.
+// Sync syncs log entries to disk.
 func (wal *WAL) Sync() error {
 	wal.writeHeader()
 	return wal.logFile.Sync()
@@ -277,6 +284,7 @@ func (wal *WAL) Close() error {
 	// acquire Lock.
 	wal.releaseLockC <- struct{}{}
 
+	// fmt.Println("wal.Close: WAL Info ", wal.WALInfo, wal.pendingLogs)
 	// Make sure sync thread isn't running.
 	wal.wg.Wait()
 	return wal.logFile.Close()
@@ -313,7 +321,20 @@ func (wal *WAL) releaseLogs() error {
 		wal.wg.Done()
 	}()
 
-	for id, logs := range wal.pendingLogs {
+	var ids []int64
+	for id := range wal.pendingLogs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids[:], func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+
+	for _, id := range ids {
+		logs := wal.pendingLogs[id]
+		// sort wal logs by offset so that adjacent free blocks can be merged
+		sort.Slice(logs[:], func(i, j int) bool {
+			return logs[i].offset < logs[j].offset
+		})
 		l := len(logs)
 		for i := 0; i < l; i++ {
 			wal.logMerge(logs[i])

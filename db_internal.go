@@ -17,8 +17,8 @@
 package unitdb
 
 import (
-	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -177,12 +177,11 @@ func (db *DB) close() error {
 	db.batchPool.stopWait()
 
 	// Acquire lock.
-	db.writeLockC <- struct{}{}
 	db.syncLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
 	db.closeW.Wait()
-
+	fmt.Println("db.close: timeWindow count ", db.timeWindow.count, db.timeWindow.timeIDs)
 	return nil
 }
 
@@ -347,25 +346,28 @@ func (db *DB) setEntry(e *Entry) error {
 
 // tinyWrite writes tiny batch to DB WAL.
 func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
-	offset := uint32(0)
-	data := tinyBatch.buffer.Bytes()
-
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
 	}
 
-	for i := uint32(0); i < tinyBatch.len(); i++ {
-		dataLen := binary.LittleEndian.Uint32(data[offset : offset+4])
-		if err := <-logWriter.Append(data[offset+4 : offset+dataLen]); err != nil {
+	for _, seq := range tinyBatch.entries {
+		blockID := startBlockIndex(seq)
+		memseq := db.cacheID ^ seq
+		data, err := db.mem.Get(uint64(blockID), memseq)
+		if err != nil {
 			return err
 		}
-		offset += dataLen
+		if err := <-logWriter.Append(data); err != nil {
+			return err
+		}
+		data = nil
 	}
 
 	if err := <-logWriter.SignalInitWrite(tinyBatch.timeID()); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -373,10 +375,10 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 	db.closeW.Add(1)
 	defer func() {
-		db.bufPool.Put(tinyBatch.buffer)
 		tinyBatch.abort()
 		db.closeW.Done()
 	}()
+
 	if err := db.tinyWrite(tinyBatch); err != nil {
 		return err
 	}

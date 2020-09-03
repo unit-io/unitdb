@@ -37,11 +37,16 @@ type (
 
 		entryCount uint32
 		size       int64
+		entries    []uint64
 		index      []batchIndex
 
 		doneChan chan struct{}
 	}
 )
+
+func (db *DB) newTinyBatch() *tinyBatch {
+	return &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+}
 
 func (b *tinyBatch) timeID() int64 {
 	b.RLock()
@@ -61,7 +66,11 @@ func (b *tinyBatch) abort() {
 	b.Lock()
 	defer b.Unlock()
 	b.ID = 0
+	b.size = 0
 	b.entryCount = 0
+	b.entries = b.entries[:0]
+	b.index = b.index[:0]
+	close(b.doneChan)
 }
 
 // setManaged sets batch managed.
@@ -119,13 +128,13 @@ func (db *DB) newBatchPool(maxBatches int) *batchPool {
 
 func (db *DB) initbatchdb(opts *options) error {
 	bdb := &batchdb{
-		bufPool:        bpool.NewBufferPool(opts.bufferSize, nil),
+		bufPool:        bpool.NewBufferPool(opts.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
 		tinyBatchLockC: make(chan struct{}, 1),
 	}
 
 	db.batchdb = bdb
 	bdb.batchPool = db.newBatchPool(nPoolSize)
-	bdb.tinyBatch = &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+	bdb.tinyBatch = db.newTinyBatch()
 
 	go db.tinyBatchLoop(opts.tinyBatchWriteInterval)
 	return nil
@@ -158,7 +167,7 @@ func (p *batchPool) isStopped() bool {
 }
 
 // waitQueueSize returns count of batches in waitingQueue.
-func (p *batchPool) waiQueueSize() int {
+func (p *batchPool) waitQueueSize() int {
 	return int(atomic.LoadInt32(&p.waiting))
 }
 
@@ -184,7 +193,7 @@ func (db *DB) batch() *Batch {
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
 	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1)}
-	b.tinyBatch = &tinyBatch{ID: db.timeID(), managed: true, buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+	b.tinyBatch = db.newTinyBatch()
 	return b
 }
 
@@ -203,6 +212,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	if b.opts.writeInterval != 0 {
 		go b.writeLoop(b.opts.writeInterval)
 	}
+	// fmt.Println("Batch: batch started... ", b.tinyBatch.timeID())
 	// If an error is returned from the function then rollback and return error.
 	if err := fn(b, b.commitComplete); err != nil {
 		b.Abort()
@@ -225,10 +235,10 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
-			if db.tinyBatch.len() != 0 {
+			if len(db.tinyBatch.entries) != 0 {
 				db.tinyBatchLockC <- struct{}{}
 				db.batchPool.write(db.tinyBatch)
-				db.tinyBatch = &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+				db.tinyBatch = db.newTinyBatch()
 				<-db.tinyBatchLockC
 			}
 		}
@@ -300,7 +310,6 @@ func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
 	if err := p.db.tinyCommit(tinyBatch); err != nil {
 		logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
 	}
-	close(tinyBatch.doneChan)
 
 	go p.tinyCommit(batchQueue)
 }
@@ -315,7 +324,6 @@ func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
 		if err := p.db.tinyCommit(tinyBatch); err != nil {
 			logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
 		}
-		close(tinyBatch.doneChan)
 	}
 }
 

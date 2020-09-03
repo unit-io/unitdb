@@ -41,11 +41,8 @@ import (
 type DB struct {
 	// Need 64-bit alignment.
 	mutex
-	mac         *crypto.MAC
-	writeLockC  chan struct{}
-	syncLockC   chan struct{}
-	expiryLockC chan struct{}
-	// consistent     *hash.Consistent
+	mac        *crypto.MAC
+	syncLockC  chan struct{}
 	filter     Filter
 	lock       fs.LockFile
 	index      file
@@ -112,7 +109,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
 	timeOptions := &timeOptions{
-		slotDuration:        slotDur,
+		maxDuration:         options.syncDurationType * time.Duration(options.maxSyncDurations),
 		expDurationType:     time.Minute,
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.backgroundKeyExpiry,
@@ -128,16 +125,14 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	db := &DB{
-		mutex:       newMutex(),
-		lock:        lock,
-		index:       index,
-		data:        dataTable{file: data, lease: lease, offset: data.Size()},
-		timeWindow:  newTimeWindowBucket(timewindow, timeOptions),
-		lease:       lease,
-		filter:      Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
-		writeLockC:  make(chan struct{}, 1),
-		syncLockC:   make(chan struct{}, 1),
-		expiryLockC: make(chan struct{}, 1),
+		mutex:      newMutex(),
+		lock:       lock,
+		index:      index,
+		data:       dataTable{file: data, lease: lease, offset: data.Size()},
+		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
+		lease:      lease,
+		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
+		syncLockC:  make(chan struct{}, 1),
 		dbInfo: dbInfo{
 			blockIdx: -1,
 		},
@@ -193,8 +188,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 			return nil, err
 		}
 	}
-
-	// db.consistent = hash.InitConsistent(int(nMutex), int(nMutex))
 
 	// Create a new MAC from the key.
 	if db.mac, err = crypto.New(options.encryptionKey); err != nil {
@@ -376,11 +369,11 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 		}
 
-		if invalidCount == 0 || len(items) >= int(q.Limit) || len(q.winEntries) == limit {
+		if invalidCount == 0 || len(items) >= int(q.Limit) || len(q.winEntries) <= limit {
 			break
 		}
 
-		if len(q.winEntries) < int(q.Limit+invalidCount) {
+		if len(q.winEntries) <= int(q.Limit+invalidCount) {
 			start = limit
 			limit = len(q.winEntries)
 		} else {
@@ -458,16 +451,6 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 
-	blockID := startBlockIndex(e.seq)
-	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(uint64(blockID), memseq, e.cache); err != nil {
-		return err
-	}
-
-	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
-		return err
-	}
-
 	if e.topicSize != 0 {
 		t := new(message.Topic)
 		rawTopic := e.cache[entrySize+idSize : entrySize+idSize+e.topicSize]
@@ -479,14 +462,18 @@ func (db *DB) PutEntry(e *Entry) error {
 	defer func() {
 		<-db.tinyBatchLockC
 	}()
-	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.cache)+4))
-	if _, err := db.tinyBatch.buffer.Write(scratch[:]); err != nil {
+
+	blockID := startBlockIndex(e.seq)
+	memseq := db.cacheID ^ e.seq
+	if err := db.mem.Set(uint64(blockID), memseq, e.cache); err != nil {
 		return err
 	}
-	if _, err := db.tinyBatch.buffer.Write(e.cache); err != nil {
+
+	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
 		return err
 	}
+
+	db.tinyBatch.entries = append(db.tinyBatch.entries, e.seq)
 	db.tinyBatch.incount()
 	// reset message entry.
 	e.reset()
