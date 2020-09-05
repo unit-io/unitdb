@@ -45,6 +45,8 @@ type (
 )
 
 func (db *DB) newTinyBatch() *tinyBatch {
+	// Backoff to limit excess memroy usage
+	db.mem.Backoff()
 	return &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
 }
 
@@ -235,7 +237,7 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
-			if len(db.tinyBatch.entries) != 0 {
+			if db.tinyBatch.len() != 0 {
 				db.tinyBatchLockC <- struct{}{}
 				db.batchPool.write(db.tinyBatch)
 				db.tinyBatch = db.newTinyBatch()

@@ -134,7 +134,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		}
 	}
 
-	// wal.releaser(defaultLogReleaseInterval)
+	wal.releaser(defaultLogReleaseInterval)
 
 	return wal, len(wal.logs) != 0, nil
 }
@@ -208,6 +208,7 @@ func (wal *WAL) logMerge(log logInfo) error {
 	if released {
 		log.status = logStatusReleased
 	}
+
 	return nil
 }
 
@@ -321,24 +322,21 @@ func (wal *WAL) releaseLogs() error {
 		wal.wg.Done()
 	}()
 
-	var ids []int64
-	for id := range wal.pendingLogs {
-		ids = append(ids, id)
+	var allLogs []logInfo
+	for _, logs := range wal.pendingLogs {
+		allLogs = append(allLogs, logs...)
 	}
-	sort.Slice(ids[:], func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
 
-	for _, id := range ids {
-		logs := wal.pendingLogs[id]
-		// sort wal logs by offset so that adjacent free blocks can be merged
-		sort.Slice(logs[:], func(i, j int) bool {
-			return logs[i].offset < logs[j].offset
-		})
+	// sort wal logs by offset so that adjacent free blocks can be merged
+	sort.Slice(allLogs[:], func(i, j int) bool {
+		return allLogs[i].offset < allLogs[j].offset
+	})
+	l := len(allLogs)
+	for i := 0; i < l; i++ {
+		wal.logMerge(allLogs[i])
+	}
+	for id, logs := range wal.pendingLogs {
 		l := len(logs)
-		for i := 0; i < l; i++ {
-			wal.logMerge(logs[i])
-		}
 		for i := 0; i < l; i++ {
 			if logs[i].status == logStatusReleased {
 				// Remove log from wal

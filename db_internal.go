@@ -18,7 +18,6 @@ package unitdb
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -181,7 +180,7 @@ func (db *DB) close() error {
 
 	// Wait for all goroutines to exit.
 	db.closeW.Wait()
-	fmt.Println("db.close: timeWindow count ", db.timeWindow.count, db.timeWindow.timeIDs)
+	// fmt.Println("db.close: timeWindow count ", db.timeWindow.count, db.timeWindow.timeIDs)
 	return nil
 }
 
@@ -346,6 +345,8 @@ func (db *DB) setEntry(e *Entry) error {
 
 // tinyWrite writes tiny batch to DB WAL.
 func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
+	// Backoff to limit excess memroy usage
+	db.mem.Backoff()
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err

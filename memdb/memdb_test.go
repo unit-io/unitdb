@@ -24,7 +24,7 @@ import (
 
 func TestSimple(t *testing.T) {
 	size := int64(1 << 4)
-	mdb, err := Open(size)
+	mdb, err := Open(size, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

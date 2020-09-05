@@ -135,7 +135,6 @@ type (
 		file
 		timeInfo
 		releaseTimeMark timeMark
-		testTimeIDs     map[int64]struct{}
 		timeIDs         map[int64]timeMark // map of timeID pending commit.
 		releasedTimeIDs map[int64]timeMark // map of timeID commit applied.
 		*windowBlocks
@@ -216,7 +215,8 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{mutex: newMutex(), file: f, timeInfo: timeInfo{windowIdx: -1}, testTimeIDs: make(map[int64]struct{}), timeIDs: make(map[int64]timeMark), releasedTimeIDs: make(map[int64]timeMark)}
+	l := &timeWindowBucket{mutex: newMutex(), file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]timeMark), releasedTimeIDs: make(map[int64]timeMark)}
+	l.releaseTimeMark = timeMark{lastUnref: time.Now().UTC().UnixNano()}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -280,9 +280,6 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 				continue
 			}
 			// tw.count += int64(len(wb.entries[k]))
-			tw.Lock()
-			tw.testTimeIDs[k.timeID] = struct{}{}
-			tw.Unlock()
 			delete(wb.entries, k)
 			wb.mu.Unlock()
 		}

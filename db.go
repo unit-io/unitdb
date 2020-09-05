@@ -200,7 +200,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// Create a memdb.
-	mem, err := memdb.Open(options.memdbSize)
+	mem, err := memdb.Open(options.memdbSize, &memdb.Options{MaxElapsedTime: 2 * time.Second})
 	if err != nil {
 		return nil, err
 	}
