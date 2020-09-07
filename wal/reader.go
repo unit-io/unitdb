@@ -55,11 +55,11 @@ func (wal *WAL) NewReader() (*Reader, error) {
 // Read reads log written to the WAL but fully applied. It returns Reader iterator.
 func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 	// release log before read.
-	l := len(r.wal.logs)
+	l := len(r.wal.pendingLogs)
 	for i := 0; i < l; i++ {
-		if r.wal.logs[i].status == logStatusReleased {
+		if r.wal.pendingLogs[i].status == logStatusReleased {
 			// Remove log from wal.
-			r.wal.logs = r.wal.logs[:i+copy(r.wal.logs[i:], r.wal.logs[i+1:])]
+			r.wal.pendingLogs = r.wal.pendingLogs[:i+copy(r.wal.pendingLogs[i:], r.wal.pendingLogs[i+1:])]
 			l -= 1
 			i--
 		}
@@ -67,15 +67,16 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 
 	r.wal.mu.RLock()
 	defer func() {
-		r.wal.mu.RUnlock()
+		r.wal.pendingLogs = r.wal.pendingLogs[:0]
 		r.wal.bufPool.Put(r.buffer)
+		r.wal.mu.RUnlock()
 	}()
 	idx := 0
-	l = len(r.wal.logs)
+	l = len(r.wal.pendingLogs)
 	if l == 0 {
 		return nil
 	}
-	fileOff := r.wal.logs[0].offset
+	fileOff := r.wal.pendingLogs[0].offset
 	size := r.wal.logFile.Size() - fileOff
 	if size > r.wal.opts.BufferSize {
 		size = r.wal.opts.BufferSize
@@ -91,7 +92,7 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 			return err
 		}
 		for i := idx; i < l; i++ {
-			ul := r.wal.logs[i]
+			ul := r.wal.pendingLogs[i]
 			if ul.entryCount == 0 || ul.status != logStatusWritten {
 				offset += int64(ul.size)
 				offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
@@ -117,8 +118,8 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 			if stop, err := f(idx == l-1); stop || err != nil {
 				return err
 			}
-			r.wal.logs[i].status = logStatusReleased
-			if err := r.wal.logFile.writeMarshalableAt(r.wal.logs[i], r.wal.logs[i].offset); err != nil {
+			r.wal.pendingLogs[i].status = logStatusReleased
+			if err := r.wal.logFile.writeMarshalableAt(r.wal.pendingLogs[i], r.wal.pendingLogs[i].offset); err != nil {
 				return err
 			}
 			offset += int64(ul.size)

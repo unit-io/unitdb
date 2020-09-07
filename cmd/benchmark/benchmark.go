@@ -7,7 +7,6 @@ import (
 	"time"
 
 	_ "net/http/pprof"
-	_ "runtime/trace"
 
 	"github.com/unit-io/unitdb"
 	"golang.org/x/sync/errgroup"
@@ -69,15 +68,6 @@ func showProgress(gid int, total int) {
 func benchmark1(dir string, numKeys int, minKS int, maxKS int, minVS int, maxVS int, concurrency int) error {
 	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	// defer p.Stop()
-	// f, err := os.Create("trace.out")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// err = trace.Start(f)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// defer trace.Stop()
 	batchSize := numKeys / concurrency
 	dbpath := path.Join(dir, "bench_unitdb")
 	db, err := unitdb.Open(dbpath, nil, nil)

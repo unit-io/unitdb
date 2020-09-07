@@ -17,6 +17,7 @@
 package unitdb
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"math"
@@ -31,26 +32,22 @@ import (
 const (
 	entriesPerIndexBlock = 255 // (4096 i.e blocksize - 14 fixed/16 i.e entry size)
 	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
-	// MaxBlocks       = math.MaxUint32
-	nShards       = 16
-	nPoolSize     = 27
-	indexPostfix  = ".index"
-	dataPostfix   = ".data"
-	windowPostfix = ".win"
-	logPostfix    = ".log"
-	leasePostfix  = ".lease"
-	lockPostfix   = ".lock"
-	idSize        = 9 // message ID prefix with additional encryption bit.
-	filterPostfix = ".filter"
-	version       = 1 // file format version.
+	nShards              = 27
+	nPoolSize            = 27
+	indexPostfix         = ".index"
+	dataPostfix          = ".data"
+	windowPostfix        = ".win"
+	logPostfix           = ".log"
+	leasePostfix         = ".lease"
+	lockPostfix          = ".lock"
+	idSize               = 9 // message ID prefix with additional encryption bit.
+	filterPostfix        = ".filter"
+	version              = 1 // file format version.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
-
-	// slotDur to store timeWindow entries into slots for better sync performance.
-	slotDur = 100 * time.Millisecond
 
 	// maxTopicLength is the maximum size of a topic in bytes.
 	maxTopicLength = 1 << 16
@@ -103,9 +100,9 @@ func (db *DB) readHeader() error {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return err
 	}
-	// if !bytes.Equal(h.signature[:], signature[:]) {
-	// 	return errCorrupted
-	// }
+	if !bytes.Equal(h.signature[:], signature[:]) {
+		return errCorrupted
+	}
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
 	if err := db.lease.read(); err != nil {
@@ -180,7 +177,6 @@ func (db *DB) close() error {
 
 	// Wait for all goroutines to exit.
 	db.closeW.Wait()
-	// fmt.Println("db.close: timeWindow count ", db.timeWindow.count, db.timeWindow.timeIDs)
 	return nil
 }
 
@@ -355,10 +351,7 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	for _, seq := range tinyBatch.entries {
 		blockID := startBlockIndex(seq)
 		memseq := db.cacheID ^ seq
-		data, err := db.mem.Get(uint64(blockID), memseq)
-		if err != nil {
-			return err
-		}
+		data, _ := db.mem.Get(uint64(blockID), memseq)
 		if err := <-logWriter.Append(data); err != nil {
 			return err
 		}

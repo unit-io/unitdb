@@ -103,7 +103,6 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	// time.Sleep(100 * time.Millisecond)
 	verifyMsgsAndClose()
 
 	db, err = Open("test.db", nil, nil)
@@ -126,7 +125,6 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +147,6 @@ func TestBatch(t *testing.T) {
 	}
 	topic := []byte("unit2.test")
 
-	// if db.count != 0 {
-	// 	t.Fatal()
-	// }
-
 	var i uint16
 	var n uint16 = 100
 
@@ -162,25 +156,16 @@ func TestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		// var v, vals [][]byte
 		_, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
 		}
-		// for i = 0; i < n; i++ {
-		// 	val := []byte(fmt.Sprintf("msg.%2d", n-i-1))
-		// 	vals = append(vals, val)
-		// }
-		// if !reflect.DeepEqual(vals, v) {
-		// 	t.Fatalf("expected %v; got %v", vals, v)
-		// }
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
-		// wg.Add(1)
 		var ids [][]byte
 		for i = 0; i < n; i++ {
 			messageID := db.NewID()
@@ -262,7 +247,6 @@ func TestAbort(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// db.tinyCommit()
 	dbsync := syncHandle{internal: internal{DB: db}}
 	dbabort := syncHandle{internal: dbsync.internal}
 	dbabort.startSync()
@@ -292,7 +276,6 @@ func TestLeasing(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +293,6 @@ func TestLeasing(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	// db.tinyCommit()
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}

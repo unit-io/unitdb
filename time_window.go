@@ -127,16 +127,15 @@ type (
 	}
 	timeInfo struct {
 		windowIdx int32
-		count     int64
 	}
+	timeRecords      map[int64]timeMark
 	timeWindowBucket struct {
 		sync.RWMutex
-		mutex
 		file
 		timeInfo
-		releaseTimeMark timeMark
-		timeIDs         map[int64]timeMark // map of timeID pending commit.
-		releasedTimeIDs map[int64]timeMark // map of timeID commit applied.
+		releaseTimeMark     timeMark
+		timeRecords                     // map of timeID pending commit.
+		releasedTimeRecords timeRecords // map of timeID commit applied.
 		*windowBlocks
 		*expiryWindowBucket
 		opts *timeOptions
@@ -215,7 +214,7 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{mutex: newMutex(), file: f, timeInfo: timeInfo{windowIdx: -1}, timeIDs: make(map[int64]timeMark), releasedTimeIDs: make(map[int64]timeMark)}
+	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeRecords: make(map[int64]timeMark), releasedTimeRecords: make(map[int64]timeMark)}
 	l.releaseTimeMark = timeMark{lastUnref: time.Now().UTC().UnixNano()}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
@@ -262,10 +261,21 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 		return keys[i].timeID < keys[j].timeID
 	})
 
+	tw.RLock()
+	timeIDs := make(map[int64]struct{})
 	for _, k := range keys {
 		if !tw.isReleased(k.timeID) {
+			timeIDs[k.timeID] = struct{}{}
+		}
+	}
+	tw.RUnlock()
+
+	for _, k := range keys {
+		// Skip unreleased timeIDs.
+		if _, ok := timeIDs[k.timeID]; ok {
 			continue
 		}
+
 		for i := 0; i < nShards; i++ {
 			wb := tw.windowBlocks.window[i]
 			wb.mu.Lock()
@@ -279,13 +289,12 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 				wb.mu.Unlock()
 				continue
 			}
-			// tw.count += int64(len(wb.entries[k]))
 			delete(wb.entries, k)
 			wb.mu.Unlock()
 		}
 	}
 
-	// fmt.Println("timeWindow sync count: ", tw.count)
+	go tw.startExpiry()
 	return err
 }
 
@@ -428,12 +437,12 @@ func (w winBlock) validation(topicHash uint64) error {
 func (tw *timeWindowBucket) newTimeID() int64 {
 	tw.Lock()
 	defer tw.Unlock()
-	timeID := time.Now().UTC().Truncate(slotDur).UnixNano()
-	if tm, ok := tw.timeIDs[timeID]; ok {
+	timeID := time.Now().UTC().UnixNano()
+	if tm, ok := tw.timeRecords[timeID]; ok {
 		tm.refs++
 		return timeID
 	}
-	tw.timeIDs[timeID] = timeMark{refs: 1}
+	tw.timeRecords[timeID] = timeMark{refs: 1}
 	return timeID
 }
 
@@ -441,34 +450,38 @@ func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
 	tw.Lock()
 	defer tw.Unlock()
 
-	timeMark, ok := tw.timeIDs[timeID]
+	timeMark, ok := tw.timeRecords[timeID]
 	if !ok {
 		return
 	}
 	timeMark.refs--
 	if timeMark.refs > 0 {
-		tw.timeIDs[timeID] = timeMark
+		tw.timeRecords[timeID] = timeMark
 	} else {
-		delete(tw.timeIDs, timeID)
+		delete(tw.timeRecords, timeID)
 		timeMark.lastUnref = tw.releaseTimeMark.lastUnref
-		tw.releasedTimeIDs[timeID] = timeMark
+		tw.releasedTimeRecords[timeID] = timeMark
 	}
 }
 
 func (tw *timeWindowBucket) isReleased(timeID int64) bool {
-	tw.Lock()
-	defer tw.Unlock()
-
-	if tm, ok := tw.releasedTimeIDs[timeID]; ok {
-		if tm.isExpired(1 * time.Second) {
-			delete(tw.releasedTimeIDs, timeID)
-			return true
-		}
+	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
 		if tm.isReleased(tw.releaseTimeMark) {
 			return true
 		}
 	}
 	return false
+}
+
+func (tw *timeWindowBucket) startExpiry() {
+	tw.Lock()
+	defer tw.Unlock()
+
+	for timeID, tm := range tw.releasedTimeRecords {
+		if tm.isExpired(tw.opts.maxDuration) {
+			delete(tw.releasedTimeRecords, timeID)
+		}
+	}
 }
 
 func (tw *timeWindowBucket) windowIndex() int32 {

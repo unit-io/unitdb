@@ -149,6 +149,11 @@ func (p *batchPool) size() int {
 
 // stop tells dispatcher to exit, and wether or not complete queued batches.
 func (p *batchPool) stop(wait bool) {
+	// Acquire tinyBatch write lock
+	p.db.tinyBatchLockC <- struct{}{}
+	defer func() {
+		<-p.db.tinyBatchLockC
+	}()
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
@@ -222,7 +227,6 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 		return err
 	}
 	b.unsetManaged()
-	// defer b.Abort()
 	return b.Commit()
 }
 

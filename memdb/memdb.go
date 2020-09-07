@@ -409,6 +409,9 @@ func (cap *Capacity) NewTicker() *time.Timer {
 
 // Backoff backs-off mem store if the currentInterval is greater than Backoff threshold.
 func (db *DB) Backoff() {
+	if db.Capacity() < 1 {
+		return
+	}
 	t := db.cap.NewTicker()
 	select {
 	case <-t.C:

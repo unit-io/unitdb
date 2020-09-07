@@ -17,6 +17,7 @@
 package wal
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"sort"
@@ -51,8 +52,8 @@ const (
 	version                   = 1 // file format version
 )
 
-type logs []logInfo
 type (
+	logs map[int64][]logInfo
 	// WALInfo provides WAL stats.
 	WALInfo struct {
 		logCountWritten int64
@@ -70,7 +71,8 @@ type (
 
 		WALInfo
 		logs
-		pendingLogs map[int64]logs // map[id]logs
+		pendingLogs        []logInfo // used only for log recovery.
+		pendingReleaseLogs logs      // pendingReleaseLogs are logs applied but not yet merged.
 
 		bufPool *bpool.BufferPool
 		logFile file
@@ -98,10 +100,11 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 		opts.BufferSize = defaultBufferSize
 	}
 	wal = &WAL{
-		releaseLockC: make(chan struct{}, 1),
-		pendingLogs:  make(map[int64]logs),
-		bufPool:      bpool.NewBufferPool(opts.BufferSize, nil),
-		opts:         opts,
+		releaseLockC:       make(chan struct{}, 1),
+		logs:               make(map[int64][]logInfo),
+		pendingReleaseLogs: make(map[int64][]logInfo),
+		bufPool:            bpool.NewBufferPool(opts.BufferSize, nil),
+		opts:               opts,
 		// close
 		closeC: make(chan struct{}, 1),
 	}
@@ -136,7 +139,7 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 
 	wal.releaser(defaultLogReleaseInterval)
 
-	return wal, len(wal.logs) != 0, nil
+	return wal, len(wal.pendingLogs) != 0, nil
 }
 
 func (wal *WAL) writeHeader() error {
@@ -152,6 +155,9 @@ func (wal *WAL) readHeader() error {
 	h := &header{}
 	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		return err
+	}
+	if !bytes.Equal(h.signature[:], signature[:]) {
+		return errors.New("WAL is corrupted")
 	}
 	wal.logFile.segments = h.segments
 	return nil
@@ -172,7 +178,7 @@ func (wal *WAL) recoverLogHeaders() error {
 		if l.offset < 0 || l.status > logStatusReleased {
 			return nil
 		}
-		wal.logs = append(wal.logs, l)
+		wal.pendingLogs = append(wal.pendingLogs, l)
 		offset = l.offset + int64(l.size)
 	}
 }
@@ -191,10 +197,10 @@ func (wal *WAL) put(id int64, log logInfo) error {
 	log.version = version
 	wal.logCountWritten++
 	wal.entriesWritten += int64(log.entryCount)
-	if _, ok := wal.pendingLogs[id]; ok {
-		wal.pendingLogs[id] = append(wal.pendingLogs[id], log)
+	if _, ok := wal.logs[id]; ok {
+		wal.logs[id] = append(wal.logs[id], log)
 	} else {
-		wal.pendingLogs[id] = logs{log}
+		wal.logs[id] = []logInfo{log}
 	}
 	return nil
 }
@@ -222,7 +228,7 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 	}()
 
 	var err1 error
-	logs := wal.pendingLogs[id]
+	logs := wal.logs[id]
 
 	// sort wal logs by offset so that adjacent free blocks can be merged
 	sort.Slice(logs[:], func(i, j int) bool {
@@ -235,17 +241,22 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 		}
 		logs[i].status = logStatusApplied
 		if err := wal.logMerge(logs[i]); err != nil {
-			err1 = err
-			continue
+			return err
 		}
 		if logs[i].status == logStatusReleased {
 			continue
+		}
+		if _, ok := wal.pendingReleaseLogs[id]; ok {
+			wal.pendingReleaseLogs[id] = append(wal.pendingReleaseLogs[id], logs[i])
+		} else {
+			wal.pendingReleaseLogs[id] = []logInfo{logs[i]}
 		}
 		if err := wal.logFile.writeMarshalableAt(logs[i], logs[i].offset); err != nil {
 			err1 = err
 			continue
 		}
 	}
+	delete(wal.logs, id)
 	if err := wal.writeHeader(); err != nil {
 		return err
 	}
@@ -254,7 +265,7 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 
 // Reset resets log file and log segments.
 func (wal *WAL) Reset() error {
-	wal.pendingLogs = make(map[int64]logs)
+	wal.logs = make(map[int64][]logInfo)
 	if err := wal.logFile.reset(); err != nil {
 		return err
 	}
@@ -285,7 +296,6 @@ func (wal *WAL) Close() error {
 	// acquire Lock.
 	wal.releaseLockC <- struct{}{}
 
-	// fmt.Println("wal.Close: WAL Info ", wal.WALInfo, wal.pendingLogs)
 	// Make sure sync thread isn't running.
 	wal.wg.Wait()
 	return wal.logFile.Close()
@@ -323,7 +333,7 @@ func (wal *WAL) releaseLogs() error {
 	}()
 
 	var allLogs []logInfo
-	for _, logs := range wal.pendingLogs {
+	for _, logs := range wal.pendingReleaseLogs {
 		allLogs = append(allLogs, logs...)
 	}
 
@@ -335,15 +345,18 @@ func (wal *WAL) releaseLogs() error {
 	for i := 0; i < l; i++ {
 		wal.logMerge(allLogs[i])
 	}
-	for id, logs := range wal.pendingLogs {
+	for id, logs := range wal.pendingReleaseLogs {
 		l := len(logs)
 		for i := 0; i < l; i++ {
 			if logs[i].status == logStatusReleased {
-				// Remove log from wal
-				wal.pendingLogs[id] = wal.pendingLogs[id][:i+copy(wal.pendingLogs[id][i:], wal.pendingLogs[id][i+1:])]
+				// Release log from wal
+				wal.pendingReleaseLogs[id] = wal.pendingReleaseLogs[id][:i+copy(wal.pendingReleaseLogs[id][i:], wal.pendingReleaseLogs[id][i+1:])]
 				l -= 1
 				i--
 			}
+		}
+		if len(wal.pendingReleaseLogs[id]) == 0 {
+			delete(wal.pendingReleaseLogs, id)
 		}
 	}
 

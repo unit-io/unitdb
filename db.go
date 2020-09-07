@@ -369,7 +369,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 		}
 
-		if invalidCount == 0 || len(items) >= int(q.Limit) || len(q.winEntries) <= limit {
+		if invalidCount == 0 || len(items) == int(q.Limit) || len(q.winEntries) == limit {
 			break
 		}
 

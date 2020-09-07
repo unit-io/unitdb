@@ -21,9 +21,9 @@ import (
 )
 
 var (
-	signature     = [8]byte{'t', 'r', 'a', 'c', 'e', 'd', 'b', '\xfd'}
+	signature     = [7]byte{'u', 'n', 'i', 't', 'd', 'b', '\xfe'}
 	logHeaderSize = 20
-	headerSize    = uint32(36)
+	headerSize    = uint32(35)
 )
 
 type logInfo struct {
@@ -58,7 +58,7 @@ func (l *logInfo) UnmarshalBinary(data []byte) error {
 }
 
 type header struct {
-	signature [8]byte
+	signature [7]byte
 	version   uint32
 	segments
 	_ [2]byte
@@ -67,22 +67,22 @@ type header struct {
 // MarshalBinary serialized header into binary data.
 func (h header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
-	copy(buf[:8], h.signature[:])
-	binary.LittleEndian.PutUint32(buf[8:12], h.version)
-	binary.LittleEndian.PutUint32(buf[12:16], h.segments[0].size)
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(h.segments[0].offset))
-	binary.LittleEndian.PutUint32(buf[24:28], h.segments[1].size)
-	binary.LittleEndian.PutUint64(buf[28:36], uint64(h.segments[1].offset))
+	copy(buf[:7], h.signature[:])
+	binary.LittleEndian.PutUint32(buf[7:11], h.version)
+	binary.LittleEndian.PutUint32(buf[11:15], h.segments[0].size)
+	binary.LittleEndian.PutUint64(buf[15:23], uint64(h.segments[0].offset))
+	binary.LittleEndian.PutUint32(buf[23:27], h.segments[1].size)
+	binary.LittleEndian.PutUint64(buf[27:35], uint64(h.segments[1].offset))
 	return buf, nil
 }
 
 // UnmarshalBinary deserialized header from binary data.
 func (h *header) UnmarshalBinary(data []byte) error {
-	copy(h.signature[:], data[:8])
-	h.version = binary.LittleEndian.Uint32(data[8:12])
-	h.segments[0].size = binary.LittleEndian.Uint32(data[12:16])
-	h.segments[0].offset = int64(binary.LittleEndian.Uint64(data[16:24]))
-	h.segments[1].size = binary.LittleEndian.Uint32(data[24:28])
-	h.segments[1].offset = int64(binary.LittleEndian.Uint64(data[28:36]))
+	copy(h.signature[:], data[:7])
+	h.version = binary.LittleEndian.Uint32(data[7:11])
+	h.segments[0].size = binary.LittleEndian.Uint32(data[11:15])
+	h.segments[0].offset = int64(binary.LittleEndian.Uint64(data[15:23]))
+	h.segments[1].size = binary.LittleEndian.Uint32(data[23:27])
+	h.segments[1].offset = int64(binary.LittleEndian.Uint64(data[27:35]))
 	return nil
 }
