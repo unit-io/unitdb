@@ -47,13 +47,12 @@ type (
 func (db *DB) newTinyBatch() *tinyBatch {
 	// Backoff to limit excess memroy usage
 	db.mem.Backoff()
-	return &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+	tinyBatch := &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
+	return tinyBatch
 }
 
 func (b *tinyBatch) timeID() int64 {
-	b.RLock()
-	defer b.RUnlock()
-	return b.ID
+	return atomic.LoadInt64(&b.ID)
 }
 
 func (b *tinyBatch) len() uint32 {
@@ -64,14 +63,17 @@ func (b *tinyBatch) incount() uint32 {
 	return atomic.AddUint32(&b.entryCount, 1)
 }
 
-func (b *tinyBatch) abort() {
+func (b *tinyBatch) reset() {
 	b.Lock()
 	defer b.Unlock()
-	b.ID = 0
+	atomic.StoreUint32(&b.entryCount, 0)
 	b.size = 0
-	b.entryCount = 0
 	b.entries = b.entries[:0]
 	b.index = b.index[:0]
+}
+
+func (b *tinyBatch) abort() {
+	b.reset()
 	close(b.doneChan)
 }
 
@@ -199,7 +201,7 @@ func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
-	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1)}
+	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1), commmitIDs: make(map[int64]*tinyBatch)}
 	b.tinyBatch = db.newTinyBatch()
 	return b
 }

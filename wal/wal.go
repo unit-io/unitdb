@@ -260,6 +260,7 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 	if err := wal.writeHeader(); err != nil {
 		return err
 	}
+
 	return err1
 }
 

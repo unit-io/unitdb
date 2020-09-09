@@ -343,6 +343,7 @@ func (db *DB) setEntry(e *Entry) error {
 func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	// Backoff to limit excess memroy usage
 	db.mem.Backoff()
+
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
 		return err
@@ -373,6 +374,15 @@ func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 		db.closeW.Done()
 	}()
 
+	// Acquire time lock on timeID
+	timeLock := db.mutex.getMutex(uint64(tinyBatch.timeID()))
+	timeLock.RLock()
+	defer timeLock.RUnlock()
+
+	if tinyBatch.len() == 0 {
+		return nil
+	}
+
 	if err := db.tinyWrite(tinyBatch); err != nil {
 		return err
 	}
@@ -381,7 +391,39 @@ func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 		db.releaseTimeID(tinyBatch.timeID())
 	}
 	db.meter.Puts.Inc(int64(tinyBatch.len()))
+
 	return nil
+}
+
+func (db *DB) rollback(tinyBatch *tinyBatch) error {
+	// Acquire time lock on timeID
+	timeLock := db.mutex.getMutex(uint64(tinyBatch.timeID()))
+	timeLock.Lock()
+	defer timeLock.Unlock()
+
+	entryCount := tinyBatch.len()
+	tinyBatch.reset()
+
+	// Abort signals WAL to release log.
+	if err := db.wal.SignalLogApplied(tinyBatch.timeID()); err != nil {
+		logger.Error().Err(err).Str("context", "db.abort")
+		return err
+	}
+	db.timeWindow.abortTimeID(tinyBatch.timeID())
+	db.meter.Aborts.Inc(int64(entryCount))
+	return nil
+}
+
+func (db *DB) abort() {
+	err := db.timeWindow.abort(func(wEntries windowEntries) (bool, error) {
+		for _, we := range wEntries {
+			db.lease.freeSlot(we.seq())
+		}
+		return false, nil
+	})
+	if err != nil {
+		logger.Error().Err(err).Str("context", "db.rollback")
+	}
 }
 
 // delete deletes the given key from the DB.

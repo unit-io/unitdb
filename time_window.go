@@ -222,7 +222,7 @@ func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	return l
 }
 
-func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) error {
+func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) (ok bool) {
 	// get windowBlock shard.
 	wb := tw.getWindowBlock(topicHash)
 	wb.mu.Lock()
@@ -238,7 +238,7 @@ func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) erro
 	} else {
 		wb.entries[key] = windowEntries{e}
 	}
-	return nil
+	return true
 }
 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file.
@@ -262,17 +262,17 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 	})
 
 	tw.RLock()
-	timeIDs := make(map[int64]struct{})
+	unReleasedtimeIDs := make(map[int64]struct{})
 	for _, k := range keys {
 		if !tw.isReleased(k.timeID) {
-			timeIDs[k.timeID] = struct{}{}
+			unReleasedtimeIDs[k.timeID] = struct{}{}
 		}
 	}
 	tw.RUnlock()
 
 	for _, k := range keys {
 		// Skip unreleased timeIDs.
-		if _, ok := timeIDs[k.timeID]; ok {
+		if _, ok := unReleasedtimeIDs[k.timeID]; ok {
 			continue
 		}
 
@@ -466,11 +466,50 @@ func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
 
 func (tw *timeWindowBucket) isReleased(timeID int64) bool {
 	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
+		if tm.lastUnref == -1 {
+			return false
+		}
 		if tm.isReleased(tw.releaseTimeMark) {
 			return true
 		}
 	}
 	return false
+}
+
+func (tw *timeWindowBucket) abortTimeID(timeID int64) {
+	tw.Lock()
+	defer tw.Unlock()
+
+	if _, ok := tw.timeRecords[timeID]; ok {
+		delete(tw.timeRecords, timeID)
+	}
+	timeMark := timeMark{lastUnref: -1}
+	tw.releasedTimeRecords[timeID] = timeMark
+}
+
+// abort iterates timewindow entries during rollback process and aborts time window entries.
+func (tw *timeWindowBucket) abort(f func(w windowEntries) (bool, error)) (err error) {
+	for timeID, tm := range tw.releasedTimeRecords {
+		if tm.lastUnref == -1 {
+			for i := 0; i < nShards; i++ {
+				wb := tw.windowBlocks.window[i]
+				wb.mu.Lock()
+				for k := range wb.entries {
+					if k.timeID != timeID {
+						continue
+					}
+					stop, err1 := f(wb.entries[k])
+					if stop || err != nil {
+						err = err1
+						continue
+					}
+					delete(wb.entries, k)
+				}
+				wb.mu.Unlock()
+			}
+		}
+	}
+	return nil
 }
 
 func (tw *timeWindowBucket) startExpiry() {

@@ -469,8 +469,8 @@ func (db *DB) PutEntry(e *Entry) error {
 		return err
 	}
 
-	if err := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
-		return err
+	if ok := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
+		return errForbidden
 	}
 
 	db.tinyBatch.entries = append(db.tinyBatch.entries, e.seq)

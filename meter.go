@@ -34,6 +34,7 @@ type Meter struct {
 	Leased     metrics.Counter
 	Syncs      metrics.Counter
 	Recovers   metrics.Counter
+	Aborts     metrics.Counter
 	Dels       metrics.Counter
 	InMsgs     metrics.Counter
 	OutMsgs    metrics.Counter
@@ -52,6 +53,7 @@ func NewMeter() *Meter {
 		Leased:     metrics.NewCounter(),
 		Syncs:      metrics.NewCounter(),
 		Recovers:   metrics.NewCounter(),
+		Aborts:     metrics.NewCounter(),
 		Dels:       metrics.NewCounter(),
 		InMsgs:     metrics.NewCounter(),
 		OutMsgs:    metrics.NewCounter(),
@@ -65,6 +67,7 @@ func NewMeter() *Meter {
 	Metrics.GetOrRegister("leased", c.Leased)
 	Metrics.GetOrRegister("Syncs", c.Syncs)
 	Metrics.GetOrRegister("Recovers", c.Recovers)
+	Metrics.GetOrRegister("Aborts", c.Aborts)
 	Metrics.GetOrRegister("Dels", c.Dels)
 	Metrics.GetOrRegister("InMsgs", c.InMsgs)
 	Metrics.GetOrRegister("OutMsgs", c.OutMsgs)
@@ -92,6 +95,7 @@ type Varz struct {
 	Leased   int64     `json:"leased"`
 	Syncs    int64     `json:"syncs"`
 	Recovers int64     `json:"recovers"`
+	Aborts   int64     `json:"aborts"`
 	Dels     int64     `json:"Dels"`
 	InMsgs   int64     `json:"in_msgs"`
 	OutMsgs  int64     `json:"out_msgs"`
@@ -149,6 +153,7 @@ func (db *DB) Varz() (*Varz, error) {
 	v.Leased = db.meter.Leased.Count()
 	v.Syncs = db.meter.Syncs.Count()
 	v.Recovers = db.meter.Recovers.Count()
+	v.Aborts = db.meter.Aborts.Count()
 	v.Dels = db.meter.Dels.Count()
 	v.InMsgs = db.meter.InMsgs.Count()
 	v.OutMsgs = db.meter.OutMsgs.Count()

@@ -45,7 +45,7 @@ type Batch struct {
 	tinyBatch      *tinyBatch
 
 	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
-	commmitTimeIDs []int64
+	commmitIDs     map[int64]*tinyBatch // map[timeID]*tinyBatch
 	commitW        sync.WaitGroup
 	commitComplete chan struct{}
 }
@@ -208,6 +208,7 @@ func (b *Batch) Write() error {
 	defer b.db.bufPool.Put(b.tinyBatch.buffer)
 
 	topics := make(map[uint64]*message.Topic)
+	b.commmitIDs[b.tinyBatch.timeID()] = b.tinyBatch
 
 	b.writeInternal(func(i int, e entry, data []byte) error {
 		if e.topicSize != 0 {
@@ -225,20 +226,18 @@ func (b *Batch) Write() error {
 		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
 			return err
 		}
-		if err := b.db.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); err != nil {
-			return nil
+		if ok := b.db.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
+			return errForbidden
 		}
 		b.tinyBatch.entries = append(b.tinyBatch.entries, e.seq)
 		return nil
 	})
 
-	b.commmitTimeIDs = append(b.commmitTimeIDs, b.tinyBatch.timeID())
-	// fmt.Println("Batch: batch written ", b.tinyBatch.timeID())
-
 	b.tinyBatchLockC <- struct{}{}
 	b.db.batchPool.write(b.tinyBatch)
 	b.tinyBatch = b.db.newTinyBatch()
 	<-b.tinyBatchLockC
+
 	return nil
 }
 
@@ -271,23 +270,29 @@ func (b *Batch) Commit() error {
 	defer func() {
 		close(b.commitComplete)
 		b.db.closeW.Done()
+		b.Abort()
 	}()
 
 	// Write if any pending entries in batch
 	if err := b.Write(); err != nil {
 		return err
 	}
-	for _, timeID := range b.commmitTimeIDs {
+	for timeID, _ := range b.commmitIDs {
 		b.db.releaseTimeID(timeID)
 	}
 
+	b.commmitIDs = make(map[int64]*tinyBatch)
 	return nil
 }
 
 //Abort abort is a batch cleanup operation on batch complete.
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed batch abort not allowed")
-	b.tinyBatch.abort()
+	for _, tinyBatch := range b.commmitIDs {
+		b.db.rollback(tinyBatch)
+	}
+	// abort time window entries
+	b.db.abort()
 	b.db = nil
 }
 
