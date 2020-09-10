@@ -291,6 +291,7 @@ func (db *syncHandle) Sync() error {
 				if err != nil {
 					return true, err
 				}
+				db.lease.free(s.seq, s.msgOffset, s.mSize())
 				db.entriesInvalid++
 				continue
 			}

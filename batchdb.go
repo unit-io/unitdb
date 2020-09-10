@@ -414,6 +414,16 @@ func (q *queue) front() *tinyBatch {
 	return q.buf[q.head]
 }
 
+// at returns element at index i in the queue without removing element from the queue.
+// at(0) refers to first element and is same as front(). at(len()0-1) refers to the last element.
+func (q *queue) at(i int) *tinyBatch {
+	if i < 0 || i > q.count {
+		panic("batchPool: at called with index out of range")
+	}
+	// bitwise modulus
+	return q.buf[(q.head+i)&(len(q.buf)-1)]
+}
+
 // grow resizes the queue to fit exactly twice its current content.
 func (q *queue) grow() {
 	if len(q.buf) == 0 {

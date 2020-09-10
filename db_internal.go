@@ -301,7 +301,7 @@ func (db *DB) setEntry(e *Entry) error {
 		id = message.ID(e.ID)
 		seq = id.Sequence()
 	} else {
-		if ok, s := db.data.lease.getSlot(e.topicHash); ok {
+		if ok, s := db.data.lease.getSlot(); ok {
 			db.meter.Leased.Inc(1)
 			seq = s
 		} else {

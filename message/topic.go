@@ -33,10 +33,10 @@ const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
 	TopicWildcard
-	TopicAnySeparator = '*'
-	TopicAllSeparator = "..."
-	TopicSeparator    = '.' // The separator character.
-	TopicMaxDepth     = 100 // Maximum depth for topic using a separator
+	TopicWildcardSymbol = '*'
+	TopicGenericSymbol  = "..."
+	TopicSeparator      = '.' // The separator character.
+	TopicMaxDepth       = 100 // Maximum depth for topic using a separator
 
 	// Wildcard wildcard is hash for wildcard topic such as '*' or '...'
 	Wildcard = uint32(857445537)
@@ -254,16 +254,16 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	}
 
 	depth := uint8(0)
-	q := []byte(TopicAllSeparator)
+	q := []byte(TopicGenericSymbol)
 	if bytes.HasSuffix(topic.Topic, q) {
 		depth++
-		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicAllSeparator))
+		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicGenericSymbol))
 		topic.TopicType = TopicWildcard
 		topic.Depth = TopicMaxDepth
 	}
 
 	parts := bytes.FieldsFunc(topic.Topic, fn.splitTopic)
-	q = []byte{TopicAnySeparator}
+	q = []byte{TopicWildcardSymbol}
 	part = Part{}
 	wildchars := uint8(0)
 	wildcharcount := 0

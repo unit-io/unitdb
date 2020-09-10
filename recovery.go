@@ -96,6 +96,7 @@ func (db *syncHandle) startRecovery() error {
 				return true, err
 			}
 			if exists {
+				db.lease.free(s.seq, s.msgOffset, s.mSize())
 				continue
 			}
 			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
