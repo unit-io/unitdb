@@ -39,8 +39,6 @@ type (
 		count          int64
 		entriesInvalid uint64
 
-		// buffer pool
-		// bufPool   *bpool.BufferPool
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
 		rawData   *bpool.Buffer
@@ -139,12 +137,6 @@ func (db *syncHandle) abort() error {
 		return err
 	}
 
-	db.lease.defrag()
-	if err := db.lease.write(); err != nil {
-		logger.Error().Err(err).Str("context", "db.abort")
-		return err
-	}
-
 	return nil
 }
 
@@ -184,7 +176,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 
 func (db *DB) sync() error {
 	// writeHeader information to persist correct seq information to disk, also sync freeblocks to disk.
-	if err := db.writeHeader(false); err != nil {
+	if err := db.writeHeader(); err != nil {
 		return err
 	}
 	if err := db.timeWindow.Sync(); err != nil {

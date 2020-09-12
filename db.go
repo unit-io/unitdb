@@ -171,7 +171,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		if _, err = db.data.extend(headerSize); err != nil {
 			return nil, err
 		}
-		if err := db.writeHeader(false); err != nil {
+		if err := db.writeHeader(); err != nil {
 			return nil, err
 		}
 	} else {
@@ -218,6 +218,11 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 	}
 
+	if err := db.lease.read(); err != nil {
+		logger.Error().Err(err).Str("context", "db.readHeader")
+		return nil, err
+	}
+
 	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
@@ -255,7 +260,11 @@ func (db *DB) Close() error {
 	// close memdb.
 	db.mem.Close()
 
-	if err := db.writeHeader(true); err != nil {
+	if err := db.writeHeader(); err != nil {
+		return err
+	}
+	db.lease.defrag()
+	if err := db.lease.write(); err != nil {
 		return err
 	}
 	if err := db.timeWindow.Close(); err != nil {
@@ -417,7 +426,7 @@ func (db *DB) NewContract() (uint32, error) {
 
 // NewID generates new ID that is later used to put entry or delete entry.
 func (db *DB) NewID() []byte {
-	db.meter.Leased.Inc(1)
+	db.meter.Leases.Inc(1)
 	return message.NewID(db.nextSeq())
 }
 

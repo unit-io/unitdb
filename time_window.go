@@ -160,7 +160,7 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 }
 
 func (tm timeMark) isExpired(expDur time.Duration) bool {
-	if tm.lastUnref > 0 && tm.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
+	if tm.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
 		return true
 	}
 	return false
@@ -489,7 +489,10 @@ func (tw *timeWindowBucket) abortTimeID(timeID int64) {
 
 // abort iterates timewindow entries during rollback process and aborts time window entries.
 func (tw *timeWindowBucket) abort(f func(w windowEntries) (bool, error)) (err error) {
-	for timeID, tm := range tw.releasedTimeRecords {
+	tw.RLock()
+	releasedTimeRecords := tw.releasedTimeRecords
+	defer tw.RUnlock()
+	for timeID, tm := range releasedTimeRecords {
 		if tm.lastUnref == -1 {
 			for i := 0; i < nShards; i++ {
 				wb := tw.windowBlocks.window[i]

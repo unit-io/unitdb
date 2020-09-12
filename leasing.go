@@ -18,6 +18,7 @@ package unitdb
 
 import (
 	"encoding/binary"
+	"io"
 	"sort"
 	"sync"
 
@@ -279,6 +280,9 @@ func (l *lease) read() error {
 	slots := &freeslots{cache: make(map[uint64]bool)}
 	buf := make([]byte, 4)
 	if _, err := l.ReadAt(buf, off); err != nil {
+		if err == io.EOF {
+			return nil
+		}
 		return err
 	}
 	size := binary.LittleEndian.Uint32(buf)

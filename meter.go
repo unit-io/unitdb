@@ -31,7 +31,7 @@ type Meter struct {
 	TimeSeries metrics.TimeSeries
 	Gets       metrics.Counter
 	Puts       metrics.Counter
-	Leased     metrics.Counter
+	Leases     metrics.Counter
 	Syncs      metrics.Counter
 	Recovers   metrics.Counter
 	Aborts     metrics.Counter
@@ -50,7 +50,7 @@ func NewMeter() *Meter {
 		TimeSeries: metrics.GetOrRegisterTimeSeries("timeseries_ns", Metrics),
 		Gets:       metrics.NewCounter(),
 		Puts:       metrics.NewCounter(),
-		Leased:     metrics.NewCounter(),
+		Leases:     metrics.NewCounter(),
 		Syncs:      metrics.NewCounter(),
 		Recovers:   metrics.NewCounter(),
 		Aborts:     metrics.NewCounter(),
@@ -64,7 +64,7 @@ func NewMeter() *Meter {
 	c.TimeSeries.Time(func() {})
 	Metrics.GetOrRegister("Gets", c.Gets)
 	Metrics.GetOrRegister("Puts", c.Puts)
-	Metrics.GetOrRegister("leased", c.Leased)
+	Metrics.GetOrRegister("leases", c.Leases)
 	Metrics.GetOrRegister("Syncs", c.Syncs)
 	Metrics.GetOrRegister("Recovers", c.Recovers)
 	Metrics.GetOrRegister("Aborts", c.Aborts)
@@ -92,7 +92,7 @@ type Varz struct {
 	Blocks   int64     `json:"blocks"`
 	Gets     int64     `json:"gets"`
 	Puts     int64     `json:"puts"`
-	Leased   int64     `json:"leased"`
+	Leases   int64     `json:"leases"`
 	Syncs    int64     `json:"syncs"`
 	Recovers int64     `json:"recovers"`
 	Aborts   int64     `json:"aborts"`
@@ -150,7 +150,7 @@ func (db *DB) Varz() (*Varz, error) {
 	v.Blocks = int64(db.blocks())
 	v.Gets = db.meter.Gets.Count()
 	v.Puts = db.meter.Puts.Count()
-	v.Leased = db.meter.Leased.Count()
+	v.Leases = db.meter.Leases.Count()
 	v.Syncs = db.meter.Syncs.Count()
 	v.Recovers = db.meter.Recovers.Count()
 	v.Aborts = db.meter.Aborts.Count()

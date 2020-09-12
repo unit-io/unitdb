@@ -44,9 +44,9 @@ type Batch struct {
 	tinyBatchLockC chan struct{}
 	tinyBatch      *tinyBatch
 
-	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
-	commmitIDs     map[int64]*tinyBatch // map[timeID]*tinyBatch
+	tinyBatchGroup map[int64]*tinyBatch // map[timeID]*tinyBatch
 	commitW        sync.WaitGroup
+	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 	commitComplete chan struct{}
 }
 
@@ -208,7 +208,7 @@ func (b *Batch) Write() error {
 	defer b.db.bufPool.Put(b.tinyBatch.buffer)
 
 	topics := make(map[uint64]*message.Topic)
-	b.commmitIDs[b.tinyBatch.timeID()] = b.tinyBatch
+	b.tinyBatchGroup[b.tinyBatch.timeID()] = b.tinyBatch
 
 	b.writeInternal(func(i int, e entry, data []byte) error {
 		if e.topicSize != 0 {
@@ -277,18 +277,18 @@ func (b *Batch) Commit() error {
 	if err := b.Write(); err != nil {
 		return err
 	}
-	for timeID, _ := range b.commmitIDs {
+	for timeID, _ := range b.tinyBatchGroup {
 		b.db.releaseTimeID(timeID)
 	}
 
-	b.commmitIDs = make(map[int64]*tinyBatch)
+	b.tinyBatchGroup = make(map[int64]*tinyBatch)
 	return nil
 }
 
 //Abort abort is a batch cleanup operation on batch complete.
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed batch abort not allowed")
-	for _, tinyBatch := range b.commmitIDs {
+	for _, tinyBatch := range b.tinyBatchGroup {
 		b.db.rollback(tinyBatch)
 	}
 	// abort time window entries

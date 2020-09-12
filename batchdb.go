@@ -201,7 +201,7 @@ func (db *DB) batch() *Batch {
 	opts := &options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.encryption == 1
-	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1), commmitIDs: make(map[int64]*tinyBatch)}
+	b := &Batch{opts: opts, db: db, tinyBatchLockC: make(chan struct{}, 1), tinyBatchGroup: make(map[int64]*tinyBatch)}
 	b.tinyBatch = db.newTinyBatch()
 	return b
 }
@@ -317,6 +317,7 @@ Loop:
 func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
 	if err := p.db.tinyCommit(tinyBatch); err != nil {
 		logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
+		p.db.rollback(tinyBatch)
 	}
 
 	go p.tinyCommit(batchQueue)
@@ -324,6 +325,9 @@ func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
 
 // tinyCommit commits batch and stops when it receive a nil batch.
 func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
+	// abort time window entries
+	defer p.db.abort()
+
 	for tinyBatch := range batchQueue {
 		if tinyBatch == nil {
 			return
@@ -331,6 +335,7 @@ func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
 
 		if err := p.db.tinyCommit(tinyBatch); err != nil {
 			logger.Error().Err(err).Str("context", "tinyCommit").Msgf("Error committing tinyBatch")
+			p.db.rollback(tinyBatch)
 		}
 	}
 }

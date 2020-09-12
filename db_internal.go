@@ -71,14 +71,7 @@ type dbInfo struct {
 	cacheID    uint64
 }
 
-func (db *DB) writeHeader(writeFreeList bool) error {
-	if writeFreeList {
-		db.lease.defrag()
-		if err := db.lease.write(); err != nil {
-			logger.Error().Err(err).Str("context", "db.writeHeader")
-			return err
-		}
-	}
+func (db *DB) writeHeader() error {
 	h := header{
 		signature: signature,
 		version:   version,
@@ -105,13 +98,7 @@ func (db *DB) readHeader() error {
 	}
 	db.dbInfo = h.dbInfo
 	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
-	if err := db.lease.read(); err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		logger.Error().Err(err).Str("context", "db.readHeader")
-		return err
-	}
+
 	return nil
 }
 
@@ -302,7 +289,7 @@ func (db *DB) setEntry(e *Entry) error {
 		seq = id.Sequence()
 	} else {
 		if ok, s := db.data.lease.getSlot(); ok {
-			db.meter.Leased.Inc(1)
+			db.meter.Leases.Inc(1)
 			seq = s
 		} else {
 			seq = db.nextSeq()
