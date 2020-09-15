@@ -73,7 +73,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	e.Encryption = e.Encryption || b.opts.batchOptions.encryption
-	if err := b.db.setEntry(e); err != nil {
+	if err := b.db.setEntry(b.tinyBatch.timeID(), e); err != nil {
 		return err
 	}
 
@@ -124,7 +124,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 
-	if err := b.db.setEntry(e); err != nil {
+	if err := b.db.setEntry(b.tinyBatch.timeID(), e); err != nil {
 		return err
 	}
 
@@ -277,7 +277,8 @@ func (b *Batch) Commit() error {
 	if err := b.Write(); err != nil {
 		return err
 	}
-	for timeID, _ := range b.tinyBatchGroup {
+	for timeID, tinyBatch := range b.tinyBatchGroup {
+		<-tinyBatch.doneChan
 		b.db.releaseTimeID(timeID)
 	}
 

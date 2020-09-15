@@ -35,11 +35,10 @@ func cleanup(path string) {
 
 func TestSimple(t *testing.T) {
 	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<4), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open("test.db", WithBufferSize(1<<4), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 	var i uint16
 	var n uint16 = 1000
 
@@ -103,12 +102,14 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
+	db.tinyCommit(db.tinyBatch)
 	verifyMsgsAndClose()
 
-	db, err = Open("test.db", nil, nil)
+	db, err = Open("test.db", WithMutable())
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	_, err = db.Get(NewQuery(topic).WithContract(contract).WithLimit(int(n)))
 	if err != nil {
 		t.Fatal(err)
@@ -156,9 +157,17 @@ func TestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
+		var v, vals [][]byte
+		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
+		}
+		for i = 0; i < n; i++ {
+			val := []byte(fmt.Sprintf("msg.%2d", n-i-1))
+			vals = append(vals, val)
+		}
+		if !reflect.DeepEqual(vals, v) {
+			t.Fatalf("expected %v; got %v", vals, v)
 		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
@@ -229,33 +238,6 @@ func TestExpiry(t *testing.T) {
 	db.expireEntries()
 }
 
-func TestAbort(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var i uint16
-	var n uint16 = 500
-
-	topic := []byte("unit1.test")
-
-	for i = 0; i < n; i++ {
-		val := []byte(fmt.Sprintf("msg.%2d", i))
-		if err := db.Put(topic, val); err != nil {
-			t.Fatal(err)
-		}
-	}
-	dbsync := syncHandle{internal: internal{DB: db}}
-	dbabort := syncHandle{internal: dbsync.internal}
-	dbabort.startSync()
-	if err := db.Sync(); err != nil {
-		t.Fatal(err)
-	}
-	dbabort.abort()
-}
-
 func TestLeasing(t *testing.T) {
 	cleanup("test.db")
 	db, err := Open("test.db", WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
@@ -279,9 +261,9 @@ func TestLeasing(t *testing.T) {
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range ids {
-		db.Delete(id, topic)
-	}
+	// for _, id := range ids {
+	// 	db.Delete(id, topic)
+	// }
 	for i = 0; i < n; i++ {
 		messageID := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
@@ -296,9 +278,9 @@ func TestLeasing(t *testing.T) {
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range ids {
-		db.Delete(id, topic)
-	}
+	// for _, id := range ids {
+	// 	db.Delete(id, topic)
+	// }
 }
 
 func TestWildcardTopics(t *testing.T) {

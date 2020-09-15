@@ -6,14 +6,15 @@ The unitdb is blazing fast specialized time-series database for microservices, I
 
 ## Key characteristics
 - 100% Go
-- Optimized for fast lookups and writes
 - Can store larger-than-memory data sets
+- Optimized for fast lookups and writes
+- Stores topic trie in memory and all other data is persisted to disk
+- Supports writing billions of messages (or metrics) per hour with very low memory usages
 - Data is safely written to disk with accuracy and high performant block sync technique
 - Supports opening database with immutable flag
 - Supports database encryption
 - Supports time-to-live on message entries
 - Supports writing to wildcard topics
-- Queried data is returned complete and correct
 
 ## Table of Contents
  * [Quick Start](#Quick-Start)

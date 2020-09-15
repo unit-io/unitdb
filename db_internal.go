@@ -220,9 +220,9 @@ func (db *DB) lookup(q *Query) error {
 			q.winEntries = append(q.winEntries, query{topicHash: topic.hash, seq: we.seq()})
 		}
 	}
-	sort.Slice(q.winEntries[:], func(i, j int) bool {
-		return q.winEntries[i].seq > q.winEntries[j].seq
-	})
+	// sort.Slice(q.winEntries[:], func(i, j int) bool {
+	// 	return q.winEntries[i].seq > q.winEntries[j].seq
+	// })
 	return nil
 }
 
@@ -259,7 +259,7 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 	return t, 0, nil
 }
 
-func (db *DB) setEntry(e *Entry) error {
+func (db *DB) setEntry(timeID int64, e *Entry) error {
 	var id message.ID
 	var eBit uint8
 	var seq uint64
@@ -287,8 +287,9 @@ func (db *DB) setEntry(e *Entry) error {
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		seq = id.Sequence()
+		db.freeList.addLease(timeID, seq)
 	} else {
-		if ok, s := db.data.lease.getSlot(); ok {
+		if ok, s := db.freeList.getSlot(); ok {
 			db.meter.Leases.Inc(1)
 			seq = s
 		} else {
@@ -339,7 +340,11 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	for _, seq := range tinyBatch.entries {
 		blockID := startBlockIndex(seq)
 		memseq := db.cacheID ^ seq
-		data, _ := db.mem.Get(uint64(blockID), memseq)
+		data, err := db.mem.Get(uint64(blockID), memseq)
+		if err != nil {
+			// Record is deleted
+			continue
+		}
 		if err := <-logWriter.Append(data); err != nil {
 			return err
 		}
@@ -404,7 +409,7 @@ func (db *DB) rollback(tinyBatch *tinyBatch) error {
 func (db *DB) abort() {
 	err := db.timeWindow.abort(func(wEntries windowEntries) (bool, error) {
 		for _, we := range wEntries {
-			db.lease.freeSlot(we.seq())
+			db.freeList.freeSlot(we.seq())
 		}
 		return false, nil
 	})
@@ -418,16 +423,20 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if db.opts.immutable {
 		return nil
 	}
-	// Test filter block for the message id presence.
-	if !db.filter.Test(seq) {
-		return nil
-	}
+
+	db.freeList.freeSlot(seq)
 	db.meter.Dels.Inc(1)
 	blockID := startBlockIndex(seq)
 	memseq := db.cacheID ^ seq
 	if err := db.mem.Remove(uint64(blockID), memseq); err != nil {
 		return err
 	}
+
+	// Test filter block for the message id presence.
+	if !db.filter.Test(seq) {
+		return nil
+	}
+
 	blockIdx := startBlockIndex(seq)
 	if blockIdx > db.blocks() {
 		return nil // no record to delete.
@@ -437,7 +446,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if err != nil {
 		return err
 	}
-	db.lease.free(e.seq, e.msgOffset, e.mSize())
+	db.freeList.freeBlock(e.msgOffset, e.mSize())
 	db.decount(1)
 	if db.syncWrites {
 		return db.sync()

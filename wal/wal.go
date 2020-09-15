@@ -299,6 +299,7 @@ func (wal *WAL) Close() error {
 
 	// Make sure sync thread isn't running.
 	wal.wg.Wait()
+
 	return wal.logFile.Close()
 }
 

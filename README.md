@@ -6,14 +6,15 @@ Unitdb is blazing fast specialized time-series database for microservices, IoT, 
 
 ## Key characteristics
 - 100% Go
-- Optimized for fast lookups and writes
 - Can store larger-than-memory data sets
-- Data is safely written to disk with accuracy and high performant block sync technique
+- Optimized for fast lookups and writes
+- Stores topic trie in memory and all other data is persisted to disk
+- Supports writing billions of messages (or metrics) per hour with very low memory usages
 - Supports opening database with immutable flag
 - Supports database encryption
-- Supports time-to-live on message entry
+- Supports time-to-live on message entries
 - Supports writing to wildcard topics
-- Queried data is returned complete and correct
+- Data is safely written to disk with accuracy and high performant block sync technique
 
 ## Quick Start
 To build unitdb from source code use go get command.
@@ -35,7 +36,6 @@ Samples are available in the cmd directory for reference.
 Below is a list of projects that use unitdb.
 
 - [Unitd](https://github.com/unit-io/unitd) Lightweight, high performance messaging system for microservices, IoT, and internet connected devices.
-- [Unitd Go Client](https://github.com/unit-io/unitd-go) Lightweight and high performance publish-subscribe messaging system - Go client library.
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.

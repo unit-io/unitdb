@@ -47,7 +47,7 @@ type DB struct {
 	lock       fs.LockFile
 	index      file
 	data       dataTable
-	lease      *lease
+	freeList   *lease
 	wal        *wal.WAL
 	syncWrites bool
 	dbInfo
@@ -130,7 +130,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		index:      index,
 		data:       dataTable{file: data, lease: lease, offset: data.Size()},
 		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
-		lease:      lease,
+		freeList:   lease,
 		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		syncLockC:  make(chan struct{}, 1),
 		dbInfo: dbInfo{
@@ -218,7 +218,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 	}
 
-	if err := db.lease.read(); err != nil {
+	// Read freeList before DB recovery
+	if err := db.freeList.read(); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err
 	}
@@ -263,8 +264,8 @@ func (db *DB) Close() error {
 	if err := db.writeHeader(); err != nil {
 		return err
 	}
-	db.lease.defrag()
-	if err := db.lease.write(); err != nil {
+	db.freeList.defrag()
+	if err := db.freeList.write(); err != nil {
 		return err
 	}
 	if err := db.timeWindow.Close(); err != nil {
@@ -456,7 +457,12 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	if err := db.setEntry(e); err != nil {
+	db.tinyBatchLockC <- struct{}{}
+	defer func() {
+		<-db.tinyBatchLockC
+	}()
+
+	if err := db.setEntry(db.tinyBatch.timeID(), e); err != nil {
 		return err
 	}
 
@@ -466,11 +472,6 @@ func (db *DB) PutEntry(e *Entry) error {
 		t.Unmarshal(rawTopic)
 		db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 	}
-
-	db.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-db.tinyBatchLockC
-	}()
 
 	blockID := startBlockIndex(e.seq)
 	memseq := db.cacheID ^ e.seq
@@ -519,9 +520,15 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		e.Contract = message.MasterContract
 	}
 	topic.AddContract(e.Contract)
+
+	timeLock := db.mutex.getMutex(uint64(db.timeID()))
+	timeLock.RLock()
+	defer timeLock.RUnlock()
+
 	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Sequence()); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -555,6 +562,9 @@ func (db *DB) Sync() error {
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
 	var err error
+	timeLock := db.mutex.getMutex(uint64(db.timeID()))
+	timeLock.RLock()
+	defer timeLock.RUnlock()
 	is, err := db.index.Stat()
 	if err != nil {
 		return -1, err

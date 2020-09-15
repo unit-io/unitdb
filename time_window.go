@@ -122,7 +122,7 @@ type (
 		backgroundKeyExpiry bool
 	}
 	timeMark struct {
-		refs      uint
+		refs      int
 		lastUnref int64
 	}
 	timeInfo struct {
@@ -160,7 +160,7 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 }
 
 func (tm timeMark) isExpired(expDur time.Duration) bool {
-	if tm.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
+	if tm.lastUnref > 0 && tm.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
 		return true
 	}
 	return false
@@ -294,7 +294,7 @@ func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntri
 		}
 	}
 
-	go tw.startExpiry()
+	go tw.startReleaser()
 	return err
 }
 
@@ -342,7 +342,9 @@ func (tw *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 			if len(wEntries) < l {
 				l = len(wEntries)
 			}
-			for _, we := range wEntries[len(wEntries)-l:] {
+			// for _, we := range wEntries[len(wEntries)-l:] {
+			for i := len(wEntries) - 1; i >= len(wEntries)-l; i-- {
+				we := wEntries[i]
 				if we.isExpired() {
 					if err := tw.addExpiry(we); err != nil {
 						expiryCount++
@@ -388,7 +390,9 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 		}
 		if len(winEntries) > limit-int(b.entryIdx) {
 			limit = limit - len(winEntries)
-			for _, we := range b.entries[b.entryIdx-uint16(limit) : b.entryIdx] {
+			// for _, we := range b.entries[b.entryIdx-uint16(limit) : b.entryIdx] {
+			for i := len(b.entries) - 1; i >= len(b.entries)-limit; i-- {
+				we := b.entries[i]
 				if we.isExpired() {
 					if err := tw.addExpiry(we); err != nil {
 						expiryCount++
@@ -403,7 +407,9 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 				return true, nil
 			}
 		}
-		for _, we := range b.entries[:b.entryIdx] {
+		// for _, we := range b.entries[:b.entryIdx] {
+		for i := len(b.entries) - 1; i >= 0; i-- {
+			we := b.entries[i]
 			if we.isExpired() {
 				if err := tw.addExpiry(we); err != nil {
 					expiryCount++
@@ -466,7 +472,8 @@ func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
 
 func (tw *timeWindowBucket) isReleased(timeID int64) bool {
 	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
-		if tm.lastUnref == -1 {
+		if tm.refs == -1 {
+			// timeID is aborted
 			return false
 		}
 		if tm.isReleased(tw.releaseTimeMark) {
@@ -483,7 +490,7 @@ func (tw *timeWindowBucket) abortTimeID(timeID int64) {
 	if _, ok := tw.timeRecords[timeID]; ok {
 		delete(tw.timeRecords, timeID)
 	}
-	timeMark := timeMark{lastUnref: -1}
+	timeMark := timeMark{refs: -1, lastUnref: tw.releaseTimeMark.lastUnref}
 	tw.releasedTimeRecords[timeID] = timeMark
 }
 
@@ -493,7 +500,7 @@ func (tw *timeWindowBucket) abort(f func(w windowEntries) (bool, error)) (err er
 	releasedTimeRecords := tw.releasedTimeRecords
 	defer tw.RUnlock()
 	for timeID, tm := range releasedTimeRecords {
-		if tm.lastUnref == -1 {
+		if tm.refs == -1 {
 			for i := 0; i < nShards; i++ {
 				wb := tw.windowBlocks.window[i]
 				wb.mu.Lock()
@@ -515,14 +522,27 @@ func (tw *timeWindowBucket) abort(f func(w windowEntries) (bool, error)) (err er
 	return nil
 }
 
-func (tw *timeWindowBucket) startExpiry() {
+func (tw *timeWindowBucket) startReleaser() {
 	tw.Lock()
 	defer tw.Unlock()
 
+	releasedTimeIDs := make(map[int64]struct{})
 	for timeID, tm := range tw.releasedTimeRecords {
 		if tm.isExpired(tw.opts.maxDuration) {
+			releasedTimeIDs[timeID] = struct{}{}
 			delete(tw.releasedTimeRecords, timeID)
 		}
+	}
+
+	for i := 0; i < nShards; i++ {
+		wb := tw.windowBlocks.window[i]
+		wb.mu.Lock()
+		for k := range wb.entries {
+			if _, ok := releasedTimeIDs[k.timeID]; ok {
+				delete(wb.entries, k)
+			}
+		}
+		wb.mu.Unlock()
 	}
 }
 

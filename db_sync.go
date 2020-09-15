@@ -283,7 +283,7 @@ func (db *syncHandle) Sync() error {
 				if err != nil {
 					return true, err
 				}
-				db.lease.free(s.seq, s.msgOffset, s.mSize())
+				db.freeList.free(s.seq, s.msgOffset, s.mSize())
 				db.entriesInvalid++
 				continue
 			}
@@ -326,6 +326,7 @@ func (db *syncHandle) Sync() error {
 				return true, err
 			}
 		}
+		// db.freeList.releaseLease(timeID)
 		return false, nil
 	})
 	if err != nil || err1 != nil {
@@ -376,7 +377,7 @@ func (db *DB) expireEntries() error {
 			return nil
 		}
 		e := b.entries[entryIdx]
-		db.lease.free(e.seq, e.msgOffset, e.mSize())
+		db.freeList.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
 	}
 

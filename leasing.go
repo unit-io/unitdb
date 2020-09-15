@@ -35,6 +35,7 @@ type freeslots struct {
 // To avoid lock bottlenecks slots are divided into several shards (nShards).
 type lease struct {
 	file
+	leases                map[int64]map[uint64]struct{} // map[timeID][]slot
 	slots                 []*freeslots
 	blocks                []*freeBlocks
 	size                  int64 // Total size of free blocks.
@@ -57,6 +58,7 @@ type freeBlocks struct {
 func newLease(f file, minimumSize int64) *lease {
 	l := &lease{
 		file:                  f,
+		leases:                make(map[int64]map[uint64]struct{}),
 		slots:                 make([]*freeslots, nShards),
 		blocks:                make([]*freeBlocks, nShards),
 		minimumFreeBlocksSize: minimumSize,
@@ -72,10 +74,6 @@ func newLease(f file, minimumSize int64) *lease {
 	}
 
 	return l
-}
-
-func align4096(n int) int {
-	return (n + 4095) &^ 4095
 }
 
 // MarshalBinary serialized leased slots into binary data.
@@ -122,17 +120,47 @@ func (s *freeBlocks) MarshalBinary() []byte {
 }
 
 // UnmarshalBinary de-serialized leased blocks from binary data.
-func (s *freeBlocks) UnmarshalBinary(data []byte, size uint32) error {
+func (b *freeBlocks) UnmarshalBinary(data []byte, size uint32) error {
 	for i := uint32(0); i < size; i++ {
 		// _ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
 		blockOff := int64(binary.LittleEndian.Uint64(data[:8]))
 		blockSize := binary.LittleEndian.Uint32(data[8:12])
 		if blockOff != 0 {
-			s.fb = append(s.fb, freeblock{size: blockSize, offset: blockOff})
+			b.fb = append(b.fb, freeblock{size: blockSize, offset: blockOff})
 		}
 		data = data[12:]
 	}
 	return nil
+}
+
+// addLease adds seq to leases.
+func (l *lease) addLease(timeID int64, seq uint64) {
+	if _, ok := l.leases[timeID]; ok {
+		l.leases[timeID][seq] = struct{}{}
+	} else {
+		l.leases[timeID] = make(map[uint64]struct{})
+		l.leases[timeID][seq] = struct{}{}
+	}
+}
+
+// releaseLease revokes leases for given timeID.
+func (l *lease) releaseLease(timeID int64) {
+	delete(l.leases, timeID)
+}
+
+// isFree check if seq is free.
+func (l *lease) isFree(seq uint64) bool {
+	// Get shard.
+	for i := uint64(0); i < nShards; i++ {
+		fss := l.slots[i]
+		fss.RLock()
+		if ok := fss.cache[seq]; ok {
+			fss.RUnlock()
+			return ok
+		}
+		fss.RUnlock()
+	}
+	return false
 }
 
 // freeSlots returns freeSlots under given blockID.
@@ -151,6 +179,14 @@ func (l *lease) getSlot() (ok bool, seq uint64) {
 			continue
 		}
 		seq := fss.fs[0]
+		// Seq must be released before it can get reallocated
+		// to avoid allocation before timeID was sync and log entry was released.
+		for timeID := range l.leases {
+			if _, ok := l.leases[timeID][seq]; ok {
+				fss.Unlock()
+				return false, seq
+			}
+		}
 		delete(fss.cache, seq)
 		fss.fs = fss.fs[1:]
 		fss.Unlock()
@@ -169,6 +205,7 @@ func (l *lease) freeSlot(seq uint64) (ok bool) {
 	}
 	fss.cache[seq] = true
 	fss.fs = append(fss.fs, seq)
+
 	return true
 }
 
@@ -187,36 +224,36 @@ func (s *freeBlocks) search(size uint32) int {
 	})
 }
 
-func (fs *freeBlocks) len() int {
-	return len(fs.fb)
+func (b *freeBlocks) len() int {
+	return len(b.fb)
 }
 
-func (s *freeBlocks) defrag() {
-	l := len(s.fb)
+func (b *freeBlocks) defrag() {
+	l := len(b.fb)
 	if l <= 1 {
 		return
 	}
-	sort.Slice(s.fb[:l], func(i, j int) bool {
-		return s.fb[i].offset < s.fb[j].offset
+	sort.Slice(b.fb[:l], func(i, j int) bool {
+		return b.fb[i].offset < b.fb[j].offset
 	})
 	var merged []freeblock
-	curOff := s.fb[0].offset
-	curSize := s.fb[0].size
+	curOff := b.fb[0].offset
+	curSize := b.fb[0].size
 	for i := 1; i < l; i++ {
-		if curOff+int64(curSize) == s.fb[i].offset {
-			curSize += s.fb[i].size
-			delete(s.cache, s.fb[i].offset)
+		if curOff+int64(curSize) == b.fb[i].offset {
+			curSize += b.fb[i].size
+			delete(b.cache, b.fb[i].offset)
 		} else {
 			merged = append(merged, freeblock{size: curSize, offset: curOff})
-			curOff = s.fb[i].offset
-			curSize = s.fb[i].size
+			curOff = b.fb[i].offset
+			curSize = b.fb[i].size
 		}
 	}
 	merged = append(merged, freeblock{offset: curOff, size: curSize})
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].size < merged[j].size
 	})
-	copy(s.fb[:l], merged)
+	copy(b.fb[:l], merged)
 }
 
 func (l *lease) defrag() {
@@ -334,7 +371,6 @@ func (l *lease) write() error {
 		}
 		slots.fs = append(slots.fs, fss.fs...)
 	}
-
 	data := slots.MarshalBinary()
 	n, err := l.WriteAt(data, off)
 	if err != nil {

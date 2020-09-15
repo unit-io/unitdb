@@ -53,7 +53,7 @@ func (wal *WAL) NewReader() (*Reader, error) {
 }
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator.
-func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
+func (r *Reader) Read(f func() (bool, error)) (err error) {
 	// release log before read.
 	l := len(r.wal.pendingLogs)
 	for i := 0; i < l; i++ {
@@ -115,7 +115,7 @@ func (r *Reader) Read(f func(bool) (bool, error)) (err error) {
 			r.entryCount = ul.entryCount
 			r.logData = data
 			r.offset = 0
-			if stop, err := f(idx == l-1); stop || err != nil {
+			if stop, err := f(); stop || err != nil {
 				return err
 			}
 			r.wal.pendingLogs[i].status = logStatusReleased

@@ -64,7 +64,7 @@ func (db *syncHandle) startRecovery() error {
 	if err != nil {
 		return err
 	}
-	err = r.Read(func(last bool) (ok bool, err error) {
+	err = r.Read(func() (ok bool, err error) {
 		l := r.Count()
 		winEntries := make(map[uint64]windowEntries)
 		for i := uint32(0); i < l; i++ {
@@ -77,6 +77,10 @@ func (db *syncHandle) startRecovery() error {
 			}
 			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
 				return true, err
+			}
+			if db.freeList.isFree(e.seq) {
+				// If seq is present in free list it mean it was deleted but not get released from the WAL.
+				continue
 			}
 			if e.seq > db.internal.upperSeq {
 				db.internal.upperSeq = e.seq
@@ -96,7 +100,7 @@ func (db *syncHandle) startRecovery() error {
 				return true, err
 			}
 			if exists {
-				db.lease.free(s.seq, s.msgOffset, s.mSize())
+				db.freeList.free(s.seq, s.msgOffset, s.mSize())
 				continue
 			}
 			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
@@ -135,7 +139,6 @@ func (db *syncHandle) startRecovery() error {
 		db.abort()
 		return err
 	}
-
 	return db.sync(true)
 }
 

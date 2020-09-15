@@ -115,7 +115,7 @@ func TestLogApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = r.Read(func(last bool) (bool, error) {
+	err = r.Read(func() (bool, error) {
 		for {
 			_, ok, err := r.Next()
 			if !ok || err != nil {
@@ -131,11 +131,6 @@ func TestLogApplied(t *testing.T) {
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	// wal, needRecovery, err = newTestWal("test.db", false)
-	// if needRecovery || err != nil {
-	// 	t.Fatal(err)
-	// }
 }
 
 func TestSimple(t *testing.T) {
