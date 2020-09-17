@@ -115,7 +115,7 @@ func TestLogApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = r.Read(func() (bool, error) {
+	err = r.Read(func(timeID int64) (bool, error) {
 		for {
 			_, ok, err := r.Next()
 			if !ok || err != nil {

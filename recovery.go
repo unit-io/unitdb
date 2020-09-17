@@ -64,7 +64,8 @@ func (db *syncHandle) startRecovery() error {
 	if err != nil {
 		return err
 	}
-	err = r.Read(func() (ok bool, err error) {
+	pendingEntries := make(map[uint64]windowEntries)
+	err = r.Read(func(timeID int64) (ok bool, err error) {
 		l := r.Count()
 		winEntries := make(map[uint64]windowEntries)
 		for i := uint32(0); i < l; i++ {
@@ -78,7 +79,7 @@ func (db *syncHandle) startRecovery() error {
 			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
 				return true, err
 			}
-			if db.freeList.isFree(e.seq) {
+			if db.freeList.isFree(timeID, e.seq) {
 				// If seq is present in free list it mean it was deleted but not get released from the WAL.
 				continue
 			}
@@ -123,6 +124,17 @@ func (db *syncHandle) startRecovery() error {
 			db.internal.inBytes += int64(e.valueSize)
 		}
 
+		for h := range winEntries {
+			_, ok := db.trie.getOffset(h)
+			if !ok {
+				if _, ok := pendingEntries[h]; ok {
+					pendingEntries[h] = append(pendingEntries[h], winEntries[h]...)
+				} else {
+					pendingEntries[h] = winEntries[h]
+				}
+				delete(winEntries, h)
+			}
+		}
 		if err := db.recoverWindowBlocks(winEntries); err != nil {
 			logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
 			return true, err
@@ -139,6 +151,12 @@ func (db *syncHandle) startRecovery() error {
 		db.abort()
 		return err
 	}
+
+	if err := db.recoverWindowBlocks(pendingEntries); err != nil {
+		logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
+		return err
+	}
+
 	return db.sync(true)
 }
 

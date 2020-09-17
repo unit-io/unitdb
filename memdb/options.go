@@ -22,8 +22,8 @@ import (
 
 // Options holds the optional memdb parameters.
 type Options struct {
-	// MaxShards sets Maximum concurrent block caches in mem store.
-	MaxShards int
+	// MaxBlocks sets Maximum concurrent block caches in mem store.
+	MaxBlocks int
 
 	// DrainInterval sets interval to start mem store drain if it reaches drain threshold.
 
@@ -51,8 +51,8 @@ func (src *Options) copyWithDefaults() *Options {
 		opts = *src
 	}
 
-	if opts.MaxShards == 0 {
-		opts.MaxShards = maxShards
+	if opts.MaxBlocks == 0 {
+		opts.MaxBlocks = nBlocks
 	}
 
 	if opts.DrainInterval == 0 {

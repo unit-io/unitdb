@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	maxShards = 27
+	nBlocks = 27
 	// maxSize value to limit maximum memory for the mem store.
 	maxSize = (int64(1) << 34) - 1
 
@@ -91,7 +91,7 @@ type (
 		blockCache blockCache
 
 		// Capacity
-		nShards int
+		nBlocks int
 		cap     *Capacity
 
 		// close
@@ -119,17 +119,17 @@ func Open(size int64, opts *Options) (*DB, error) {
 
 	db := &DB{
 		drainLockC: make(chan struct{}, 1),
-		blockCache: newBlockCache(opts.MaxShards),
+		blockCache: newBlockCache(opts.MaxBlocks),
 
 		// Capacity
-		nShards: opts.MaxShards,
+		nBlocks: opts.MaxBlocks,
 		cap:     cap,
 
 		// Close
 		closeC: make(chan struct{}),
 	}
 
-	db.consistent = hash.InitConsistent(int(opts.MaxShards), int(opts.MaxShards))
+	db.consistent = hash.InitConsistent(int(opts.MaxBlocks), int(opts.MaxBlocks))
 
 	go db.drain(opts.DrainFactor, opts.DrainInterval)
 
@@ -159,7 +159,7 @@ func (db *DB) shrinkDataTable() error {
 		<-db.drainLockC
 	}()
 
-	for i := 0; i < db.nShards; i++ {
+	for i := 0; i < db.nBlocks; i++ {
 		block := db.blockCache[i]
 		block.Lock()
 		if block.freeOffset > 0 {
@@ -316,7 +316,7 @@ func (db *DB) Free(blockID, key uint64) error {
 // Count returns the number of items in mem store.
 func (db *DB) Count() uint64 {
 	count := 0
-	for i := 0; i < db.nShards; i++ {
+	for i := 0; i < db.nBlocks; i++ {
 		block := db.blockCache[i]
 		block.RLock()
 		count += len(block.m)
@@ -328,7 +328,7 @@ func (db *DB) Count() uint64 {
 // Size returns the total size of mem store.
 func (db *DB) Size() (int64, error) {
 	size := int64(0)
-	for i := 0; i < db.nShards; i++ {
+	for i := 0; i < db.nBlocks; i++ {
 		block := db.blockCache[i]
 		block.RLock()
 		size += int64(block.data.size)

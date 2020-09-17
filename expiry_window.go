@@ -40,11 +40,11 @@ type expiryWindows struct {
 // newExpiryWindows creates a new concurrent expiryWindows.
 func newExpiryWindows() *expiryWindows {
 	w := &expiryWindows{
-		expiry:     make([]*expiryWindow, nShards),
-		consistent: hash.InitConsistent(nShards, nShards),
+		expiry:     make([]*expiryWindow, nBlocks),
+		consistent: hash.InitConsistent(nBlocks, nBlocks),
 	}
 
-	for i := 0; i < nShards; i++ {
+	for i := 0; i < nBlocks; i++ {
 		w.expiry[i] = &expiryWindow{windows: make(map[int64]expiryWindowEntries)}
 	}
 

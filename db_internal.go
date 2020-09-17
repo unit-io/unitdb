@@ -32,6 +32,7 @@ import (
 const (
 	entriesPerIndexBlock = 255 // (4096 i.e blocksize - 14 fixed/16 i.e entry size)
 	seqsPerWindowBlock   = 335 // ((4096 i.e. blocksize - 26 fixed)/12 i.e. window entry size)
+	nBlocks              = 100000
 	nShards              = 27
 	nPoolSize            = 27
 	indexPostfix         = ".index"

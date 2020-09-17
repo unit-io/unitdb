@@ -22,18 +22,19 @@ import (
 
 var (
 	signature     = [7]byte{'u', 'n', 'i', 't', 'd', 'b', '\xfe'}
-	logHeaderSize = 20
-	headerSize    = uint32(35)
+	logHeaderSize = 28
+	headerSize    = uint32(47)
 )
 
 type logInfo struct {
 	version    uint16
 	status     LogStatus
+	timeID     int64
 	entryCount uint32
 	size       uint32
 	offset     int64
 
-	_ [20]byte
+	_ [28]byte
 }
 
 // MarshalBinary serialized logInfo into binary data.
@@ -41,9 +42,10 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
 	binary.LittleEndian.PutUint16(buf[:2], l.version)
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(l.status))
-	binary.LittleEndian.PutUint32(buf[4:8], l.entryCount)
-	binary.LittleEndian.PutUint32(buf[8:12], l.size)
-	binary.LittleEndian.PutUint64(buf[12:20], uint64(l.offset))
+	binary.LittleEndian.PutUint64(buf[4:12], uint64(l.timeID))
+	binary.LittleEndian.PutUint32(buf[12:16], l.entryCount)
+	binary.LittleEndian.PutUint32(buf[16:20], l.size)
+	binary.LittleEndian.PutUint64(buf[20:28], uint64(l.offset))
 	return buf, nil
 }
 
@@ -51,9 +53,10 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 func (l *logInfo) UnmarshalBinary(data []byte) error {
 	l.version = binary.LittleEndian.Uint16(data[:2])
 	l.status = LogStatus(binary.LittleEndian.Uint16(data[2:4]))
-	l.entryCount = binary.LittleEndian.Uint32(data[4:8])
-	l.size = binary.LittleEndian.Uint32(data[8:12])
-	l.offset = int64(binary.LittleEndian.Uint64(data[12:20]))
+	l.timeID = int64(binary.LittleEndian.Uint64(data[4:12]))
+	l.entryCount = binary.LittleEndian.Uint32(data[12:16])
+	l.size = binary.LittleEndian.Uint32(data[16:20])
+	l.offset = int64(binary.LittleEndian.Uint64(data[20:28]))
 	return nil
 }
 
@@ -73,6 +76,8 @@ func (h header) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint64(buf[15:23], uint64(h.segments[0].offset))
 	binary.LittleEndian.PutUint32(buf[23:27], h.segments[1].size)
 	binary.LittleEndian.PutUint64(buf[27:35], uint64(h.segments[1].offset))
+	binary.LittleEndian.PutUint32(buf[35:39], h.segments[2].size)
+	binary.LittleEndian.PutUint64(buf[39:47], uint64(h.segments[2].offset))
 	return buf, nil
 }
 
@@ -84,5 +89,7 @@ func (h *header) UnmarshalBinary(data []byte) error {
 	h.segments[0].offset = int64(binary.LittleEndian.Uint64(data[15:23]))
 	h.segments[1].size = binary.LittleEndian.Uint32(data[23:27])
 	h.segments[1].offset = int64(binary.LittleEndian.Uint64(data[27:35]))
+	h.segments[2].size = binary.LittleEndian.Uint32(data[35:39])
+	h.segments[2].offset = int64(binary.LittleEndian.Uint64(data[39:47]))
 	return nil
 }

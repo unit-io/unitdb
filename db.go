@@ -314,7 +314,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
-	mu := db.getMutex(q.uid)
+	mu := db.getMutex(q.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
 	db.lookup(q)
@@ -521,10 +521,6 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 	topic.AddContract(e.Contract)
 
-	timeLock := db.mutex.getMutex(uint64(db.timeID()))
-	timeLock.RLock()
-	defer timeLock.RUnlock()
-
 	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Sequence()); err != nil {
 		return err
 	}
@@ -562,9 +558,6 @@ func (db *DB) Sync() error {
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
 	var err error
-	timeLock := db.mutex.getMutex(uint64(db.timeID()))
-	timeLock.RLock()
-	defer timeLock.RUnlock()
 	is, err := db.index.Stat()
 	if err != nil {
 		return -1, err

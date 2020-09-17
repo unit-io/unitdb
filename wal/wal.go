@@ -176,7 +176,7 @@ func (wal *WAL) recoverLogHeaders() error {
 			return err
 		}
 		if l.offset < 0 || l.status > logStatusReleased {
-			return nil
+			return errors.New("WAL is corrupted")
 		}
 		wal.pendingLogs = append(wal.pendingLogs, l)
 		offset = l.offset + int64(l.size)

@@ -25,6 +25,11 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
+type leases struct {
+	ls           map[int64]map[uint64]struct{} // map[timeID]map[seq]
+	sync.RWMutex                               // Read Write mutex, guards access to internal collection.
+}
+
 type freeslots struct {
 	cache        map[uint64]bool // map[seq]bool.
 	fs           []uint64
@@ -35,7 +40,7 @@ type freeslots struct {
 // To avoid lock bottlenecks slots are divided into several shards (nShards).
 type lease struct {
 	file
-	leases                map[int64]map[uint64]struct{} // map[timeID][]slot
+	leases                []*leases
 	slots                 []*freeslots
 	blocks                []*freeBlocks
 	size                  int64 // Total size of free blocks.
@@ -58,11 +63,15 @@ type freeBlocks struct {
 func newLease(f file, minimumSize int64) *lease {
 	l := &lease{
 		file:                  f,
-		leases:                make(map[int64]map[uint64]struct{}),
+		leases:                make([]*leases, nShards),
 		slots:                 make([]*freeslots, nShards),
 		blocks:                make([]*freeBlocks, nShards),
 		minimumFreeBlocksSize: minimumSize,
 		consistent:            hash.InitConsistent(int(nShards), int(nShards)),
+	}
+
+	for i := 0; i < nShards; i++ {
+		l.leases[i] = &leases{ls: make(map[int64]map[uint64]struct{})}
 	}
 
 	for i := 0; i < nShards; i++ {
@@ -133,33 +142,46 @@ func (b *freeBlocks) UnmarshalBinary(data []byte, size uint32) error {
 	return nil
 }
 
+// leaseBlock returns leases under given blockID.
+func (l *lease) leaseBlock(blockID uint64) *leases {
+	return l.leases[l.consistent.FindBlock(blockID)]
+}
+
 // addLease adds seq to leases.
 func (l *lease) addLease(timeID int64, seq uint64) {
-	if _, ok := l.leases[timeID]; ok {
-		l.leases[timeID][seq] = struct{}{}
+	// Get shard.
+	lb := l.leaseBlock(seq)
+	lb.Lock()
+	defer lb.Unlock()
+	if _, ok := lb.ls[timeID]; ok {
+		lb.ls[timeID][seq] = struct{}{}
 	} else {
-		l.leases[timeID] = make(map[uint64]struct{})
-		l.leases[timeID][seq] = struct{}{}
+		lb.ls[timeID] = make(map[uint64]struct{})
+		lb.ls[timeID][seq] = struct{}{}
 	}
 }
 
 // releaseLease revokes leases for given timeID.
 func (l *lease) releaseLease(timeID int64) {
-	delete(l.leases, timeID)
+	// Get shard.
+	for i := uint64(0); i < nShards; i++ {
+		lb := l.leases[i]
+		lb.Lock()
+		delete(lb.ls, timeID)
+		lb.Unlock()
+	}
 }
 
 // isFree check if seq is free.
-func (l *lease) isFree(seq uint64) bool {
+func (l *lease) isFree(timeID int64, seq uint64) bool {
 	// Get shard.
-	for i := uint64(0); i < nShards; i++ {
-		fss := l.slots[i]
-		fss.RLock()
-		if ok := fss.cache[seq]; ok {
-			fss.RUnlock()
-			return ok
-		}
-		fss.RUnlock()
+	fss := l.freeSlots(seq)
+	fss.RLock()
+	defer fss.RUnlock()
+	if ok := fss.cache[seq]; ok {
+		return true
 	}
+
 	return false
 }
 
@@ -181,12 +203,16 @@ func (l *lease) getSlot() (ok bool, seq uint64) {
 		seq := fss.fs[0]
 		// Seq must be released before it can get reallocated
 		// to avoid allocation before timeID was sync and log entry was released.
-		for timeID := range l.leases {
-			if _, ok := l.leases[timeID][seq]; ok {
+		lb := l.leaseBlock(seq)
+		lb.RLock()
+		for timeID := range lb.ls {
+			if _, ok := lb.ls[timeID][seq]; ok {
+				lb.RUnlock()
 				fss.Unlock()
 				return false, seq
 			}
 		}
+		lb.RUnlock()
 		delete(fss.cache, seq)
 		fss.fs = fss.fs[1:]
 		fss.Unlock()

@@ -261,9 +261,9 @@ func TestLeasing(t *testing.T) {
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	// for _, id := range ids {
-	// 	db.Delete(id, topic)
-	// }
+	for _, id := range ids {
+		db.Delete(id, topic)
+	}
 	for i = 0; i < n; i++ {
 		messageID := db.NewID()
 		val := []byte(fmt.Sprintf("msg.%2d", i))
@@ -278,9 +278,9 @@ func TestLeasing(t *testing.T) {
 	if err := db.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	// for _, id := range ids {
-	// 	db.Delete(id, topic)
-	// }
+	for _, id := range ids {
+		db.Delete(id, topic)
+	}
 }
 
 func TestWildcardTopics(t *testing.T) {

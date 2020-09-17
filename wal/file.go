@@ -18,6 +18,7 @@ package wal
 
 import (
 	"encoding"
+	"fmt"
 	"os"
 
 	"github.com/unit-io/unitdb/fs"
@@ -105,16 +106,15 @@ func (sg *segments) allocate(size uint32) int64 {
 }
 
 func (sg *segments) free(offset int64, size uint32) (ok bool) {
+	if sg[0].offset+int64(sg[0].size) == offset {
+		sg[0].size += size
+		return true
+	}
 	if sg[1].offset+int64(sg[1].size) == offset {
 		sg[1].size += size
 		return true
-	} else {
-		if sg[0].offset+int64(sg[0].size) == offset {
-			sg[0].size += size
-			return true
-		}
 	}
-	return ok
+	return false
 }
 
 func (sg *segments) swap(targetSize int64) error {
@@ -128,6 +128,7 @@ func (sg *segments) swap(targetSize int64) error {
 		sg[1].offset = sg[0].offset
 		sg[1].size = sg[0].size
 		sg[0].size = 0
+		fmt.Println("wal.Swap: segments ", sg)
 	}
 	return nil
 }

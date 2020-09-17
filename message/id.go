@@ -30,8 +30,8 @@ const (
 	fixed = 16
 )
 
-// UniqueID generates unique ID from topic parts and concatenate contract as first part of the topic.
-func UniqueID(parts []Part) uint64 {
+// Prefix generates unique ID from topic parts and concatenate contract as first part of the topic.
+func Prefix(parts []Part) uint64 {
 	if len(parts) == 1 {
 		return uint64(parts[0].Hash)
 	}

@@ -333,7 +333,7 @@ func (tw *timeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries win
 	var expiryCount int
 
 	for key := range wb.entries {
-		if key.topicHash != topicHash {
+		if key.topicHash != topicHash || tw.isAborted(key.timeID) {
 			continue
 		}
 		wEntries := wb.entries[key]
@@ -477,6 +477,18 @@ func (tw *timeWindowBucket) isReleased(timeID int64) bool {
 			return false
 		}
 		if tm.isReleased(tw.releaseTimeMark) {
+			return true
+		}
+	}
+	return false
+}
+
+func (tw *timeWindowBucket) isAborted(timeID int64) bool {
+	tw.RLock()
+	defer tw.RUnlock()
+	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
+		if tm.refs == -1 {
+			// timeID is aborted
 			return true
 		}
 	}

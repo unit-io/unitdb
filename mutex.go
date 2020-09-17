@@ -22,10 +22,6 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-const (
-	nMutex = 100000
-)
-
 // mutex mutex to lock/unlock.
 type mutex struct {
 	internal   []*sync.RWMutex
@@ -35,11 +31,11 @@ type mutex struct {
 // newMutex creates mutex to lock/unlock.
 func newMutex() mutex {
 	mu := mutex{
-		internal:   make([]*sync.RWMutex, nMutex),
-		consistent: hash.InitConsistent(int(nMutex), int(nMutex)),
+		internal:   make([]*sync.RWMutex, nBlocks),
+		consistent: hash.InitConsistent(int(nBlocks), int(nBlocks)),
 	}
 
-	for i := 0; i < nMutex; i++ {
+	for i := 0; i < nBlocks; i++ {
 		mu.internal[i] = new(sync.RWMutex)
 	}
 

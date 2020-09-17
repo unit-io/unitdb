@@ -116,6 +116,7 @@ func (w *Writer) writeLog(id int64) error {
 	}
 	h := logInfo{
 		status:     logStatusWritten,
+		timeID:     id,
 		entryCount: w.entryCount,
 		size:       dataLen,
 		offset:     int64(off),

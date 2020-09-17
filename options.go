@@ -202,7 +202,7 @@ func WithDefaultOptions() Options {
 			o.memdbSize = 1 << 31 // maximum size of memdb (2GB).
 		}
 		if o.logSize == 0 {
-			o.logSize = 1 << 30 // maximum size of log to grow before allocating free segments (1GB).
+			o.logSize = 1 << 31 // maximum size of log to grow before allocating free segments (2GB).
 		}
 		if o.minimumFreeBlocksSize == 0 {
 			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB).
