@@ -8,7 +8,6 @@ Unitdb is blazing fast specialized time-series database for microservices, IoT, 
 - 100% Go
 - Can store larger-than-memory data sets
 - Optimized for fast lookups and writes
-- Stores topic trie in memory and all other data is persisted to disk
 - Supports writing billions of messages (or metrics) per hour with very low memory usages
 - Supports opening database with immutable flag
 - Supports database encryption
@@ -35,7 +34,7 @@ Samples are available in the cmd directory for reference.
 ## Projects Using Unitdb
 Below is a list of projects that use unitdb.
 
-- [Unitd](https://github.com/unit-io/unitd) Lightweight, high performance messaging system for microservices, IoT, and internet connected devices.
+- [Unite](https://github.com/unit-io/unite) Lightweight, high performance messaging system for microservices, and internet connected devices.
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.

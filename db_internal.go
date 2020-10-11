@@ -402,7 +402,7 @@ func (db *DB) rollback(tinyBatch *tinyBatch) error {
 		logger.Error().Err(err).Str("context", "db.abort")
 		return err
 	}
-	db.timeWindow.abortTimeID(tinyBatch.timeID())
+	db.timeWindow.timeMark.abort(tinyBatch.timeID())
 	db.meter.Aborts.Inc(int64(entryCount))
 	return nil
 }
@@ -483,11 +483,11 @@ func (db *DB) decount(count uint64) uint64 {
 }
 
 func (db *DB) timeID() int64 {
-	return db.timeWindow.newTimeID()
+	return db.timeWindow.timeMark.newID()
 }
 
 func (db *DB) releaseTimeID(timeID int64) {
-	db.timeWindow.releaseTimeID(timeID)
+	db.timeWindow.timeMark.release(timeID)
 }
 
 // setClosed flag; return true if not already closed.

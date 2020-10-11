@@ -121,21 +121,19 @@ type (
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
-	timeMark struct {
-		refs      int
-		lastUnref int64
-	}
+	// timeMark struct {
+	// 	refs      int
+	// 	lastUnref int64
+	// }
 	timeInfo struct {
 		windowIdx int32
 	}
-	timeRecords      map[int64]timeMark
+	// timeRecords      map[int64]timeMark
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
 		timeInfo
-		releaseTimeMark     timeMark
-		timeRecords                     // map of timeID pending commit.
-		releasedTimeRecords timeRecords // map of timeID commit applied.
+		timeMark
 		*windowBlocks
 		*expiryWindowBucket
 		opts *timeOptions
@@ -157,20 +155,6 @@ func (src *timeOptions) copyWithDefaults() *timeOptions {
 		opts.maxExpDurations = 1
 	}
 	return &opts
-}
-
-func (tm timeMark) isExpired(expDur time.Duration) bool {
-	if tm.lastUnref > 0 && tm.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
-		return true
-	}
-	return false
-}
-
-func (tm timeMark) isReleased(timeMark timeMark) bool {
-	if tm.lastUnref > 0 && tm.lastUnref < timeMark.lastUnref {
-		return true
-	}
-	return false
 }
 
 type windowEntries []winEntry
@@ -214,8 +198,7 @@ func (w *windowBlocks) getWindowBlock(blockID uint64) *timeWindow {
 
 func newTimeWindowBucket(f file, opts *timeOptions) *timeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeRecords: make(map[int64]timeMark), releasedTimeRecords: make(map[int64]timeMark)}
-	l.releaseTimeMark = timeMark{lastUnref: time.Now().UTC().UnixNano()}
+	l := &timeWindowBucket{file: f, timeInfo: timeInfo{windowIdx: -1}, timeMark: newTimeMark()}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -244,7 +227,7 @@ func (tw *timeWindowBucket) add(timeID int64, topicHash uint64, e winEntry) (ok 
 // foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file.
 func (tw *timeWindowBucket) foreachTimeWindow(f func(timeID int64, w windowEntries) (bool, error)) (err error) {
 	tw.Lock()
-	tw.releaseTimeMark = timeMark{lastUnref: time.Now().UTC().UnixNano()}
+	tw.timeRecord = timeRecord{lastUnref: time.Now().UTC().UnixNano()}
 	tw.Unlock()
 
 	var keys []key
@@ -440,78 +423,12 @@ func (w winBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-func (tw *timeWindowBucket) newTimeID() int64 {
-	tw.Lock()
-	defer tw.Unlock()
-	timeID := time.Now().UTC().UnixNano()
-	if tm, ok := tw.timeRecords[timeID]; ok {
-		tm.refs++
-		return timeID
-	}
-	tw.timeRecords[timeID] = timeMark{refs: 1}
-	return timeID
-}
-
-func (tw *timeWindowBucket) releaseTimeID(timeID int64) {
-	tw.Lock()
-	defer tw.Unlock()
-
-	timeMark, ok := tw.timeRecords[timeID]
-	if !ok {
-		return
-	}
-	timeMark.refs--
-	if timeMark.refs > 0 {
-		tw.timeRecords[timeID] = timeMark
-	} else {
-		delete(tw.timeRecords, timeID)
-		timeMark.lastUnref = tw.releaseTimeMark.lastUnref
-		tw.releasedTimeRecords[timeID] = timeMark
-	}
-}
-
-func (tw *timeWindowBucket) isReleased(timeID int64) bool {
-	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
-		if tm.refs == -1 {
-			// timeID is aborted
-			return false
-		}
-		if tm.isReleased(tw.releaseTimeMark) {
-			return true
-		}
-	}
-	return false
-}
-
-func (tw *timeWindowBucket) isAborted(timeID int64) bool {
-	tw.RLock()
-	defer tw.RUnlock()
-	if tm, ok := tw.releasedTimeRecords[timeID]; ok {
-		if tm.refs == -1 {
-			// timeID is aborted
-			return true
-		}
-	}
-	return false
-}
-
-func (tw *timeWindowBucket) abortTimeID(timeID int64) {
-	tw.Lock()
-	defer tw.Unlock()
-
-	if _, ok := tw.timeRecords[timeID]; ok {
-		delete(tw.timeRecords, timeID)
-	}
-	timeMark := timeMark{refs: -1, lastUnref: tw.releaseTimeMark.lastUnref}
-	tw.releasedTimeRecords[timeID] = timeMark
-}
-
 // abort iterates timewindow entries during rollback process and aborts time window entries.
 func (tw *timeWindowBucket) abort(f func(w windowEntries) (bool, error)) (err error) {
 	tw.RLock()
-	releasedTimeRecords := tw.releasedTimeRecords
+	releasedRecords := tw.releasedRecords
 	defer tw.RUnlock()
-	for timeID, tm := range releasedTimeRecords {
+	for timeID, tm := range releasedRecords {
 		if tm.refs == -1 {
 			for i := 0; i < nShards; i++ {
 				wb := tw.windowBlocks.window[i]
@@ -538,19 +455,13 @@ func (tw *timeWindowBucket) startReleaser() {
 	tw.Lock()
 	defer tw.Unlock()
 
-	releasedTimeIDs := make(map[int64]struct{})
-	for timeID, tm := range tw.releasedTimeRecords {
-		if tm.isExpired(tw.opts.maxDuration) {
-			releasedTimeIDs[timeID] = struct{}{}
-			delete(tw.releasedTimeRecords, timeID)
-		}
-	}
+	tw.timeMark.startReleaser(tw.opts.maxDuration)
 
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
 		wb.mu.Lock()
 		for k := range wb.entries {
-			if _, ok := releasedTimeIDs[k.timeID]; ok {
+			if _, ok := tw.releasedRecords[k.timeID]; !ok {
 				delete(wb.entries, k)
 			}
 		}
