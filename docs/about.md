@@ -22,7 +22,7 @@ The unitdb engine includes the following components:
 - Writing to Data file
 
 ### Writing data to disk 
-The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb block cache and become immediately queryable. The memdb block cache is periodically written to disk in the form of blocks.
+The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to block cache and become immediately queryable. The block cache is periodically written to disk in the form of blocks.
 
 ### Write Ahead Log (WAL)
 The Write Ahead Log (WAL) retains unitdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
@@ -31,11 +31,11 @@ When the unitdb engine receives a put request, the following steps occur:
 
 - The put request is parsed, packed and appended to a tinyBatch buffer.
 - Topic is parsed into parts and added to the lookup Trie. Contract is added to the first part of the parts in the lookup Trie.
-- The data is added to the memdb block cache.
+- The data is added to the block cache.
 - The tinyBatch is appended to the WAL in cyclic order.
 - The last offset of topic from timeWindow block is added to the Trie.
 - Data is written to disk using block sync.
-- The memdb block cache is updated with free offset. The memdb block cache shrinks if it reaches target size.
+- The block cache is updated with free offset. The block cache shrinks if it reaches target size.
 - When data is successfully written to WAL, a response confirms the write request was successful.
 
 Blocks sync writes the timeWindow blocks, index blocks, and data blocks to disk.
@@ -43,7 +43,7 @@ Blocks sync writes the timeWindow blocks, index blocks, and data blocks to disk.
 When the unitdb restarts, last offset of all topics is loaded into Trie, the WAL file is read back and pending writes are applied to the unitdb.
 
 ### Block Cache
-The memdb block cache is an in-memory copy of entries that currently stored in the WAL. The block cache:
+The block cache is an in-memory copy of entries that currently stored in the WAL. The block cache:
 
 - Organizes entries as per topic hash into shards.
 - Stores keys and offsets into map
@@ -62,4 +62,4 @@ Block index stores entry sequence, offset of data block, message size and expiry
 #### Data Block
 The unitdb compress data and store it into data blocks. If an entry expires or deleted then the offset and size of data is marked as free and added to the leasing blocks that get allocated by new request.
 
-After data is stored safely in files, the WAL is truncated and memdb is shrink.
+After data is stored safely in files, the WAL is truncated and block cache is shrink.

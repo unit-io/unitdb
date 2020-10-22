@@ -46,7 +46,7 @@ type (
 
 func (db *DB) newTinyBatch() *tinyBatch {
 	// Backoff to limit excess memroy usage
-	db.mem.Backoff()
+	db.blockCache.Backoff()
 	tinyBatch := &tinyBatch{ID: db.timeID(), buffer: db.bufPool.Get(), doneChan: make(chan struct{})}
 	return tinyBatch
 }

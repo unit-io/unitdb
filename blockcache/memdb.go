@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package memdb
+package cache
 
 import (
 	"encoding/binary"
@@ -29,12 +29,12 @@ import (
 
 const (
 	nBlocks = 27
-	// maxSize value to limit maximum memory for the mem store.
+	// maxSize value to limit maximum memory for the blockcache.
 	maxSize = (int64(1) << 34) - 1
 
 	// defaultInitialInterval duration for waiting in the queue due to system memory surge operations.
 	defaultInitialInterval = 500 * time.Millisecond
-	// defaultRandomizationFactor sets factor to backoff when mem store reaches target size.
+	// defaultRandomizationFactor sets factor to backoff when blockcache reaches target size.
 	defaultRandomizationFactor = 0.5
 	// defaultMaxElapsedTime sets maximum elapsed time to wait during backoff.
 	defaultMaxElapsedTime   = 15 * time.Second
@@ -42,7 +42,7 @@ const (
 
 	defaultDrainInterval = 1 * time.Second
 	defaultDrainFactor   = 0.7
-	defaultShrinkFactor  = 0.33 // shrinker try to free 33% of total mem store size.
+	defaultShrinkFactor  = 0.33 // shrinker try to free 33% of total blockcache size.
 )
 
 var timerPool sync.Pool
@@ -52,7 +52,7 @@ type blockCache []*block
 
 type block struct {
 	data         dataTable
-	freeOffset   int64            // mem cache keep lowest offset that can be free.
+	freeOffset   int64            // blockcache keep lowest offset that can be free.
 	m            map[uint64]int64 // map[key]offset
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
@@ -66,10 +66,10 @@ func newBlockCache(nShards int) blockCache {
 	return m
 }
 
-// DB represents the block cache mem store.
-// All DB methods are safe for concurrent use by multiple goroutines.
+// Cache represents the blockcache.
+// All Cache methods are safe for concurrent use by multiple goroutines.
 type (
-	// Capacity manages the mem store capacity to limit excess memory usage.
+	// Capacity manages the blockcache capacity to limit excess memory usage.
 	Capacity struct {
 		sync.RWMutex
 
@@ -83,12 +83,12 @@ type (
 
 		WriteBackOff bool
 	}
-	DB struct {
+	Cache struct {
 		drainLockC chan struct{}
 
 		// block cache
 		consistent *hash.Consistent
-		blockCache blockCache
+		blockCache
 
 		// Capacity
 		nBlocks int
@@ -100,8 +100,8 @@ type (
 	}
 )
 
-// Open opens or creates a new mem store.
-func Open(size int64, opts *Options) (*DB, error) {
+// Open opens or creates a new blockcache.
+func Open(size int64, opts *Options) (*Cache, error) {
 	opts = opts.copyWithDefaults()
 	if size > maxSize {
 		size = maxSize
@@ -117,7 +117,7 @@ func Open(size int64, opts *Options) (*DB, error) {
 	}
 	cap.Reset()
 
-	db := &DB{
+	c := &Cache{
 		drainLockC: make(chan struct{}, 1),
 		blockCache: newBlockCache(opts.MaxBlocks),
 
@@ -129,47 +129,47 @@ func Open(size int64, opts *Options) (*DB, error) {
 		closeC: make(chan struct{}),
 	}
 
-	db.consistent = hash.InitConsistent(int(opts.MaxBlocks), int(opts.MaxBlocks))
+	c.consistent = hash.InitConsistent(int(opts.MaxBlocks), int(opts.MaxBlocks))
 
-	go db.drain(opts.DrainFactor, opts.DrainInterval)
+	go c.drain(opts.DrainFactor, opts.DrainInterval)
 
-	return db, nil
+	return c, nil
 }
 
-func (db *DB) drain(drainFactor float64, interval time.Duration) {
+func (c *Cache) drain(drainFactor float64, interval time.Duration) {
 	drainTicker := time.NewTicker(interval)
 	defer drainTicker.Stop()
 	for {
 		select {
-		case <-db.closeC:
+		case <-c.closeC:
 			return
 		case <-drainTicker.C:
-			if db.Capacity() > drainFactor {
-				db.shrinkDataTable()
+			if c.Capacity() > drainFactor {
+				c.shrinkDataTable()
 			}
 		}
 	}
 }
 
-func (db *DB) shrinkDataTable() error {
-	db.drainLockC <- struct{}{}
-	db.closeW.Add(1)
+func (c *Cache) shrinkDataTable() error {
+	c.drainLockC <- struct{}{}
+	c.closeW.Add(1)
 	defer func() {
-		db.closeW.Done()
-		<-db.drainLockC
+		c.closeW.Done()
+		<-c.drainLockC
 	}()
 
-	for i := 0; i < db.nBlocks; i++ {
-		block := db.blockCache[i]
+	for i := 0; i < c.nBlocks; i++ {
+		block := c.blockCache[i]
 		block.Lock()
 		if block.freeOffset > 0 {
 			if err := block.data.shrink(block.freeOffset); err != nil {
 				block.Unlock()
 				return err
 			}
-			db.cap.Lock()
-			db.cap.size -= int64(block.freeOffset)
-			db.cap.Unlock()
+			c.cap.Lock()
+			c.cap.size -= int64(block.freeOffset)
+			c.cap.Unlock()
 		}
 		for seq, off := range block.m {
 			if off < block.freeOffset {
@@ -182,33 +182,33 @@ func (db *DB) shrinkDataTable() error {
 		block.Unlock()
 	}
 
-	db.cap.Reset()
+	c.cap.Reset()
 
 	return nil
 }
 
-// Close closes the mem store.
-func (db *DB) Close() error {
+// Close closes the blockcache.
+func (c *Cache) Close() error {
 	// Signal all goroutines.
-	close(db.closeC)
+	close(c.closeC)
 
 	// Acquire lock.
-	db.drainLockC <- struct{}{}
+	c.drainLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
-	db.closeW.Wait()
+	c.closeW.Wait()
 	return nil
 }
 
 // getBlock returns block under given blockID.
-func (db *DB) getBlock(blockID uint64) *block {
-	return db.blockCache[db.consistent.FindBlock(blockID)]
+func (c *Cache) getBlock(blockID uint64) *block {
+	return c.blockCache[c.consistent.FindBlock(blockID)]
 }
 
 // Get gets data for the provided key under a blockID.
-func (db *DB) Get(blockID uint64, key uint64) ([]byte, error) {
+func (c *Cache) Get(blockID uint64, key uint64) ([]byte, error) {
 	// Get block
-	block := db.getBlock(blockID)
+	block := c.getBlock(blockID)
 	block.RLock()
 	defer block.RUnlock()
 	// Get item from block.
@@ -232,11 +232,11 @@ func (db *DB) Get(blockID uint64, key uint64) ([]byte, error) {
 }
 
 // Remove sets data offset to -1 for the key under a blockID.
-func (db *DB) Remove(blockID uint64, key uint64) error {
+func (c *Cache) Remove(blockID uint64, key uint64) error {
 	// Get block
-	block := db.getBlock(blockID)
-	block.RLock()
-	defer block.RUnlock()
+	block := c.getBlock(blockID)
+	block.Lock()
+	defer block.Unlock()
 	// Get item from block.
 	if _, ok := block.m[key]; ok {
 		block.m[key] = -1
@@ -245,16 +245,16 @@ func (db *DB) Remove(blockID uint64, key uint64) error {
 }
 
 // Set sets the value for the given entry for a blockID.
-func (db *DB) Set(blockID uint64, key uint64, data []byte) error {
-	if db.cap.WriteBackOff {
-		t := db.cap.NewTicker()
+func (c *Cache) Set(blockID uint64, key uint64, data []byte) error {
+	if c.cap.WriteBackOff {
+		t := c.cap.NewTicker()
 		select {
 		case <-t.C:
 			timerPool.Put(t)
 		}
 	}
 	// Get block
-	block := db.getBlock(blockID)
+	block := c.getBlock(blockID)
 	block.Lock()
 	defer block.Unlock()
 	dataLen := uint32(len(data) + 4)
@@ -273,16 +273,16 @@ func (db *DB) Set(blockID uint64, key uint64, data []byte) error {
 	}
 	block.m[key] = off
 
-	db.cap.Lock()
-	defer db.cap.Unlock()
-	db.cap.size += int64(dataLen)
+	c.cap.Lock()
+	defer c.cap.Unlock()
+	c.cap.size += int64(dataLen)
 	return nil
 }
 
 // Keys gets all keys from block cache for the provided blockID.
-func (db *DB) Keys(blockID uint64) []uint64 {
+func (c *Cache) Keys(blockID uint64) []uint64 {
 	// Get block
-	block := db.getBlock(blockID)
+	block := c.getBlock(blockID)
 	block.RLock()
 	defer block.RUnlock()
 	// Get keys from  block.
@@ -293,10 +293,10 @@ func (db *DB) Keys(blockID uint64) []uint64 {
 	return keys
 }
 
-// Free free keeps first offset that can be free if mem store exceeds target size.
-func (db *DB) Free(blockID, key uint64) error {
+// Free free keeps first offset that can be free if blockcache exceeds target size.
+func (c *Cache) Free(blockID, key uint64) error {
 	// Get block
-	block := db.getBlock(blockID)
+	block := c.getBlock(blockID)
 	block.Lock()
 	defer block.Unlock()
 	if block.freeOffset > 0 {
@@ -313,11 +313,11 @@ func (db *DB) Free(blockID, key uint64) error {
 	return nil
 }
 
-// Count returns the number of items in mem store.
-func (db *DB) Count() uint64 {
+// Count returns the number of items in blockcache.
+func (c *Cache) Count() uint64 {
 	count := 0
-	for i := 0; i < db.nBlocks; i++ {
-		block := db.blockCache[i]
+	for i := 0; i < c.nBlocks; i++ {
+		block := c.blockCache[i]
 		block.RLock()
 		count += len(block.m)
 		block.RUnlock()
@@ -325,11 +325,11 @@ func (db *DB) Count() uint64 {
 	return uint64(count)
 }
 
-// Size returns the total size of mem store.
-func (db *DB) Size() (int64, error) {
+// Size returns the total size of blockcache.
+func (c *Cache) Size() (int64, error) {
 	size := int64(0)
-	for i := 0; i < db.nBlocks; i++ {
-		block := db.blockCache[i]
+	for i := 0; i < c.nBlocks; i++ {
+		block := c.blockCache[i]
 		block.RLock()
 		size += int64(block.data.size)
 		block.RUnlock()
@@ -337,15 +337,15 @@ func (db *DB) Size() (int64, error) {
 	return size, nil
 }
 
-// Capacity return the mem store capacity in proportion to target size.
-func (db *DB) Capacity() float64 {
-	db.cap.RLock()
-	defer db.cap.RUnlock()
-	return float64(db.cap.size) / float64(db.cap.targetSize)
+// Capacity return the blockcache capacity in proportion to target size.
+func (c *Cache) Capacity() float64 {
+	c.cap.RLock()
+	defer c.cap.RUnlock()
+	return float64(c.cap.size) / float64(c.cap.targetSize)
 }
 
 // Reset the interval back to the initial interval.
-// Reset must be called before using db.
+// Reset must be called before using c.
 func (cap *Capacity) Reset() {
 	cap.Lock()
 	defer cap.Unlock()
@@ -387,7 +387,7 @@ func getRandomValueFromInterval(randomizationFactor, random float64, currentInte
 	return time.Duration(minInterval + (random * (maxInterval - minInterval + 1)))
 }
 
-// NewTicker creates or get ticker from timer db. It uses backoff duration of the mem store for the timer.
+// NewTicker creates or get ticker from timer c. It uses backoff duration of the blockcache for the timer.
 func (cap *Capacity) NewTicker() *time.Timer {
 	cap.RLock()
 	factor := float64(cap.size) / float64(cap.targetSize)
@@ -400,19 +400,19 @@ func (cap *Capacity) NewTicker() *time.Timer {
 	if v := timerPool.Get(); v != nil {
 		t := v.(*time.Timer)
 		if t.Reset(d) {
-			panic(fmt.Sprintf("db.NewTicker: active timer trapped to the pool"))
+			panic(fmt.Sprintf("c.NewTicker: active timer trapped to the pool"))
 		}
 		return t
 	}
 	return time.NewTimer(d)
 }
 
-// Backoff backs-off mem store if the currentInterval is greater than Backoff threshold.
-func (db *DB) Backoff() {
-	if db.Capacity() < 1 {
+// Backoff backs-off blockcache if the currentInterval is greater than Backoff threshold.
+func (c *Cache) Backoff() {
+	if c.Capacity() < 1 {
 		return
 	}
-	t := db.cap.NewTicker()
+	t := c.cap.NewTicker()
 	select {
 	case <-t.C:
 		timerPool.Put(t)

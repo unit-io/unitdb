@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package memdb
+package cache
 
 import (
 	"math/rand"
@@ -24,12 +24,12 @@ import (
 
 func TestSimple(t *testing.T) {
 	size := int64(1 << 4)
-	mdb, err := Open(size, nil)
+	bc, err := Open(size, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if mdb.Count() != 0 {
+	if bc.Count() != 0 {
 		t.Fatal()
 	}
 
@@ -42,7 +42,7 @@ func TestSimple(t *testing.T) {
 
 	for i = 0; i < n; i++ {
 		k := cacheID ^ uint64(i)
-		if data, err := mdb.Get(contract, k); data != nil || err != nil {
+		if data, err := bc.Get(contract, k); data != nil || err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,14 +51,14 @@ func TestSimple(t *testing.T) {
 		k := cacheID ^ uint64(i)
 		val := []byte("msg.")
 		val = append(val, i)
-		if err = mdb.Set(contract, k, val); err != nil {
+		if err = bc.Set(contract, k, val); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	verifyMsgs := func() {
-		if count := mdb.Count(); count != uint64(n) {
-			mdb.Close()
+		if count := bc.Count(); count != uint64(n) {
+			bc.Close()
 			t.Fatalf("expected %d records; got %d", n, count)
 		}
 		var v []byte
@@ -66,7 +66,7 @@ func TestSimple(t *testing.T) {
 			k := cacheID ^ uint64(i)
 			val := []byte("msg.")
 			val = append(val, i)
-			v, err = mdb.Get(contract, k)
+			v, err = bc.Get(contract, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,34 +74,34 @@ func TestSimple(t *testing.T) {
 				t.Fatalf("expected %v; got %v", val, v)
 			}
 		}
-		if _, err := mdb.Size(); err != nil {
+		if _, err := bc.Size(); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	verifyMsgs()
 
-	if err := mdb.Free(contract, cacheID^uint64(n-1)); err != nil {
+	if err := bc.Free(contract, cacheID^uint64(n-1)); err != nil {
 		t.Fatal(err)
 	}
 
 	for i = 0; i < n; i++ {
 		k := cacheID ^ uint64(i)
-		if err = mdb.Remove(contract, k); err != nil {
+		if err = bc.Remove(contract, k); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if err := mdb.shrinkDataTable(); err != nil {
+	if err := bc.shrinkDataTable(); err != nil {
 		t.Fatal(err)
 	}
 
 	verifyAndClose := func() {
-		if count := mdb.Count(); count != 0 {
-			mdb.Close()
+		if count := bc.Count(); count != 0 {
+			bc.Close()
 			t.Fatalf("expected zero records; got %d", count)
 		}
-		if err := mdb.Close(); err != nil {
+		if err := bc.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}

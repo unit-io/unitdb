@@ -256,7 +256,7 @@ func (db *syncHandle) Sync() error {
 			}
 			blockID := startBlockIndex(we.seq())
 			mseq := db.cacheID ^ uint64(we.seq())
-			memdata, err := db.mem.Get(uint64(blockID), mseq)
+			memdata, err := db.blockCache.Get(uint64(blockID), mseq)
 			if err != nil || memdata == nil {
 				db.entriesInvalid++
 				logger.Error().Err(err).Str("context", "mem.Get")
@@ -312,7 +312,7 @@ func (db *syncHandle) Sync() error {
 			}
 		}
 		blockID := startBlockIndex(baseSeq)
-		db.mem.Free(uint64(blockID), db.cacheID^baseSeq)
+		db.blockCache.Free(uint64(blockID), db.cacheID^baseSeq)
 		if err1 != nil {
 			return true, err1
 		}

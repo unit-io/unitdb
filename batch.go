@@ -223,7 +223,7 @@ func (b *Batch) Write() error {
 		}
 		blockID := startBlockIndex(e.seq)
 		memseq := b.db.cacheID ^ e.seq
-		if err := b.db.mem.Set(uint64(blockID), memseq, data); err != nil {
+		if err := b.db.blockCache.Set(uint64(blockID), memseq, data); err != nil {
 			return err
 		}
 		if ok := b.db.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {

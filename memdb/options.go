@@ -20,60 +20,107 @@ import (
 	"time"
 )
 
-// Options holds the optional memdb parameters.
-type Options struct {
+type options struct {
+	logFilePath string
+
+	// memdbSize sets Size of memory db.
+	memdbSize int64
+
 	// MaxBlocks sets Maximum concurrent block caches in mem store.
 	MaxBlocks int
 
-	// DrainInterval sets interval to start mem store drain if it reaches drain threshold.
+	// bufferSize sets Size of buffer to use for pooling.
+	bufferSize int64
 
-	DrainInterval time.Duration
+	// logSize sets Size of write ahead log.
+	logSize int64
 
-	// DrainFactor sets drain factor to start shrinking datatable if meme store reaches drain threshold.
-	DrainFactor float64
-
-	// The duration for waiting in the queue if mem store reaches its target size.
-	InitialInterval time.Duration
-
-	// RandomizationFactor sets factor to backoff when mem store reaches target size.
-	RandomizationFactor float64
-
-	// MaxElapsedTime sets maximum elapsed time to wait during backoff.
-	MaxElapsedTime time.Duration
-
-	// WriteBackOff to turn on Backoff for writes.
-	WriteBackOff bool
+	tinyBatchWriteInterval time.Duration
 }
 
-func (src *Options) copyWithDefaults() *Options {
-	opts := Options{}
-	if src != nil {
-		opts = *src
-	}
+// Options it contains configurable options and flags for DB.
+type Options interface {
+	set(*options)
+}
 
-	if opts.MaxBlocks == 0 {
-		opts.MaxBlocks = nBlocks
-	}
+// fOption wraps a function that modifies options and flags into an
+// implementation of the Options interface.
+type fOption struct {
+	f func(*options)
+}
 
-	if opts.DrainInterval == 0 {
-		opts.DrainInterval = defaultDrainInterval
-	}
+func (fo *fOption) set(o *options) {
+	fo.f(o)
+}
 
-	if opts.DrainFactor == 0 {
-		opts.DrainFactor = defaultDrainFactor
+func newFuncOption(f func(*options)) *fOption {
+	return &fOption{
+		f: f,
 	}
+}
 
-	if opts.InitialInterval == 0 {
-		opts.InitialInterval = defaultInitialInterval
-	}
+// WithDefaultOptions will open DB with some default values.
+func WithDefaultOptions() Options {
+	return newFuncOption(func(o *options) {
+		if o.logFilePath == "" {
+			o.logFilePath = "/tmp/unitdb"
+		}
+		if o.memdbSize == 0 {
+			o.memdbSize = defaultMemSize
+		}
+		if o.MaxBlocks == 0 {
+			o.MaxBlocks = nBlocks
+		}
+		if o.bufferSize == 0 {
+			o.bufferSize = defaultBufferSize
+		}
+		if o.logSize == 0 {
+			o.logSize = defaultLogSize
+		}
+		if o.tinyBatchWriteInterval == 0 {
+			o.tinyBatchWriteInterval = 15 * time.Millisecond
+		}
+	})
+}
 
-	if opts.RandomizationFactor == 0 {
-		opts.RandomizationFactor = defaultRandomizationFactor
-	}
+// WithLogFilePath sets database directory.
+func WithLogFilePath(path string) Options {
+	return newFuncOption(func(o *options) {
+		o.logFilePath = path
+	})
+}
 
-	if opts.MaxElapsedTime == 0 {
-		opts.MaxElapsedTime = defaultMaxElapsedTime
-	}
+// WithMemdbSize sets Size of memory DB.
+func WithMemdbSize(size int64) Options {
+	return newFuncOption(func(o *options) {
+		o.memdbSize = size
+	})
+}
 
-	return &opts
+// WithMaxBlocks sets number of concurrent blocks for the mem store.
+func WithMaxBlocks(nBlocks int) Options {
+	return newFuncOption(func(o *options) {
+		o.MaxBlocks = nBlocks
+	})
+}
+
+// WithBufferSize sets Size of buffer to use for pooling.
+func WithBufferSize(size int64) Options {
+	return newFuncOption(func(o *options) {
+		o.bufferSize = size
+	})
+}
+
+// WithLogSize sets Size of write ahead log.
+func WithLogSize(size int64) Options {
+	return newFuncOption(func(o *options) {
+		o.logSize = size
+	})
+}
+
+// WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
+func TinyBatchWriteInterval(dur time.Duration) Options {
+	return newFuncOption(func(o *options) {
+		o.tinyBatchWriteInterval = dur
+	})
 }

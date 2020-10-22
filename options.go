@@ -76,8 +76,8 @@ type options struct {
 	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
 
-	// memdbSize sets Size of memory db.
-	memdbSize int64
+	// blockCacheSize sets Size of blockcache.
+	blockCacheSize int64
 
 	// logSize sets Size of write ahead log.
 	logSize int64
@@ -198,8 +198,8 @@ func WithDefaultOptions() Options {
 		if o.bufferSize == 0 {
 			o.bufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
 		}
-		if o.memdbSize == 0 {
-			o.memdbSize = 1 << 31 // maximum size of memdb (2GB).
+		if o.blockCacheSize == 0 {
+			o.blockCacheSize = 1 << 31 // maximum size of blockcache (2GB).
 		}
 		if o.logSize == 0 {
 			o.logSize = 1 << 31 // maximum size of log to grow before allocating free segments (2GB).
@@ -252,10 +252,10 @@ func WithBufferSize(size int64) Options {
 	})
 }
 
-// WithMemdbSize sets Size of memory DB.
-func WithMemdbSize(size int64) Options {
+// WithBlockCacheSize sets Size of blockcache.
+func WithBlockCacheSize(size int64) Options {
 	return newFuncOption(func(o *options) {
-		o.memdbSize = size
+		o.blockCacheSize = size
 	})
 }
 

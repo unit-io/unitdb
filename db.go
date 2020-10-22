@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+	bc "github.com/unit-io/unitdb/blockcache"
 	"github.com/unit-io/unitdb/crypto"
 	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/fs"
-	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
 	"github.com/unit-io/unitdb/wal"
 )
@@ -53,7 +53,7 @@ type DB struct {
 	dbInfo
 	timeWindow *timeWindowBucket
 	opts       *options
-	mem        *memdb.DB
+	blockCache *bc.Cache
 
 	//batchdb
 	*batchdb
@@ -199,19 +199,19 @@ func Open(path string, opts ...Options) (*DB, error) {
 		db.encryption = 1
 	}
 
-	// Create a memdb.
-	mem, err := memdb.Open(options.memdbSize, &memdb.Options{MaxElapsedTime: 2 * time.Second})
+	// Create a blockcache.
+	blockCache, err := bc.Open(options.blockCacheSize, &bc.Options{MaxElapsedTime: 2 * time.Second})
 	if err != nil {
 		return nil, err
 	}
-	db.mem = mem
+	db.blockCache = blockCache
 
 	//initbatchdb
 	if err = db.initbatchdb(options); err != nil {
 		return nil, err
 	}
 
-	db.filter.cache = db.mem
+	db.filter.blockCache = db.blockCache
 	db.filter.cacheID = db.cacheID
 
 	if err := db.loadTrie(); err != nil {
@@ -259,7 +259,7 @@ func (db *DB) Close() error {
 	db.bufPool.Done()
 
 	// close memdb.
-	db.mem.Close()
+	db.blockCache.Close()
 
 	if err := db.writeHeader(); err != nil {
 		return err
@@ -475,7 +475,7 @@ func (db *DB) PutEntry(e *Entry) error {
 
 	blockID := startBlockIndex(e.seq)
 	memseq := db.cacheID ^ e.seq
-	if err := db.mem.Set(uint64(blockID), memseq, e.cache); err != nil {
+	if err := db.blockCache.Set(uint64(blockID), memseq, e.cache); err != nil {
 		return err
 	}
 

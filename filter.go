@@ -17,15 +17,15 @@
 package unitdb
 
 import (
+	bc "github.com/unit-io/unitdb/blockcache"
 	"github.com/unit-io/unitdb/filter"
-	"github.com/unit-io/unitdb/memdb"
 )
 
 // Filter filter is bloom filter generator.
 type Filter struct {
 	file
 	filterBlock *filter.Generator
-	cache       *memdb.DB
+	blockCache  *bc.Cache
 	cacheID     uint64
 }
 
@@ -68,9 +68,9 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 		return nil, nil
 	}
 	var cacheKey uint64
-	if f.cache != nil {
+	if f.blockCache != nil {
 		cacheKey = f.cacheID ^ uint64(f.size)
-		if data, err := f.cache.Get(0, cacheKey); data != nil {
+		if data, err := f.blockCache.Get(0, cacheKey); data != nil {
 			return filter.NewFilterBlock(data), err
 		}
 	}
@@ -80,8 +80,8 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 		return nil, err
 	}
 
-	if f.cache != nil && fillCache {
-		f.cache.Set(0, cacheKey, raw)
+	if f.blockCache != nil && fillCache {
+		f.blockCache.Set(0, cacheKey, raw)
 	}
 	return filter.NewFilterBlock(raw), nil
 }

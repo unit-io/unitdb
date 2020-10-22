@@ -171,7 +171,7 @@ func (db *DB) close() error {
 func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
 	blockID := startBlockIndex(seq)
 	memseq := db.cacheID ^ seq
-	data, err := db.mem.Get(uint64(blockID), memseq)
+	data, err := db.blockCache.Get(uint64(blockID), memseq)
 	if err != nil {
 		return slot{}, errMsgIDDeleted
 	}
@@ -331,7 +331,7 @@ func (db *DB) setEntry(timeID int64, e *Entry) error {
 // tinyWrite writes tiny batch to DB WAL.
 func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	// Backoff to limit excess memroy usage
-	db.mem.Backoff()
+	db.blockCache.Backoff()
 
 	logWriter, err := db.wal.NewWriter()
 	if err != nil {
@@ -341,7 +341,7 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 	for _, seq := range tinyBatch.entries {
 		blockID := startBlockIndex(seq)
 		memseq := db.cacheID ^ seq
-		data, err := db.mem.Get(uint64(blockID), memseq)
+		data, err := db.blockCache.Get(uint64(blockID), memseq)
 		if err != nil {
 			// Record is deleted
 			continue
@@ -429,7 +429,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	db.meter.Dels.Inc(1)
 	blockID := startBlockIndex(seq)
 	memseq := db.cacheID ^ seq
-	if err := db.mem.Remove(uint64(blockID), memseq); err != nil {
+	if err := db.blockCache.Remove(uint64(blockID), memseq); err != nil {
 		return err
 	}
 

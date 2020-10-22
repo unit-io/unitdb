@@ -121,14 +121,9 @@ type (
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
-	// timeMark struct {
-	// 	refs      int
-	// 	lastUnref int64
-	// }
 	timeInfo struct {
 		windowIdx int32
 	}
-	// timeRecords      map[int64]timeMark
 	timeWindowBucket struct {
 		sync.RWMutex
 		file
@@ -373,7 +368,6 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 		}
 		if len(winEntries) > limit-int(b.entryIdx) {
 			limit = limit - len(winEntries)
-			// for _, we := range b.entries[b.entryIdx-uint16(limit) : b.entryIdx] {
 			for i := len(b.entries) - 1; i >= len(b.entries)-limit; i-- {
 				we := b.entries[i]
 				if we.isExpired() {
@@ -390,7 +384,6 @@ func (tw *timeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit in
 				return true, nil
 			}
 		}
-		// for _, we := range b.entries[:b.entryIdx] {
 		for i := len(b.entries) - 1; i >= 0; i-- {
 			we := b.entries[i]
 			if we.isExpired() {

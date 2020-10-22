@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package memdb
+package cache
 
 import "errors"
 
@@ -30,14 +30,6 @@ func (t *dataTable) allocate(size uint32) (int64, error) {
 	}
 	off := t.size
 	return off, t.truncate(t.size + int64(size))
-}
-
-func (t *dataTable) reset() error {
-	t.closed = true
-	t.size = 0
-	t.buf = nil
-
-	return nil
 }
 
 func (t *dataTable) shrink(off int64) error {
