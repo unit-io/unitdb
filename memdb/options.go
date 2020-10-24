@@ -27,7 +27,7 @@ type options struct {
 	memdbSize int64
 
 	// MaxBlocks sets Maximum concurrent block caches in mem store.
-	MaxBlocks int
+	maxBlocks int
 
 	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
@@ -68,8 +68,8 @@ func WithDefaultOptions() Options {
 		if o.memdbSize == 0 {
 			o.memdbSize = defaultMemSize
 		}
-		if o.MaxBlocks == 0 {
-			o.MaxBlocks = nBlocks
+		if o.maxBlocks == 0 {
+			o.maxBlocks = nBlocks
 		}
 		if o.bufferSize == 0 {
 			o.bufferSize = defaultBufferSize
@@ -100,7 +100,7 @@ func WithMemdbSize(size int64) Options {
 // WithMaxBlocks sets number of concurrent blocks for the mem store.
 func WithMaxBlocks(nBlocks int) Options {
 	return newFuncOption(func(o *options) {
-		o.MaxBlocks = nBlocks
+		o.maxBlocks = nBlocks
 	})
 }
 
@@ -119,7 +119,7 @@ func WithLogSize(size int64) Options {
 }
 
 // WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
-func TinyBatchWriteInterval(dur time.Duration) Options {
+func WithTinyBatchWriteInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *options) {
 		o.tinyBatchWriteInterval = dur
 	})

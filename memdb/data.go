@@ -16,9 +16,12 @@
 
 package memdb
 
-import "errors"
+import (
+	"errors"
+)
 
 type dataTable struct {
+	timeID timeID
 	buf    []byte
 	size   int64
 	closed bool
@@ -37,16 +40,6 @@ func (t *dataTable) reset() error {
 	t.size = 0
 	t.buf = nil
 
-	return nil
-}
-
-func (t *dataTable) shrink(off int64) error {
-	if t.size == 0 {
-		panic("unable to shrink table of size zero bytes")
-	}
-	if err := t.truncateFront(off); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -89,20 +82,6 @@ func (t *dataTable) truncate(size int64) error {
 		t.buf = t.buf[:t.size]
 	}
 	t.size = size
-	return nil
-}
-
-func (t *dataTable) truncateFront(off int64) error {
-	if t.closed {
-		return errors.New("table closed")
-	}
-	if off > t.size {
-		t.buf = nil
-		t.size = 0
-		return nil
-	}
-	t.buf = t.buf[off:t.size]
-	t.size = t.size - off
 	return nil
 }
 

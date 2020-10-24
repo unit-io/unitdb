@@ -27,6 +27,10 @@ Make use of the client by importing it in your Go client source code. For exampl
 
 import "github.com/unit-io/unitdb"
 
+The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure. Make use of the client by importing in your Go client source code. For example,
+
+import "github.com/unit-io/unitdb/memdb"
+
 The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, and writing to wildcard topics. See [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
 Samples are available in the cmd directory for reference.
