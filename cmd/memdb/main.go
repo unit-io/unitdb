@@ -56,15 +56,13 @@ func main() {
 		if err := db.Delete(2); err != nil {
 			fmt.Println("error: ", err)
 		}
-		if err := db.Delete(3); err != nil {
-			fmt.Println("error: ", err)
-		}
+		// if err := db.Delete(3); err != nil {
+		// 	fmt.Println("error: ", err)
+		// }
 	}
-	sets()
-	deletes()
-	fmt.Println("main: Print entries after delete")
-	gets()
 	sets()
 	fmt.Println("main: Print entries after set")
 	gets()
+	deletes()
+	time.Sleep(100 * time.Millisecond)
 }

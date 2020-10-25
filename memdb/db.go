@@ -25,12 +25,6 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-// To avoid lock bottlenecks block cache is divided into several (nShards) shards.
-type (
-	timeID     int64
-	blockCache map[timeID]*block
-)
-
 // DB represents an SSD-optimized store.
 type DB struct {
 	mu sync.RWMutex
@@ -42,7 +36,7 @@ type DB struct {
 	internal   *db
 	consistent *hash.Consistent
 	blockCache
-	timeBlocks map[blockKey]timeID
+	timeBlocks map[uint16]timeID // map[blockID]timeID
 }
 
 // Open initializes database connection.
@@ -65,12 +59,12 @@ func Open(opts ...Options) (*DB, error) {
 		internal:   &db{},
 		consistent: hash.InitConsistent(options.maxBlocks, options.maxBlocks),
 		blockCache: make(map[timeID]*block),
-		timeBlocks: make(map[blockKey]timeID),
+		timeBlocks: make(map[uint16]timeID),
 	}
 
 	db.initDb()
 
-	if err := db.recovery(false); err != nil {
+	if err := db.startRecover(false); err != nil {
 		return nil, err
 	}
 
@@ -99,11 +93,10 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return nil, err
 	}
 
-	// Get timeBlock
-	blockID := db.consistent.FindBlock(key)
-
 	db.mu.RLock()
-	timeID, ok := db.timeBlocks[blockKey{blockID: blockID, key: key}]
+	// Get timeBlock
+	blockID := db.blockID(key)
+	timeID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return nil, errEntryDoesNotExist
@@ -118,7 +111,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	block.RLock()
 	defer block.RUnlock()
 	// Get item from block.
-	off, ok := block.m[key]
+	off, ok := block.records[iKey(false, key)]
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
@@ -139,12 +132,11 @@ func (db *DB) Delete(key uint64) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
-	// Get timeBlock
-	blockID := db.consistent.FindBlock(key)
 
 	db.mu.RLock()
-	blockKey := blockKey{blockID: blockID, key: key}
-	timeID, ok := db.timeBlocks[blockKey]
+	// Get timeBlock
+	blockID := db.blockID(key)
+	timeID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return errEntryDoesNotExist
@@ -155,17 +147,22 @@ func (db *DB) Delete(key uint64) error {
 
 	block.Lock()
 	defer block.Unlock()
-	delete(block.m, key)
-
-	if len(block.m) == 0 {
+	iK := iKey(false, key)
+	delete(block.records, iK)
+	block.count--
+	// fmt.Println("db.Delete: timeID, count, records ", timeID, block.count, block.records)
+	if block.count == 0 {
 		db.mu.Lock()
-		delete(db.timeBlocks, blockKey)
+		delete(db.timeBlocks, blockID)
 		block.data.reset()
 		delete(db.blockCache, timeID)
 		db.mu.Unlock()
 
 		db.signalLogApplied(int64(timeID))
 	}
+
+	// set deleted key
+	db.set(true, key, nil)
 
 	return nil
 }
@@ -176,54 +173,15 @@ func (db *DB) Set(key uint64, data []byte) error {
 		return err
 	}
 
-	db.internal.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-db.internal.tinyBatchLockC
-	}()
-
-	db.mu.Lock()
-	timeID := timeID(db.internal.timeID())
-	b, ok := db.blockCache[timeID]
-	if !ok {
-		b = &block{data: dataTable{}, m: make(map[uint64]int64)}
-		db.blockCache[timeID] = b
-	}
-	db.mu.Unlock()
-	b.Lock()
-	defer b.Unlock()
-	dataLen := uint32(len(data) + 8 + 1 + 4) // data len+key len+flag bit+scratch len
-	off, err := b.data.allocate(dataLen)
+	timeID, err := db.set(false, key, data)
 	if err != nil {
 		return err
 	}
-	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], dataLen)
-	if _, err := b.data.writeAt(scratch[:], off); err != nil {
-		return err
-	}
-	// k with flag bit
-	var k [9]byte
-	k[0] = 0
-	binary.LittleEndian.PutUint64(k[1:], key)
-	if _, err := b.data.writeAt(k[:], off+4); err != nil {
-		return err
-	}
-	if _, err := b.data.writeAt(data, off+8+1+4); err != nil {
-		return err
-	}
-	b.m[key] = off
-
 	// Get timeBlock
-	blockID := db.consistent.FindBlock(key)
-	blockKey := blockKey{
-		blockID: blockID,
-		key:     key,
-	}
+	blockID := db.blockID(key)
 	db.mu.Lock()
-	db.timeBlocks[blockKey] = timeID
+	db.timeBlocks[blockID] = timeID
 	db.mu.Unlock()
-
-	db.internal.tinyBatch.incount()
 
 	return nil
 }

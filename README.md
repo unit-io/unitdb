@@ -25,11 +25,11 @@ Detailed API documentation is available using the [go.dev](https://pkg.go.dev/gi
 
 Make use of the client by importing it in your Go client source code. For example,
 
-import "github.com/unit-io/unitdb"
+> import "github.com/unit-io/unitdb"
 
 The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure. Make use of the client by importing in your Go client source code. For example,
 
-import "github.com/unit-io/unitdb/memdb"
+> import "github.com/unit-io/unitdb/memdb"
 
 The unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, and writing to wildcard topics. See [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
@@ -39,6 +39,8 @@ Samples are available in the cmd directory for reference.
 Below is a list of projects that use unitdb.
 
 - [Unite](https://github.com/unit-io/unite) Lightweight, high performance messaging system for microservices, and internet connected devices.
+- [Unite-Go](https://github.com/unit-io/unite-go) Lightweight and high performance publish-subscribe messaging system - Go client library.
+- [Unite-Dart](https://github.com/unit-io/unite-dart) Lightweight and high performance publish-subscribe messaging system - Flutter and Dart client.
 
 ## Contributing
 If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.

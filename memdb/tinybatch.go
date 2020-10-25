@@ -32,8 +32,8 @@ type tinyBatch struct {
 	doneChan chan struct{}
 }
 
-func (b *tinyBatch) timeID() int64 {
-	return atomic.LoadInt64(&b.ID)
+func (b *tinyBatch) timeID() timeID {
+	return timeID(atomic.LoadInt64(&b.ID))
 }
 
 func (b *tinyBatch) len() uint32 {
