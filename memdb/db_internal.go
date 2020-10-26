@@ -93,7 +93,7 @@ func (db *DB) initDb() error {
 	db.internal.writeLockC = make(chan struct{}, 1)
 	db.internal.timeMark = newTimeMark()
 	db.internal.tinyBatchLockC = make(chan struct{}, 1)
-	db.internal.tinyBatch = &tinyBatch{ID: db.internal.timeMark.newID(), doneChan: make(chan struct{})}
+	db.internal.tinyBatch = &tinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
 	db.internal.batchPool = db.newBatchPool(nPoolSize)
 
 	// Close
@@ -123,7 +123,7 @@ func iKey(delFlag bool, k uint64) key {
 }
 
 func (db *DB) newTinyBatch() *tinyBatch {
-	tinyBatch := &tinyBatch{ID: db.internal.timeMark.newID(), doneChan: make(chan struct{})}
+	tinyBatch := &tinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
 	return tinyBatch
 }
 
@@ -174,18 +174,18 @@ func (db *DB) close() error {
 	return err
 }
 
-func (db *DB) set(delFlag bool, key uint64, data []byte) (timeID, error) {
+func (db *DB) set(ikey key, data []byte) (timeID, error) {
 	db.internal.tinyBatchLockC <- struct{}{}
 	defer func() {
 		<-db.internal.tinyBatchLockC
 	}()
 
 	db.mu.Lock()
-	timeID := db.internal.timeID()
-	b, ok := db.blockCache[timeID]
+	tmID := db.internal.timeID()
+	b, ok := db.blockCache[tmID]
 	if !ok {
 		b = newBlock()
-		db.blockCache[timeID] = b
+		db.blockCache[tmID] = b
 	}
 	db.mu.Unlock()
 	b.Lock()
@@ -193,38 +193,72 @@ func (db *DB) set(delFlag bool, key uint64, data []byte) (timeID, error) {
 	dataLen := uint32(len(data) + 8 + 1 + 4) // data len+key len+flag bit+scratch len
 	off, err := b.data.allocate(dataLen)
 	if err != nil {
-		return timeID, err
+		return tmID, err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], dataLen)
 	if _, err := b.data.writeAt(scratch[:], off); err != nil {
-		return timeID, err
+		return tmID, err
 	}
+
 	// k with flag bit
-	dFlag := uint8(0)
-	if delFlag {
-		dFlag = 1
-	}
 	var k [9]byte
-	k[0] = dFlag
-	binary.LittleEndian.PutUint64(k[1:], key)
+	k[0] = ikey.delFlag
+	binary.LittleEndian.PutUint64(k[1:], ikey.key)
 	if _, err := b.data.writeAt(k[:], off+4); err != nil {
-		return timeID, err
+		return tmID, err
 	}
-	if delFlag {
-		b.records[iKey(true, key)] = off
-		db.internal.tinyBatch.incount()
-		return timeID, nil
-	}
-
-	if _, err := b.data.writeAt(data, off+8+1+4); err != nil {
-		return timeID, err
-	}
-	b.records[iKey(false, key)] = off
-	b.count++
+	b.records[ikey] = off
 	db.internal.tinyBatch.incount()
+	if _, err := b.data.writeAt(data, off+8+1+4); err != nil {
+		return tmID, err
+	}
+	if ikey.delFlag == 0 {
+		b.count++
+	}
 
-	return timeID, nil
+	return tmID, nil
+}
+
+// move moves deleted records to new blockCache if the timeID of deleted key still exist in the mem store.
+func (db *DB) move(tmID timeID) error {
+	block := db.blockCache[tmID]
+	block.RLock()
+	defer block.RUnlock()
+
+	// get all deleted keys
+	var dkeys []key
+	for ik := range block.records {
+		if ik.delFlag == 1 {
+			dkeys = append(dkeys, ik)
+		}
+	}
+
+	for _, ik := range dkeys {
+		off, ok := block.records[ik]
+		if ok {
+			scratch, err := block.data.readRaw(off, 4) // read data length.
+			if err != nil {
+				return err
+			}
+			dataLen := binary.LittleEndian.Uint32(scratch[:4])
+			data, err := block.data.readRaw(off, dataLen)
+			if err != nil {
+				return err
+			}
+			if dataLen != 8+1+4+8 {
+				return errBadRequest
+			}
+			tmID := timeID(binary.LittleEndian.Uint64(data[8+1+4 : dataLen]))
+			db.mu.RLock()
+			_, ok := db.blockCache[tmID]
+			db.mu.RUnlock()
+			if ok {
+				db.set(ik, data[8+1+4:dataLen])
+			}
+		}
+	}
+	return nil
 }
 
 // tinyWrite writes tiny batch to DB WAL.
@@ -288,7 +322,7 @@ func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 	}
 
 	if !tinyBatch.managed {
-		db.internal.timeMark.release(int64(tinyBatch.timeID()))
+		db.internal.timeMark.release(tinyBatch.timeID())
 	}
 
 	return nil
@@ -301,7 +335,7 @@ func (db *DB) startRecover(reset bool) error {
 		return errors.New("db.Open, Unable to create db dir")
 	}
 
-	logOpts := wal.Options{Path: db.opts.logFilePath + "/" + logFileName, TargetSize: db.opts.logSize, BufferSize: db.opts.bufferSize}
+	logOpts := wal.Options{Path: db.opts.logFilePath + "/" + logFileName, TargetSize: db.opts.logSize, BufferSize: db.opts.bufferSize, Reset: reset}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
@@ -321,7 +355,7 @@ func (db *DB) startRecover(reset bool) error {
 	}
 
 	m := make(map[uint64][]byte)
-	err = r.Read(func(timeID int64) (ok bool, err error) {
+	err = r.Read(func(tmID int64) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
@@ -360,9 +394,9 @@ func (db *DB) startRecover(reset bool) error {
 	return db.internal.wal.Reset()
 }
 
-func (db *DB) signalLogApplied(timeID int64) error {
+func (db *DB) releaseLog(tmID timeID) error {
 	// signal log applied for older messages those are acknowledged or timed out.
-	return db.internal.wal.SignalLogApplied(timeID)
+	return db.internal.wal.SignalLogApplied(int64(tmID))
 }
 
 // tinyBatchLoop handles tiny batches.

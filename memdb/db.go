@@ -64,7 +64,7 @@ func Open(opts ...Options) (*DB, error) {
 
 	db.initDb()
 
-	if err := db.startRecover(false); err != nil {
+	if err := db.startRecover(options.resetFlag); err != nil {
 		return nil, err
 	}
 
@@ -87,6 +87,26 @@ func (db *DB) IsOpen() bool {
 	return db.blockCache != nil
 }
 
+// Keys gets all keys from mem store.
+func (db *DB) Keys() []uint64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var keys []uint64
+
+	for _, block := range db.blockCache {
+		block.RLock()
+		for ik := range block.records {
+			if ik.delFlag == 0 {
+				keys = append(keys, ik.key)
+			}
+		}
+		block.RUnlock()
+	}
+
+	return keys
+}
+
 // Get gets data for the provided key under a blockID.
 func (db *DB) Get(key uint64) ([]byte, error) {
 	if err := db.ok(); err != nil {
@@ -96,13 +116,13 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	// Get timeBlock
 	blockID := db.blockID(key)
-	timeID, ok := db.timeBlocks[blockID]
+	tmID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return nil, errEntryDoesNotExist
 	}
 
-	block, ok := db.blockCache[timeID]
+	block, ok := db.blockCache[tmID]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDeleted
@@ -124,7 +144,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return data[+8+1+4:], nil
+	return data[8+1+4:], nil
 }
 
 // Delete deletes entry from mem store.
@@ -136,33 +156,44 @@ func (db *DB) Delete(key uint64) error {
 	db.mu.RLock()
 	// Get timeBlock
 	blockID := db.blockID(key)
-	timeID, ok := db.timeBlocks[blockID]
+	tmID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return errEntryDoesNotExist
 	}
 
-	block := db.blockCache[timeID]
+	block, ok := db.blockCache[tmID]
+	if !ok {
+		db.mu.RUnlock()
+		return errEntryDoesNotExist
+	}
 	db.mu.RUnlock()
 
 	block.Lock()
-	defer block.Unlock()
-	iK := iKey(false, key)
-	delete(block.records, iK)
+	ikey := iKey(false, key)
+	delete(block.records, ikey)
 	block.count--
+	count := block.count
+	block.Unlock()
 	// fmt.Println("db.Delete: timeID, count, records ", timeID, block.count, block.records)
-	if block.count == 0 {
+
+	if count == 0 {
+		// move moves deleted keys before releasing log if the timeID of deleted keys still exist in the mem store
+		db.move(tmID)
 		db.mu.Lock()
 		delete(db.timeBlocks, blockID)
 		block.data.reset()
-		delete(db.blockCache, timeID)
+		delete(db.blockCache, tmID)
 		db.mu.Unlock()
 
-		db.signalLogApplied(int64(timeID))
+		db.releaseLog(tmID)
 	}
 
-	// set deleted key
-	db.set(true, key, nil)
+	// set key is deleted to persist key with timeID to log.
+	ikey = iKey(true, key)
+	var data [8]byte
+	binary.LittleEndian.PutUint64(data[0:8], uint64(tmID))
+	db.set(ikey, data[:])
 
 	return nil
 }
@@ -173,14 +204,15 @@ func (db *DB) Set(key uint64, data []byte) error {
 		return err
 	}
 
-	timeID, err := db.set(false, key, data)
+	ikey := iKey(false, key)
+	tmID, err := db.set(ikey, data)
 	if err != nil {
 		return err
 	}
 	// Get timeBlock
 	blockID := db.blockID(key)
 	db.mu.Lock()
-	db.timeBlocks[blockID] = timeID
+	db.timeBlocks[blockID] = tmID
 	db.mu.Unlock()
 
 	return nil

@@ -35,6 +35,9 @@ type options struct {
 	// logSize sets Size of write ahead log.
 	logSize int64
 
+	// resetFlag skips recovery on DB open and reset WAL if reset flag is set true.
+	resetFlag bool
+
 	tinyBatchWriteInterval time.Duration
 }
 
@@ -115,6 +118,13 @@ func WithBufferSize(size int64) Options {
 func WithLogSize(size int64) Options {
 	return newFuncOption(func(o *options) {
 		o.logSize = size
+	})
+}
+
+// WithResetFlag skips recovery on DB open and reset WAL if reset flag is set.
+func WithResetFlag() Options {
+	return newFuncOption(func(o *options) {
+		o.resetFlag = true
 	})
 }
 

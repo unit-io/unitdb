@@ -64,5 +64,7 @@ func main() {
 	fmt.Println("main: Print entries after set")
 	gets()
 	deletes()
+	sets()
+	deletes()
 	time.Sleep(100 * time.Millisecond)
 }
