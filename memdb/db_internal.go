@@ -89,24 +89,6 @@ type _DB struct {
 	closer io.Closer
 }
 
-func (db *DB) initDb() error {
-	internal := &_DB{
-		writeLockC:     make(chan struct{}, 1),
-		timeMark:       newTimeMark(),
-		tinyBatchLockC: make(chan struct{}, 1),
-		tinyBatch:      &_TinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})},
-		batchPool:      db.newBatchPool(nPoolSize),
-
-		// Close
-		closeC: make(chan struct{}),
-	}
-	db.internal = internal
-
-	go db.tinyBatchLoop(db.opts.tinyBatchWriteInterval)
-
-	return nil
-}
-
 func newBlock() *_Block {
 	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
 }

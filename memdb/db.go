@@ -54,15 +54,27 @@ func Open(opts ...Options) (*DB, error) {
 		return nil, errors.New("DB.Open, Unable to create db dir")
 	}
 
+	internal := &_DB{
+		writeLockC:     make(chan struct{}, 1),
+		timeMark:       newTimeMark(),
+		tinyBatchLockC: make(chan struct{}, 1),
+
+		// Close
+		closeC: make(chan struct{}),
+	}
+	internal.tinyBatch = &_TinyBatch{ID: int64(internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
+
 	db := &DB{
 		opts:       options,
-		internal:   &_DB{},
+		internal:   internal,
 		consistent: hash.InitConsistent(options.maxBlocks, options.maxBlocks),
 		blockCache: make(map[_TimeID]*_Block),
 		timeBlocks: make(map[uint16]_TimeID),
 	}
 
-	db.initDb()
+	db.internal.batchPool = db.newBatchPool(nPoolSize)
+
+	go db.tinyBatchLoop(db.opts.tinyBatchWriteInterval)
 
 	if err := db.startRecover(options.resetFlag); err != nil {
 		return nil, err
