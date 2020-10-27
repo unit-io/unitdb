@@ -26,7 +26,7 @@ var (
 	headerSize    = uint32(47)
 )
 
-type logInfo struct {
+type _LogInfo struct {
 	version    uint16
 	status     LogStatus
 	timeID     int64
@@ -38,7 +38,7 @@ type logInfo struct {
 }
 
 // MarshalBinary serialized logInfo into binary data.
-func (l logInfo) MarshalBinary() ([]byte, error) {
+func (l _LogInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
 	binary.LittleEndian.PutUint16(buf[:2], l.version)
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(l.status))
@@ -50,7 +50,7 @@ func (l logInfo) MarshalBinary() ([]byte, error) {
 }
 
 // UnmarshalBinary deserialized logInfo from binary data.
-func (l *logInfo) UnmarshalBinary(data []byte) error {
+func (l *_LogInfo) UnmarshalBinary(data []byte) error {
 	l.version = binary.LittleEndian.Uint16(data[:2])
 	l.status = LogStatus(binary.LittleEndian.Uint16(data[2:4]))
 	l.timeID = int64(binary.LittleEndian.Uint64(data[4:12]))
@@ -60,15 +60,15 @@ func (l *logInfo) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-type header struct {
+type _Header struct {
 	signature [7]byte
 	version   uint32
-	segments
-	_ [2]byte
+	segments  _Segments
+	_         [2]byte
 }
 
 // MarshalBinary serialized header into binary data.
-func (h header) MarshalBinary() ([]byte, error) {
+func (h _Header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, headerSize)
 	copy(buf[:7], h.signature[:])
 	binary.LittleEndian.PutUint32(buf[7:11], h.version)
@@ -82,7 +82,7 @@ func (h header) MarshalBinary() ([]byte, error) {
 }
 
 // UnmarshalBinary deserialized header from binary data.
-func (h *header) UnmarshalBinary(data []byte) error {
+func (h *_Header) UnmarshalBinary(data []byte) error {
 	copy(h.signature[:], data[:7])
 	h.version = binary.LittleEndian.Uint32(data[7:11])
 	h.segments[0].size = binary.LittleEndian.Uint32(data[11:15])

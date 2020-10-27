@@ -114,7 +114,7 @@ func (w *Writer) writeLog(id int64) error {
 	if off < int64(headerSize) || err != nil {
 		return err
 	}
-	h := logInfo{
+	h := _LogInfo{
 		status:     logStatusWritten,
 		timeID:     id,
 		entryCount: w.entryCount,

@@ -25,9 +25,9 @@ import (
 	"github.com/unit-io/unitdb/message"
 )
 
-func (db *syncHandle) recoverWindowBlocks(windowEntries map[uint64]windowEntries) error {
+func (db *_SyncHandle) recoverWindowBlocks(windowEntries map[uint64]_WindowEntries) error {
 	for h, wEntries := range windowEntries {
-		topicOff, ok := db.trie.getOffset(h)
+		topicOff, ok := db.internal.trie.getOffset(h)
 		if !ok {
 			return errors.New(fmt.Sprintf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h))
 		}
@@ -35,19 +35,19 @@ func (db *syncHandle) recoverWindowBlocks(windowEntries map[uint64]windowEntries
 		if err != nil {
 			return err
 		}
-		if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
+		if ok := db.internal.trie.setOffset(_Topic{hash: h, offset: wOff}); !ok {
 			return errors.New("recovery.recoverWindowBlocks: timeWindow sync error, unable to set topic offset in trie")
 		}
 	}
 	return nil
 }
 
-func (db *syncHandle) startRecovery() error {
+func (db *_SyncHandle) startRecovery() error {
 	// p := profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook)
 	// defer p.Stop()
-	db.closeW.Add(1)
+	db.internal.closeW.Add(1)
 	defer func() {
-		db.closeW.Done()
+		db.internal.closeW.Done()
 	}()
 	fmt.Println("db.recoverLog: start recovery")
 
@@ -58,16 +58,16 @@ func (db *syncHandle) startRecovery() error {
 		db.finish()
 	}()
 
-	var e entry
+	var e _Entry
 	topics := make(map[uint64]*message.Topic) // map[topicHash]*message.Topic
-	r, err := db.wal.NewReader()
+	r, err := db.internal.wal.NewReader()
 	if err != nil {
 		return err
 	}
-	pendingEntries := make(map[uint64]windowEntries)
+	pendingEntries := make(map[uint64]_WindowEntries)
 	err = r.Read(func(timeID int64) (ok bool, err error) {
 		l := r.Count()
-		winEntries := make(map[uint64]windowEntries)
+		winEntries := make(map[uint64]_WindowEntries)
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {
@@ -79,14 +79,14 @@ func (db *syncHandle) startRecovery() error {
 			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
 				return true, err
 			}
-			if db.freeList.isFree(timeID, e.seq) {
+			if db.internal.freeList.isFree(timeID, e.seq) {
 				// If seq is present in free list it mean it was deleted but not get released from the WAL.
 				continue
 			}
-			if e.seq > db.internal.upperSeq {
-				db.internal.upperSeq = e.seq
+			if e.seq > db.syncInfo.upperSeq {
+				db.syncInfo.upperSeq = e.seq
 			}
-			s := slot{
+			s := _Slot{
 				seq:       e.seq,
 				topicSize: e.topicSize,
 				valueSize: e.valueSize,
@@ -96,36 +96,36 @@ func (db *syncHandle) startRecovery() error {
 			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
 				return true, err
 			}
-			exists, err := db.blockWriter.append(s, db.startBlockIdx)
+			exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx)
 			if err != nil {
 				return true, err
 			}
 			if exists {
-				db.freeList.free(s.seq, s.msgOffset, s.mSize())
+				db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
 				continue
 			}
 			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
-				rawtopic, _ := db.dataWriter.readTopic(s)
+				rawtopic, _ := db.dataWriter.dataTable.readTopic(s)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {
 					return true, err
 				}
-				db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
+				db.internal.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 				topics[e.topicHash] = t
 			}
 			if _, ok := winEntries[e.topicHash]; ok {
 				winEntries[e.topicHash] = append(winEntries[e.topicHash], newWinEntry(e.seq, e.expiresAt))
 			} else {
-				winEntries[e.topicHash] = windowEntries{newWinEntry(e.seq, e.expiresAt)}
+				winEntries[e.topicHash] = _WindowEntries{newWinEntry(e.seq, e.expiresAt)}
 			}
-			db.filter.Append(e.seq)
-			db.internal.count++
-			db.internal.inBytes += int64(e.valueSize)
+			db.internal.filter.Append(e.seq)
+			db.syncInfo.count++
+			db.syncInfo.inBytes += int64(e.valueSize)
 		}
 
 		for h := range winEntries {
-			_, ok := db.trie.getOffset(h)
+			_, ok := db.internal.trie.getOffset(h)
 			if !ok {
 				if _, ok := pendingEntries[h]; ok {
 					pendingEntries[h] = append(pendingEntries[h], winEntries[h]...)
@@ -147,7 +147,7 @@ func (db *syncHandle) startRecovery() error {
 	})
 	if err != nil {
 		fmt.Println("db.Sync: error ", err)
-		db.syncComplete = false
+		db.syncInfo.syncComplete = false
 		db.abort()
 		return err
 	}
@@ -162,16 +162,16 @@ func (db *syncHandle) startRecovery() error {
 
 func (db *DB) recoverLog() error {
 	// Sync happens synchronously.
-	db.syncLockC <- struct{}{}
+	db.internal.syncLockC <- struct{}{}
 	defer func() {
-		<-db.syncLockC
+		<-db.internal.syncLockC
 	}()
 
-	syncHandle := syncHandle{internal: internal{DB: db}}
+	syncHandle := _SyncHandle{DB: db}
 	if err := syncHandle.startRecovery(); err != nil {
 		return err
 	}
 
 	// reset log on successful recovery.
-	return db.wal.Reset()
+	return db.internal.wal.Reset()
 }

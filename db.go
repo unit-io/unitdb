@@ -19,11 +19,9 @@ package unitdb
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math/rand"
 	"os"
 	"sort"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,42 +37,20 @@ import (
 // DB represents the message storage for topic->keys-values.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
-	// Need 64-bit alignment.
-	mutex
-	mac        *crypto.MAC
-	syncLockC  chan struct{}
-	filter     Filter
-	lock       fs.LockFile
-	index      file
-	data       dataTable
-	freeList   *lease
-	wal        *wal.WAL
-	syncWrites bool
-	dbInfo
-	timeWindow *timeWindowBucket
-	opts       *options
-	blockCache *bc.Cache
+	lock  fs.LockFile
+	index _File
+	data  _DataTable
+	opts  *_Options
+
+	internal *_DB
 
 	//batchdb
-	*batchdb
-	//trie
-	trie *trie
-	// sync handler
-	syncHandle syncHandle
-	// The db start time.
-	start time.Time
-	// The metrics to measure timeseries on message events.
-	meter *Meter
-	// Close.
-	closeW sync.WaitGroup
-	closeC chan struct{}
-	closed uint32
-	closer io.Closer
+	batchdb *_Batchdb
 }
 
 // Open opens or creates a new DB.
 func Open(path string, opts ...Options) (*DB, error) {
-	options := &options{}
+	options := &_Options{}
 	WithDefaultOptions().set(options)
 	WithDefaultFlags().set(options)
 	for _, opt := range opts {
@@ -108,11 +84,11 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
-	timeOptions := &timeOptions{
+	timeOptions := &_TimeOptions{
 		maxDuration:         options.syncDurationType * time.Duration(options.maxSyncDurations),
 		expDurationType:     time.Minute,
 		maxExpDurations:     maxExpDur,
-		backgroundKeyExpiry: options.backgroundKeyExpiry,
+		backgroundKeyExpiry: options.flags.backgroundKeyExpiry,
 	}
 	timewindow, err := newFile(fs, path+windowPostfix)
 	if err != nil {
@@ -124,26 +100,30 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{
+	internal := &_DB{
 		mutex:      newMutex(),
-		lock:       lock,
-		index:      index,
-		data:       dataTable{file: data, lease: lease, offset: data.Size()},
 		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
 		freeList:   lease,
 		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		syncLockC:  make(chan struct{}, 1),
-		dbInfo: dbInfo{
+		dbInfo: _DBInfo{
 			blockIdx: -1,
 		},
-		opts: options,
-
-		batchdb: &batchdb{},
-		trie:    newTrie(),
-		start:   time.Now(),
-		meter:   NewMeter(),
+		trie:  newTrie(),
+		start: time.Now(),
+		meter: NewMeter(),
 		// Close
 		closeC: make(chan struct{}),
+	}
+
+	db := &DB{
+		lock:  lock,
+		index: index,
+		data:  _DataTable{file: data, lease: lease, offset: data.Size()},
+		opts:  options,
+
+		internal: internal,
+		batchdb:  &_Batchdb{},
 	}
 
 	if index.size == 0 {
@@ -161,7 +141,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 			return nil, errCorrupted
 		}
 		// memdb blockcache id.
-		db.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
+		db.internal.dbInfo.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
 		if err != nil {
 			return nil, err
 		}
@@ -190,13 +170,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// Create a new MAC from the key.
-	if db.mac, err = crypto.New(options.encryptionKey); err != nil {
+	if db.internal.mac, err = crypto.New(options.encryptionKey); err != nil {
 		return nil, err
 	}
 
 	// set encryption flag to encrypt messages.
 	if db.opts.flags.encryption {
-		db.encryption = 1
+		db.internal.dbInfo.encryption = 1
 	}
 
 	// Create a blockcache.
@@ -204,22 +184,22 @@ func Open(path string, opts ...Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.blockCache = blockCache
+	db.internal.blockCache = blockCache
 
 	//initbatchdb
 	if err = db.initbatchdb(options); err != nil {
 		return nil, err
 	}
 
-	db.filter.blockCache = db.blockCache
-	db.filter.cacheID = db.cacheID
+	db.internal.filter.blockCache = db.internal.blockCache
+	db.internal.filter.cacheID = db.internal.dbInfo.cacheID
 
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 	}
 
 	// Read freeList before DB recovery
-	if err := db.freeList.read(); err != nil {
+	if err := db.internal.freeList.read(); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err
 	}
@@ -231,8 +211,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "wal.New")
 		return nil, err
 	}
-	db.closer = wal
-	db.wal = wal
+	db.internal.closer = wal
+	db.internal.wal = wal
 	if needLogRecovery {
 		if err := db.recoverLog(); err != nil {
 			// if unable to recover db then close db.
@@ -240,10 +220,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	db.syncHandle = syncHandle{internal: internal{DB: db}}
+	db.internal.syncHandle = _SyncHandle{DB: db}
 	db.startSyncer(options.syncDurationType * time.Duration(options.maxSyncDurations))
 
-	if db.opts.backgroundKeyExpiry {
+	if db.opts.flags.backgroundKeyExpiry {
 		db.startExpirer(time.Minute, maxExpDur)
 	}
 
@@ -255,46 +235,8 @@ func (db *DB) Close() error {
 	if err := db.close(); err != nil {
 		return err
 	}
-	//close bufferpool.
-	db.bufPool.Done()
 
-	// close memdb.
-	db.blockCache.Close()
-
-	if err := db.writeHeader(); err != nil {
-		return err
-	}
-	db.freeList.defrag()
-	if err := db.freeList.write(); err != nil {
-		return err
-	}
-	if err := db.timeWindow.Close(); err != nil {
-		return err
-	}
-	if err := db.data.Close(); err != nil {
-		return err
-	}
-	if err := db.index.Close(); err != nil {
-		return err
-	}
-	if err := db.filter.close(); err != nil {
-		return err
-	}
-	if err := db.lock.Unlock(); err != nil {
-		return err
-	}
-
-	var err error
-	if db.closer != nil {
-		if err1 := db.closer.Close(); err == nil {
-			err = err1
-		}
-		db.closer = nil
-	}
-
-	db.meter.UnregisterAll()
-
-	return err
+	return nil
 }
 
 // Get return items matching the query paramater.
@@ -310,28 +252,28 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	q.opts = &queryOptions{defaultQueryLimit: db.opts.defaultQueryLimit, maxQueryLimit: db.opts.maxQueryLimit}
+	q.internal.opts = &_QueryOptions{defaultQueryLimit: db.opts.queryOptions.defaultQueryLimit, maxQueryLimit: db.opts.queryOptions.maxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
-	mu := db.getMutex(q.prefix)
+	mu := db.internal.mutex.getMutex(q.internal.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
 	db.lookup(q)
-	if len(q.winEntries) == 0 {
+	if len(q.internal.winEntries) == 0 {
 		return
 	}
-	sort.Slice(q.winEntries[:], func(i, j int) bool {
-		return q.winEntries[i].seq > q.winEntries[j].seq
+	sort.Slice(q.internal.winEntries[:], func(i, j int) bool {
+		return q.internal.winEntries[i].seq > q.internal.winEntries[j].seq
 	})
 	invalidCount := 0
 	start := 0
 	limit := q.Limit
-	if len(q.winEntries) < int(q.Limit) {
-		limit = len(q.winEntries)
+	if len(q.internal.winEntries) < int(q.Limit) {
+		limit = len(q.internal.winEntries)
 	}
 	for {
-		for _, we := range q.winEntries[start:limit] {
+		for _, we := range q.internal.winEntries[start:limit] {
 			err = func() error {
 				if we.seq == 0 {
 					return nil
@@ -351,14 +293,14 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return err
 				}
 				msgID := message.ID(id)
-				if !msgID.EvalPrefix(q.Contract, q.cutoff) {
+				if !msgID.EvalPrefix(q.Contract, q.internal.cutoff) {
 					invalidCount++
 					return nil
 				}
 
 				// last bit of ID is an encryption flag.
 				if uint8(id[idSize-1]) == 1 {
-					val, err = db.mac.Decrypt(nil, val)
+					val, err = db.internal.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.decrypt")
 						return err
@@ -371,7 +313,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					return err
 				}
 				items = append(items, val)
-				db.meter.OutBytes.Inc(int64(s.valueSize))
+				db.internal.meter.OutBytes.Inc(int64(s.valueSize))
 				return nil
 			}()
 			if err != nil {
@@ -379,20 +321,20 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 			}
 		}
 
-		if invalidCount == 0 || len(items) == int(q.Limit) || len(q.winEntries) == limit {
+		if invalidCount == 0 || len(items) == int(q.Limit) || len(q.internal.winEntries) == limit {
 			break
 		}
 
-		if len(q.winEntries) <= int(q.Limit+invalidCount) {
+		if len(q.internal.winEntries) <= int(q.Limit+invalidCount) {
 			start = limit
-			limit = len(q.winEntries)
+			limit = len(q.internal.winEntries)
 		} else {
 			start = limit
 			limit = limit + invalidCount
 		}
 	}
-	db.meter.Gets.Inc(int64(len(items)))
-	db.meter.OutMsgs.Inc(int64(len(items)))
+	db.internal.meter.Gets.Inc(int64(len(items)))
+	db.internal.meter.OutMsgs.Inc(int64(len(items)))
 	return items, nil
 }
 
@@ -408,7 +350,7 @@ func (db *DB) Items(q *Query) (*ItemIterator, error) {
 		return nil, errTopicTooLarge
 	}
 
-	q.opts = &queryOptions{defaultQueryLimit: db.opts.defaultQueryLimit, maxQueryLimit: db.opts.maxQueryLimit}
+	q.internal.opts = &_QueryOptions{defaultQueryLimit: db.opts.queryOptions.defaultQueryLimit, maxQueryLimit: db.opts.queryOptions.maxQueryLimit}
 	if err := q.parse(); err != nil {
 		return nil, err
 	}
@@ -427,7 +369,7 @@ func (db *DB) NewContract() (uint32, error) {
 
 // NewID generates new ID that is later used to put entry or delete entry.
 func (db *DB) NewID() []byte {
-	db.meter.Leases.Inc(1)
+	db.internal.meter.Leases.Inc(1)
 	return message.NewID(db.nextSeq())
 }
 
@@ -457,34 +399,34 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	db.tinyBatchLockC <- struct{}{}
+	db.batchdb.tinyBatchLockC <- struct{}{}
 	defer func() {
-		<-db.tinyBatchLockC
+		<-db.batchdb.tinyBatchLockC
 	}()
 
-	if err := db.setEntry(db.tinyBatch.timeID(), e); err != nil {
+	if err := db.setEntry(db.batchdb.tinyBatch.timeID(), e); err != nil {
 		return err
 	}
 
-	if e.topicSize != 0 {
+	if e.entry.topicSize != 0 {
 		t := new(message.Topic)
-		rawTopic := e.cache[entrySize+idSize : entrySize+idSize+e.topicSize]
+		rawTopic := e.entry.cache[entrySize+idSize : entrySize+idSize+e.entry.topicSize]
 		t.Unmarshal(rawTopic)
-		db.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
+		db.internal.trie.add(newTopic(e.entry.topicHash, 0), t.Parts, t.Depth)
 	}
 
-	blockID := startBlockIndex(e.seq)
-	memseq := db.cacheID ^ e.seq
-	if err := db.blockCache.Set(uint64(blockID), memseq, e.cache); err != nil {
+	blockID := startBlockIndex(e.entry.seq)
+	memseq := db.internal.dbInfo.cacheID ^ e.entry.seq
+	if err := db.internal.blockCache.Set(uint64(blockID), memseq, e.entry.cache); err != nil {
 		return err
 	}
 
-	if ok := db.timeWindow.add(db.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
+	if ok := db.internal.timeWindow.add(db.batchdb.tinyBatch.timeID(), e.entry.topicHash, newWinEntry(e.entry.seq, e.entry.expiresAt)); !ok {
 		return errForbidden
 	}
 
-	db.tinyBatch.entries = append(db.tinyBatch.entries, e.seq)
-	db.tinyBatch.incount()
+	db.batchdb.tinyBatch.entries = append(db.batchdb.tinyBatch.entries, e.entry.seq)
+	db.batchdb.tinyBatch.incount()
 	// reset message entry.
 	e.reset()
 	return nil
@@ -502,7 +444,7 @@ func (db *DB) Delete(id, topic []byte) error {
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
 	switch {
-	case db.opts.immutable:
+	case db.opts.flags.immutable:
 		return errImmutable
 	case len(e.ID) == 0:
 		return errMsgIDEmpty
@@ -533,26 +475,26 @@ func (db *DB) DeleteEntry(e *Entry) error {
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
 	// start := time.Now()
-	if ok := db.syncHandle.status(); ok {
+	if ok := db.internal.syncHandle.status(); ok {
 		// sync is in-progress.
 		return nil
 	}
 
 	// Sync happens synchronously.
-	db.syncLockC <- struct{}{}
-	db.closeW.Add(1)
+	db.internal.syncLockC <- struct{}{}
+	db.internal.closeW.Add(1)
 	defer func() {
-		db.closeW.Done()
-		<-db.syncLockC
+		db.internal.closeW.Done()
+		<-db.internal.syncLockC
 	}()
 
-	if ok := db.syncHandle.startSync(); !ok {
+	if ok := db.internal.syncHandle.startSync(); !ok {
 		return nil
 	}
 	defer func() {
-		db.syncHandle.finish()
+		db.internal.syncHandle.finish()
 	}()
-	return db.syncHandle.Sync()
+	return db.internal.syncHandle.Sync()
 }
 
 // FileSize returns the total size of the disk storage used by the DB.
@@ -562,7 +504,7 @@ func (db *DB) FileSize() (int64, error) {
 	if err != nil {
 		return -1, err
 	}
-	ds, err := db.data.Stat()
+	ds, err := db.data.file.Stat()
 	if err != nil {
 		return -1, err
 	}
@@ -571,5 +513,5 @@ func (db *DB) FileSize() (int64, error) {
 
 // Count returns the number of items in the DB.
 func (db *DB) Count() uint64 {
-	return atomic.LoadUint64(&db.count)
+	return atomic.LoadUint64(&db.internal.dbInfo.count)
 }

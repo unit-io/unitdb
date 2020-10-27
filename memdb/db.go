@@ -30,18 +30,18 @@ type DB struct {
 	mu sync.RWMutex
 
 	version int
-	opts    *options
+	opts    *_Options
 
 	// blockcache
-	internal   *db
+	internal   *_DB
 	consistent *hash.Consistent
-	blockCache
-	timeBlocks map[uint16]timeID // map[blockID]timeID
+	blockCache _BlockCache
+	timeBlocks map[uint16]_TimeID // map[blockID]timeID
 }
 
 // Open initializes database connection.
 func Open(opts ...Options) (*DB, error) {
-	options := &options{}
+	options := &_Options{}
 	WithDefaultOptions().set(options)
 	for _, opt := range opts {
 		if opt != nil {
@@ -56,10 +56,10 @@ func Open(opts ...Options) (*DB, error) {
 
 	db := &DB{
 		opts:       options,
-		internal:   &db{},
+		internal:   &_DB{},
 		consistent: hash.InitConsistent(options.maxBlocks, options.maxBlocks),
-		blockCache: make(map[timeID]*block),
-		timeBlocks: make(map[uint16]timeID),
+		blockCache: make(map[_TimeID]*_Block),
+		timeBlocks: make(map[uint16]_TimeID),
 	}
 
 	db.initDb()
@@ -116,13 +116,13 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	// Get timeBlock
 	blockID := db.blockID(key)
-	tmID, ok := db.timeBlocks[blockID]
+	timeID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return nil, errEntryDoesNotExist
 	}
 
-	block, ok := db.blockCache[tmID]
+	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDeleted
@@ -156,13 +156,13 @@ func (db *DB) Delete(key uint64) error {
 	db.mu.RLock()
 	// Get timeBlock
 	blockID := db.blockID(key)
-	tmID, ok := db.timeBlocks[blockID]
+	timeID, ok := db.timeBlocks[blockID]
 	if !ok {
 		db.mu.RUnlock()
 		return errEntryDoesNotExist
 	}
 
-	block, ok := db.blockCache[tmID]
+	block, ok := db.blockCache[timeID]
 	if !ok {
 		db.mu.RUnlock()
 		return errEntryDoesNotExist
@@ -179,20 +179,20 @@ func (db *DB) Delete(key uint64) error {
 
 	if count == 0 {
 		// move moves deleted keys before releasing log if the timeID of deleted keys still exist in the mem store
-		db.move(tmID)
+		db.move(timeID)
 		db.mu.Lock()
 		delete(db.timeBlocks, blockID)
 		block.data.reset()
-		delete(db.blockCache, tmID)
+		delete(db.blockCache, timeID)
 		db.mu.Unlock()
 
-		db.releaseLog(tmID)
+		db.releaseLog(timeID)
 	}
 
 	// set key is deleted to persist key with timeID to log.
 	ikey = iKey(true, key)
 	var data [8]byte
-	binary.LittleEndian.PutUint64(data[0:8], uint64(tmID))
+	binary.LittleEndian.PutUint64(data[0:8], uint64(timeID))
 	db.set(ikey, data[:])
 
 	return nil
@@ -205,14 +205,14 @@ func (db *DB) Set(key uint64, data []byte) error {
 	}
 
 	ikey := iKey(false, key)
-	tmID, err := db.set(ikey, data)
+	timeID, err := db.set(ikey, data)
 	if err != nil {
 		return err
 	}
 	// Get timeBlock
 	blockID := db.blockID(key)
 	db.mu.Lock()
-	db.timeBlocks[blockID] = tmID
+	db.timeBlocks[blockID] = timeID
 	db.mu.Unlock()
 
 	return nil

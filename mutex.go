@@ -23,14 +23,14 @@ import (
 )
 
 // mutex mutex to lock/unlock.
-type mutex struct {
+type _Mutex struct {
 	internal   []*sync.RWMutex
 	consistent *hash.Consistent
 }
 
 // newMutex creates mutex to lock/unlock.
-func newMutex() mutex {
-	mu := mutex{
+func newMutex() _Mutex {
+	mu := _Mutex{
 		internal:   make([]*sync.RWMutex, nBlocks),
 		consistent: hash.InitConsistent(int(nBlocks), int(nBlocks)),
 	}
@@ -43,6 +43,6 @@ func newMutex() mutex {
 }
 
 // getMutex returns mutex under given blockID
-func (mu *mutex) getMutex(blockID uint64) *sync.RWMutex {
+func (mu *_Mutex) getMutex(blockID uint64) *sync.RWMutex {
 	return mu.internal[mu.consistent.FindBlock(blockID)]
 }

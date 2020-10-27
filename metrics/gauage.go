@@ -33,7 +33,7 @@ func GetOrRegisterGauge(name string, r Metrics) Gauge {
 
 // NewGauge constructs a new StandardGauge.
 func NewGauge() Gauge {
-	return &gauge{0}
+	return &_Gauge{0}
 }
 
 // GaugeSnapshot is a read-only copy of another Gauge.
@@ -52,21 +52,21 @@ func (g GaugeSnapshot) Value() int64 { return int64(g) }
 
 // StandardGauge is the standard implementation of a Gauge and uses the
 // sync/atomic package to manage a single int64 value.
-type gauge struct {
+type _Gauge struct {
 	value int64
 }
 
 // Snapshot returns a read-only copy of the gauge.
-func (g *gauge) Snapshot() Gauge {
+func (g *_Gauge) Snapshot() Gauge {
 	return GaugeSnapshot(g.Value())
 }
 
 // Update updates the gauge's value.
-func (g *gauge) Update(v int64) {
+func (g *_Gauge) Update(v int64) {
 	atomic.StoreInt64(&g.value, v)
 }
 
 // Value returns the gauge's current value.
-func (g *gauge) Value() int64 {
+func (g *_Gauge) Value() int64 {
 	return atomic.LoadInt64(&g.value)
 }

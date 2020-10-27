@@ -22,11 +22,15 @@ import (
 	"io"
 	"math"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/golang/snappy"
+	bc "github.com/unit-io/unitdb/blockcache"
+	"github.com/unit-io/unitdb/crypto"
 	"github.com/unit-io/unitdb/message"
+	"github.com/unit-io/unitdb/wal"
 )
 
 const (
@@ -63,33 +67,66 @@ const (
 	maxSeq = math.MaxUint64
 )
 
-type dbInfo struct {
-	encryption int8
-	sequence   uint64
-	count      uint64
-	blockIdx   int32
-	windowIdx  int32
-	cacheID    uint64
-}
+type (
+	_DBInfo struct {
+		encryption int8
+		sequence   uint64
+		count      uint64
+		blockIdx   int32
+		windowIdx  int32
+		cacheID    uint64
+	}
+	_DB struct {
+		mutex _Mutex
+		mac   *crypto.MAC
+		// The db start time.
+		start  time.Time
+		dbInfo _DBInfo
+		// The metrics to measure timeseries on message events.
+		meter *Meter
+
+		filter   Filter
+		freeList *_Lease
+
+		blockCache *bc.Cache
+
+		wal        *wal.WAL
+		timeWindow *_TimeWindowBucket
+
+		//trie
+		trie *_Trie
+
+		// sync handler
+		syncLockC  chan struct{}
+		syncWrites bool
+		syncHandle _SyncHandle
+
+		// Close.
+		closeW sync.WaitGroup
+		closeC chan struct{}
+		closed uint32
+		closer io.Closer
+	}
+)
 
 func (db *DB) writeHeader() error {
-	h := header{
+	h := _Header{
 		signature: signature,
 		version:   version,
-		dbInfo: dbInfo{
-			encryption: db.encryption,
-			sequence:   atomic.LoadUint64(&db.sequence),
-			count:      atomic.LoadUint64(&db.count),
+		dbInfo: _DBInfo{
+			encryption: db.internal.dbInfo.encryption,
+			sequence:   atomic.LoadUint64(&db.internal.dbInfo.sequence),
+			count:      atomic.LoadUint64(&db.internal.dbInfo.count),
 			blockIdx:   db.blocks(),
-			windowIdx:  db.timeWindow.windowIndex(),
-			cacheID:    db.cacheID,
+			windowIdx:  db.internal.timeWindow.windowIndex(),
+			cacheID:    db.internal.dbInfo.cacheID,
 		},
 	}
 	return db.index.writeMarshalableAt(h, 0)
 }
 
 func (db *DB) readHeader() error {
-	h := &header{}
+	h := &_Header{}
 	if err := db.index.readUnmarshalableAt(h, headerSize, 0); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return err
@@ -97,17 +134,17 @@ func (db *DB) readHeader() error {
 	if !bytes.Equal(h.signature[:], signature[:]) {
 		return errCorrupted
 	}
-	db.dbInfo = h.dbInfo
-	db.timeWindow.setWindowIndex(db.dbInfo.windowIdx)
+	db.internal.dbInfo = h.dbInfo
+	db.internal.timeWindow.setWindowIndex(db.internal.dbInfo.windowIdx)
 
 	return nil
 }
 
 // loadTopicHash loads topic and offset from window file.
 func (db *DB) loadTrie() error {
-	err := db.timeWindow.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
+	err := db.internal.timeWindow.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		blockOff := blockOffset(startBlockIndex(startSeq))
-		b := blockHandle{file: db.index, offset: blockOff}
+		b := _BlockHandle{file: db.index, offset: blockOff}
 		if err := b.read(); err != nil {
 			if err == io.EOF {
 				return false, nil
@@ -116,7 +153,7 @@ func (db *DB) loadTrie() error {
 		}
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
-			s := b.entries[i]
+			s := b.block.entries[i]
 			if s.seq == startSeq { //topic exist in db
 				entryIdx = i
 				break
@@ -125,7 +162,7 @@ func (db *DB) loadTrie() error {
 		if entryIdx == -1 {
 			return false, nil
 		}
-		s := b.entries[entryIdx]
+		s := b.block.entries[entryIdx]
 
 		if s.topicSize == 0 {
 			return false, nil
@@ -140,7 +177,7 @@ func (db *DB) loadTrie() error {
 		if err != nil {
 			return true, err
 		}
-		if ok := db.trie.add(newTopic(topicHash, off), t.Parts, t.Depth); !ok {
+		if ok := db.internal.trie.add(newTopic(topicHash, off), t.Parts, t.Depth); !ok {
 			logger.Info().Str("context", "db.loadTrie: topic exist in the trie")
 			return false, nil
 		}
@@ -157,28 +194,68 @@ func (db *DB) close() error {
 
 	// Signal all goroutines.
 	time.Sleep(db.opts.tinyBatchWriteInterval)
-	close(db.closeC)
-	db.batchPool.stopWait()
+	close(db.internal.closeC)
+	db.batchdb.batchPool.stopWait()
 
 	// Acquire lock.
-	db.syncLockC <- struct{}{}
+	db.internal.syncLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
-	db.closeW.Wait()
+	db.internal.closeW.Wait()
+
+	//close bufferpool.
+	db.batchdb.bufPool.Done()
+
+	// close memdb.
+	db.internal.blockCache.Close()
+
+	if err := db.writeHeader(); err != nil {
+		return err
+	}
+	db.internal.freeList.defrag()
+	if err := db.internal.freeList.write(); err != nil {
+		return err
+	}
+	if err := db.internal.timeWindow.file.Close(); err != nil {
+		return err
+	}
+	if err := db.data.file.Close(); err != nil {
+		return err
+	}
+	if err := db.index.Close(); err != nil {
+		return err
+	}
+	if err := db.internal.filter.close(); err != nil {
+		return err
+	}
+	if err := db.lock.Unlock(); err != nil {
+		return err
+	}
+
+	var err error
+	if db.internal.closer != nil {
+		if err1 := db.internal.closer.Close(); err == nil {
+			err = err1
+		}
+		db.internal.closer = nil
+	}
+
+	db.internal.meter.UnregisterAll()
+
 	return nil
 }
 
-func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
+func (db *DB) readEntry(topicHash uint64, seq uint64) (_Slot, error) {
 	blockID := startBlockIndex(seq)
-	memseq := db.cacheID ^ seq
-	data, err := db.blockCache.Get(uint64(blockID), memseq)
+	memseq := db.internal.dbInfo.cacheID ^ seq
+	data, err := db.internal.blockCache.Get(uint64(blockID), memseq)
 	if err != nil {
-		return slot{}, errMsgIDDeleted
+		return _Slot{}, errMsgIDDeleted
 	}
 	if data != nil {
-		var e entry
+		var e _Entry
 		e.UnmarshalBinary(data[:entrySize])
-		s := slot{
+		s := _Slot{
 			seq:       e.seq,
 			topicSize: e.topicSize,
 			valueSize: e.valueSize,
@@ -189,36 +266,36 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (slot, error) {
 	}
 
 	off := blockOffset(startBlockIndex(seq))
-	bh := blockHandle{file: db.index, offset: off}
+	bh := _BlockHandle{file: db.index, offset: off}
 	if err := bh.read(); err != nil {
-		return slot{}, err
+		return _Slot{}, err
 	}
 
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		s := bh.entries[i]
+		s := bh.block.entries[i]
 		if s.seq == seq {
 			return s, nil
 		}
 	}
-	return slot{}, nil
+	return _Slot{}, nil
 }
 
 // lookups are performed in following order
 // ilookup lookups in memory entries from timeWindow
 // lookup lookups persisted entries from timeWindow file.
 func (db *DB) lookup(q *Query) error {
-	topics := db.trie.lookup(q.parts, q.depth, q.topicType)
+	topics := db.internal.trie.lookup(q.internal.parts, q.internal.depth, q.internal.topicType)
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
 	for _, topic := range topics {
-		if len(q.winEntries) > q.Limit {
+		if len(q.internal.winEntries) > q.Limit {
 			break
 		}
-		limit := q.Limit - len(q.winEntries)
-		wEntries := db.timeWindow.lookup(topic.hash, topic.offset, q.cutoff, limit)
+		limit := q.Limit - len(q.internal.winEntries)
+		wEntries := db.internal.timeWindow.lookup(topic.hash, topic.offset, q.internal.cutoff, limit)
 		for _, we := range wEntries {
-			q.winEntries = append(q.winEntries, query{topicHash: topic.hash, seq: we.seq()})
+			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}
 	}
 	// sort.Slice(q.winEntries[:], func(i, j int) bool {
@@ -265,7 +342,7 @@ func (db *DB) setEntry(timeID int64, e *Entry) error {
 	var eBit uint8
 	var seq uint64
 	var rawTopic []byte
-	if !e.parsed {
+	if !e.entry.parsed {
 		if e.Contract == 0 {
 			e.Contract = message.MasterContract
 		}
@@ -277,21 +354,21 @@ func (db *DB) setEntry(timeID int64, e *Entry) error {
 			e.ExpiresAt = ttl
 		}
 		t.AddContract(e.Contract)
-		e.topicHash = t.GetHash(e.Contract)
+		e.entry.topicHash = t.GetHash(e.Contract)
 		// topic is packed if it is new topic entry
-		if _, ok := db.trie.getOffset(e.topicHash); !ok {
+		if _, ok := db.internal.trie.getOffset(e.entry.topicHash); !ok {
 			rawTopic = t.Marshal()
-			e.topicSize = uint16(len(rawTopic))
+			e.entry.topicSize = uint16(len(rawTopic))
 		}
-		e.parsed = true
+		e.entry.parsed = true
 	}
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		seq = id.Sequence()
-		db.freeList.addLease(timeID, seq)
+		db.internal.freeList.addLease(timeID, seq)
 	} else {
-		if ok, s := db.freeList.getSlot(); ok {
-			db.meter.Leases.Inc(1)
+		if ok, s := db.internal.freeList.getSlot(); ok {
+			db.internal.meter.Leases.Inc(1)
 			seq = s
 		} else {
 			seq = db.nextSeq()
@@ -303,45 +380,45 @@ func (db *DB) setEntry(timeID int64, e *Entry) error {
 	}
 
 	id.SetContract(e.Contract)
-	e.seq = seq
-	e.expiresAt = e.ExpiresAt
+	e.entry.seq = seq
+	e.entry.expiresAt = e.ExpiresAt
 	val := snappy.Encode(nil, e.Payload)
-	if db.encryption == 1 || e.Encryption {
+	if db.internal.dbInfo.encryption == 1 || e.Encryption {
 		eBit = 1
-		val = db.mac.Encrypt(nil, val)
+		val = db.internal.mac.Encrypt(nil, val)
 	}
-	e.valueSize = uint32(len(val))
-	mLen := entrySize + idSize + uint32(e.topicSize) + uint32(e.valueSize)
-	e.cache = make([]byte, mLen)
-	entryData, err := e.MarshalBinary()
+	e.entry.valueSize = uint32(len(val))
+	mLen := entrySize + idSize + uint32(e.entry.topicSize) + uint32(e.entry.valueSize)
+	e.entry.cache = make([]byte, mLen)
+	entryData, err := e.entry.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	copy(e.cache, entryData)
-	copy(e.cache[entrySize:], id.Prefix())
-	e.cache[entrySize+idSize-1] = byte(eBit)
+	copy(e.entry.cache, entryData)
+	copy(e.entry.cache[entrySize:], id.Prefix())
+	e.entry.cache[entrySize+idSize-1] = byte(eBit)
 	// topic data is added on first entry for the topic.
-	if e.topicSize != 0 {
-		copy(e.cache[entrySize+idSize:], rawTopic)
+	if e.entry.topicSize != 0 {
+		copy(e.entry.cache[entrySize+idSize:], rawTopic)
 	}
-	copy(e.cache[entrySize+idSize+uint32(e.topicSize):], val)
+	copy(e.entry.cache[entrySize+idSize+uint32(e.entry.topicSize):], val)
 	return nil
 }
 
 // tinyWrite writes tiny batch to DB WAL.
-func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
+func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	// Backoff to limit excess memroy usage
-	db.blockCache.Backoff()
+	db.internal.blockCache.Backoff()
 
-	logWriter, err := db.wal.NewWriter()
+	logWriter, err := db.internal.wal.NewWriter()
 	if err != nil {
 		return err
 	}
 
 	for _, seq := range tinyBatch.entries {
 		blockID := startBlockIndex(seq)
-		memseq := db.cacheID ^ seq
-		data, err := db.blockCache.Get(uint64(blockID), memseq)
+		memseq := db.internal.dbInfo.cacheID ^ seq
+		data, err := db.internal.blockCache.Get(uint64(blockID), memseq)
 		if err != nil {
 			// Record is deleted
 			continue
@@ -360,15 +437,15 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 }
 
 // tinyCommit commits tiny batch to DB.
-func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
-	db.closeW.Add(1)
+func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
+	db.internal.closeW.Add(1)
 	defer func() {
 		tinyBatch.abort()
-		db.closeW.Done()
+		db.internal.closeW.Done()
 	}()
 
 	// Acquire time lock on timeID
-	timeLock := db.mutex.getMutex(uint64(tinyBatch.timeID()))
+	timeLock := db.internal.mutex.getMutex(uint64(tinyBatch.timeID()))
 	timeLock.RLock()
 	defer timeLock.RUnlock()
 
@@ -383,14 +460,14 @@ func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
 	if !tinyBatch.managed {
 		db.releaseTimeID(tinyBatch.timeID())
 	}
-	db.meter.Puts.Inc(int64(tinyBatch.len()))
+	db.internal.meter.Puts.Inc(int64(tinyBatch.len()))
 
 	return nil
 }
 
-func (db *DB) rollback(tinyBatch *tinyBatch) error {
+func (db *DB) rollback(tinyBatch *_TinyBatch) error {
 	// Acquire time lock on timeID
-	timeLock := db.mutex.getMutex(uint64(tinyBatch.timeID()))
+	timeLock := db.internal.mutex.getMutex(uint64(tinyBatch.timeID()))
 	timeLock.Lock()
 	defer timeLock.Unlock()
 
@@ -398,19 +475,19 @@ func (db *DB) rollback(tinyBatch *tinyBatch) error {
 	tinyBatch.reset()
 
 	// Abort signals WAL to release log.
-	if err := db.wal.SignalLogApplied(tinyBatch.timeID()); err != nil {
+	if err := db.internal.wal.SignalLogApplied(tinyBatch.timeID()); err != nil {
 		logger.Error().Err(err).Str("context", "db.abort")
 		return err
 	}
-	db.timeWindow.timeMark.abort(tinyBatch.timeID())
-	db.meter.Aborts.Inc(int64(entryCount))
+	db.internal.timeWindow.timeMark.abort(tinyBatch.timeID())
+	db.internal.meter.Aborts.Inc(int64(entryCount))
 	return nil
 }
 
 func (db *DB) abort() {
-	err := db.timeWindow.abort(func(wEntries windowEntries) (bool, error) {
+	err := db.internal.timeWindow.abort(func(wEntries _WindowEntries) (bool, error) {
 		for _, we := range wEntries {
-			db.freeList.freeSlot(we.seq())
+			db.internal.freeList.freeSlot(we.seq())
 		}
 		return false, nil
 	})
@@ -421,20 +498,20 @@ func (db *DB) abort() {
 
 // delete deletes the given key from the DB.
 func (db *DB) delete(topicHash, seq uint64) error {
-	if db.opts.immutable {
+	if db.opts.flags.immutable {
 		return nil
 	}
 
-	db.freeList.freeSlot(seq)
-	db.meter.Dels.Inc(1)
+	db.internal.freeList.freeSlot(seq)
+	db.internal.meter.Dels.Inc(1)
 	blockID := startBlockIndex(seq)
-	memseq := db.cacheID ^ seq
-	if err := db.blockCache.Remove(uint64(blockID), memseq); err != nil {
+	memseq := db.internal.dbInfo.cacheID ^ seq
+	if err := db.internal.blockCache.Remove(uint64(blockID), memseq); err != nil {
 		return err
 	}
 
 	// Test filter block for the message id presence.
-	if !db.filter.Test(seq) {
+	if !db.internal.filter.Test(seq) {
 		return nil
 	}
 
@@ -447,9 +524,9 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if err != nil {
 		return err
 	}
-	db.freeList.freeBlock(e.msgOffset, e.mSize())
+	db.internal.freeList.freeBlock(e.msgOffset, e.mSize())
 	db.decount(1)
-	if db.syncWrites {
+	if db.internal.syncWrites {
 		return db.sync()
 	}
 	return nil
@@ -457,47 +534,47 @@ func (db *DB) delete(topicHash, seq uint64) error {
 
 // seq current seq of the DB.
 func (db *DB) seq() uint64 {
-	return atomic.LoadUint64(&db.sequence)
+	return atomic.LoadUint64(&db.internal.dbInfo.sequence)
 }
 
 func (db *DB) nextSeq() uint64 {
-	return atomic.AddUint64(&db.sequence, 1)
+	return atomic.AddUint64(&db.internal.dbInfo.sequence, 1)
 }
 
 // blocks returns the total blocks in the DB.
 func (db *DB) blocks() int32 {
-	return atomic.LoadInt32(&db.blockIdx)
+	return atomic.LoadInt32(&db.internal.dbInfo.blockIdx)
 }
 
 // addBlock adds new block to the DB.
 func (db *DB) addBlocks(nBlocks int32) int32 {
-	return atomic.AddInt32(&db.blockIdx, nBlocks)
+	return atomic.AddInt32(&db.internal.dbInfo.blockIdx, nBlocks)
 }
 
 func (db *DB) incount(count uint64) uint64 {
-	return atomic.AddUint64(&db.count, count)
+	return atomic.AddUint64(&db.internal.dbInfo.count, count)
 }
 
 func (db *DB) decount(count uint64) uint64 {
-	return atomic.AddUint64(&db.count, -count)
+	return atomic.AddUint64(&db.internal.dbInfo.count, -count)
 }
 
 func (db *DB) timeID() int64 {
-	return db.timeWindow.timeMark.newID()
+	return db.internal.timeWindow.timeMark.newID()
 }
 
 func (db *DB) releaseTimeID(timeID int64) {
-	db.timeWindow.timeMark.release(timeID)
+	db.internal.timeWindow.timeMark.release(timeID)
 }
 
 // setClosed flag; return true if not already closed.
 func (db *DB) setClosed() bool {
-	return atomic.CompareAndSwapUint32(&db.closed, 0, 1)
+	return atomic.CompareAndSwapUint32(&db.internal.closed, 0, 1)
 }
 
 // isClosed checks whether DB was closed.
 func (db *DB) isClosed() bool {
-	return atomic.LoadUint32(&db.closed) != 0
+	return atomic.LoadUint32(&db.internal.closed) != 0
 }
 
 // ok checks read ok status.

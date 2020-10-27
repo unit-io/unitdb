@@ -25,12 +25,12 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-type leases struct {
+type _Leases struct {
 	ls           map[int64]map[uint64]struct{} // map[timeID]map[seq]
 	sync.RWMutex                               // Read Write mutex, guards access to internal collection.
 }
 
-type freeslots struct {
+type _FreeSlots struct {
 	cache        map[uint64]bool // map[seq]bool.
 	fs           []uint64
 	sync.RWMutex // Read Write mutex, guards access to internal collection.
@@ -38,55 +38,55 @@ type freeslots struct {
 
 // A "thread" safe lease freeblocks.
 // To avoid lock bottlenecks slots are divided into several shards (nShards).
-type lease struct {
-	file
-	leases                []*leases
-	slots                 []*freeslots
-	blocks                []*freeBlocks
+type _Lease struct {
+	file                  _File
+	leases                []*_Leases
+	slots                 []*_FreeSlots
+	blocks                []*_FreeBlocks
 	size                  int64 // Total size of free blocks.
 	minimumFreeBlocksSize int64 // Minimum free blocks size before free blocks are reused for new allocation.
 	consistent            *hash.Consistent
 }
 
-type freeblock struct {
+type _FreeBlock struct {
 	offset int64
 	size   uint32
 }
 
-type freeBlocks struct {
-	fb           []freeblock
+type _FreeBlocks struct {
+	fb           []_FreeBlock
 	cache        map[int64]bool // cache free offset.
 	sync.RWMutex                // Read Write mutex, guards access to internal collection.
 }
 
 // newLeaswing creates a new concurrent freeblocks.
-func newLease(f file, minimumSize int64) *lease {
-	l := &lease{
+func newLease(f _File, minimumSize int64) *_Lease {
+	l := &_Lease{
 		file:                  f,
-		leases:                make([]*leases, nShards),
-		slots:                 make([]*freeslots, nShards),
-		blocks:                make([]*freeBlocks, nShards),
+		leases:                make([]*_Leases, nShards),
+		slots:                 make([]*_FreeSlots, nShards),
+		blocks:                make([]*_FreeBlocks, nShards),
 		minimumFreeBlocksSize: minimumSize,
 		consistent:            hash.InitConsistent(int(nShards), int(nShards)),
 	}
 
 	for i := 0; i < nShards; i++ {
-		l.leases[i] = &leases{ls: make(map[int64]map[uint64]struct{})}
+		l.leases[i] = &_Leases{ls: make(map[int64]map[uint64]struct{})}
 	}
 
 	for i := 0; i < nShards; i++ {
-		l.slots[i] = &freeslots{cache: make(map[uint64]bool)}
+		l.slots[i] = &_FreeSlots{cache: make(map[uint64]bool)}
 	}
 
 	for i := 0; i < nShards; i++ {
-		l.blocks[i] = &freeBlocks{cache: make(map[int64]bool)}
+		l.blocks[i] = &_FreeBlocks{cache: make(map[int64]bool)}
 	}
 
 	return l
 }
 
 // MarshalBinary serialized leased slots into binary data.
-func (s *freeslots) MarshalBinary() []byte {
+func (s *_FreeSlots) MarshalBinary() []byte {
 	size := 4 + (8 * len(s.fs))
 	buf := make([]byte, size)
 	data := buf
@@ -100,7 +100,7 @@ func (s *freeslots) MarshalBinary() []byte {
 }
 
 // UnmarshalBinary de-serialized leased slots from binary data.
-func (s *freeslots) UnmarshalBinary(data []byte, size uint32) error {
+func (s *_FreeSlots) UnmarshalBinary(data []byte, size uint32) error {
 	for i := uint32(0); i < size; i++ {
 		// _ = data[8] // bounds check hint to compiler; see golang.org/issue/14808.
 		seq := binary.LittleEndian.Uint64(data[:8])
@@ -113,8 +113,12 @@ func (s *freeslots) UnmarshalBinary(data []byte, size uint32) error {
 	return nil
 }
 
+func (fs *_FreeSlots) len() int {
+	return len(fs.fs)
+}
+
 // MarshalBinary serialized leased blocks into binary data.
-func (s *freeBlocks) MarshalBinary() []byte {
+func (s *_FreeBlocks) MarshalBinary() []byte {
 	size := 4 + (12 * len(s.fb))
 	buf := make([]byte, size)
 	data := buf
@@ -129,13 +133,13 @@ func (s *freeBlocks) MarshalBinary() []byte {
 }
 
 // UnmarshalBinary de-serialized leased blocks from binary data.
-func (b *freeBlocks) UnmarshalBinary(data []byte, size uint32) error {
+func (b *_FreeBlocks) UnmarshalBinary(data []byte, size uint32) error {
 	for i := uint32(0); i < size; i++ {
 		// _ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
 		blockOff := int64(binary.LittleEndian.Uint64(data[:8]))
 		blockSize := binary.LittleEndian.Uint32(data[8:12])
 		if blockOff != 0 {
-			b.fb = append(b.fb, freeblock{size: blockSize, offset: blockOff})
+			b.fb = append(b.fb, _FreeBlock{size: blockSize, offset: blockOff})
 		}
 		data = data[12:]
 	}
@@ -143,12 +147,12 @@ func (b *freeBlocks) UnmarshalBinary(data []byte, size uint32) error {
 }
 
 // leaseBlock returns leases under given blockID.
-func (l *lease) leaseBlock(blockID uint64) *leases {
+func (l *_Lease) leaseBlock(blockID uint64) *_Leases {
 	return l.leases[l.consistent.FindBlock(blockID)]
 }
 
 // addLease adds seq to leases.
-func (l *lease) addLease(timeID int64, seq uint64) {
+func (l *_Lease) addLease(timeID int64, seq uint64) {
 	// Get shard.
 	lb := l.leaseBlock(seq)
 	lb.Lock()
@@ -162,7 +166,7 @@ func (l *lease) addLease(timeID int64, seq uint64) {
 }
 
 // releaseLease revokes leases for given timeID.
-func (l *lease) releaseLease(timeID int64) {
+func (l *_Lease) releaseLease(timeID int64) {
 	// Get shard.
 	for i := uint64(0); i < nShards; i++ {
 		lb := l.leases[i]
@@ -173,7 +177,7 @@ func (l *lease) releaseLease(timeID int64) {
 }
 
 // isFree check if seq is free.
-func (l *lease) isFree(timeID int64, seq uint64) bool {
+func (l *_Lease) isFree(timeID int64, seq uint64) bool {
 	// Get shard.
 	fss := l.freeSlots(seq)
 	fss.RLock()
@@ -186,12 +190,12 @@ func (l *lease) isFree(timeID int64, seq uint64) bool {
 }
 
 // freeSlots returns freeSlots under given blockID.
-func (l *lease) freeSlots(blockID uint64) *freeslots {
+func (l *_Lease) freeSlots(blockID uint64) *_FreeSlots {
 	return l.slots[l.consistent.FindBlock(blockID)]
 }
 
 // getSlot gets seq from free slot.
-func (l *lease) getSlot() (ok bool, seq uint64) {
+func (l *_Lease) getSlot() (ok bool, seq uint64) {
 	// Get shard.
 	for i := uint64(0); i < nShards; i++ {
 		fss := l.slots[i]
@@ -221,7 +225,7 @@ func (l *lease) getSlot() (ok bool, seq uint64) {
 	return false, seq
 }
 
-func (l *lease) freeSlot(seq uint64) (ok bool) {
+func (l *_Lease) freeSlot(seq uint64) (ok bool) {
 	// Get shard.
 	fss := l.freeSlots(seq)
 	fss.Lock()
@@ -235,26 +239,22 @@ func (l *lease) freeSlot(seq uint64) (ok bool) {
 	return true
 }
 
-func (fs *freeslots) len() int {
-	return len(fs.fs)
-}
-
 // freeBlocks returns freeBlocks under given blockID.
-func (l *lease) freeBlocks(blockID uint64) *freeBlocks {
+func (l *_Lease) freeBlocks(blockID uint64) *_FreeBlocks {
 	return l.blocks[l.consistent.FindBlock(blockID)]
 }
 
-func (s *freeBlocks) search(size uint32) int {
+func (s *_FreeBlocks) search(size uint32) int {
 	return sort.Search(len(s.fb), func(i int) bool {
 		return s.fb[i].size >= size
 	})
 }
 
-func (b *freeBlocks) len() int {
+func (b *_FreeBlocks) len() int {
 	return len(b.fb)
 }
 
-func (b *freeBlocks) defrag() {
+func (b *_FreeBlocks) defrag() {
 	l := len(b.fb)
 	if l <= 1 {
 		return
@@ -262,7 +262,7 @@ func (b *freeBlocks) defrag() {
 	sort.Slice(b.fb[:l], func(i, j int) bool {
 		return b.fb[i].offset < b.fb[j].offset
 	})
-	var merged []freeblock
+	var merged []_FreeBlock
 	curOff := b.fb[0].offset
 	curSize := b.fb[0].size
 	for i := 1; i < l; i++ {
@@ -270,26 +270,26 @@ func (b *freeBlocks) defrag() {
 			curSize += b.fb[i].size
 			delete(b.cache, b.fb[i].offset)
 		} else {
-			merged = append(merged, freeblock{size: curSize, offset: curOff})
+			merged = append(merged, _FreeBlock{size: curSize, offset: curOff})
 			curOff = b.fb[i].offset
 			curSize = b.fb[i].size
 		}
 	}
-	merged = append(merged, freeblock{offset: curOff, size: curSize})
+	merged = append(merged, _FreeBlock{offset: curOff, size: curSize})
 	sort.Slice(merged, func(i, j int) bool {
 		return merged[i].size < merged[j].size
 	})
 	copy(b.fb[:l], merged)
 }
 
-func (l *lease) defrag() {
+func (l *_Lease) defrag() {
 	for i := 0; i < nShards; i++ {
 		fbs := l.blocks[i]
 		fbs.defrag()
 	}
 }
 
-func (l *lease) freeBlock(off int64, size uint32) {
+func (l *_Lease) freeBlock(off int64, size uint32) {
 	fbs := l.freeBlocks(uint64(off))
 	fbs.Lock()
 	defer fbs.Unlock()
@@ -297,12 +297,12 @@ func (l *lease) freeBlock(off int64, size uint32) {
 	if fbs.cache[off] {
 		return
 	}
-	fbs.fb = append(fbs.fb, freeblock{offset: off, size: size})
+	fbs.fb = append(fbs.fb, _FreeBlock{offset: off, size: size})
 	fbs.cache[off] = true
 	l.size += int64(size)
 }
 
-func (l *lease) free(seq uint64, off int64, size uint32) {
+func (l *_Lease) free(seq uint64, off int64, size uint32) {
 	if size == 0 {
 		panic("unable to free zero bytes")
 	}
@@ -310,7 +310,7 @@ func (l *lease) free(seq uint64, off int64, size uint32) {
 	l.freeBlock(off, size)
 }
 
-func (l *lease) allocate(size uint32) int64 {
+func (l *_Lease) allocate(size uint32) int64 {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
@@ -327,7 +327,7 @@ func (l *lease) allocate(size uint32) int64 {
 	off := fbs.fb[i].offset
 	if fbs.fb[i].size == size {
 		copy(fbs.fb[i:], fbs.fb[i+1:])
-		fbs.fb[len(fbs.fb)-1] = freeblock{}
+		fbs.fb[len(fbs.fb)-1] = _FreeBlock{}
 		fbs.fb = fbs.fb[:len(fbs.fb)-1]
 	} else {
 		fbs.fb[i].size -= size
@@ -338,11 +338,11 @@ func (l *lease) allocate(size uint32) int64 {
 	return off
 }
 
-func (l *lease) read() error {
+func (l *_Lease) read() error {
 	off := int64(0)
-	slots := &freeslots{cache: make(map[uint64]bool)}
+	slots := &_FreeSlots{cache: make(map[uint64]bool)}
 	buf := make([]byte, 4)
-	if _, err := l.ReadAt(buf, off); err != nil {
+	if _, err := l.file.ReadAt(buf, off); err != nil {
 		if err == io.EOF {
 			return nil
 		}
@@ -351,7 +351,7 @@ func (l *lease) read() error {
 	size := binary.LittleEndian.Uint32(buf)
 	off += 4
 	buf = make([]byte, 8*size)
-	if _, err := l.ReadAt(buf, off); err != nil {
+	if _, err := l.file.ReadAt(buf, off); err != nil {
 		return err
 	}
 	off += int64(8 * size)
@@ -361,15 +361,15 @@ func (l *lease) read() error {
 		l.freeSlot(seq)
 	}
 
-	blocks := &freeBlocks{cache: make(map[int64]bool)}
+	blocks := &_FreeBlocks{cache: make(map[int64]bool)}
 	buf = make([]byte, 4)
-	if _, err := l.ReadAt(buf, off); err != nil {
+	if _, err := l.file.ReadAt(buf, off); err != nil {
 		return err
 	}
 	size = binary.LittleEndian.Uint32(buf)
 	off += 4
 	buf = make([]byte, 12*size)
-	if _, err := l.ReadAt(buf, off); err != nil {
+	if _, err := l.file.ReadAt(buf, off); err != nil {
 		return err
 	}
 	blocks.UnmarshalBinary(buf, size)
@@ -381,15 +381,15 @@ func (l *lease) read() error {
 	return nil
 }
 
-func (l *lease) write() error {
+func (l *_Lease) write() error {
 	if len(l.blocks) == 0 {
 		return nil
 	}
-	if err := l.Truncate(0); err != nil {
+	if err := l.file.Truncate(0); err != nil {
 		return err
 	}
 	var off int64
-	slots := &freeslots{cache: make(map[uint64]bool)}
+	slots := &_FreeSlots{cache: make(map[uint64]bool)}
 	for i := 0; i < nShards; i++ {
 		fss := l.slots[i]
 		if fss.len() == 0 {
@@ -398,13 +398,13 @@ func (l *lease) write() error {
 		slots.fs = append(slots.fs, fss.fs...)
 	}
 	data := slots.MarshalBinary()
-	n, err := l.WriteAt(data, off)
+	n, err := l.file.WriteAt(data, off)
 	if err != nil {
 		return err
 	}
 	off += int64(n)
 
-	blocks := &freeBlocks{cache: make(map[int64]bool)}
+	blocks := &_FreeBlocks{cache: make(map[int64]bool)}
 	for i := 0; i < nShards; i++ {
 		fbs := l.blocks[i]
 		if fbs.len() == 0 {
@@ -414,7 +414,7 @@ func (l *lease) write() error {
 	}
 
 	data = blocks.MarshalBinary()
-	if _, err = l.WriteAt(data, off); err != nil {
+	if _, err = l.file.WriteAt(data, off); err != nil {
 		return err
 	}
 

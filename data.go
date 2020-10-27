@@ -16,32 +16,32 @@
 
 package unitdb
 
-type dataTable struct {
-	file
-	lease *lease
+type _DataTable struct {
+	file  _File
+	lease *_Lease
 
 	offset int64
 }
 
-func (dt *dataTable) readMessage(s slot) ([]byte, []byte, error) {
+func (dt *_DataTable) readMessage(s _Slot) ([]byte, []byte, error) {
 	if s.cacheBlock != nil {
 		return s.cacheBlock[:idSize], s.cacheBlock[s.topicSize+idSize:], nil
 	}
-	message, err := dt.Slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
+	message, err := dt.file.Slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
 	return message[:idSize], message[s.topicSize+idSize:], nil
 }
 
-func (dt *dataTable) readTopic(s slot) ([]byte, error) {
+func (dt *_DataTable) readTopic(s _Slot) ([]byte, error) {
 	if s.cacheBlock != nil {
 		return s.cacheBlock[idSize : s.topicSize+idSize], nil
 	}
-	return dt.Slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
+	return dt.file.Slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
 }
 
-func (dt *dataTable) extend(size uint32) (int64, error) {
+func (dt *_DataTable) extend(size uint32) (int64, error) {
 	off := dt.offset
 	if _, err := dt.file.extend(size); err != nil {
 		return 0, err

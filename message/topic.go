@@ -86,21 +86,21 @@ func (t *Topic) GetHash(contract uint32) uint64 {
 	return uint64(h)<<32 + uint64((contract<<8)|uint32(t.Depth))
 }
 
-// SplitFunc various split function to split topic using delimeter.
-type splitFunc struct{}
+// _SplitFunc various split function to split topic using delimeter.
+type _SplitFunc struct{}
 
-func (splitFunc) splitTopic(c rune) bool {
+func (_SplitFunc) splitTopic(c rune) bool {
 	return c == TopicSeparator
 }
 
-func (splitFunc) options(c rune) bool {
+func (_SplitFunc) options(c rune) bool {
 	return c == '?'
 }
 
-func (splitFunc) splitOptions(c rune) bool {
+func (_SplitFunc) splitOptions(c rune) bool {
 	return c == '&'
 }
-func (splitFunc) splitOpsKeyValue(c rune) bool {
+func (_SplitFunc) splitOpsKeyValue(c rune) bool {
 	return c == '='
 }
 
@@ -158,7 +158,7 @@ func (t *Topic) getOption(name string) (string, int, bool) {
 // parseOptions parse the options from the topic.
 func (t *Topic) parseOptions(text []byte) (ok bool) {
 	//Parse Options
-	var fn splitFunc
+	var fn _SplitFunc
 	ops := bytes.FieldsFunc(text, fn.splitOptions)
 	if ops != nil || len(ops) >= 1 {
 		for _, o := range ops {
@@ -186,7 +186,7 @@ func (t *Topic) GetHashCode() uint32 {
 
 // ParseKey attempts to parse the key.
 func (t *Topic) ParseKey(text []byte) {
-	var fn splitFunc
+	var fn _SplitFunc
 
 	parts := bytes.FieldsFunc(text, fn.options)
 	l := len(parts)
@@ -217,7 +217,7 @@ func parseStaticTopic(contract uint32, topic *Topic) (ok bool) {
 	// defer logger.Debug().Str("context", "topic.parseStaticTopic").Dur("duration", time.Since(start)).Msg("")
 
 	var part Part
-	var fn splitFunc
+	var fn _SplitFunc
 	topic.Parts = make([]Part, 0, 6)
 	ok = topic.parseOptions(topic.TopicOptions)
 
@@ -244,7 +244,7 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	// defer logger.Debug().Str("context", "topic.parseWildcardTopic").Dur("duration", time.Since(start)).Msg("")
 
 	var part Part
-	var fn splitFunc
+	var fn _SplitFunc
 	topic.Parts = make([]Part, 0, 6)
 	ok = topic.parseOptions(topic.TopicOptions)
 

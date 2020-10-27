@@ -29,7 +29,7 @@ const (
 )
 
 type (
-	slot struct {
+	_Slot struct {
 		seq       uint64
 		topicSize uint16
 		valueSize uint32
@@ -38,8 +38,8 @@ type (
 		cacheBlock []byte // block from memdb if it exist
 	}
 
-	block struct {
-		entries  [entriesPerIndexBlock]slot
+	_Block struct {
+		entries  [entriesPerIndexBlock]_Slot
 		baseSeq  uint64
 		next     uint32
 		entryIdx uint16
@@ -48,8 +48,8 @@ type (
 		leased bool
 	}
 
-	blockHandle struct {
-		block
+	_BlockHandle struct {
+		block  _Block
 		file   fs.FileManager
 		offset int64
 	}
@@ -66,11 +66,11 @@ func blockOffset(idx int32) int64 {
 	return int64(headerSize + (blockSize * uint32(idx)))
 }
 
-func (s slot) mSize() uint32 {
+func (s _Slot) mSize() uint32 {
 	return idSize + uint32(s.topicSize) + s.valueSize
 }
 
-func (b block) validation(blockIdx int32) error {
+func (b _Block) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)
 	if startBlockIdx != blockIdx {
 		return fmt.Errorf("validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
@@ -79,7 +79,7 @@ func (b block) validation(blockIdx int32) error {
 }
 
 // MarshalBinary serialized entries block into binary data.
-func (b block) MarshalBinary() []byte {
+func (b _Block) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 
@@ -104,7 +104,7 @@ func (b block) MarshalBinary() []byte {
 }
 
 // UnmarshalBinary de-serialized entries block from binary data.
-func (b *block) UnmarshalBinary(data []byte) error {
+func (b *_Block) UnmarshalBinary(data []byte) error {
 	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
 	data = data[8:]
 	for i := 0; i < entriesPerIndexBlock; i++ {
@@ -125,10 +125,10 @@ func (b *block) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (bh *blockHandle) read() error {
-	buf, err := bh.file.Slice(bh.offset, bh.offset+int64(blockSize))
+func (h *_BlockHandle) read() error {
+	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
 	if err != nil {
 		return err
 	}
-	return bh.UnmarshalBinary(buf)
+	return h.block.UnmarshalBinary(buf)
 }

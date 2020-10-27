@@ -23,7 +23,7 @@ import (
 
 // Filter filter is bloom filter generator.
 type Filter struct {
-	file
+	file        _File
 	filterBlock *filter.Generator
 	blockCache  *bc.Cache
 	cacheID     uint64
@@ -47,7 +47,7 @@ func (f *Filter) Test(h uint64) bool {
 // Close finalizes writing filter to file.
 func (f *Filter) close() error {
 	f.writeFilterBlock()
-	if err := f.Close(); err != nil {
+	if err := f.file.Close(); err != nil {
 		return err
 	}
 	return nil
@@ -56,7 +56,7 @@ func (f *Filter) close() error {
 // writeFilterBlock writes the filter block.
 func (f *Filter) writeFilterBlock() error {
 	d := f.filterBlock.Finish()
-	if _, err := f.WriteAt(d, 0); err != nil {
+	if _, err := f.file.WriteAt(d, 0); err != nil {
 		return err
 	}
 
@@ -64,19 +64,19 @@ func (f *Filter) writeFilterBlock() error {
 }
 
 func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
-	if f.size <= 0 {
+	if f.file.size <= 0 {
 		return nil, nil
 	}
 	var cacheKey uint64
 	if f.blockCache != nil {
-		cacheKey = f.cacheID ^ uint64(f.size)
+		cacheKey = f.cacheID ^ uint64(f.file.size)
 		if data, err := f.blockCache.Get(0, cacheKey); data != nil {
 			return filter.NewFilterBlock(data), err
 		}
 	}
 
-	raw := make([]byte, f.size)
-	if _, err := f.ReadAt(raw, 0); err != nil {
+	raw := make([]byte, f.file.size)
+	if _, err := f.file.ReadAt(raw, 0); err != nil {
 		return nil, err
 	}
 

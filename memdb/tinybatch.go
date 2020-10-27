@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-type tinyBatch struct {
+type _TinyBatch struct {
 	sync.RWMutex
 	ID      int64
 	managed bool
@@ -32,45 +32,45 @@ type tinyBatch struct {
 	doneChan chan struct{}
 }
 
-func (b *tinyBatch) timeID() timeID {
-	return timeID(atomic.LoadInt64(&b.ID))
+func (b *_TinyBatch) timeID() _TimeID {
+	return _TimeID(atomic.LoadInt64(&b.ID))
 }
 
-func (b *tinyBatch) len() uint32 {
+func (b *_TinyBatch) len() uint32 {
 	return atomic.LoadUint32(&b.entryCount)
 }
 
-func (b *tinyBatch) incount() uint32 {
+func (b *_TinyBatch) incount() uint32 {
 	return atomic.AddUint32(&b.entryCount, 1)
 }
 
-func (b *tinyBatch) reset() {
+func (b *_TinyBatch) reset() {
 	b.Lock()
 	defer b.Unlock()
 	atomic.StoreUint32(&b.entryCount, 0)
 }
 
-func (b *tinyBatch) abort() {
+func (b *_TinyBatch) abort() {
 	b.reset()
 	close(b.doneChan)
 }
 
 // setManaged sets batch managed.
-func (b *tinyBatch) setManaged() {
+func (b *_TinyBatch) setManaged() {
 	b.managed = true
 }
 
 // unsetManaged sets batch unmanaged.
-func (b *tinyBatch) unsetManaged() {
+func (b *_TinyBatch) unsetManaged() {
 	b.managed = false
 }
 
-type batchPool struct {
+type _BatchPool struct {
 	db           *DB
 	maxBatches   int
-	writeQueue   chan *tinyBatch
-	batchQueue   chan *tinyBatch
-	waitingQueue queue
+	writeQueue   chan *_TinyBatch
+	batchQueue   chan *_TinyBatch
+	waitingQueue _Queue
 	stoppedChan  chan struct{}
 	stopOnce     sync.Once
 	stopped      int32
@@ -79,12 +79,12 @@ type batchPool struct {
 }
 
 // size returns maximum number of concurrent batches.
-func (p *batchPool) size() int {
+func (p *_BatchPool) size() int {
 	return p.maxBatches
 }
 
 // stop tells dispatcher to exit, and wether or not complete queued batches.
-func (p *batchPool) stop(wait bool) {
+func (p *_BatchPool) stop(wait bool) {
 	// Acquire tinyBatch write lock
 	p.db.internal.tinyBatchLockC <- struct{}{}
 	defer func() {
@@ -100,29 +100,29 @@ func (p *batchPool) stop(wait bool) {
 }
 
 // stopWait stops batch pool and wait for all queued batches to complete.
-func (p *batchPool) stopWait() {
+func (p *_BatchPool) stopWait() {
 	p.stop(true)
 }
 
 // stopped returns true if batch pool has been stopped.
-func (p *batchPool) isStopped() bool {
+func (p *_BatchPool) isStopped() bool {
 	return atomic.LoadInt32(&p.stopped) != 0
 }
 
 // waitQueueSize returns count of batches in waitingQueue.
-func (p *batchPool) waitQueueSize() int {
+func (p *_BatchPool) waitQueueSize() int {
 	return int(atomic.LoadInt32(&p.waiting))
 }
 
 // write enqueues a batch to write.
-func (p *batchPool) write(tinyBatch *tinyBatch) {
+func (p *_BatchPool) write(tinyBatch *_TinyBatch) {
 	if tinyBatch != nil {
 		p.writeQueue <- tinyBatch
 	}
 }
 
 // witeWait enqueues the given batch and waits for it to be executed.
-func (p *batchPool) writeWait(tinyBatch *tinyBatch) {
+func (p *_BatchPool) writeWait(tinyBatch *_TinyBatch) {
 	if tinyBatch == nil {
 		return
 	}
@@ -131,7 +131,7 @@ func (p *batchPool) writeWait(tinyBatch *tinyBatch) {
 }
 
 // dispatch handles tiny batch commit for the batches queue.
-func (p *batchPool) dispatch() {
+func (p *_BatchPool) dispatch() {
 	defer close(p.stoppedChan)
 	timeout := time.NewTimer(2 * time.Second)
 	var batchCount int
@@ -191,7 +191,7 @@ Loop:
 }
 
 // commit run initial tinyBatch commit, then start tinyBatch waiting for more.
-func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
+func (p *_BatchPool) commit(tinyBatch *_TinyBatch, batchQueue chan *_TinyBatch) {
 	if err := p.db.tinyCommit(tinyBatch); err != nil {
 		// p.db.rollback(tinyBatch)
 	}
@@ -200,7 +200,7 @@ func (p *batchPool) commit(tinyBatch *tinyBatch, batchQueue chan *tinyBatch) {
 }
 
 // tinyCommit commits batch and stops when it receive a nil batch.
-func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
+func (p *_BatchPool) tinyCommit(batchQueue chan *_TinyBatch) {
 	// abort time window entries
 	// defer p.db.abort()
 
@@ -217,7 +217,7 @@ func (p *batchPool) tinyCommit(batchQueue chan *tinyBatch) {
 
 // processWaiting queue puts new batches onto the waiting queue,
 // removes batches from the waiting queue. Returns false if batchPool is stopped.
-func (p *batchPool) processWaitingQueue() bool {
+func (p *_BatchPool) processWaitingQueue() bool {
 	select {
 	case b, ok := <-p.writeQueue:
 		if !ok {
@@ -231,7 +231,7 @@ func (p *batchPool) processWaitingQueue() bool {
 	return true
 }
 
-func (p *batchPool) killIdleBatch() bool {
+func (p *_BatchPool) killIdleBatch() bool {
 	select {
 	case p.batchQueue <- nil:
 		return true
@@ -242,27 +242,27 @@ func (p *batchPool) killIdleBatch() bool {
 
 // runQueuedBatches removes each batch from the waiting queue and
 // process it until queue is empty.
-func (p *batchPool) runQueuedBatches() {
+func (p *_BatchPool) runQueuedBatches() {
 	if p.waitingQueue.len() != 0 {
 		p.batchQueue <- p.waitingQueue.pop()
 		atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
 	}
 }
 
-type queue struct {
-	buf   []*tinyBatch
+type _Queue struct {
+	buf   []*_TinyBatch
 	head  int
 	tail  int
 	count int
 }
 
 // len returns the number of elements currently stored in the queue.
-func (q *queue) len() int {
+func (q *_Queue) len() int {
 	return q.count
 }
 
 // push appends an element to the back of the queue.
-func (q *queue) push(elem *tinyBatch) {
+func (q *_Queue) push(elem *_TinyBatch) {
 	q.grow()
 
 	q.buf[q.tail] = elem
@@ -272,7 +272,7 @@ func (q *queue) push(elem *tinyBatch) {
 }
 
 // pop removes and return an element from front of the queue.
-func (q *queue) pop() *tinyBatch {
+func (q *_Queue) pop() *_TinyBatch {
 	if q.count <= 0 {
 		panic("batchPool: pop called on empty queue")
 	}
@@ -287,7 +287,7 @@ func (q *queue) pop() *tinyBatch {
 
 // front returns element at the front of the queue. This is the element
 // that would be returned by pop().
-func (q *queue) front() *tinyBatch {
+func (q *_Queue) front() *_TinyBatch {
 	if q.count <= 0 {
 		panic("batchPool: pop called on empty queue")
 	}
@@ -296,7 +296,7 @@ func (q *queue) front() *tinyBatch {
 
 // at returns element at index i in the queue without removing element from the queue.
 // at(0) refers to first element and is same as front(). at(len()0-1) refers to the last element.
-func (q *queue) at(i int) *tinyBatch {
+func (q *_Queue) at(i int) *_TinyBatch {
 	if i < 0 || i > q.count {
 		panic("batchPool: at called with index out of range")
 	}
@@ -305,9 +305,9 @@ func (q *queue) at(i int) *tinyBatch {
 }
 
 // grow resizes the queue to fit exactly twice its current content.
-func (q *queue) grow() {
+func (q *_Queue) grow() {
 	if len(q.buf) == 0 {
-		q.buf = make([]*tinyBatch, nPoolSize)
+		q.buf = make([]*_TinyBatch, nPoolSize)
 		return
 	}
 	if q.count == len(q.buf) {
@@ -316,15 +316,15 @@ func (q *queue) grow() {
 }
 
 // shrink resizes the queue down if bugger if 1/4 full.
-func (q *queue) shrink() {
+func (q *_Queue) shrink() {
 	if len(q.buf) > nPoolSize && (q.count<<2) == len(q.buf) {
 		q.resize()
 	}
 }
 
 // resize resizes the queue to fit exactly twice its current content.
-func (q *queue) resize() {
-	newBuf := make([]*tinyBatch, q.count<<1)
+func (q *_Queue) resize() {
+	newBuf := make([]*_TinyBatch, q.count<<1)
 	if q.tail > q.head {
 		copy(newBuf, q.buf[q.head:q.tail])
 	} else {

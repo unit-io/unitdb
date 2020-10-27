@@ -27,9 +27,7 @@ import (
 )
 
 type (
-	internal struct {
-		*DB
-
+	_SyncInfo struct {
 		startBlockIdx  int32
 		lastSyncSeq    uint64
 		upperSeq       uint64
@@ -38,6 +36,14 @@ type (
 		inBytes        int64
 		count          int64
 		entriesInvalid uint64
+	}
+	_SyncHandle struct {
+		syncInfo _SyncInfo
+		*DB
+
+		windowWriter *_WindowWriter
+		blockWriter  *_BlockWriter
+		dataWriter   *_DataWriter
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
@@ -48,84 +54,77 @@ type (
 		blockOff int64
 		dataOff  int64
 	}
-	syncHandle struct {
-		internal
-
-		windowWriter *windowWriter
-		blockWriter  *blockWriter
-		dataWriter   *dataWriter
-	}
 )
 
-func (db *syncHandle) startSync() bool {
-	if db.lastSyncSeq == db.seq() {
-		db.syncStatusOk = false
-		return db.syncStatusOk
+func (db *_SyncHandle) startSync() bool {
+	if db.syncInfo.lastSyncSeq == db.seq() {
+		db.syncInfo.syncStatusOk = false
+		return db.syncInfo.syncStatusOk
 	}
-	db.startBlockIdx = db.blocks()
+	db.syncInfo.startBlockIdx = db.blocks()
 
-	db.rawWindow = db.internal.bufPool.Get()
-	db.rawBlock = db.internal.bufPool.Get()
-	db.rawData = db.internal.bufPool.Get()
+	db.rawWindow = db.batchdb.bufPool.Get()
+	db.rawBlock = db.batchdb.bufPool.Get()
+	db.rawData = db.batchdb.bufPool.Get()
 
-	db.windowWriter = newWindowWriter(db.timeWindow, db.rawWindow)
+	db.windowWriter = newWindowWriter(db.internal.timeWindow, db.rawWindow)
 	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
 	db.dataWriter = newDataWriter(&db.data, db.rawData)
 
-	db.winOff = db.timeWindow.currSize()
+	db.winOff = db.internal.timeWindow.file.currSize()
 	db.blockOff = db.index.currSize()
-	db.dataOff = db.data.currSize()
-	db.syncStatusOk = true
+	db.dataOff = db.data.file.currSize()
+	db.syncInfo.syncStatusOk = true
 
-	return db.syncStatusOk
+	return db.syncInfo.syncStatusOk
 }
 
-func (db *syncHandle) finish() error {
-	if !db.syncStatusOk {
+func (db *_SyncHandle) finish() error {
+	if !db.syncInfo.syncStatusOk {
 		return nil
 	}
 
-	db.internal.bufPool.Put(db.rawWindow)
-	db.internal.bufPool.Put(db.rawBlock)
-	db.internal.bufPool.Put(db.rawData)
+	db.batchdb.bufPool.Put(db.rawWindow)
+	db.batchdb.bufPool.Put(db.rawBlock)
+	db.batchdb.bufPool.Put(db.rawData)
 
-	db.syncStatusOk = false
+	db.syncInfo.syncStatusOk = false
 	return nil
 }
 
-func (db *syncHandle) status() (ok bool) {
-	return db.syncStatusOk
+func (db *_SyncHandle) status() (ok bool) {
+	return db.syncInfo.syncStatusOk
 }
 
-func (in *internal) reset() error {
-	in.lastSyncSeq = in.upperSeq
-	in.count = 0
-	in.inBytes = 0
-	in.upperSeq = 0
-	in.startBlockIdx = in.blocks()
+func (db *_SyncHandle) reset() error {
+	db.syncInfo.lastSyncSeq = db.syncInfo.upperSeq
+	db.syncInfo.count = 0
+	db.syncInfo.inBytes = 0
+	db.syncInfo.upperSeq = 0
+	db.syncInfo.startBlockIdx = db.blocks()
 
-	in.rawWindow.Reset()
-	in.rawBlock.Reset()
-	in.rawData.Reset()
+	db.rawWindow.Reset()
+	db.rawBlock.Reset()
+	db.rawData.Reset()
 
-	in.winOff = in.timeWindow.currSize()
-	in.blockOff = in.index.currSize()
-	in.dataOff = in.data.currSize()
+	db.winOff = db.internal.timeWindow.file.currSize()
+	db.blockOff = db.index.currSize()
+	db.dataOff = db.data.file.currSize()
 
 	return nil
 }
 
-func (db *syncHandle) abort() error {
-	defer db.internal.reset()
-	if db.syncComplete {
+func (db *_SyncHandle) abort() error {
+	defer db.reset()
+	if db.syncInfo.syncComplete {
 		return nil
 	}
 	// rollback blocks.
-	db.data.truncate(db.internal.dataOff)
-	db.index.truncate(db.internal.blockOff)
-	db.timeWindow.truncate(db.internal.winOff)
-	atomic.StoreInt32(&db.blockIdx, db.internal.startBlockIdx)
-	db.decount(uint64(db.internal.count))
+	db.data.file.truncate(db.dataOff)
+	db.index.truncate(db.blockOff)
+	db.internal.timeWindow.file.truncate(db.winOff)
+	atomic.StoreInt32(&db.internal.dbInfo.blockIdx, db.syncInfo.startBlockIdx)
+	db.decount(uint64(db.syncInfo.count))
 
 	if err := db.dataWriter.rollback(); err != nil {
 		return err
@@ -148,7 +147,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 		}()
 		for {
 			select {
-			case <-db.closeC:
+			case <-db.internal.closeC:
 				return
 			case <-syncTicker.C:
 				if err := db.Sync(); err != nil {
@@ -166,7 +165,7 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 			select {
 			case <-expirerTicker.C:
 				db.expireEntries()
-			case <-db.closeC:
+			case <-db.internal.closeC:
 				expirerTicker.Stop()
 				return
 			}
@@ -179,23 +178,23 @@ func (db *DB) sync() error {
 	if err := db.writeHeader(); err != nil {
 		return err
 	}
-	if err := db.timeWindow.Sync(); err != nil {
+	if err := db.internal.timeWindow.file.Sync(); err != nil {
 		return err
 	}
 	if err := db.index.Sync(); err != nil {
 		return err
 	}
-	if err := db.data.Sync(); err != nil {
+	if err := db.data.file.Sync(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (db *syncHandle) sync(recovery bool) error {
-	if db.internal.upperSeq == 0 {
+func (db *_SyncHandle) sync(recovery bool) error {
+	if db.syncInfo.upperSeq == 0 {
 		return nil
 	}
-	db.syncComplete = false
+	db.syncInfo.syncComplete = false
 	defer db.abort()
 
 	if _, err := db.dataWriter.write(); err != nil {
@@ -203,7 +202,7 @@ func (db *syncHandle) sync(recovery bool) error {
 		return err
 	}
 
-	nBlocks := int32((db.internal.upperSeq - 1) / entriesPerIndexBlock)
+	nBlocks := int32((db.syncInfo.upperSeq - 1) / entriesPerIndexBlock)
 	if nBlocks > db.blocks() {
 		if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
 			logger.Error().Err(err).Str("context", "db.extendBlocks")
@@ -222,54 +221,54 @@ func (db *syncHandle) sync(recovery bool) error {
 	if err := db.DB.sync(); err != nil {
 		return err
 	}
-	db.incount(uint64(db.internal.count))
+	db.incount(uint64(db.syncInfo.count))
 	if recovery {
-		db.meter.Recovers.Inc(db.internal.count)
+		db.internal.meter.Recovers.Inc(db.syncInfo.count)
 	}
-	db.meter.Syncs.Inc(db.internal.count)
-	db.meter.InMsgs.Inc(db.internal.count)
-	db.meter.InBytes.Inc(db.internal.inBytes)
-	db.syncComplete = true
+	db.internal.meter.Syncs.Inc(db.syncInfo.count)
+	db.internal.meter.InMsgs.Inc(db.syncInfo.count)
+	db.internal.meter.InBytes.Inc(db.syncInfo.inBytes)
+	db.syncInfo.syncComplete = true
 	return nil
 }
 
 // Sync syncs entries into DB. Sync happens synchronously.
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
-func (db *syncHandle) Sync() error {
+func (db *_SyncHandle) Sync() error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	var err1 error
-	baseSeq := db.internal.lastSyncSeq
-	err := db.timeWindow.foreachTimeWindow(func(timeID int64, wEntries windowEntries) (bool, error) {
-		winEntries := make(map[uint64]windowEntries)
+	baseSeq := db.syncInfo.lastSyncSeq
+	err := db.internal.timeWindow.foreachTimeWindow(func(timeID int64, wEntries _WindowEntries) (bool, error) {
+		winEntries := make(map[uint64]_WindowEntries)
 		for _, we := range wEntries {
 			if we.seq() == 0 {
-				db.entriesInvalid++
+				db.syncInfo.entriesInvalid++
 				continue
 			}
 			if we.seq() < baseSeq {
 				baseSeq = we.seq()
 			}
-			if we.seq() > db.internal.upperSeq {
-				db.internal.upperSeq = we.seq()
+			if we.seq() > db.syncInfo.upperSeq {
+				db.syncInfo.upperSeq = we.seq()
 			}
 			blockID := startBlockIndex(we.seq())
-			mseq := db.cacheID ^ uint64(we.seq())
-			memdata, err := db.blockCache.Get(uint64(blockID), mseq)
+			mseq := db.internal.dbInfo.cacheID ^ uint64(we.seq())
+			memdata, err := db.internal.blockCache.Get(uint64(blockID), mseq)
 			if err != nil || memdata == nil {
-				db.entriesInvalid++
+				db.syncInfo.entriesInvalid++
 				logger.Error().Err(err).Str("context", "mem.Get")
 				err1 = err
 				continue
 			}
-			var e entry
+			var e _Entry
 			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
-				db.entriesInvalid++
+				db.syncInfo.entriesInvalid++
 				err1 = err
 				continue
 			}
-			s := slot{
+			s := _Slot{
 				seq:       e.seq,
 				topicSize: e.topicSize,
 				valueSize: e.valueSize,
@@ -279,27 +278,27 @@ func (db *syncHandle) Sync() error {
 			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
 				return true, err
 			}
-			if exists, err := db.blockWriter.append(s, db.startBlockIdx); exists || err != nil {
+			if exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx); exists || err != nil {
 				if err != nil {
 					return true, err
 				}
-				db.freeList.free(s.seq, s.msgOffset, s.mSize())
-				db.entriesInvalid++
+				db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
+				db.syncInfo.entriesInvalid++
 				continue
 			}
 
 			if _, ok := winEntries[e.topicHash]; ok {
 				winEntries[e.topicHash] = append(winEntries[e.topicHash], we)
 			} else {
-				winEntries[e.topicHash] = windowEntries{we}
+				winEntries[e.topicHash] = _WindowEntries{we}
 			}
 
-			db.filter.Append(we.seq())
-			db.internal.count++
-			db.internal.inBytes += int64(e.valueSize)
+			db.internal.filter.Append(we.seq())
+			db.syncInfo.count++
+			db.syncInfo.inBytes += int64(e.valueSize)
 		}
 		for h := range winEntries {
-			topicOff, ok := db.trie.getOffset(h)
+			topicOff, ok := db.internal.trie.getOffset(h)
 			if !ok {
 				return true, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
 			}
@@ -307,12 +306,12 @@ func (db *syncHandle) Sync() error {
 			if err != nil {
 				return true, err
 			}
-			if ok := db.trie.setOffset(topic{hash: h, offset: wOff}); !ok {
+			if ok := db.internal.trie.setOffset(_Topic{hash: h, offset: wOff}); !ok {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
 		}
 		blockID := startBlockIndex(baseSeq)
-		db.blockCache.Free(uint64(blockID), db.cacheID^baseSeq)
+		db.internal.blockCache.Free(uint64(blockID), db.internal.dbInfo.cacheID^baseSeq)
 		if err1 != nil {
 			return true, err1
 		}
@@ -320,8 +319,8 @@ func (db *syncHandle) Sync() error {
 		if err := db.sync(false); err != nil {
 			return true, err
 		}
-		if db.syncComplete {
-			if err := db.wal.SignalLogApplied(timeID); err != nil {
+		if db.syncInfo.syncComplete {
+			if err := db.internal.wal.SignalLogApplied(timeID); err != nil {
 				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
 				return true, err
 			}
@@ -331,7 +330,7 @@ func (db *syncHandle) Sync() error {
 	})
 	if err != nil || err1 != nil {
 		fmt.Println("db.Sync: error ", err, err1)
-		db.syncComplete = false
+		db.syncInfo.syncComplete = false
 		db.abort()
 		// run db recovery if an error occur with the db sync.
 		if err := db.startRecovery(); err != nil {
@@ -346,19 +345,19 @@ func (db *syncHandle) Sync() error {
 // expireEntries run expirer to delete entries from db if ttl was set on entries and that has expired.
 func (db *DB) expireEntries() error {
 	// sync happens synchronously.
-	db.syncLockC <- struct{}{}
+	db.internal.syncLockC <- struct{}{}
 	defer func() {
-		<-db.syncLockC
+		<-db.internal.syncLockC
 	}()
-	expiredEntries := db.timeWindow.getExpiredEntries(db.opts.defaultQueryLimit)
+	expiredEntries := db.internal.timeWindow.expiryWindowBucket.getExpiredEntries(db.opts.queryOptions.defaultQueryLimit)
 	for _, expiredEntry := range expiredEntries {
-		we := expiredEntry.(winEntry)
+		we := expiredEntry.(_WinEntry)
 		/// Test filter block if message hash presence.
-		if !db.filter.Test(we.seq()) {
+		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
 		off := blockOffset(startBlockIndex(we.seq()))
-		b := blockHandle{file: db.index, offset: off}
+		b := _BlockHandle{file: db.index, offset: off}
 		if err := b.read(); err != nil {
 			if err == io.EOF {
 				return nil
@@ -367,7 +366,7 @@ func (db *DB) expireEntries() error {
 		}
 		entryIdx := -1
 		for i := 0; i < entriesPerIndexBlock; i++ {
-			e := b.entries[i]
+			e := b.block.entries[i]
 			if e.seq == we.seq() { //record exist in db.
 				entryIdx = i
 				break
@@ -376,8 +375,8 @@ func (db *DB) expireEntries() error {
 		if entryIdx == -1 {
 			return nil
 		}
-		e := b.entries[entryIdx]
-		db.freeList.free(e.seq, e.msgOffset, e.mSize())
+		e := b.block.entries[entryIdx]
+		db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
 	}
 

@@ -25,13 +25,13 @@ type IOFile struct {
 	*os.File
 }
 
-type iofs struct{}
+type _IOFs struct{}
 
 // FileIO is a file system backed by the io package.
-var FileIO = &iofs{}
+var FileIO = &_IOFs{}
 
 // Open opens file is exist or create new file.
-func (fs *iofs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
+func (fs *_IOFs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f, err := os.OpenFile(name, flag, perm)
 	if err != nil {
 		return nil, err
@@ -41,17 +41,17 @@ func (fs *iofs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, 
 }
 
 // CreateLockFile to create lock file.
-func (fs *iofs) CreateLockFile(name string) (LockFile, error) {
+func (fs *_IOFs) CreateLockFile(name string) (LockFile, error) {
 	return newLockFile(name)
 }
 
 // State provides state and size of the file.
-func (fs *iofs) Stat(name string) (os.FileInfo, error) {
+func (fs *_IOFs) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
 // Remove removes the file.
-func (fs *iofs) Remove(name string) error {
+func (fs *_IOFs) Remove(name string) error {
 	return os.Remove(name)
 }
 

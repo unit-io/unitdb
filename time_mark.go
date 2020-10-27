@@ -6,85 +6,85 @@ import (
 )
 
 type (
-	timeRecord struct {
+	_TimeRecord struct {
 		refs      int
 		lastUnref int64
 	}
 
-	timeMark struct {
+	_TimeMark struct {
 		sync.RWMutex
-		timeRecord
-		records         map[int64]timeRecord // map of timeID pending commit.
-		releasedRecords map[int64]timeRecord // map of timeID commit applied.
+		timeRecord      _TimeRecord
+		records         map[int64]_TimeRecord // map of timeID pending commit.
+		releasedRecords map[int64]_TimeRecord // map of timeID commit applied.
 	}
 )
 
-func newTimeMark() timeMark {
-	return timeMark{timeRecord: timeRecord{lastUnref: time.Now().UTC().UnixNano()}, records: make(map[int64]timeRecord), releasedRecords: make(map[int64]timeRecord)}
+func newTimeMark() _TimeMark {
+	return _TimeMark{timeRecord: _TimeRecord{lastUnref: time.Now().UTC().UnixNano()}, records: make(map[int64]_TimeRecord), releasedRecords: make(map[int64]_TimeRecord)}
 }
 
-func (r timeRecord) isExpired(expDur time.Duration) bool {
+func (r _TimeRecord) isExpired(expDur time.Duration) bool {
 	if r.lastUnref > 0 && r.lastUnref+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
 		return true
 	}
 	return false
 }
 
-func (r timeRecord) isReleased(lastUnref int64) bool {
+func (r _TimeRecord) isReleased(lastUnref int64) bool {
 	if r.lastUnref > 0 && r.lastUnref < lastUnref {
 		return true
 	}
 	return false
 }
 
-func (tm *timeMark) newID() int64 {
+func (tm *_TimeMark) newID() int64 {
 	tm.Lock()
 	defer tm.Unlock()
 	timeID := time.Now().UTC().UnixNano()
-	if tm, ok := tm.records[timeID]; ok {
-		tm.refs++
+	if r, ok := tm.records[timeID]; ok {
+		r.refs++
 		return timeID
 	}
-	tm.records[timeID] = timeRecord{refs: 1}
+	tm.records[timeID] = _TimeRecord{refs: 1}
 	return timeID
 }
 
-func (tm *timeMark) release(timeID int64) {
+func (tm *_TimeMark) release(timeID int64) {
 	tm.Lock()
 	defer tm.Unlock()
 
-	timeMark, ok := tm.records[timeID]
+	r, ok := tm.records[timeID]
 	if !ok {
 		return
 	}
-	timeMark.refs--
-	if timeMark.refs > 0 {
-		tm.records[timeID] = timeMark
+	r.refs--
+	if r.refs > 0 {
+		tm.records[timeID] = r
 	} else {
 		delete(tm.records, timeID)
-		timeMark.lastUnref = tm.timeRecord.lastUnref
-		tm.releasedRecords[timeID] = timeMark
+		r.lastUnref = tm.timeRecord.lastUnref
+		tm.releasedRecords[timeID] = r
 	}
 }
 
-func (tm *timeMark) isReleased(timeID int64) bool {
-	if tm, ok := tm.releasedRecords[timeID]; ok {
-		if tm.refs == -1 {
+func (tm *_TimeMark) isReleased(timeID int64) bool {
+	if r, ok := tm.releasedRecords[timeID]; ok {
+		if r.refs == -1 {
 			// timeID is aborted
 			return false
 		}
-		if tm.isReleased(tm.lastUnref) {
+		if r.isReleased(tm.timeRecord.lastUnref) {
 			return true
 		}
 	}
 	return false
 }
 
-func (tm *timeMark) isAborted(timeID int64) bool {
+func (tm *_TimeMark) isAborted(timeID int64) bool {
 	tm.RLock()
 	defer tm.RUnlock()
-	if tm, ok := tm.releasedRecords[timeID]; ok {
-		if tm.refs == -1 {
+	if r, ok := tm.releasedRecords[timeID]; ok {
+		if r.refs == -1 {
 			// timeID is aborted
 			return true
 		}
@@ -92,18 +92,18 @@ func (tm *timeMark) isAborted(timeID int64) bool {
 	return false
 }
 
-func (tm *timeMark) abort(timeID int64) {
+func (tm *_TimeMark) abort(timeID int64) {
 	tm.Lock()
 	defer tm.Unlock()
 
 	if _, ok := tm.records[timeID]; ok {
 		delete(tm.records, timeID)
 	}
-	timeRecord := timeRecord{refs: -1, lastUnref: tm.timeRecord.lastUnref}
-	tm.releasedRecords[timeID] = timeRecord
+	r := _TimeRecord{refs: -1, lastUnref: tm.timeRecord.lastUnref}
+	tm.releasedRecords[timeID] = r
 }
 
-func (tm *timeMark) startReleaser(dur time.Duration) {
+func (tm *_TimeMark) startReleaser(dur time.Duration) {
 	tm.Lock()
 	defer tm.Unlock()
 

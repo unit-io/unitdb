@@ -35,7 +35,7 @@ func GetOrRegisterCounter(name string, r Metrics) Counter {
 
 // NewCounter constructs a new StandardCounter.
 func NewCounter() Counter {
-	return &counter{0}
+	return &_Counter{0}
 }
 
 // CounterSnapshot is a read-only copy of another Counter.
@@ -64,31 +64,31 @@ func (c CounterSnapshot) Snapshot() Counter { return c }
 
 // StandardCounter is the standard implementation of a Counter and uses the
 // sync/atomic package to manage a single int64 value.
-type counter struct {
+type _Counter struct {
 	count int64
 }
 
 // Clear sets the counter to zero.
-func (c *counter) Reset() {
+func (c *_Counter) Reset() {
 	atomic.StoreInt64(&c.count, 0)
 }
 
 // Count returns the current count.
-func (c *counter) Count() int64 {
+func (c *_Counter) Count() int64 {
 	return atomic.LoadInt64(&c.count)
 }
 
 // Dec decrements the counter by the given amount.
-func (c *counter) Dec(i int64) {
+func (c *_Counter) Dec(i int64) {
 	atomic.AddInt64(&c.count, -i)
 }
 
 // Inc increments the counter by the given amount.
-func (c *counter) Inc(i int64) {
+func (c *_Counter) Inc(i int64) {
 	atomic.AddInt64(&c.count, i)
 }
 
 // Snapshot returns a read-only copy of the counter.
-func (c *counter) Snapshot() Counter {
+func (c *_Counter) Snapshot() Counter {
 	return CounterSnapshot(c.Count())
 }

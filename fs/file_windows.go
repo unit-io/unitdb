@@ -34,13 +34,13 @@ const (
 	lockfileExclusiveLock = 3
 )
 
-type windowsFileLock struct {
+type _WindowsFileLock struct {
 	fd   syscall.Handle
 	name string
 }
 
 // Unlock removes the lock from file.
-func (fl *windowsFileLock) Unlock() error {
+func (fl *_WindowsFileLock) Unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
@@ -80,5 +80,5 @@ func newLockFile(name string) (LockFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &windowsFileLock{fd, name}, nil
+	return &_WindowsFileLock{fd, name}, nil
 }

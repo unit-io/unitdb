@@ -28,7 +28,7 @@ const (
 )
 
 type (
-	entry struct {
+	_Entry struct {
 		seq       uint64
 		topicSize uint16
 		valueSize uint32
@@ -40,7 +40,7 @@ type (
 	}
 	// Entry entry is a message entry structure.
 	Entry struct {
-		entry
+		entry      _Entry
 		ID         []byte // The ID of the message.
 		Topic      []byte // The topic of the message.
 		Payload    []byte // The payload of the message.
@@ -95,19 +95,19 @@ func (e *Entry) WithEncryption() *Entry {
 }
 
 func (e *Entry) reset() {
-	e.seq = 0
-	e.topicSize = 0
-	e.cache = nil
+	e.entry.seq = 0
+	e.entry.topicSize = 0
+	e.entry.cache = nil
 	e.ID = nil
 	e.Payload = nil
 }
 
-func (e entry) ExpiresAt() uint32 {
+func (e _Entry) ExpiresAt() uint32 {
 	return e.expiresAt
 }
 
 // MarshalBinary serialized entry into binary data.
-func (e entry) MarshalBinary() ([]byte, error) {
+func (e _Entry) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, entrySize)
 	data := buf
 	binary.LittleEndian.PutUint64(buf[:8], e.seq)
@@ -119,7 +119,7 @@ func (e entry) MarshalBinary() ([]byte, error) {
 }
 
 // MarshalBinary de-serialized entry from binary data.
-func (e *entry) UnmarshalBinary(data []byte) error {
+func (e *_Entry) UnmarshalBinary(data []byte) error {
 	e.seq = binary.LittleEndian.Uint64(data[:8])
 	e.topicSize = binary.LittleEndian.Uint16(data[8:10])
 	e.valueSize = binary.LittleEndian.Uint32(data[10:14])

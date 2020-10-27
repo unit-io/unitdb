@@ -22,15 +22,15 @@ import (
 	"time"
 )
 
-type memfs struct {
+type _MemFs struct {
 	files map[string]*MemFile
 }
 
 // Mem is a file system backed by memory.
-var Mem = &memfs{files: map[string]*MemFile{}}
+var Mem = &_MemFs{files: map[string]*MemFile{}}
 
 // Open opens table if it is exist or create new memtable.
-func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
+func (fs *_MemFs) OpenFile(name string, flag int, perm os.FileMode) (FileManager, error) {
 	f := fs.files[name]
 	if f == nil {
 		f = &MemFile{}
@@ -44,7 +44,7 @@ func (fs *memfs) OpenFile(name string, flag int, perm os.FileMode) (FileManager,
 }
 
 // State provides state and size of file.
-func (fs *memfs) Stat(name string) (os.FileInfo, error) {
+func (fs *_MemFs) Stat(name string) (os.FileInfo, error) {
 	if f, ok := fs.files[name]; ok {
 		return f, nil
 	}
@@ -52,7 +52,7 @@ func (fs *memfs) Stat(name string) (os.FileInfo, error) {
 }
 
 // Remove removes the file.
-func (fs *memfs) Remove(name string) error {
+func (fs *_MemFs) Remove(name string) error {
 	if _, ok := fs.files[name]; ok {
 		delete(fs.files, name)
 		return nil

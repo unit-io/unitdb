@@ -25,27 +25,27 @@ import (
 )
 
 type (
-	segment struct {
+	_Segment struct {
 		offset int64
 		size   uint32
 	}
-	file struct {
+	_File struct {
 		fs.FileManager
-		segments
+		segments   _Segments
 		size       int64
 		targetSize int64
 	}
 )
 
-type segments [3]segment
+type _Segments [3]_Segment
 
-func openFile(name string, targetSize int64) (file, error) {
+func openFile(name string, targetSize int64) (_File, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	fs := fs.FileIO
 
 	fi, err := fs.OpenFile(name, fileFlag, fileMode)
-	f := file{}
+	f := _File{}
 	if err != nil {
 		return f, err
 	}
@@ -61,18 +61,18 @@ func openFile(name string, targetSize int64) (file, error) {
 	return f, err
 }
 
-func newSegments() segments {
-	segments := segments{}
-	segments[0] = segment{offset: int64(headerSize), size: 0}
-	segments[1] = segment{offset: int64(headerSize), size: 0}
+func newSegments() _Segments {
+	segments := _Segments{}
+	segments[0] = _Segment{offset: int64(headerSize), size: 0}
+	segments[1] = _Segment{offset: int64(headerSize), size: 0}
 	return segments
 }
 
-func (sg *segments) currSize() uint32 {
+func (sg *_Segments) currSize() uint32 {
 	return sg[1].size
 }
 
-func (sg *segments) recoveryOffset(offset int64) int64 {
+func (sg *_Segments) recoveryOffset(offset int64) int64 {
 	if offset == sg[0].offset {
 		offset += int64(sg[0].size)
 	}
@@ -85,7 +85,7 @@ func (sg *segments) recoveryOffset(offset int64) int64 {
 	return offset
 }
 
-func (sg *segments) freeSize(offset int64) uint32 {
+func (sg *_Segments) freeSize(offset int64) uint32 {
 	if offset == sg[0].offset {
 		return sg[0].size
 	}
@@ -98,14 +98,14 @@ func (sg *segments) freeSize(offset int64) uint32 {
 	return 0
 }
 
-func (sg *segments) allocate(size uint32) int64 {
+func (sg *_Segments) allocate(size uint32) int64 {
 	off := sg[1].offset
 	sg[1].size -= size
 	sg[1].offset += int64(size)
 	return off
 }
 
-func (sg *segments) free(offset int64, size uint32) (ok bool) {
+func (sg *_Segments) free(offset int64, size uint32) (ok bool) {
 	if sg[0].offset+int64(sg[0].size) == offset {
 		sg[0].size += size
 		return true
@@ -117,7 +117,7 @@ func (sg *segments) free(offset int64, size uint32) (ok bool) {
 	return false
 }
 
-func (sg *segments) swap(targetSize int64) error {
+func (sg *_Segments) swap(targetSize int64) error {
 	if sg[1].size != 0 && sg[1].offset+int64(sg[1].size) == sg[2].offset {
 		sg[1].size += sg[2].size
 		sg[2].size = 0
@@ -133,7 +133,7 @@ func (sg *segments) swap(targetSize int64) error {
 	return nil
 }
 
-func (f *file) truncate(size int64) error {
+func (f *_File) truncate(size int64) error {
 	if err := f.Truncate(size); err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (f *file) truncate(size int64) error {
 	return nil
 }
 
-func (f *file) reset() error {
+func (f *_File) reset() error {
 	f.size = 0
 	if err := f.truncate(0); err != nil {
 		return err
@@ -152,7 +152,7 @@ func (f *file) reset() error {
 	return nil
 }
 
-func (f *file) allocate(size uint32) (int64, error) {
+func (f *_File) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
@@ -170,11 +170,11 @@ func (f *file) allocate(size uint32) (int64, error) {
 	return off, nil
 }
 
-func (f *file) readAt(buf []byte, off int64) (int, error) {
+func (f *_File) readAt(buf []byte, off int64) (int, error) {
 	return f.ReadAt(buf, off)
 }
 
-func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
+func (f *_File) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	buf, err := m.MarshalBinary()
 	if err != nil {
 		return err
@@ -183,7 +183,7 @@ func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	return err
 }
 
-func (f *file) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
+func (f *_File) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
 	buf := make([]byte, size)
 	if _, err := f.ReadAt(buf, off); err != nil {
 		return err
@@ -191,6 +191,6 @@ func (f *file) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, of
 	return m.UnmarshalBinary(buf)
 }
 
-func (f *file) Size() int64 {
+func (f *_File) Size() int64 {
 	return f.size
 }

@@ -26,19 +26,19 @@ const (
 	nul = 0x0
 )
 
-type topic struct {
+type _Topic struct {
 	hash   uint64
 	offset int64
 }
 
-type topics []topic
+type _Topics []_Topic
 
-func newTopic(hash uint64, off int64) topic {
-	return topic{hash: hash, offset: off}
+func newTopic(hash uint64, off int64) _Topic {
+	return _Topic{hash: hash, offset: off}
 }
 
 // addUnique adds topic to the set.
-func (top *topics) addUnique(value topic) (added bool) {
+func (top *_Topics) addUnique(value _Topic) (added bool) {
 	for i, v := range *top {
 		if v.hash == value.hash {
 			(*top)[i].offset = value.offset
@@ -50,20 +50,20 @@ func (top *topics) addUnique(value topic) (added bool) {
 	return
 }
 
-type part struct {
+type _Part struct {
 	hash      uint32
 	wildchars uint8
 }
 
-type node struct {
-	part     part
+type _Node struct {
+	part     _Part
 	depth    uint8
-	parent   *node
-	children map[part]*node
-	topics   topics
+	parent   *_Node
+	children map[_Part]*_Node
+	topics   _Topics
 }
 
-func (n *node) orphan() {
+func (n *_Node) orphan() {
 	if n.parent == nil {
 		return
 	}
@@ -74,49 +74,49 @@ func (n *node) orphan() {
 	}
 }
 
-// topicTrie represents an efficient collection of Trie with lookup capability.
-type topicTrie struct {
-	summary map[uint64]*node // summary is map of topichash to node of tree.
-	root    *node            // The root node of the tree.
+// _topicTrie represents an efficient collection of Trie with lookup capability.
+type _TopicTrie struct {
+	summary map[uint64]*_Node // summary is map of topichash to node of tree.
+	root    *_Node            // The root node of the tree.
 }
 
 // newTopicTrie creates a new Trie.
-func newTopicTrie() *topicTrie {
-	return &topicTrie{
-		summary: make(map[uint64]*node),
-		root: &node{
-			children: make(map[part]*node),
+func newTopicTrie() *_TopicTrie {
+	return &_TopicTrie{
+		summary: make(map[uint64]*_Node),
+		root: &_Node{
+			children: make(map[_Part]*_Node),
 		},
 	}
 }
 
-// trie trie data structure to store topic parts
-type trie struct {
+// _Trie trie data structure to store topic parts
+type _Trie struct {
 	sync.RWMutex
-	mutex
-	topicTrie *topicTrie
+	mutex     _Mutex
+	topicTrie *_TopicTrie
 }
 
 // newTrie new trie creates a Trie with an initialized Trie.
 // Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
-func newTrie() *trie {
-	return &trie{
+func newTrie() *_Trie {
+	return &_Trie{
 		mutex:     newMutex(),
 		topicTrie: newTopicTrie(),
 	}
 }
 
 // Count returns the number of topics in the Trie.
-func (t *trie) Count() int {
+func (t *_Trie) Count() int {
 	t.RLock()
 	defer t.RUnlock()
 	return len(t.topicTrie.summary)
 }
 
 // add adds a topic to trie.
-func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) {
+func (t *_Trie) add(topic _Topic, parts []message.Part, depth uint8) (added bool) {
 	// Get mutex
-	mu := t.getMutex(topic.hash)
+	mu := t.mutex.getMutex(topic.hash)
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := t.topicTrie.summary[topic.hash]; ok {
@@ -124,7 +124,7 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 	}
 	curr := t.topicTrie.root
 	for _, p := range parts {
-		newPart := part{
+		newPart := _Part{
 			hash:      p.Hash,
 			wildchars: p.Wildchars,
 		}
@@ -132,10 +132,10 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 		child, ok := curr.children[newPart]
 		t.RUnlock()
 		if !ok {
-			child = &node{
+			child = &_Node{
 				part:     newPart,
 				parent:   curr,
-				children: make(map[part]*node),
+				children: make(map[_Part]*_Node),
 			}
 			t.Lock()
 			curr.children[newPart] = child
@@ -153,14 +153,14 @@ func (t *trie) add(topic topic, parts []message.Part, depth uint8) (added bool) 
 }
 
 // lookup returns window entry set for given topic.
-func (t *trie) lookup(query []message.Part, depth, topicType uint8) (tops topics) {
+func (t *_Trie) lookup(query []message.Part, depth, topicType uint8) (tops _Topics) {
 	t.RLock()
 	defer t.RUnlock()
 	t.ilookup(query, depth, topicType, &tops, t.topicTrie.root)
 	return
 }
 
-func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topics, currNode *node) {
+func (t *_Trie) ilookup(query []message.Part, depth, topicType uint8, tops *_Topics, currNode *_Node) {
 	// Add topics from the current branch.
 	if currNode.depth == depth || (topicType == message.TopicStatic && currNode.part.hash == message.Wildcard) {
 		for _, topic := range currNode.topics {
@@ -187,7 +187,7 @@ func (t *trie) ilookup(query []message.Part, depth, topicType uint8, tops *topic
 	}
 }
 
-func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
+func (t *_Trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	t.RLock()
 	defer t.RUnlock()
 	if curr, ok := t.topicTrie.summary[topicHash]; ok {
@@ -200,11 +200,11 @@ func (t *trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	return off, ok
 }
 
-func (t *trie) setOffset(top topic) (ok bool) {
+func (t *_Trie) setOffset(topic _Topic) (ok bool) {
 	t.Lock()
 	defer t.Unlock()
-	if curr, ok := t.topicTrie.summary[top.hash]; ok {
-		curr.topics.addUnique(top)
+	if curr, ok := t.topicTrie.summary[topic.hash]; ok {
+		curr.topics.addUnique(topic)
 		return ok
 	}
 	return false

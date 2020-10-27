@@ -48,20 +48,20 @@ const (
 var timerPool sync.Pool
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
-type blockCache []*block
+type _BlockCache []*_Block
 
-type block struct {
-	data         dataTable
+type _Block struct {
+	data         _DataTable
 	freeOffset   int64            // blockcache keep lowest offset that can be free.
 	m            map[uint64]int64 // map[key]offset
 	sync.RWMutex                  // Read Write mutex, guards access to internal map.
 }
 
 // newBlockCache creates a new concurrent block cache.
-func newBlockCache(nShards int) blockCache {
-	m := make(blockCache, nShards)
+func newBlockCache(nShards int) _BlockCache {
+	m := make(_BlockCache, nShards)
 	for i := 0; i < nShards; i++ {
-		m[i] = &block{data: dataTable{}, m: make(map[uint64]int64)}
+		m[i] = &_Block{data: _DataTable{}, m: make(map[uint64]int64)}
 	}
 	return m
 }
@@ -88,7 +88,7 @@ type (
 
 		// block cache
 		consistent *hash.Consistent
-		blockCache
+		blockCache _BlockCache
 
 		// Capacity
 		nBlocks int
@@ -201,7 +201,7 @@ func (c *Cache) Close() error {
 }
 
 // getBlock returns block under given blockID.
-func (c *Cache) getBlock(blockID uint64) *block {
+func (c *Cache) getBlock(blockID uint64) *_Block {
 	return c.blockCache[c.consistent.FindBlock(blockID)]
 }
 

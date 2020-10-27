@@ -12,12 +12,12 @@ import (
 // Hash is a signature of a hash function used by the package.
 type Hash func(data []byte) uint32
 
-type elem struct {
+type _Elem struct {
 	key  string
 	hash uint32
 }
 
-type sortable []elem
+type sortable []_Elem
 
 func (k sortable) Len() int      { return len(k) }
 func (k sortable) Swap(i, j int) { k[i], k[j] = k[j], k[i] }
@@ -34,7 +34,7 @@ func (k sortable) Less(i, j int) bool {
 
 // Ring is the definition of the ringhash.
 type Ring struct {
-	keys []elem // Sorted list of keys.
+	keys []_Elem // Sorted list of keys.
 
 	signature string
 	replicas  int
@@ -67,7 +67,7 @@ func (ring *Ring) Len() int {
 func (ring *Ring) Add(keys ...string) {
 	for _, key := range keys {
 		for i := 0; i < ring.replicas; i++ {
-			ring.keys = append(ring.keys, elem{
+			ring.keys = append(ring.keys, _Elem{
 				hash: ring.hashfunc([]byte(strconv.Itoa(i) + key)),
 				key:  key})
 		}

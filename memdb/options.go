@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-type options struct {
+type _Options struct {
 	logFilePath string
 
 	// memdbSize sets Size of memory db.
@@ -43,20 +43,20 @@ type options struct {
 
 // Options it contains configurable options and flags for DB.
 type Options interface {
-	set(*options)
+	set(*_Options)
 }
 
 // fOption wraps a function that modifies options and flags into an
 // implementation of the Options interface.
 type fOption struct {
-	f func(*options)
+	f func(*_Options)
 }
 
-func (fo *fOption) set(o *options) {
+func (fo *fOption) set(o *_Options) {
 	fo.f(o)
 }
 
-func newFuncOption(f func(*options)) *fOption {
+func newFuncOption(f func(*_Options)) *fOption {
 	return &fOption{
 		f: f,
 	}
@@ -64,7 +64,7 @@ func newFuncOption(f func(*options)) *fOption {
 
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		if o.logFilePath == "" {
 			o.logFilePath = "/tmp/unitdb"
 		}
@@ -88,49 +88,49 @@ func WithDefaultOptions() Options {
 
 // WithLogFilePath sets database directory.
 func WithLogFilePath(path string) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.logFilePath = path
 	})
 }
 
 // WithMemdbSize sets Size of memory DB.
 func WithMemdbSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.memdbSize = size
 	})
 }
 
 // WithMaxBlocks sets number of concurrent blocks for the mem store.
 func WithMaxBlocks(nBlocks int) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.maxBlocks = nBlocks
 	})
 }
 
 // WithBufferSize sets Size of buffer to use for pooling.
 func WithBufferSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.bufferSize = size
 	})
 }
 
 // WithLogSize sets Size of write ahead log.
 func WithLogSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.logSize = size
 	})
 }
 
 // WithResetFlag skips recovery on DB open and reset WAL if reset flag is set.
 func WithResetFlag() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.resetFlag = true
 	})
 }
 
 // WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
 func WithTinyBatchWriteInterval(dur time.Duration) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.tinyBatchWriteInterval = dur
 	})
 }

@@ -48,7 +48,7 @@ func GetOrRegisterHistogram(name string, r Metrics, s Sample) Histogram {
 
 // NewHistogram constructs a new StandardHistogram from a Sample.
 func NewHistogram(s Sample) Histogram {
-	return &histogram{sample: s}
+	return &_Histogram{sample: s}
 }
 
 // HistogramSnapshot is a read-only copy of another Histogram.
@@ -114,65 +114,65 @@ func (h *HistogramSnapshot) Snapshot() Histogram { return h }
 
 // StandardHistogram is the standard implementation of a Histogram and uses a
 // Sample to bound its memory use.
-type histogram struct {
+type _Histogram struct {
 	sample Sample
 }
 
 // Reset clears the histogram and its sample.
-func (h *histogram) Reset() { h.sample.Reset() }
+func (h *_Histogram) Reset() { h.sample.Reset() }
 
 // Cumulative returns cumulative time of all sampled events.
-func (h *histogram) Cumulative() time.Duration { return h.sample.Cumulative() }
+func (h *_Histogram) Cumulative() time.Duration { return h.sample.Cumulative() }
 
 // HMean returns event duration harmonic mean.
-func (h *histogram) HMean() time.Duration { return h.sample.HMean() }
+func (h *_Histogram) HMean() time.Duration { return h.sample.HMean() }
 
 // Avg returns average of number of events recorded.
-func (h *histogram) Avg() time.Duration { return h.sample.Avg() }
+func (h *_Histogram) Avg() time.Duration { return h.sample.Avg() }
 
 // P50 returns event duration nth percentiles.
-func (h *histogram) P50() time.Duration { return h.sample.P50() }
+func (h *_Histogram) P50() time.Duration { return h.sample.P50() }
 
 // P75 returns event duration nth percentiles.
-func (h *histogram) P75() time.Duration { return h.sample.P75() }
+func (h *_Histogram) P75() time.Duration { return h.sample.P75() }
 
 // P95 returns event duration nth percentiles.
-func (h *histogram) P95() time.Duration { return h.sample.P95() }
+func (h *_Histogram) P95() time.Duration { return h.sample.P95() }
 
 // P99 returns event duration nth percentiles.
-func (h *histogram) P99() time.Duration { return h.sample.P99() }
+func (h *_Histogram) P99() time.Duration { return h.sample.P99() }
 
 // P999 returns event duration nth percentiles.
-func (h *histogram) P999() time.Duration { return h.sample.P999() }
+func (h *_Histogram) P999() time.Duration { return h.sample.P999() }
 
 // StdDev returns standard deviation.
-func (h *histogram) StdDev() time.Duration { return h.sample.StdDev() }
+func (h *_Histogram) StdDev() time.Duration { return h.sample.StdDev() }
 
 // Long5p returns average of the longest 5% event durations.
-func (h *histogram) Long5p() time.Duration { return h.sample.Long5p() }
+func (h *_Histogram) Long5p() time.Duration { return h.sample.Long5p() }
 
 // Short5p returns average of the shortest 5% event durations.
-func (h *histogram) Short5p() time.Duration { return h.sample.Short5p() }
+func (h *_Histogram) Short5p() time.Duration { return h.sample.Short5p() }
 
 // Min returns lowest event duration.
-func (h *histogram) Min() time.Duration { return h.sample.Min() }
+func (h *_Histogram) Min() time.Duration { return h.sample.Min() }
 
 // Max returns highest event duration.
-func (h *histogram) Max() time.Duration { return h.sample.Max() }
+func (h *_Histogram) Max() time.Duration { return h.sample.Max() }
 
 // Range returns event duration range (Max-Min).
-func (h *histogram) Range() time.Duration { return h.sample.Range() }
+func (h *_Histogram) Range() time.Duration { return h.sample.Range() }
 
 // AddTime adds a time.Duration to metrics
-func (h *histogram) AddTime(t time.Duration) { h.sample.AddTime(t) }
+func (h *_Histogram) AddTime(t time.Duration) { h.sample.AddTime(t) }
 
 // SetWallTime optionally sets an elapsed wall time duration.
 // This affects rate output by using total events counted over time.
 // This is useful for concurrent/parallelized events that overlap
 // in wall time and are writing to a shared metrics instance.
-func (h *histogram) SetWallTime(t time.Duration) { h.sample.SetWallTime(t) }
+func (h *_Histogram) SetWallTime(t time.Duration) { h.sample.SetWallTime(t) }
 
 // Snapshot returns a read-only copy of the histogram.
-func (h *histogram) Snapshot() Histogram {
+func (h *_Histogram) Snapshot() Histogram {
 	return &HistogramSnapshot{sample: h.sample.Snapshot().(*SampleSnapshot)}
 }

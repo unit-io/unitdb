@@ -23,13 +23,13 @@ import (
 	"syscall"
 )
 
-type unixFileLock struct {
+type _UnixFileLock struct {
 	f    *os.File
 	name string
 }
 
 // Unlock removes the lock from file.
-func (fl *unixFileLock) Unlock() error {
+func (fl *_UnixFileLock) Unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
@@ -55,5 +55,5 @@ func newLockFile(name string) (LockFile, error) {
 		f.Close()
 		return nil, err
 	}
-	return &unixFileLock{f, name}, nil
+	return &_UnixFileLock{f, name}, nil
 }

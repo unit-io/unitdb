@@ -25,62 +25,64 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-type expiryWindow struct {
-	windows map[int64]expiryWindowEntries // map[expiryHash]windowEntries.
+type (
+	_ExpiryWindowEntries []timeWindowEntry
 
-	mu sync.RWMutex // Read Write mutex, guards access to internal collection.
-}
+	timeWindowEntry interface {
+		expiryTime() uint32
+	}
 
-type expiryWindows struct {
-	sync.RWMutex
-	expiry     []*expiryWindow
-	consistent *hash.Consistent
-}
+	_ExpiryWindow struct {
+		windows map[int64]_ExpiryWindowEntries // map[expiryHash]windowEntries.
+
+		mu sync.RWMutex // Read Write mutex, guards access to internal collection.
+	}
+
+	_ExpiryWindows struct {
+		sync.RWMutex
+		expiry     []*_ExpiryWindow
+		consistent *hash.Consistent
+	}
+
+	_ExpiryWindowBucket struct {
+		sync.RWMutex
+		expiryWindows *_ExpiryWindows
+
+		expDurationType     time.Duration
+		maxExpDurations     int
+		backgroundKeyExpiry bool
+		earliestExpiryHash  int64
+	}
+)
 
 // newExpiryWindows creates a new concurrent expiryWindows.
-func newExpiryWindows() *expiryWindows {
-	w := &expiryWindows{
-		expiry:     make([]*expiryWindow, nBlocks),
+func newExpiryWindows() *_ExpiryWindows {
+	w := &_ExpiryWindows{
+		expiry:     make([]*_ExpiryWindow, nBlocks),
 		consistent: hash.InitConsistent(nBlocks, nBlocks),
 	}
 
 	for i := 0; i < nBlocks; i++ {
-		w.expiry[i] = &expiryWindow{windows: make(map[int64]expiryWindowEntries)}
+		w.expiry[i] = &_ExpiryWindow{windows: make(map[int64]_ExpiryWindowEntries)}
 	}
 
 	return w
 }
 
-type expiryWindowEntries []timeWindowEntry
-
-type timeWindowEntry interface {
-	expiryTime() uint32
-}
-
 // getWindows returns shard under given key.
-func (w *expiryWindows) getWindows(key uint64) *expiryWindow {
+func (w *_ExpiryWindows) getWindows(key uint64) *_ExpiryWindow {
 	w.RLock()
 	defer w.RUnlock()
 	return w.expiry[w.consistent.FindBlock(key)]
 }
 
-type expiryWindowBucket struct {
-	sync.RWMutex
-	*expiryWindows
-
-	expDurationType     time.Duration
-	maxExpDurations     int
-	backgroundKeyExpiry bool
-	earliestExpiryHash  int64
-}
-
-func newExpiryWindowBucket(bgKeyExp bool, expDurType time.Duration, maxExpDur int) *expiryWindowBucket {
-	ex := &expiryWindowBucket{backgroundKeyExpiry: bgKeyExp, expDurationType: expDurType, maxExpDurations: maxExpDur}
+func newExpiryWindowBucket(bgKeyExp bool, expDurType time.Duration, maxExpDur int) *_ExpiryWindowBucket {
+	ex := &_ExpiryWindowBucket{backgroundKeyExpiry: bgKeyExp, expDurationType: expDurType, maxExpDurations: maxExpDur}
 	ex.expiryWindows = newExpiryWindows()
 	return ex
 }
 
-func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntry {
+func (wb *_ExpiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntry {
 	if !wb.backgroundKeyExpiry {
 		return nil
 	}
@@ -124,7 +126,7 @@ func (wb *expiryWindowBucket) getExpiredEntries(maxResults int) []timeWindowEntr
 }
 
 // addExpiry adds expiry for entries expiring. Entries expires in future are not added to expiry window.
-func (wb *expiryWindowBucket) addExpiry(e timeWindowEntry) error {
+func (wb *_ExpiryWindowBucket) addExpiry(e timeWindowEntry) error {
 	if !wb.backgroundKeyExpiry {
 		return nil
 	}
@@ -132,14 +134,14 @@ func (wb *expiryWindowBucket) addExpiry(e timeWindowEntry) error {
 	atomic.CompareAndSwapInt64(&wb.earliestExpiryHash, 0, timeExpiry)
 
 	// get windows shard.
-	ws := wb.getWindows(uint64(e.expiryTime()))
+	ws := wb.expiryWindows.getWindows(uint64(e.expiryTime()))
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	if expiryWindow, ok := ws.windows[timeExpiry]; ok {
 		expiryWindow = append(expiryWindow, e)
 		ws.windows[timeExpiry] = expiryWindow
 	} else {
-		ws.windows[timeExpiry] = expiryWindowEntries{e}
+		ws.windows[timeExpiry] = _ExpiryWindowEntries{e}
 	}
 
 	return nil

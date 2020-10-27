@@ -55,97 +55,97 @@ func GetOrRegisterTimeSeries(name string, r Metrics) TimeSeries {
 // sample with the same reservoir size and alpha as UNIX load averages.
 // Be sure to call Stop() once the timer is of no use to allow for garbage collection.
 func NewTimeSeries() TimeSeries {
-	return &timeseries{
+	return &_TimeSeries{
 		histogram: NewHistogram(NewSample(&Config{Size: 50})),
 	}
 }
 
-// timeseries is the standard implementation of a timeseries and uses a Histogram
+// _TimeSeries is the standard implementation of a timeseries and uses a Histogram
 // and Meter.
-type timeseries struct {
+type _TimeSeries struct {
 	histogram Histogram
 	mutex     sync.Mutex
 }
 
 // Cumulative returns cumulative time of all sampled events.
-func (t *timeseries) Cumulative() time.Duration {
+func (t *_TimeSeries) Cumulative() time.Duration {
 	return t.histogram.Cumulative()
 }
 
 // HMean returns event duration harmonic mean.
-func (t *timeseries) HMean() time.Duration {
+func (t *_TimeSeries) HMean() time.Duration {
 	return t.histogram.HMean()
 }
 
 // Avg returns the average of number of events recorded.
-func (t *timeseries) Avg() time.Duration {
+func (t *_TimeSeries) Avg() time.Duration {
 	return t.histogram.Avg()
 }
 
 // P50 returns event duration nth percentiles.
-func (t *timeseries) P50() time.Duration {
+func (t *_TimeSeries) P50() time.Duration {
 	return t.histogram.P50()
 }
 
 // P75 returns event duration nth percentiles.
-func (t *timeseries) P75() time.Duration {
+func (t *_TimeSeries) P75() time.Duration {
 	return t.histogram.P75()
 }
 
 // P95 returns event duration nth percentiles.
-func (t *timeseries) P95() time.Duration {
+func (t *_TimeSeries) P95() time.Duration {
 	return t.histogram.P95()
 }
 
 // P99 returns event duration nth percentiles.
-func (t *timeseries) P99() time.Duration {
+func (t *_TimeSeries) P99() time.Duration {
 	return t.histogram.P99()
 }
 
 // P999 returns event duration nth percentiles.
-func (t *timeseries) P999() time.Duration {
+func (t *_TimeSeries) P999() time.Duration {
 	return t.histogram.P999()
 }
 
 // StdDev returns standard deviation.
-func (t *timeseries) StdDev() time.Duration {
+func (t *_TimeSeries) StdDev() time.Duration {
 	return t.histogram.StdDev()
 }
 
 // Long5p returns average of the longest 5% event durations.
-func (t *timeseries) Long5p() time.Duration {
+func (t *_TimeSeries) Long5p() time.Duration {
 	return t.histogram.Long5p()
 }
 
 // Short5p returns average of the shortest 5% event durations.
-func (t *timeseries) Short5p() time.Duration {
+func (t *_TimeSeries) Short5p() time.Duration {
 	return t.histogram.Short5p()
 }
 
 // Min returns lowest event duration.
-func (t *timeseries) Min() time.Duration {
+func (t *_TimeSeries) Min() time.Duration {
 	return t.histogram.Min()
 }
 
 // Max returns highest event duration.
-func (t *timeseries) Max() time.Duration {
+func (t *_TimeSeries) Max() time.Duration {
 	return t.histogram.Max()
 }
 
 // Range returns event duration range (Max-Min).
-func (t *timeseries) Range() time.Duration {
+func (t *_TimeSeries) Range() time.Duration {
 	return t.histogram.Range()
 }
 
 // Record the duration of the execution of the given function.
-func (t *timeseries) Time(f func()) {
+func (t *_TimeSeries) Time(f func()) {
 	ts := time.Now()
 	f()
 	t.AddTime(time.Since(ts))
 }
 
 // AddTime adds a time.Duration to metrics
-func (t *timeseries) AddTime(time time.Duration) {
+func (t *_TimeSeries) AddTime(time time.Duration) {
 	t.histogram.AddTime(time)
 }
 
@@ -153,12 +153,12 @@ func (t *timeseries) AddTime(time time.Duration) {
 // This affects rate output by using total events counted over time.
 // This is useful for concurrent/parallelized events that overlap
 // in wall time and are writing to a shared metrics instance.
-func (t *timeseries) SetWallTime(time time.Duration) {
+func (t *_TimeSeries) SetWallTime(time time.Duration) {
 	t.histogram.SetWallTime(time)
 }
 
 // Snapshot returns a read-only copy of the timer.
-func (t *timeseries) Snapshot() TimeSeries {
+func (t *_TimeSeries) Snapshot() TimeSeries {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 	return &TimeSeriesSnapshot{

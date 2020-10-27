@@ -49,35 +49,35 @@ const (
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	timeID     int64
-	blockCache map[timeID]*block
+	_TimeID     int64
+	_BlockCache map[_TimeID]*_Block
 )
 
 type (
-	// key is an internal key that includes deleted flag for the key.
-	key struct {
+	// _Key is an internal key that includes deleted flag for the key.
+	_Key struct {
 		delFlag uint8 // deleted flag
 		key     uint64
 	}
-	block struct {
+	_Block struct {
 		count        int64
-		data         dataTable
-		records      map[key]int64 // map[key]offset
-		sync.RWMutex               // Read Write mutex, guards access to internal map.
+		data         _DataTable
+		records      map[_Key]int64 // map[key]offset
+		sync.RWMutex                // Read Write mutex, guards access to internal map.
 	}
 )
 
-// db represents mem store.
-type db struct {
+// _DB represents mem store.
+type _DB struct {
 	writeLockC chan struct{}
 
 	// time mark to manage timeIDs
-	*timeMark
+	timeMark *_TimeMark
 
 	// tiny Batch
 	tinyBatchLockC chan struct{}
-	*tinyBatch
-	*batchPool
+	tinyBatch      *_TinyBatch
+	batchPool      *_BatchPool
 
 	// Write ahead log
 	wal *wal.WAL
@@ -90,22 +90,25 @@ type db struct {
 }
 
 func (db *DB) initDb() error {
-	db.internal.writeLockC = make(chan struct{}, 1)
-	db.internal.timeMark = newTimeMark()
-	db.internal.tinyBatchLockC = make(chan struct{}, 1)
-	db.internal.tinyBatch = &tinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
-	db.internal.batchPool = db.newBatchPool(nPoolSize)
+	internal := &_DB{
+		writeLockC:     make(chan struct{}, 1),
+		timeMark:       newTimeMark(),
+		tinyBatchLockC: make(chan struct{}, 1),
+		tinyBatch:      &_TinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})},
+		batchPool:      db.newBatchPool(nPoolSize),
 
-	// Close
-	db.internal.closeC = make(chan struct{})
+		// Close
+		closeC: make(chan struct{}),
+	}
+	db.internal = internal
 
 	go db.tinyBatchLoop(db.opts.tinyBatchWriteInterval)
 
 	return nil
 }
 
-func newBlock() *block {
-	return &block{data: dataTable{}, records: make(map[key]int64)}
+func newBlock() *_Block {
+	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
 }
 
 // blockID gets blockID from Key using consistent hashing.
@@ -114,30 +117,30 @@ func (db *DB) blockID(key uint64) uint16 {
 }
 
 // iKey an internal key includes deleted flag.
-func iKey(delFlag bool, k uint64) key {
+func iKey(delFlag bool, k uint64) _Key {
 	dFlag := uint8(0)
 	if delFlag {
 		dFlag = 1
 	}
-	return key{delFlag: dFlag, key: k}
+	return _Key{delFlag: dFlag, key: k}
 }
 
-func (db *DB) newTinyBatch() *tinyBatch {
-	tinyBatch := &tinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
+func (db *DB) newTinyBatch() *_TinyBatch {
+	tinyBatch := &_TinyBatch{ID: int64(db.internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
 	return tinyBatch
 }
 
-func (db *DB) newBatchPool(maxBatches int) *batchPool {
+func (db *DB) newBatchPool(maxBatches int) *_BatchPool {
 	// There must be at least one batch.
 	if maxBatches < 1 {
 		maxBatches = 1
 	}
 
-	pool := &batchPool{
+	pool := &_BatchPool{
 		db:          db,
 		maxBatches:  maxBatches,
-		writeQueue:  make(chan *tinyBatch, 1),
-		batchQueue:  make(chan *tinyBatch),
+		writeQueue:  make(chan *_TinyBatch, 1),
+		batchQueue:  make(chan *_TinyBatch),
 		stoppedChan: make(chan struct{}),
 	}
 
@@ -174,18 +177,18 @@ func (db *DB) close() error {
 	return err
 }
 
-func (db *DB) set(ikey key, data []byte) (timeID, error) {
+func (db *DB) set(ikey _Key, data []byte) (_TimeID, error) {
 	db.internal.tinyBatchLockC <- struct{}{}
 	defer func() {
 		<-db.internal.tinyBatchLockC
 	}()
 
 	db.mu.Lock()
-	tmID := db.internal.timeID()
-	b, ok := db.blockCache[tmID]
+	timeID := db.internal.tinyBatch.timeID()
+	b, ok := db.blockCache[timeID]
 	if !ok {
 		b = newBlock()
-		db.blockCache[tmID] = b
+		db.blockCache[timeID] = b
 	}
 	db.mu.Unlock()
 	b.Lock()
@@ -193,12 +196,12 @@ func (db *DB) set(ikey key, data []byte) (timeID, error) {
 	dataLen := uint32(len(data) + 8 + 1 + 4) // data len+key len+flag bit+scratch len
 	off, err := b.data.allocate(dataLen)
 	if err != nil {
-		return tmID, err
+		return timeID, err
 	}
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], dataLen)
 	if _, err := b.data.writeAt(scratch[:], off); err != nil {
-		return tmID, err
+		return timeID, err
 	}
 
 	// k with flag bit
@@ -206,28 +209,28 @@ func (db *DB) set(ikey key, data []byte) (timeID, error) {
 	k[0] = ikey.delFlag
 	binary.LittleEndian.PutUint64(k[1:], ikey.key)
 	if _, err := b.data.writeAt(k[:], off+4); err != nil {
-		return tmID, err
+		return timeID, err
 	}
 	b.records[ikey] = off
 	db.internal.tinyBatch.incount()
 	if _, err := b.data.writeAt(data, off+8+1+4); err != nil {
-		return tmID, err
+		return timeID, err
 	}
 	if ikey.delFlag == 0 {
 		b.count++
 	}
 
-	return tmID, nil
+	return timeID, nil
 }
 
 // move moves deleted records to new blockCache if the timeID of deleted key still exist in the mem store.
-func (db *DB) move(tmID timeID) error {
-	block := db.blockCache[tmID]
+func (db *DB) move(timeID _TimeID) error {
+	block := db.blockCache[timeID]
 	block.RLock()
 	defer block.RUnlock()
 
 	// get all deleted keys
-	var dkeys []key
+	var dkeys []_Key
 	for ik := range block.records {
 		if ik.delFlag == 1 {
 			dkeys = append(dkeys, ik)
@@ -249,9 +252,9 @@ func (db *DB) move(tmID timeID) error {
 			if dataLen != 8+1+4+8 {
 				return errBadRequest
 			}
-			tmID := timeID(binary.LittleEndian.Uint64(data[8+1+4 : dataLen]))
+			timeID := _TimeID(binary.LittleEndian.Uint64(data[8+1+4 : dataLen]))
 			db.mu.RLock()
-			_, ok := db.blockCache[tmID]
+			_, ok := db.blockCache[timeID]
 			db.mu.RUnlock()
 			if ok {
 				db.set(ik, data[8+1+4:dataLen])
@@ -262,7 +265,7 @@ func (db *DB) move(tmID timeID) error {
 }
 
 // tinyWrite writes tiny batch to DB WAL.
-func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
+func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	// Backoff to limit excess memroy usage
 	// db.blockCache.Backoff()
 
@@ -300,7 +303,7 @@ func (db *DB) tinyWrite(tinyBatch *tinyBatch) error {
 }
 
 // tinyCommit commits tiny batch to DB.
-func (db *DB) tinyCommit(tinyBatch *tinyBatch) error {
+func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
 	db.internal.closeW.Add(1)
 	defer func() {
 		tinyBatch.abort()
@@ -355,7 +358,7 @@ func (db *DB) startRecover(reset bool) error {
 	}
 
 	m := make(map[uint64][]byte)
-	err = r.Read(func(tmID int64) (ok bool, err error) {
+	err = r.Read(func(timeID int64) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
@@ -394,9 +397,9 @@ func (db *DB) startRecover(reset bool) error {
 	return db.internal.wal.Reset()
 }
 
-func (db *DB) releaseLog(tmID timeID) error {
+func (db *DB) releaseLog(timeID _TimeID) error {
 	// signal log applied for older messages those are acknowledged or timed out.
-	return db.internal.wal.SignalLogApplied(int64(tmID))
+	return db.internal.wal.SignalLogApplied(int64(timeID))
 }
 
 // tinyBatchLoop handles tiny batches.

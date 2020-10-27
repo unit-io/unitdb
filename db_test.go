@@ -48,7 +48,7 @@ func TestSimple(t *testing.T) {
 	}
 	topic := []byte("unit1.test")
 
-	if db.count != 0 {
+	if db.internal.dbInfo.count != 0 {
 		t.Fatal()
 	}
 
@@ -56,7 +56,7 @@ func TestSimple(t *testing.T) {
 		t.Fatal()
 	}
 
-	if db.count != 0 {
+	if db.internal.dbInfo.count != 0 {
 		t.Fatal()
 	}
 
@@ -102,7 +102,7 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	db.tinyCommit(db.tinyBatch)
+	db.tinyCommit(db.batchdb.tinyBatch)
 	verifyMsgsAndClose()
 
 	db, err = Open("test.db", WithMutable())

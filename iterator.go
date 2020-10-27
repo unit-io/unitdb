@@ -34,22 +34,22 @@ type Item struct {
 
 // Query represents a topic to query and optional contract information.
 type (
-	query struct {
+	_Query struct {
 		topicHash uint64
 		seq       uint64
 	}
-	internalQuery struct {
+	_InternalQuery struct {
 		parts      []message.Part // The parts represents a topic which contains a contract and a list of hashes for various parts of the topic.
 		depth      uint8
 		topicType  uint8
 		prefix     uint64 // The prefix is generated from contract and first of the topic.
 		cutoff     int64  // The cutoff is time limit check on message IDs.
-		winEntries []query
+		winEntries []_Query
 
-		opts *queryOptions
+		opts *_QueryOptions
 	}
 	Query struct {
-		internalQuery
+		internal _InternalQuery
 		Topic    []byte // The topic of the message.
 		Contract uint32 // The contract is used as prefix in the message ID.
 		Limit    int    // The maximum number of elements to return.
@@ -99,24 +99,24 @@ func (q *Query) parse() error {
 		return errBadRequest
 	}
 	topic.AddContract(q.Contract)
-	q.parts = topic.Parts
-	q.depth = topic.Depth
-	q.topicType = topic.TopicType
-	q.prefix = message.Prefix(q.parts)
+	q.internal.parts = topic.Parts
+	q.internal.depth = topic.Depth
+	q.internal.topicType = topic.TopicType
+	q.internal.prefix = message.Prefix(q.internal.parts)
 	// In case of last, include it to the query.
 	if from, limit, ok := topic.Last(); ok {
-		q.cutoff = from.Unix()
+		q.internal.cutoff = from.Unix()
 		switch {
 		case (q.Limit == 0 && limit == 0):
-			q.Limit = q.opts.defaultQueryLimit
-		case q.Limit > q.opts.maxQueryLimit || limit > q.opts.maxQueryLimit:
-			q.Limit = q.opts.maxQueryLimit
+			q.Limit = q.internal.opts.defaultQueryLimit
+		case q.Limit > q.internal.opts.maxQueryLimit || limit > q.internal.opts.maxQueryLimit:
+			q.Limit = q.internal.opts.maxQueryLimit
 		case limit > q.Limit:
 			q.Limit = limit
 		}
 	}
 	if q.Limit == 0 {
-		q.Limit = q.opts.defaultQueryLimit
+		q.Limit = q.internal.opts.defaultQueryLimit
 	}
 	return nil
 }
@@ -126,12 +126,12 @@ func (it *ItemIterator) Next() {
 	it.mu.Lock()
 	defer it.mu.Unlock()
 
-	mu := it.db.getMutex(it.query.prefix)
+	mu := it.db.internal.mutex.getMutex(it.query.internal.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
 	it.item = nil
 	if len(it.queue) == 0 {
-		for _, we := range it.query.winEntries[it.next:] {
+		for _, we := range it.query.internal.winEntries[it.next:] {
 			err := func() error {
 				if we.seq == 0 {
 					return nil
@@ -151,14 +151,14 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				msgID := message.ID(id)
-				if !msgID.EvalPrefix(it.query.Contract, it.query.cutoff) {
+				if !msgID.EvalPrefix(it.query.Contract, it.query.internal.cutoff) {
 					it.invalidKeys++
 					return nil
 				}
 
 				// last bit of ID is an encryption flag.
 				if uint8(id[idSize-1]) == 1 {
-					val, err = it.db.mac.Decrypt(nil, val)
+					val, err = it.db.internal.mac.Decrypt(nil, val)
 					if err != nil {
 						logger.Error().Err(err).Str("context", "mac.Decrypt")
 						return err
@@ -171,9 +171,9 @@ func (it *ItemIterator) Next() {
 					return err
 				}
 				it.queue = append(it.queue, &Item{topic: it.query.Topic, value: val, err: err})
-				it.db.meter.Gets.Inc(1)
-				it.db.meter.OutMsgs.Inc(1)
-				it.db.meter.OutBytes.Inc(int64(s.valueSize))
+				it.db.internal.meter.Gets.Inc(1)
+				it.db.internal.meter.OutMsgs.Inc(1)
+				it.db.internal.meter.OutBytes.Inc(int64(s.valueSize))
 				return nil
 			}()
 			if err != nil {
@@ -195,7 +195,7 @@ func (it *ItemIterator) Next() {
 // First is similar to init. It query and loads window entries from trie/timeWindowBucket or summary file if available.
 func (it *ItemIterator) First() {
 	it.db.lookup(it.query)
-	if len(it.query.winEntries) == 0 || it.next >= 1 {
+	if len(it.query.internal.winEntries) == 0 || it.next >= 1 {
 		return
 	}
 	it.Next()

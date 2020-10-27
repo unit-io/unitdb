@@ -23,17 +23,17 @@ import (
 	"github.com/unit-io/unitdb/fs"
 )
 
-type file struct {
+type _File struct {
 	fs.FileManager
 
 	size int64
 }
 
-func newFile(fs fs.FileSystem, name string) (file, error) {
+func newFile(fs fs.FileSystem, name string) (_File, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	fi, err := fs.OpenFile(name, fileFlag, fileMode)
-	f := file{}
+	f := _File{}
 	if err != nil {
 		return f, err
 	}
@@ -46,7 +46,7 @@ func newFile(fs fs.FileSystem, name string) (file, error) {
 	return f, err
 }
 
-func (f *file) truncate(size int64) error {
+func (f *_File) truncate(size int64) error {
 	if err := f.Truncate(size); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func (f *file) truncate(size int64) error {
 	return nil
 }
 
-func (f *file) extend(size uint32) (int64, error) {
+func (f *_File) extend(size uint32) (int64, error) {
 	off := f.size
 	if err := f.Truncate(off + int64(size)); err != nil {
 		return 0, err
@@ -64,7 +64,7 @@ func (f *file) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-func (f *file) write(data []byte) (int, error) {
+func (f *_File) write(data []byte) (int, error) {
 	off := f.size
 	if _, err := f.WriteAt(data, off); err != nil {
 		return 0, err
@@ -73,7 +73,7 @@ func (f *file) write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
+func (f *_File) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	buf, err := m.MarshalBinary()
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (f *file) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	return err
 }
 
-func (f *file) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
+func (f *_File) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
 	buf := make([]byte, size)
 	if _, err := f.ReadAt(buf, off); err != nil {
 		return err
@@ -90,11 +90,11 @@ func (f *file) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, of
 	return m.UnmarshalBinary(buf)
 }
 
-func (f *file) currSize() int64 {
+func (f *_File) currSize() int64 {
 	return f.size
 }
 
-func (f *file) Size() int64 {
+func (f *_File) Size() int64 {
 	stat, _ := f.Stat()
 	return stat.Size()
 }

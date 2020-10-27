@@ -23,8 +23,8 @@ import (
 	"github.com/unit-io/unitdb/message"
 )
 
-// flags holds various DB flags.
-type flags struct {
+// _Flags holds various DB flags.
+type _Flags struct {
 	// immutable set immutable flag on database.
 	immutable bool
 
@@ -35,15 +35,15 @@ type flags struct {
 	backgroundKeyExpiry bool
 }
 
-// batchOptions is used to set options when using batch operation.
-type batchOptions struct {
+// _BatchOptions is used to set options when using batch operation.
+type _BatchOptions struct {
 	contract      uint32
 	encryption    bool
 	writeInterval time.Duration
 }
 
-// queryOptions is used to set options for DB query.
-type queryOptions struct {
+// _QueryOptions is used to set options for DB query.
+type _QueryOptions struct {
 	// defaultQueryLimit limits maximum number of records to fetch if the DB Get or DB Iterator method does not specify a limit.
 	defaultQueryLimit int
 
@@ -51,11 +51,11 @@ type queryOptions struct {
 	maxQueryLimit int
 }
 
-// options holds the optional DB parameters.
-type options struct {
-	flags
-	batchOptions
-	queryOptions
+// _Options holds the optional DB parameters.
+type _Options struct {
+	flags        _Flags
+	batchOptions _BatchOptions
+	queryOptions _QueryOptions
 	// maxSyncDurations sets the amount of time between background fsync() calls.
 	//
 	// Setting the value to 0 disables the automatic background synchronization.
@@ -91,20 +91,20 @@ type options struct {
 
 // Options it contains configurable options and flags for DB.
 type Options interface {
-	set(*options)
+	set(*_Options)
 }
 
 // fOption wraps a function that modifies options and flags into an
 // implementation of the Options interface.
 type fOption struct {
-	f func(*options)
+	f func(*_Options)
 }
 
-func (fo *fOption) set(o *options) {
+func (fo *fOption) set(o *_Options) {
 	fo.f(o)
 }
 
-func newFuncOption(f func(*options)) *fOption {
+func newFuncOption(f func(*_Options)) *fOption {
 	return &fOption{
 		f: f,
 	}
@@ -115,7 +115,7 @@ func newFuncOption(f func(*options)) *fOption {
 //   encryption: False
 //   backgroundKeyExpiry: False
 func WithDefaultFlags() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.flags.immutable = true
 		o.flags.encryption = false
 		o.flags.backgroundKeyExpiry = false
@@ -124,21 +124,21 @@ func WithDefaultFlags() Options {
 
 // WithMutable sets Immutable flag to false.
 func WithMutable() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.flags.immutable = false
 	})
 }
 
 // WithEncryption sets encryption on DB.
 func WithEncryption() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.flags.encryption = true
 	})
 }
 
 // WithBackgroundKeyExpiry sets background key expiry for DB.
 func WithBackgroundKeyExpiry() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.flags.backgroundKeyExpiry = true
 	})
 }
@@ -147,7 +147,7 @@ func WithBackgroundKeyExpiry() Options {
 //   contract: MasterContract
 //   encryption: False
 func WithDefaultBatchOptions() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.batchOptions.contract = message.MasterContract
 		o.batchOptions.encryption = false
 	})
@@ -155,28 +155,28 @@ func WithDefaultBatchOptions() Options {
 
 // WithBatchContract sets contract for batch operation.
 func WithBatchContract(contract uint32) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.batchOptions.contract = contract
 	})
 }
 
 // WithBatchEncryption sets encryption on batch operation.
 func WithBatchEncryption() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.batchOptions.encryption = true
 	})
 }
 
 // WithBatchWriteInterval sets batch write interval to partial write large batch.
 func WithBatchWriteInterval(dur time.Duration) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.batchOptions.writeInterval = dur
 	})
 }
 
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		if o.fileSystem == nil {
 			o.fileSystem = fs.FileIO
 		}
@@ -215,7 +215,7 @@ func WithDefaultOptions() Options {
 
 // WithBackgroundSyncInterval sets the amount of time between background fsync() calls.
 func WithMaxSyncDuration(dur time.Duration, interval int) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.maxSyncDurations = interval
 		o.syncDurationType = dur
 	})
@@ -223,7 +223,7 @@ func WithMaxSyncDuration(dur time.Duration, interval int) Options {
 
 // WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
 func TinyBatchWriteInterval(dur time.Duration) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.tinyBatchWriteInterval = dur
 	})
 }
@@ -231,8 +231,8 @@ func TinyBatchWriteInterval(dur time.Duration) Options {
 // WithDefaultQueryLimit limits maximum number of records to fetch
 // if the DB Get or DB Iterator method does not specify a limit.
 func WithDefaultQueryLimit(limit int) Options {
-	return newFuncOption(func(o *options) {
-		o.defaultQueryLimit = limit
+	return newFuncOption(func(o *_Options) {
+		o.queryOptions.defaultQueryLimit = limit
 	})
 }
 
@@ -240,28 +240,28 @@ func WithDefaultQueryLimit(limit int) Options {
 // if the DB Get or DB Iterator method does not specify
 // a limit or specify a limit larger than MaxQueryResults.
 func WithMaxQueryLimit(limit int) Options {
-	return newFuncOption(func(o *options) {
-		o.maxQueryLimit = limit
+	return newFuncOption(func(o *_Options) {
+		o.queryOptions.maxQueryLimit = limit
 	})
 }
 
 // WithBufferSize sets Size of buffer to use for pooling.
 func WithBufferSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.bufferSize = size
 	})
 }
 
 // WithBlockCacheSize sets Size of blockcache.
 func WithBlockCacheSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.blockCacheSize = size
 	})
 }
 
 // WithLogSize sets Size of write ahead log.
 func WithLogSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.logSize = size
 	})
 }
@@ -269,14 +269,14 @@ func WithLogSize(size int64) Options {
 // WithMinimumFreeBlocksSize sets minimum freeblocks size
 // before free blocks are allocated and reused.
 func WithMinimumFreeBlocksSize(size int64) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.minimumFreeBlocksSize = size
 	})
 }
 
 // WithEncryptionKey sets encryption key to use for data encryption.
 func WithEncryptionKey(key []byte) Options {
-	return newFuncOption(func(o *options) {
+	return newFuncOption(func(o *_Options) {
 		o.encryptionKey = key
 	})
 }

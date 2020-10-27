@@ -20,14 +20,14 @@ import (
 	"errors"
 )
 
-type dataTable struct {
-	timeID timeID
+type _DataTable struct {
+	timeID _TimeID
 	buf    []byte
 	size   int64
 	closed bool
 }
 
-func (t *dataTable) allocate(size uint32) (int64, error) {
+func (t *_DataTable) allocate(size uint32) (int64, error) {
 	if size == 0 {
 		panic("unable to allocate zero bytes")
 	}
@@ -35,7 +35,7 @@ func (t *dataTable) allocate(size uint32) (int64, error) {
 	return off, t.truncate(t.size + int64(size))
 }
 
-func (t *dataTable) reset() error {
+func (t *_DataTable) reset() error {
 	t.closed = true
 	t.size = 0
 	t.buf = nil
@@ -43,11 +43,11 @@ func (t *dataTable) reset() error {
 	return nil
 }
 
-func (t *dataTable) readRaw(off int64, size uint32) ([]byte, error) {
+func (t *_DataTable) readRaw(off int64, size uint32) ([]byte, error) {
 	return t.slice(off, off+int64(size))
 }
 
-func (t *dataTable) close() error {
+func (t *_DataTable) close() error {
 	if t.closed {
 		return errors.New("table closed")
 	}
@@ -55,7 +55,7 @@ func (t *dataTable) close() error {
 	return nil
 }
 
-func (t *dataTable) writeAt(p []byte, off int64) (int, error) {
+func (t *_DataTable) writeAt(p []byte, off int64) (int, error) {
 	if t.closed {
 		return 0, errors.New("table closed")
 	}
@@ -71,7 +71,7 @@ func (t *dataTable) writeAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func (t *dataTable) truncate(size int64) error {
+func (t *_DataTable) truncate(size int64) error {
 	if t.closed {
 		return errors.New("table closed")
 	}
@@ -85,7 +85,7 @@ func (t *dataTable) truncate(size int64) error {
 	return nil
 }
 
-func (t *dataTable) slice(start int64, end int64) ([]byte, error) {
+func (t *_DataTable) slice(start int64, end int64) ([]byte, error) {
 	if t.closed {
 		return nil, errors.New("table closed")
 	}
