@@ -36,6 +36,10 @@ func (b *_TinyBatch) timeID() _TimeID {
 	return _TimeID(atomic.LoadInt64(&b.ID))
 }
 
+func (b *_TinyBatch) setTimeID(timeID _TimeID) {
+	atomic.StoreInt64(&b.ID, int64(timeID))
+}
+
 func (b *_TinyBatch) len() uint32 {
 	return atomic.LoadUint32(&b.entryCount)
 }
