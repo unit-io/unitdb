@@ -17,54 +17,50 @@ func main() {
 	}
 	defer db.Close()
 
-	gets := func() {
-		// Get message
-		if msg, err := db.Get(1); err == nil {
-			log.Printf("%s ", msg)
-		}
-
-		// Get message
-		if msg, err := db.Get(2); err == nil {
-			log.Printf("%s ", msg)
-		}
-
-		// Get message
-		if msg, err := db.Get(3); err == nil {
-			log.Printf("%s ", msg)
+	gets := func(start, end int) {
+		for i := start; i < end; i++ {
+			// Get message
+			if msg, err := db.Get(uint64(i)); err == nil {
+				log.Printf("%s ", msg)
+			}
 		}
 	}
 
 	fmt.Println("main: Print recovered entries on DB open")
-	gets()
+	gets(1, 10)
 
-	sets := func() {
-		msg := []byte("teams.alpha.ch1")
-		db.Set(1, msg)
-
-		msg = []byte("teams.alpha.ch1.*")
-		db.Set(2, msg)
-
-		msg = []byte("teams.alpha...")
-		db.Set(3, msg)
+	sets := func(start, end int) {
+		for i := start; i < end; i++ {
+			val := []byte(fmt.Sprintf("msg.%2d", i))
+			db.Set(uint64(i), val)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	deletes := func() {
-		if err := db.Delete(1); err != nil {
-			fmt.Println("error: ", err)
+	deletes := func(start, end int) {
+		for i := start; i < end; i++ {
+			if err := db.Delete(uint64(i)); err != nil {
+				fmt.Println("error: ", err)
+			}
 		}
-		if err := db.Delete(2); err != nil {
-			fmt.Println("error: ", err)
-		}
-		// if err := db.Delete(3); err != nil {
-		// 	fmt.Println("error: ", err)
-		// }
 	}
-	sets()
+
+	batch := func(start, end int) {
+		err = db.Batch(func(b *memdb.Batch, completed <-chan struct{}) error {
+			for i := start; i < end; i++ {
+				val := []byte(fmt.Sprintf("msg.%2d", i))
+				b.Append(uint64(i), val)
+			}
+			return nil
+		})
+	}
+
+	sets(1, 3)
 	fmt.Println("main: Print entries after set")
-	gets()
-	deletes()
-	sets()
-	deletes()
+	gets(1, 3)
+	deletes(1, 2)
+	batch(4, 10)
+	gets(1, 10)
+	deletes(4, 5)
 	time.Sleep(100 * time.Millisecond)
 }
