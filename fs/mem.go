@@ -128,6 +128,14 @@ func (m *MemFile) Sync() error {
 	return nil
 }
 
+// Copy copies the memtable to a new memtable
+func (m *MemFile) Copy() (int64, error) {
+	if m.closed {
+		return 0, os.ErrClosed
+	}
+	return 0, nil
+}
+
 // Truncate resize the memtable and shrink or extend the memtable.
 func (m *MemFile) Truncate(size int64) error {
 	if m.closed {

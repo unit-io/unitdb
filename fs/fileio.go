@@ -17,6 +17,8 @@
 package fs
 
 import (
+	"fmt"
+	"io"
 	"os"
 )
 
@@ -88,4 +90,37 @@ func (f *IOFile) Sync() error {
 		return err
 	}
 	return nil
+}
+
+// Copy copies the file to a new file.
+func (f *IOFile) Copy() (int64, error) {
+	if err := f.File.Sync(); err != nil {
+		return 0, err
+	}
+	if stat, err := f.File.Stat(); err != nil || stat.Size() == int64(0) {
+		return 0, err
+	}
+	newName := fmt.Sprintf("%s.%d", f.File.Name(), f.File.Fd())
+	newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR, os.FileMode(0666))
+	if err != nil {
+		return 0, err
+	}
+
+	buf := make([]byte, 4096)
+	size := int64(0)
+	for {
+		n, err := f.File.Read(buf)
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if n == 0 {
+			break
+		}
+
+		if _, err := newFile.Write(buf[:n]); err != nil {
+			return 0, err
+		}
+		size += int64(n)
+	}
+	return size, err
 }

@@ -29,6 +29,7 @@ type File interface {
 
 	Stat() (os.FileInfo, error)
 	Sync() error
+	Copy() (int64, error)
 	Truncate(size int64) error
 	Seek(offset int64, whence int) (ret int64, err error)
 }
