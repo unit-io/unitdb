@@ -1,6 +1,6 @@
 # memdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb/memdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb/memdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb/memdb)](https://goreportcard.com/report/github.com/unit-io/unitdb/memdb)
 
-The memdb is blazing fast specialized in memory key-value store for time-series database for microservices, IoT, and realtime internet connected devices. The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure. Make use of the client by importing in your Go client source code. For example,
+The memdb is blazing fast specialized in memory key-value store for time-series database for microservices, IoT, and realtime internet connected devices. The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
 
 # About memdb
 
@@ -53,10 +53,10 @@ To open or create a new database, use the memdb.Open() function:
 ### Writing to a database
 
 #### Store a message
-Use DB.Set() function to insert a new key-value pair.
+Use DB.Put() function to insert a new key-value pair. If key exist it will override value if the write happens withing same timeID (based on tinyBatchWriteInterval option) or it appends a new value. Note, get operation will always get most recent entry.
 
 ```
-	if err := db.Set(1, []byte("msg 1")); err != nil {
+	if timeID, err := db.Put(1, []byte("msg 1")); err != nil {
 		log.Fatal(err)
 		return
     }
@@ -87,13 +87,13 @@ Deleting a key-value pair use DB.Delete() function.
 Use batch operation to bulk insert records into memdb or bulk delete records from memdb. See examples under cmd/memdb folder.
 
 #### Writing to a batch
-Use Batch.Append() to insert a new key-value.
+Use Batch.Put() to insert a new key-value or Batch.Delete() to delete a key-value from DB.
 
 ```
 	db.Batch(func(b *memdb.Batch, completed <-chan struct{}) error {
 		for i := 1; i <= 10; i++ {
             val := []byte(fmt.Sprintf("msg.%2d", i))
-            b.Append(uint64(i), val)
+            b.Put(uint64(i), val)
         }
 		return nil
     })

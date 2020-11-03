@@ -55,7 +55,7 @@ func (r _TimeRecord) isReleased(lastUnref _TimeID) bool {
 }
 
 func (tm *TimeMark) newTimeID() _TimeID {
-	timeID := _TimeID(time.Now().UTC().Truncate(tm.durations).UnixNano())
+	timeID := _TimeID(time.Now().UTC().UnixNano())
 	tm.add(timeID)
 
 	return timeID

@@ -26,9 +26,6 @@ type _Options struct {
 	// memdbSize sets Size of memory db.
 	memdbSize int64
 
-	// MaxBlocks sets Maximum concurrent block caches in mem store.
-	maxBlocks int
-
 	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
 
@@ -71,9 +68,6 @@ func WithDefaultOptions() Options {
 		if o.memdbSize == 0 {
 			o.memdbSize = defaultMemSize
 		}
-		if o.maxBlocks == 0 {
-			o.maxBlocks = nBlocks
-		}
 		if o.bufferSize == 0 {
 			o.bufferSize = defaultBufferSize
 		}
@@ -97,13 +91,6 @@ func WithLogFilePath(path string) Options {
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.memdbSize = size
-	})
-}
-
-// WithMaxBlocks sets number of concurrent blocks for the mem store.
-func WithMaxBlocks(nBlocks int) Options {
-	return newFuncOption(func(o *_Options) {
-		o.maxBlocks = nBlocks
 	})
 }
 

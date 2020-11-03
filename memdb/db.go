@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/hash"
 )
 
@@ -38,7 +39,7 @@ type DB struct {
 	internal   *_DB
 	consistent *hash.Consistent
 	blockCache _BlockCache
-	timeBlocks map[_BlockKey]_TimeID // map[blockID]timeID
+	timeBlocks map[_BlockKey]*_BlockRecord
 }
 
 // Open initializes database connection.
@@ -58,8 +59,8 @@ func Open(opts ...Options) (*DB, error) {
 
 	internal := &_DB{
 		writeLockC:     make(chan struct{}, 1),
-		timeMark:       newTimeMark(options.tinyBatchWriteInterval),
 		tinyBatchLockC: make(chan struct{}, 1),
+		timeMark:       newTimeMark(options.tinyBatchWriteInterval),
 
 		// Close
 		closeC: make(chan struct{}),
@@ -69,9 +70,13 @@ func Open(opts ...Options) (*DB, error) {
 	db := &DB{
 		opts:       options,
 		internal:   internal,
-		consistent: hash.InitConsistent(options.maxBlocks, options.maxBlocks),
+		consistent: hash.InitConsistent(nBlocks, nBlocks),
 		blockCache: make(map[_TimeID]*_Block),
-		timeBlocks: make(map[_BlockKey]_TimeID),
+		timeBlocks: make(map[_BlockKey]*_BlockRecord),
+	}
+
+	for i := 0; i < nBlocks; i++ {
+		db.timeBlocks[_BlockKey(i)] = &_BlockRecord{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
 	db.internal.batchPool = db.newBatchPool(nPoolSize)
@@ -144,17 +149,43 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 	db.mu.RLock()
 	// Get timeBlock
-	blockKey := _BlockKey{blockID: db.blockID(key), key: key}
-	timeID, ok := db.timeBlocks[blockKey]
+	blockKey := db.blockID(key)
+	r, ok := db.timeBlocks[blockKey]
 	if !ok {
 		db.mu.RUnlock()
 		return nil, errEntryDoesNotExist
 	}
 
+	var timeID _TimeID
+	var timeRec []_TimeID
+	for tmID := range r.timeRecords {
+		timeRec = append(timeRec, tmID)
+	}
+	sort.Slice(timeRec[:], func(i, j int) bool {
+		return timeRec[i] > timeRec[j]
+	})
+	for _, tmID := range timeRec {
+		if b, ok := db.blockCache[tmID]; ok {
+			b.RLock()
+			if _, ok := b.records[iKey(false, key)]; ok {
+				timeID = tmID
+				b.RUnlock()
+				break
+			}
+			fltr := r.timeRecords[tmID]
+			if fltr.Test(key) {
+				// fmt.Println("db.Get: filter test for blockKey, key ", blockKey, key, timeRec)
+				b.RUnlock()
+				break
+			}
+			b.RUnlock()
+		}
+	}
+
 	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {
-		return nil, errEntryDeleted
+		return nil, errEntryDoesNotExist
 	}
 
 	block.RLock()
@@ -176,7 +207,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	return data[8+1+4:], nil
 }
 
-// Keys gets all keys from mem store. This method is not thread safe.
+// ForEachBlock gets all keys from mem store. This method is not thread safe.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
 	blocks := db.blockCache
@@ -213,11 +244,37 @@ func (db *DB) Delete(key uint64) error {
 
 	db.mu.RLock()
 	// Get timeBlock
-	blockKey := _BlockKey{blockID: db.blockID(key), key: key}
-	timeID, ok := db.timeBlocks[blockKey]
+	blockKey := db.blockID(key)
+	r, ok := db.timeBlocks[blockKey]
 	if !ok {
 		db.mu.RUnlock()
 		return errEntryDoesNotExist
+	}
+
+	var timeID _TimeID
+	var timeRec []_TimeID
+	for tmID := range r.timeRecords {
+		timeRec = append(timeRec, tmID)
+	}
+	sort.Slice(timeRec[:], func(i, j int) bool {
+		return timeRec[i] > timeRec[j]
+	})
+	for _, tmID := range timeRec {
+		if b, ok := db.blockCache[tmID]; ok {
+			b.RLock()
+			if _, ok := b.records[iKey(false, key)]; ok {
+				timeID = tmID
+				b.RUnlock()
+				break
+			}
+			fltr := r.timeRecords[tmID]
+			if fltr.Test(key) {
+				// fmt.Println("db.Delete: filter test for blockKey, key ", blockKey, key, timeRec)
+				b.RUnlock()
+				break
+			}
+			b.RUnlock()
+		}
 	}
 
 	block, ok := db.blockCache[timeID]
@@ -232,23 +289,18 @@ func (db *DB) Delete(key uint64) error {
 	block.count--
 	count := block.count
 	block.Unlock()
-	// fmt.Println("db.Delete: timeID, count, records ", timeID, block.count, block.records)
+
+	db.delete(key)
 
 	if count == 0 {
-		db.releaseLog(timeID)
+		return db.releaseLog(timeID)
 	}
-
-	// set key is deleted to persist key with timeID to log.
-	ikey = iKey(true, key)
-	var data [8]byte
-	binary.LittleEndian.PutUint64(data[0:8], uint64(timeID))
-	block.set(ikey, data[:])
 
 	return nil
 }
 
-// Set sets the value for the given key-value.
-func (db *DB) Set(key uint64, data []byte) (int64, error) {
+// Put sets the value for the given key-value.
+func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	if err := db.ok(); err != nil {
 		return 0, err
 	}
@@ -266,19 +318,19 @@ func (db *DB) Set(key uint64, data []byte) (int64, error) {
 		block = newBlock()
 		db.blockCache[timeID] = block
 	}
-
-	blockKey := _BlockKey{blockID: db.blockID(key), key: key}
-	db.timeBlocks[blockKey] = timeID
 	db.mu.Unlock()
+
 	block.Lock()
 	defer block.Unlock()
-
-	if err := block.set(ikey, data); err != nil {
+	if err := block.put(ikey, data); err != nil {
 		return int64(timeID), err
 	}
 
+	db.addTimeBlock(timeID, key)
+
 	db.internal.tinyBatch.incount()
 
+	// fmt.Println("db.Set: timeID, key ", timeID, key)
 	return int64(timeID), nil
 }
 
@@ -309,7 +361,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
-// Free frees datatable from mem store and release log from WAL.
+// Free frees datatable from mem store for a timeID and release log from WAL.
 func (db *DB) Free(timeID int64) error {
 	return db.releaseLog(_TimeID(timeID))
 }

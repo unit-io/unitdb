@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/wal"
 )
 
@@ -49,7 +50,11 @@ const (
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	_TimeID     int64
+	_TimeID      int64
+	_BlockRecord struct {
+		timeRecords map[_TimeID]*filter.Block
+		filter      *filter.Generator
+	}
 	_BlockCache map[_TimeID]*_Block
 )
 
@@ -59,11 +64,8 @@ type (
 		delFlag uint8 // deleted flag
 		key     uint64
 	}
-	_BlockKey struct {
-		blockID uint16
-		key     uint64
-	}
-	_Block struct {
+	_BlockKey uint16
+	_Block    struct {
 		count        int64
 		data         _DataTable
 		records      map[_Key]int64 // map[key]offset
@@ -98,8 +100,8 @@ func newBlock() *_Block {
 }
 
 // blockID gets blockID from Key using consistent hashing.
-func (db *DB) blockID(key uint64) uint16 {
-	return db.consistent.FindBlock(key)
+func (db *DB) blockID(key uint64) _BlockKey {
+	return _BlockKey(db.consistent.FindBlock(key))
 }
 
 // iKey an internal key includes deleted flag.
@@ -109,6 +111,22 @@ func iKey(delFlag bool, k uint64) _Key {
 		dFlag = 1
 	}
 	return _Key{delFlag: dFlag, key: k}
+}
+
+// addTimeBlock adds unique timeID block to the set.
+func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
+	blockKey := db.blockID(key)
+	r, ok := db.timeBlocks[blockKey]
+	if ok {
+		// Append key to bloom filter
+		r.filter.Append(key)
+
+		if _, ok := r.timeRecords[timeID]; !ok {
+			r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) newTinyBatch() *_TinyBatch {
@@ -176,7 +194,7 @@ func (db *DB) batch() *Batch {
 	return b
 }
 
-func (b *_Block) set(ikey _Key, data []byte) error {
+func (b *_Block) put(ikey _Key, data []byte) error {
 	dataLen := uint32(len(data) + 8 + 1 + 4) // data len+key len+flag bit+scratch len
 	off, err := b.data.allocate(dataLen)
 	if err != nil {
@@ -202,6 +220,33 @@ func (b *_Block) set(ikey _Key, data []byte) error {
 	if ikey.delFlag == 0 {
 		b.count++
 	}
+
+	return nil
+}
+
+func (db *DB) delete(key uint64) error {
+	db.internal.tinyBatchLockC <- struct{}{}
+	defer func() {
+		<-db.internal.tinyBatchLockC
+	}()
+
+	timeID := db.internal.tinyBatch.timeID()
+	db.mu.Lock()
+	block, ok := db.blockCache[timeID]
+	if !ok {
+		block = newBlock()
+		db.blockCache[timeID] = block
+	}
+	db.mu.Unlock()
+
+	// set key is deleted to persist key with timeID to the log.
+	ikey := iKey(true, key)
+	var data [8]byte
+	binary.LittleEndian.PutUint64(data[0:8], uint64(timeID))
+	block.put(ikey, data[:])
+	db.internal.tinyBatch.incount()
+
+	// fmt.Println("db.delete: timeID, key ", timeID, key)
 
 	return nil
 }
@@ -242,7 +287,7 @@ func (db *DB) move(timeID _TimeID) error {
 			_, ok := db.blockCache[timeID]
 			db.mu.RUnlock()
 			if ok {
-				block.set(ik, data[8+1+4:dataLen])
+				return db.delete(ik.key)
 			}
 		}
 	}
@@ -285,6 +330,8 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	if err := <-logWriter.SignalInitWrite(int64(tinyBatch.timeID())); err != nil {
 		return err
 	}
+
+	// fmt.Println("db.tinyWrite: timeID ", tinyBatch.timeID())
 
 	return nil
 }
@@ -344,7 +391,7 @@ func (db *DB) startRecover(reset bool) error {
 		return err
 	}
 
-	m := make(map[uint64][]byte)
+	log := make(map[uint64][]byte)
 	err = r.Read(func(timeID int64) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
@@ -357,31 +404,30 @@ func (db *DB) startRecover(reset bool) error {
 			}
 			dBit := logData[0]
 			key := binary.LittleEndian.Uint64(logData[1:9])
-			msg := logData[9:]
+			val := logData[9:]
 			if dBit == 1 {
-				if _, exists := m[key]; exists {
-					delete(m, key)
+				if _, exists := log[key]; exists {
+					delete(log, key)
 				}
 				continue
 			}
-			m[key] = msg
+			log[key] = val
 		}
 		return false, nil
 	})
 
-	// acquire write lock on recovery.
+	// acquire write lock on recovery from log.
 	db.internal.writeLockC <- struct{}{}
 	defer func() {
 		<-db.internal.writeLockC
 	}()
-	for k, msg := range m {
-		if _, err := db.Set(k, msg); err != nil {
+	for k, val := range log {
+		if _, err := db.Put(k, val); err != nil {
 			return err
 		}
 	}
 
-	// reset log on successful recovery.
-	return db.internal.wal.Reset()
+	return nil
 }
 
 func (db *DB) releaseLog(timeID _TimeID) error {
@@ -417,12 +463,12 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
+			db.internal.tinyBatchLockC <- struct{}{}
 			if db.internal.tinyBatch.len() != 0 {
-				db.internal.tinyBatchLockC <- struct{}{}
 				db.internal.batchPool.write(db.internal.tinyBatch)
-				db.internal.tinyBatch = db.newTinyBatch()
-				<-db.internal.tinyBatchLockC
 			}
+			db.internal.tinyBatch = db.newTinyBatch()
+			<-db.internal.tinyBatchLockC
 		}
 	}
 }

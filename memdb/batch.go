@@ -41,8 +41,8 @@ func (b *Batch) TimeID() int64 {
 	return int64(b.tinyBatch.timeID())
 }
 
-// Append appends key-value to batch.
-func (b *Batch) Append(key uint64, data []byte) error {
+// Put added key-value to a batch.
+func (b *Batch) Put(key uint64, data []byte) error {
 	if err := b.db.ok(); err != nil {
 		return err
 	}
@@ -63,15 +63,13 @@ func (b *Batch) Append(key uint64, data []byte) error {
 	b.db.mu.Unlock()
 	block.Lock()
 	defer block.Unlock()
-	if err := block.set(ikey, data); err != nil {
+	if err := block.put(ikey, data); err != nil {
 		return err
 	}
+
+	b.db.addTimeBlock(timeID, key)
+
 	b.tinyBatch.incount()
-	// Get timeBlock
-	// b.db.mu.Lock()
-	blockKey := _BlockKey{blockID: b.db.blockID(key), key: key}
-	b.db.timeBlocks[blockKey] = timeID
-	// b.db.mu.Unlock()
 
 	return nil
 }
