@@ -60,7 +60,7 @@ func Open(opts ...Options) (*DB, error) {
 	internal := &_DB{
 		writeLockC:     make(chan struct{}, 1),
 		tinyBatchLockC: make(chan struct{}, 1),
-		timeMark:       newTimeMark(options.tinyBatchWriteInterval),
+		timeMark:       newTimeMark(options.timeRecordInterval),
 
 		// Close
 		closeC: make(chan struct{}),
@@ -81,9 +81,9 @@ func Open(opts ...Options) (*DB, error) {
 
 	db.internal.batchPool = db.newBatchPool(nPoolSize)
 
-	go db.tinyBatchLoop(db.opts.tinyBatchWriteInterval)
+	go db.tinyBatchLoop(db.opts.timeRecordInterval)
 
-	if err := db.startRecover(options.resetFlag); err != nil {
+	if err := db.startRecover(options.logResetFlag); err != nil {
 		return nil, err
 	}
 
@@ -173,7 +173,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 				break
 			}
 			fltr := r.timeRecords[tmID]
-			if fltr.Test(key) {
+			if !fltr.Test(key) {
 				// fmt.Println("db.Get: filter test for blockKey, key ", blockKey, key, timeRec)
 				b.RUnlock()
 				break
@@ -268,7 +268,7 @@ func (db *DB) Delete(key uint64) error {
 				break
 			}
 			fltr := r.timeRecords[tmID]
-			if fltr.Test(key) {
+			if !fltr.Test(key) {
 				// fmt.Println("db.Delete: filter test for blockKey, key ", blockKey, key, timeRec)
 				b.RUnlock()
 				break

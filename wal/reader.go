@@ -55,11 +55,11 @@ func (wal *WAL) NewReader() (*Reader, error) {
 // Read reads log written to the WAL but fully applied. It returns Reader iterator.
 func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 	// release log before read.
-	l := len(r.wal.pendingLogs)
+	l := len(r.wal.recoveredLogs)
 	for i := 0; i < l; i++ {
-		if r.wal.pendingLogs[i].status == logStatusReleased {
+		if r.wal.recoveredLogs[i].status == logStatusReleased {
 			// Remove log from wal.
-			r.wal.pendingLogs = r.wal.pendingLogs[:i+copy(r.wal.pendingLogs[i:], r.wal.pendingLogs[i+1:])]
+			r.wal.recoveredLogs = r.wal.recoveredLogs[:i+copy(r.wal.recoveredLogs[i:], r.wal.recoveredLogs[i+1:])]
 			l -= 1
 			i--
 		}
@@ -67,16 +67,16 @@ func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 
 	r.wal.mu.RLock()
 	defer func() {
-		r.wal.pendingLogs = r.wal.pendingLogs[:0]
+		r.wal.recoveredLogs = r.wal.recoveredLogs[:0]
 		r.wal.bufPool.Put(r.buffer)
 		r.wal.mu.RUnlock()
 	}()
 	idx := 0
-	l = len(r.wal.pendingLogs)
+	l = len(r.wal.recoveredLogs)
 	if l == 0 {
 		return nil
 	}
-	fileOff := r.wal.pendingLogs[0].offset
+	fileOff := r.wal.recoveredLogs[0].offset
 	size := r.wal.logFile.Size() - fileOff
 	if size > r.wal.opts.BufferSize {
 		size = r.wal.opts.BufferSize
@@ -92,7 +92,7 @@ func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 			return err
 		}
 		for i := idx; i < l; i++ {
-			ul := r.wal.pendingLogs[i]
+			ul := r.wal.recoveredLogs[i]
 			if ul.entryCount == 0 || ul.status != logStatusWritten {
 				offset += int64(ul.size)
 				offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
@@ -118,8 +118,8 @@ func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 			if stop, err := f(ul.timeID); stop || err != nil {
 				return err
 			}
-			r.wal.pendingLogs[i].status = logStatusReleased
-			if err := r.wal.logFile.writeMarshalableAt(r.wal.pendingLogs[i], r.wal.pendingLogs[i].offset); err != nil {
+			r.wal.recoveredLogs[i].status = logStatusReleased
+			if err := r.wal.logFile.writeMarshalableAt(r.wal.recoveredLogs[i], r.wal.recoveredLogs[i].offset); err != nil {
 				return err
 			}
 			offset += int64(ul.size)

@@ -57,7 +57,7 @@ func main() {
 
 	fmt.Println("main: Put 1-3")
 	puts(1, 3)
-	gets(1, 3)
+	gets(1, 5)
 	fmt.Println("main: Delete 1-2")
 	deletes(1, 2)
 	fmt.Println("main: Put 4-5")
@@ -69,5 +69,5 @@ func main() {
 	fmt.Println("main: Delete 4-5")
 	deletes(4, 5)
 	gets(1, 10)
-	time.Sleep(100 * time.Millisecond)
+	// time.Sleep(100 * time.Millisecond)
 }

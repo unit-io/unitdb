@@ -33,9 +33,9 @@ type _Options struct {
 	logSize int64
 
 	// resetFlag skips recovery on DB open and reset WAL if reset flag is set true.
-	resetFlag bool
+	logResetFlag bool
 
-	tinyBatchWriteInterval time.Duration
+	timeRecordInterval time.Duration
 }
 
 // Options it contains configurable options and flags for DB.
@@ -74,8 +74,8 @@ func WithDefaultOptions() Options {
 		if o.logSize == 0 {
 			o.logSize = defaultLogSize
 		}
-		if o.tinyBatchWriteInterval == 0 {
-			o.tinyBatchWriteInterval = 15 * time.Millisecond
+		if o.timeRecordInterval == 0 {
+			o.timeRecordInterval = 15 * time.Millisecond
 		}
 	})
 }
@@ -108,16 +108,16 @@ func WithLogSize(size int64) Options {
 	})
 }
 
-// WithResetFlag skips recovery on DB open and reset WAL if reset flag is set.
-func WithResetFlag() Options {
+// WithLogReset skips recovery on DB open and reset WAL if reset flag is set.
+func WithLogReset() Options {
 	return newFuncOption(func(o *_Options) {
-		o.resetFlag = true
+		o.logResetFlag = true
 	})
 }
 
-// WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
-func WithTinyBatchWriteInterval(dur time.Duration) Options {
+// WithTimeRecordInterval sets interval to group tiny batches and write into db on tiny batch interval.
+func WithTimeRecordInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *_Options) {
-		o.tinyBatchWriteInterval = dur
+		o.timeRecordInterval = dur
 	})
 }

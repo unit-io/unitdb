@@ -142,6 +142,10 @@ func (f *_File) truncate(size int64) error {
 }
 
 func (f *_File) reset() error {
+	// copy file before reseting.
+	if _, err := f.Copy(); err != nil {
+		return err
+	}
 	f.size = 0
 	if err := f.truncate(0); err != nil {
 		return err

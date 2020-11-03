@@ -118,12 +118,12 @@ func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
 	if ok {
-		// Append key to bloom filter
-		r.filter.Append(key)
-
 		if _, ok := r.timeRecords[timeID]; !ok {
 			r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
 		}
+
+		// Append key to bloom filter
+		r.filter.Append(key)
 	}
 
 	return nil
@@ -161,7 +161,7 @@ func (db *DB) close() error {
 	}
 
 	// Signal all goroutines.
-	time.Sleep(db.opts.tinyBatchWriteInterval)
+	time.Sleep(db.opts.timeRecordInterval)
 	close(db.internal.closeC)
 	db.internal.batchPool.stopWait()
 
@@ -415,6 +415,10 @@ func (db *DB) startRecover(reset bool) error {
 		}
 		return false, nil
 	})
+
+	if err := wal.Reset(); err != nil {
+		return err
+	}
 
 	// acquire write lock on recovery from log.
 	db.internal.writeLockC <- struct{}{}

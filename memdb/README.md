@@ -1,6 +1,6 @@
 # memdb [![GoDoc](https://godoc.org/github.com/unit-io/unitdb/memdb?status.svg)](https://pkg.go.dev/github.com/unit-io/unitdb/memdb) [![Go Report Card](https://goreportcard.com/badge/github.com/unit-io/unitdb/memdb)](https://goreportcard.com/report/github.com/unit-io/unitdb/memdb)
 
-The memdb is blazing fast specialized in memory key-value store for time-series database for microservices, IoT, and realtime internet connected devices. The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
+The memdb is blazing fast specialized in memory key-value store for time-series database. The in-memory key-value data store persist entries into a WAL for immediate durability. The Write Ahead Log (WAL) retains memdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
 
 # About memdb
 
@@ -40,7 +40,7 @@ To open or create a new database, use the memdb.Open() function:
 	func main() {
 		// Opening a database.
 		// Open DB with reset flag to to skip recovery from log
-		db, err := memdb.Open(memdb.WithLogFilePath("unitdb"), memdb.WithResetFlag())
+		db, err := memdb.Open(memdb.WithLogFilePath("unitdb"), memdb.WithLogReset())
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -53,7 +53,8 @@ To open or create a new database, use the memdb.Open() function:
 ### Writing to a database
 
 #### Store a message
-Use DB.Put() function to insert a new key-value pair. If key exist it will override value if the write happens withing same timeID (based on tinyBatchWriteInterval option) or it appends a new value. Note, get operation will always get most recent entry.
+Use DB.Put() function to insert a new key-value pair. 
+Note, if key exists then it overrides key-value if the write operation happens within same timeID (see timeRecordInterval option) or it insert a new key-value pair in different timeID.
 
 ```
 	if timeID, err := db.Put(1, []byte("msg 1")); err != nil {
@@ -64,7 +65,7 @@ Use DB.Put() function to insert a new key-value pair. If key exist it will overr
 ```
 
 #### Read messages
-Use DB.Get() function to read inserted value.
+Use DB.Get() function to read inserted value. It gets most recent entry for the provided key. 
 
 ```
 	if val, err := db.Get(1); err == nil {
@@ -74,7 +75,7 @@ Use DB.Get() function to read inserted value.
 ```
 
 #### Deleting a message
-Deleting a key-value pair use DB.Delete() function.
+use DB.Delete() function to delete a key-value pair.
 
 ```
     if err := db.Delete(1); err != nil {
