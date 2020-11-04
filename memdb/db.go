@@ -58,9 +58,11 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	internal := &_DB{
-		writeLockC:     make(chan struct{}, 1),
-		tinyBatchLockC: make(chan struct{}, 1),
-		timeMark:       newTimeMark(options.timeRecordInterval),
+		start:      time.Now(),
+		meter:      NewMeter(),
+		writeLockC: make(chan struct{}, 1),
+		timeMark:   newTimeMark(options.timeRecordInterval),
+		timeLock:   newTimeLock(),
 
 		// Close
 		closeC: make(chan struct{}),
@@ -128,11 +130,6 @@ func (db *DB) Keys() []uint64 {
 	}
 
 	return keys
-}
-
-// TimeID returns new timeID.
-func (db *DB) TimeID() int64 {
-	return int64(db.internal.tinyBatch.timeID())
 }
 
 // TimeMark sets TimeRecord and returns TimeMark.
@@ -204,6 +201,8 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.internal.meter.Gets.Inc(1)
+
 	return data[8+1+4:], nil
 }
 
@@ -291,6 +290,7 @@ func (db *DB) Delete(key uint64) error {
 	block.Unlock()
 
 	db.delete(key)
+	db.internal.meter.Dels.Inc(1)
 
 	if count == 0 {
 		return db.releaseLog(timeID)
@@ -305,14 +305,12 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		return 0, err
 	}
 
-	db.internal.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-db.internal.tinyBatchLockC
-	}()
-
-	timeID := db.internal.tinyBatch.timeID()
-	ikey := iKey(false, key)
 	db.mu.Lock()
+	timeID := db.internal.tinyBatch.timeID()
+	timeLock := db.internal.timeLock.getTimeLock(timeID)
+	timeLock.Lock()
+	defer timeLock.Unlock()
+
 	block, ok := db.blockCache[timeID]
 	if !ok {
 		block = newBlock()
@@ -322,6 +320,7 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 
 	block.Lock()
 	defer block.Unlock()
+	ikey := iKey(false, key)
 	if err := block.put(ikey, data); err != nil {
 		return int64(timeID), err
 	}
@@ -329,8 +328,8 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	db.addTimeBlock(timeID, key)
 
 	db.internal.tinyBatch.incount()
+	db.internal.meter.Puts.Inc(1)
 
-	// fmt.Println("db.Set: timeID, key ", timeID, key)
 	return int64(timeID), nil
 }
 

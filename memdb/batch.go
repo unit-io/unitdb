@@ -70,6 +70,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	b.db.addTimeBlock(timeID, key)
 
 	b.tinyBatch.incount()
+	b.db.internal.meter.Puts.Inc(1)
 
 	return nil
 }

@@ -75,15 +75,21 @@ type (
 
 // _DB represents mem store.
 type _DB struct {
+	// The db start time.
+	start time.Time
+
+	// The metrics to measure timeseries on message events.
+	meter *Meter
+
 	writeLockC chan struct{}
 
 	// time mark to manage timeIDs
 	timeMark *TimeMark
+	timeLock _TimeLock
 
 	// tiny Batch
-	tinyBatchLockC chan struct{}
-	tinyBatch      *_TinyBatch
-	batchPool      *_BatchPool
+	tinyBatch *_TinyBatch
+	batchPool *_BatchPool
 
 	// Write ahead log
 	wal *wal.WAL
@@ -179,6 +185,8 @@ func (db *DB) close() error {
 		db.internal.closer = nil
 	}
 
+	db.internal.meter.UnregisterAll()
+
 	return err
 }
 
@@ -225,13 +233,13 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 }
 
 func (db *DB) delete(key uint64) error {
-	db.internal.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-db.internal.tinyBatchLockC
-	}()
+	db.mu.Lock()
 
 	timeID := db.internal.tinyBatch.timeID()
-	db.mu.Lock()
+	timeLock := db.internal.timeLock.getTimeLock(timeID)
+	timeLock.Lock()
+	defer timeLock.Unlock()
+
 	block, ok := db.blockCache[timeID]
 	if !ok {
 		block = newBlock()
@@ -245,8 +253,6 @@ func (db *DB) delete(key uint64) error {
 	binary.LittleEndian.PutUint64(data[0:8], uint64(timeID))
 	block.put(ikey, data[:])
 	db.internal.tinyBatch.incount()
-
-	// fmt.Println("db.delete: timeID, key ", timeID, key)
 
 	return nil
 }
@@ -331,7 +337,7 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 		return err
 	}
 
-	// fmt.Println("db.tinyWrite: timeID ", tinyBatch.timeID())
+	db.internal.meter.Syncs.Inc(int64(len(block.records)))
 
 	return nil
 }
@@ -430,6 +436,7 @@ func (db *DB) startRecover(reset bool) error {
 			return err
 		}
 	}
+	db.internal.meter.Recovers.Inc(int64(len(log)))
 
 	return nil
 }
@@ -467,12 +474,16 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
-			db.internal.tinyBatchLockC <- struct{}{}
+			db.mu.RLock()
+			timeID := db.internal.tinyBatch.timeID()
+			timeLock := db.internal.timeLock.getTimeLock(timeID)
+			timeLock.RLock()
+			db.mu.RUnlock()
 			if db.internal.tinyBatch.len() != 0 {
 				db.internal.batchPool.write(db.internal.tinyBatch)
 			}
 			db.internal.tinyBatch = db.newTinyBatch()
-			<-db.internal.tinyBatchLockC
+			timeLock.RUnlock()
 		}
 	}
 }

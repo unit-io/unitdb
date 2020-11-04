@@ -89,11 +89,12 @@ func (p *_BatchPool) size() int {
 
 // stop tells dispatcher to exit, and wether or not complete queued batches.
 func (p *_BatchPool) stop(wait bool) {
-	// Acquire tinyBatch write lock
-	p.db.internal.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-p.db.internal.tinyBatchLockC
-	}()
+	p.db.mu.RLock()
+	timeID := p.db.internal.tinyBatch.timeID()
+	timeLock := p.db.internal.timeLock.getTimeLock(timeID)
+	timeLock.Lock()
+	p.db.mu.RUnlock()
+	defer timeLock.Unlock()
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
