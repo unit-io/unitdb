@@ -59,12 +59,12 @@ func (b *_TinyBatch) abort() {
 	close(b.doneChan)
 }
 
-// setManaged sets batch managed.
+// setManaged sets batch is managed.
 func (b *_TinyBatch) setManaged() {
 	b.managed = true
 }
 
-// unsetManaged sets batch unmanaged.
+// unsetManaged sets batch to unmanaged.
 func (b *_TinyBatch) unsetManaged() {
 	b.managed = false
 }
@@ -126,7 +126,7 @@ func (p *_BatchPool) write(tinyBatch *_TinyBatch) {
 	}
 }
 
-// witeWait enqueues the given batch and waits for it to be executed.
+// writeWait enqueues the given batch and waits for it to be executed.
 func (p *_BatchPool) writeWait(tinyBatch *_TinyBatch) {
 	if tinyBatch == nil {
 		return
@@ -135,7 +135,7 @@ func (p *_BatchPool) writeWait(tinyBatch *_TinyBatch) {
 	<-tinyBatch.doneChan
 }
 
-// dispatch handles tiny batch commit for the batches queue.
+// dispatch handles tiny batch commit for the batches in queue.
 func (p *_BatchPool) dispatch() {
 	defer close(p.stoppedChan)
 	timeout := time.NewTimer(2 * time.Second)
@@ -186,7 +186,7 @@ Loop:
 		p.runQueuedBatches()
 	}
 
-	// Stop all remaining tinyBatch as it become ready.
+	// Stop all remaining tiny batch as it become ready.
 	for batchCount > 0 {
 		p.batchQueue <- nil
 		batchCount--
@@ -195,7 +195,7 @@ Loop:
 	timeout.Stop()
 }
 
-// commit run initial tinyBatch commit, then start tinyBatch waiting for more.
+// commit run initial tiny batch commit, then start tiny batch waiting for more.
 func (p *_BatchPool) commit(tinyBatch *_TinyBatch, batchQueue chan *_TinyBatch) {
 	if err := p.db.tinyCommit(tinyBatch); err != nil {
 		// p.db.rollback(tinyBatch)

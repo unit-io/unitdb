@@ -22,13 +22,13 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-// _TimeLock mutex to lock/unlock.
+// _TimeLock mutex to perform time based lock/unlock.
 type _TimeLock struct {
 	internal   []*sync.RWMutex
 	consistent *hash.Consistent
 }
 
-// newTimeLock creates mutex to lock/unlock.
+// newTimeLock creates mutex to perform time based lock/unlock.
 func newTimeLock() _TimeLock {
 	mu := _TimeLock{
 		internal:   make([]*sync.RWMutex, nBlocks),
@@ -42,7 +42,7 @@ func newTimeLock() _TimeLock {
 	return mu
 }
 
-// getTimeLock returns mutex for the provided timeID
+// getTimeLock returns mutex for the provided time ID
 func (mu *_TimeLock) getTimeLock(timeID _TimeID) *sync.RWMutex {
 	return mu.internal[mu.consistent.FindBlock(uint64(timeID))]
 }

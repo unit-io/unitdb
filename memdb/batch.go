@@ -30,18 +30,18 @@ type Batch struct {
 	tinyBatchLockC chan struct{}
 	tinyBatch      *_TinyBatch
 
-	tinyBatchGroup map[_TimeID]*_TinyBatch // map[timeID]*tinyBatch
+	tinyBatchGroup map[_TimeID]*_TinyBatch
 
 	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 	commitComplete chan struct{}
 }
 
-// TimeID returns timeID for the batch.
+// TimeID returns time ID for the batch.
 func (b *Batch) TimeID() int64 {
 	return int64(b.tinyBatch.timeID())
 }
 
-// Put added key-value to a batch.
+// Put adds a new key-value pair to the batch.
 func (b *Batch) Put(key uint64, data []byte) error {
 	if err := b.db.ok(); err != nil {
 		return err
@@ -75,6 +75,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	return nil
 }
 
+// Write starts writing entries into DB.
 func (b *Batch) Write() error {
 	b.tinyBatchLockC <- struct{}{}
 	b.tinyBatchGroup[b.tinyBatch.timeID()] = b.tinyBatch
@@ -86,7 +87,7 @@ func (b *Batch) Write() error {
 }
 
 // Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
-// On Commit complete batch operation signal to the caller if the batch is fully commited to DB.
+// On Commit complete batch operation signal to the caller if the batch is fully committed to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed batch commit not allowed")
 	b.db.internal.closeW.Add(1)
@@ -111,7 +112,7 @@ func (b *Batch) Commit() error {
 	return nil
 }
 
-//Abort abort is a batch cleanup operation on batch complete.
+//Abort aborts batch or perform cleanup operation on batch complete.
 func (b *Batch) Abort() error {
 	_assert(!b.managed, "managed batch abort not allowed")
 	for timeID := range b.tinyBatchGroup {

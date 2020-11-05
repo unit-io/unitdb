@@ -38,22 +38,26 @@ const (
 
 	nPoolSize = 27
 
-	// maxMemSize value to limit maximum memory for the mem store.
+	// defaultMemSize sets maximum memory usage limit for the mem store.
 	defaultMemSize = (int64(1) << 34) - 1
 
-	// maxBufferSize sets Size of buffer to use for pooling.
+	// defaultBufferSize sets Size of buffer to use for pooling.
 	defaultBufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
 
-	// logSize sets Size of write ahead log.
-	defaultLogSize = 1 << 32 // maximum size of log to grow before allocating free segments (4GB).
+	// defaultLogSize sets Size of write ahead log.
+	defaultLogSize = 1 << 32 // maximum size of log to grow before allocating from free segments (4GB).
 )
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	_TimeID      int64
-	_BlockRecord struct {
+	_TimeID    int64
+	_TimeBlock struct {
 		timeRecords map[_TimeID]*filter.Block
-		filter      *filter.Generator
+		// bloom filter adds keys to the filter for all entries in a time block.
+		// filter is checked during get or delete operation
+		// to indicate key definitely not exist in the time block.
+		filter       *filter.Generator
+		sync.RWMutex // Read Write mutex, guards access to internal map.
 	}
 	_BlockCache map[_TimeID]*_Block
 )
@@ -73,17 +77,17 @@ type (
 	}
 )
 
-// _DB represents mem store.
+// _DB represents a mem store.
 type _DB struct {
 	// The db start time.
 	start time.Time
 
-	// The metrics to measure timeseries on message events.
+	// The metrics to measure timeseries on DB events.
 	meter *Meter
 
 	writeLockC chan struct{}
 
-	// time mark to manage timeIDs
+	// time mark to manage time records
 	timeMark *TimeMark
 	timeLock _TimeLock
 
@@ -105,7 +109,7 @@ func newBlock() *_Block {
 	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
 }
 
-// blockID gets blockID from Key using consistent hashing.
+// blockID gets blockID for the Key using consistent hashing.
 func (db *DB) blockID(key uint64) _BlockKey {
 	return _BlockKey(db.consistent.FindBlock(key))
 }
@@ -119,10 +123,12 @@ func iKey(delFlag bool, k uint64) _Key {
 	return _Key{delFlag: dFlag, key: k}
 }
 
-// addTimeBlock adds unique timeID block to the set.
+// addTimeBlock adds unique time block to the set.
 func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
+	r.Lock()
+	defer r.Unlock()
 	if ok {
 		if _, ok := r.timeRecords[timeID]; !ok {
 			r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
@@ -203,7 +209,7 @@ func (db *DB) batch() *Batch {
 }
 
 func (b *_Block) put(ikey _Key, data []byte) error {
-	dataLen := uint32(len(data) + 8 + 1 + 4) // data len+key len+flag bit+scratch len
+	dataLen := uint32(len(data) + 8 + 1 + 4) // data len + key len + flag bit + scratch len
 	off, err := b.data.allocate(dataLen)
 	if err != nil {
 		return err
@@ -257,7 +263,7 @@ func (db *DB) delete(key uint64) error {
 	return nil
 }
 
-// move moves deleted records to new blockCache if the timeID of deleted key still exist in the mem store.
+// move moves deleted records to new block cache before releasing the block from the WAL.
 func (db *DB) move(timeID _TimeID) error {
 	db.mu.RLock()
 	block := db.blockCache[timeID]
@@ -300,11 +306,8 @@ func (db *DB) move(timeID _TimeID) error {
 	return nil
 }
 
-// tinyWrite writes tiny batch to DB WAL.
+// tinyWrite writes tiny batch to the WAL.
 func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
-	// Backoff to limit excess memroy usage
-	// db.blockCache.Backoff()
-
 	logWriter, err := db.internal.wal.NewWriter()
 	if err != nil {
 		return err
@@ -318,7 +321,6 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	}
 	block.RLock()
 	defer block.RUnlock()
-	// fmt.Println("db.tinyWrite: timeID, count, records ", tinyBatch.timeID(), block.count, block.records)
 	for _, off := range block.records {
 		scratch, err := block.data.readRaw(off, 4) // read data length.
 		if err != nil {
@@ -371,8 +373,8 @@ func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
 	return nil
 }
 
-// recovery recovers pending messages from log file.
-func (db *DB) startRecover(reset bool) error {
+// startRecovery recovers pending entries from the WAL.
+func (db *DB) startRecovery(reset bool) error {
 	// Make sure we have a directory
 	if err := os.MkdirAll(db.opts.logFilePath, 0777); err != nil {
 		return errors.New("db.Open, Unable to create db dir")
@@ -426,7 +428,7 @@ func (db *DB) startRecover(reset bool) error {
 		return err
 	}
 
-	// acquire write lock on recovery from log.
+	// acquire write lock on recovery.
 	db.internal.writeLockC <- struct{}{}
 	defer func() {
 		<-db.internal.writeLockC
@@ -442,7 +444,7 @@ func (db *DB) startRecover(reset bool) error {
 }
 
 func (db *DB) releaseLog(timeID _TimeID) error {
-	// move moves deleted keys before releasing log if the timeID of deleted keys still exist in the mem store
+	// move moves deleted keys before releasing log.
 	db.move(timeID)
 
 	db.mu.RLock()
@@ -459,11 +461,10 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	delete(db.blockCache, timeID)
 	db.mu.Unlock()
 
-	// signal log applied for older messages those are acknowledged or timed out.
 	return db.internal.wal.SignalLogApplied(int64(timeID))
 }
 
-// tinyBatchLoop handles tiny batches.
+// tinyBatchLoop handles writing tiny batches to the log.
 func (db *DB) tinyBatchLoop(interval time.Duration) {
 	db.internal.closeW.Add(1)
 	defer db.internal.closeW.Done()
@@ -474,21 +475,21 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
-			db.mu.RLock()
+			db.mu.Lock()
 			timeID := db.internal.tinyBatch.timeID()
 			timeLock := db.internal.timeLock.getTimeLock(timeID)
 			timeLock.RLock()
-			db.mu.RUnlock()
 			if db.internal.tinyBatch.len() != 0 {
 				db.internal.batchPool.write(db.internal.tinyBatch)
 			}
 			db.internal.tinyBatch = db.newTinyBatch()
+			db.mu.Unlock()
 			timeLock.RUnlock()
 		}
 	}
 }
 
-// setClosed flag; return true if not already closed.
+// setClosed flag; return true if DB is not already closed.
 func (db *DB) setClosed() bool {
 	return atomic.CompareAndSwapUint32(&db.internal.closed, 0, 1)
 }
@@ -498,7 +499,7 @@ func (db *DB) isClosed() bool {
 	return atomic.LoadUint32(&db.internal.closed) != 0
 }
 
-// ok checks read ok status.
+// ok checks DB status.
 func (db *DB) ok() error {
 	if db.isClosed() {
 		return errors.New("db is closed")

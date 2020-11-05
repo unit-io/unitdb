@@ -25,6 +25,11 @@ func (b *Generator) Finish() []byte {
 	return b.filter.Bytes()
 }
 
+// Bytes returns a slice to filter block contents.
+func (b *Generator) Bytes() []byte {
+	return b.filter.Bytes()
+}
+
 // Block is a filter block
 type Block struct {
 	filter *Filter

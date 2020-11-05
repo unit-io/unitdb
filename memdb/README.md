@@ -54,7 +54,7 @@ To open or create a new database, use the memdb.Open() function:
 
 #### Store a message
 Use DB.Put() function to insert a new key-value pair. 
-Note, if key exists then it overrides key-value if the write operation happens within same timeID (see timeRecordInterval option) or it insert a new key-value pair in different timeID.
+Note, if key exists then it overrides key-value when the writes happen within same timeID (see timeRecordInterval option) or it insert a new key-value pair in different timeID.
 
 ```
 	if timeID, err := db.Put(1, []byte("msg 1")); err != nil {
@@ -65,7 +65,7 @@ Note, if key exists then it overrides key-value if the write operation happens w
 ```
 
 #### Read messages
-Use DB.Get() function to read inserted value. It gets most recent entry for the provided key. 
+Use DB.Get() function to read inserted value. It gets entry from most recent timeID for the provided key. 
 
 ```
 	if val, err := db.Get(1); err == nil {

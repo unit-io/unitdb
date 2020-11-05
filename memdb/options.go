@@ -23,16 +23,16 @@ import (
 type _Options struct {
 	logFilePath string
 
-	// memdbSize sets Size of memory db.
+	// memdbSize sets maximum size of mem store.
 	memdbSize int64
 
-	// bufferSize sets Size of buffer to use for pooling.
+	// bufferSize sets size of buffer to use for buffer pooling.
 	bufferSize int64
 
-	// logSize sets Size of write ahead log.
+	// logSize sets size of write ahead log before reallocating free blocks from released segments.
 	logSize int64
 
-	// resetFlag skips recovery on DB open and reset WAL if reset flag is set true.
+	// logResetFlag flag to skips log recovery on DB open and reset WAL.
 	logResetFlag bool
 
 	timeRecordInterval time.Duration
@@ -80,42 +80,42 @@ func WithDefaultOptions() Options {
 	})
 }
 
-// WithLogFilePath sets database directory.
+// WithLogFilePath sets database directory for storing logs.
 func WithLogFilePath(path string) Options {
 	return newFuncOption(func(o *_Options) {
 		o.logFilePath = path
 	})
 }
 
-// WithMemdbSize sets Size of memory DB.
+// WithMemdbSize sets max size of mem store.
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.memdbSize = size
 	})
 }
 
-// WithBufferSize sets Size of buffer to use for pooling.
+// WithBufferSize sets max size of buffer to use for buffer pooling.
 func WithBufferSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.bufferSize = size
 	})
 }
 
-// WithLogSize sets Size of write ahead log.
+// WithLogSize sets size of write ahead log.
 func WithLogSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.logSize = size
 	})
 }
 
-// WithLogReset skips recovery on DB open and reset WAL if reset flag is set.
+// WithLogReset flag to skip recovery on DB open and reset WAL.
 func WithLogReset() Options {
 	return newFuncOption(func(o *_Options) {
 		o.logResetFlag = true
 	})
 }
 
-// WithTimeRecordInterval sets interval to group tiny batches and write into db on tiny batch interval.
+// WithTimeBlockInterval sets interval for a time block. Block is pushed to the queue to write it to the log file.
 func WithTimeRecordInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *_Options) {
 		o.timeRecordInterval = dur

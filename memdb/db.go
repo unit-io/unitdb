@@ -28,21 +28,21 @@ import (
 	"github.com/unit-io/unitdb/hash"
 )
 
-// DB represents an SSD-optimized store.
+// DB represents an SSD-optimized mem store.
 type DB struct {
 	mu sync.RWMutex
 
 	version int
 	opts    *_Options
 
-	// blockcache
+	// block cache
 	internal   *_DB
 	consistent *hash.Consistent
 	blockCache _BlockCache
-	timeBlocks map[_BlockKey]*_BlockRecord
+	timeBlocks map[_BlockKey]*_TimeBlock
 }
 
-// Open initializes database connection.
+// Open initializes database.
 func Open(opts ...Options) (*DB, error) {
 	options := &_Options{}
 	WithDefaultOptions().set(options)
@@ -74,37 +74,43 @@ func Open(opts ...Options) (*DB, error) {
 		internal:   internal,
 		consistent: hash.InitConsistent(nBlocks, nBlocks),
 		blockCache: make(map[_TimeID]*_Block),
-		timeBlocks: make(map[_BlockKey]*_BlockRecord),
+		timeBlocks: make(map[_BlockKey]*_TimeBlock),
 	}
 
 	for i := 0; i < nBlocks; i++ {
-		db.timeBlocks[_BlockKey(i)] = &_BlockRecord{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+		db.timeBlocks[_BlockKey(i)] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
 	db.internal.batchPool = db.newBatchPool(nPoolSize)
 
 	go db.tinyBatchLoop(db.opts.timeRecordInterval)
 
-	if err := db.startRecover(options.logResetFlag); err != nil {
+	if err := db.startRecovery(options.logResetFlag); err != nil {
 		return nil, err
 	}
 
 	return db, nil
 }
 
-// Close closes the underlying database connection.
+// Close closes the underlying database.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	db.mu.Unlock()
+
+	if err := db.close(); err != nil {
+		return err
+	}
+
 	if db.blockCache != nil {
 		db.blockCache = nil
 		db.version = -1
 
 	}
-	return db.close()
+
+	return nil
 }
 
-// IsOpen returns true if connection to database has been established. It does not check if
+// IsOpen returns true if connection to the database has been established. It does not check if
 // connection is actually live.
 func (db *DB) IsOpen() bool {
 	db.mu.RLock()
@@ -132,20 +138,20 @@ func (db *DB) Keys() []uint64 {
 	return keys
 }
 
-// TimeMark sets TimeRecord and returns TimeMark.
+// TimeMark sets time mark.
 func (db *DB) TimeMark() *TimeMark {
 	db.internal.timeMark.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
 	return db.internal.timeMark
 }
 
-// Get gets data for the provided key.
+// Get gets data from most recent time ID for the provided key.
 func (db *DB) Get(key uint64) ([]byte, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
 	}
 
 	db.mu.RLock()
-	// Get timeBlock
+	// Get time block
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
 	if !ok {
@@ -155,6 +161,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 	var timeID _TimeID
 	var timeRec []_TimeID
+	r.RLock()
 	for tmID := range r.timeRecords {
 		timeRec = append(timeRec, tmID)
 	}
@@ -171,14 +178,13 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 			}
 			fltr := r.timeRecords[tmID]
 			if !fltr.Test(key) {
-				// fmt.Println("db.Get: filter test for blockKey, key ", blockKey, key, timeRec)
 				b.RUnlock()
 				break
 			}
 			b.RUnlock()
 		}
 	}
-
+	r.RUnlock()
 	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {
@@ -207,6 +213,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 }
 
 // ForEachBlock gets all keys from mem store. This method is not thread safe.
+// It is mainly used during database recovery on DB open.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
 	blocks := db.blockCache
@@ -242,7 +249,7 @@ func (db *DB) Delete(key uint64) error {
 	}
 
 	db.mu.RLock()
-	// Get timeBlock
+	// Get time block
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
 	if !ok {
@@ -252,6 +259,7 @@ func (db *DB) Delete(key uint64) error {
 
 	var timeID _TimeID
 	var timeRec []_TimeID
+	r.RLock()
 	for tmID := range r.timeRecords {
 		timeRec = append(timeRec, tmID)
 	}
@@ -268,14 +276,13 @@ func (db *DB) Delete(key uint64) error {
 			}
 			fltr := r.timeRecords[tmID]
 			if !fltr.Test(key) {
-				// fmt.Println("db.Delete: filter test for blockKey, key ", blockKey, key, timeRec)
 				b.RUnlock()
 				break
 			}
 			b.RUnlock()
 		}
 	}
-
+	r.RUnlock()
 	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {
@@ -299,7 +306,7 @@ func (db *DB) Delete(key uint64) error {
 	return nil
 }
 
-// Put sets the value for the given key-value.
+// Put sets a new key-value pait to the DB.
 func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	if err := db.ok(); err != nil {
 		return 0, err
@@ -333,7 +340,7 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	return int64(timeID), nil
 }
 
-// NewBatch returns unmanaged Batch so caller can perform Append, Write, Commit to the Batch.
+// NewBatch returns unmanaged Batch so caller can perform Put, Write, Commit, Abort to the Batch.
 func (db *DB) NewBatch() *Batch {
 	return db.batch()
 }
@@ -360,12 +367,12 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
-// Free frees datatable from mem store for a timeID and release log from WAL.
+// Free frees time block from mem store for a provided time ID and releases block from WAL.
 func (db *DB) Free(timeID int64) error {
 	return db.releaseLog(_TimeID(timeID))
 }
 
-// Size returns the total number of keys in memstore.
+// Size returns the total number of entries in mem store.
 func (db *DB) Size() int64 {
 	size := int64(0)
 	db.mu.RLock()

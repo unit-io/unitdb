@@ -94,7 +94,7 @@ func (tm *TimeMark) IsReleased(timeID int64) bool {
 	defer tm.RUnlock()
 	if r, ok := tm.releasedRecords[_TimeID(timeID)]; ok {
 		if r.refs == -1 {
-			// timeID is aborted
+			// time ID is aborted
 			return false
 		}
 		if r.isReleased(tm.timeRecord.lastUnref) {
@@ -109,7 +109,7 @@ func (tm *TimeMark) IsAborted(timeID int64) bool {
 	defer tm.RUnlock()
 	if r, ok := tm.releasedRecords[_TimeID(timeID)]; ok {
 		if r.refs == -1 {
-			// timeID is aborted
+			// time ID is aborted
 			return true
 		}
 	}
