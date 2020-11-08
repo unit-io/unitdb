@@ -27,7 +27,7 @@ type (
 		lastUnref _TimeID
 	}
 
-	TimeMark struct {
+	_TimeMark struct {
 		sync.RWMutex
 		durations       time.Duration
 		timeRecord      _TimeRecord
@@ -36,8 +36,8 @@ type (
 	}
 )
 
-func newTimeMark(maxDur time.Duration) *TimeMark {
-	return &TimeMark{durations: maxDur, timeRecord: _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
+func newTimeMark(maxDur time.Duration) *_TimeMark {
+	return &_TimeMark{durations: maxDur, timeRecord: _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
 func (r _TimeRecord) isExpired(expDur time.Duration) bool {
@@ -54,14 +54,14 @@ func (r _TimeRecord) isReleased(lastUnref _TimeID) bool {
 	return false
 }
 
-func (tm *TimeMark) newTimeID() _TimeID {
+func (tm *_TimeMark) newTimeID() _TimeID {
 	timeID := _TimeID(time.Now().UTC().UnixNano())
 	tm.add(timeID)
 
 	return timeID
 }
 
-func (tm *TimeMark) add(timeID _TimeID) {
+func (tm *_TimeMark) add(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 	if r, ok := tm.records[timeID]; ok {
@@ -70,7 +70,7 @@ func (tm *TimeMark) add(timeID _TimeID) {
 	tm.records[timeID] = _TimeRecord{refs: 1}
 }
 
-func (tm *TimeMark) release(timeID _TimeID) {
+func (tm *_TimeMark) release(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 
@@ -89,10 +89,10 @@ func (tm *TimeMark) release(timeID _TimeID) {
 	}
 }
 
-func (tm *TimeMark) IsReleased(timeID int64) bool {
+func (tm *_TimeMark) isReleased(timeID _TimeID) bool {
 	tm.RLock()
 	defer tm.RUnlock()
-	if r, ok := tm.releasedRecords[_TimeID(timeID)]; ok {
+	if r, ok := tm.releasedRecords[timeID]; ok {
 		if r.refs == -1 {
 			// time ID is aborted
 			return false
@@ -104,10 +104,10 @@ func (tm *TimeMark) IsReleased(timeID int64) bool {
 	return false
 }
 
-func (tm *TimeMark) IsAborted(timeID int64) bool {
+func (tm *_TimeMark) isAborted(timeID _TimeID) bool {
 	tm.RLock()
 	defer tm.RUnlock()
-	if r, ok := tm.releasedRecords[_TimeID(timeID)]; ok {
+	if r, ok := tm.releasedRecords[timeID]; ok {
 		if r.refs == -1 {
 			// time ID is aborted
 			return true
@@ -116,7 +116,7 @@ func (tm *TimeMark) IsAborted(timeID int64) bool {
 	return false
 }
 
-func (tm *TimeMark) abort(timeID _TimeID) {
+func (tm *_TimeMark) abort(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 
@@ -127,7 +127,7 @@ func (tm *TimeMark) abort(timeID _TimeID) {
 	tm.releasedRecords[timeID] = r
 }
 
-func (tm *TimeMark) StartReleaser(dur time.Duration) {
+func (tm *_TimeMark) startReleaser(dur time.Duration) {
 	tm.Lock()
 	defer tm.Unlock()
 

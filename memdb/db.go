@@ -26,6 +26,7 @@ import (
 
 	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/hash"
+	"github.com/unit-io/unitdb/wal"
 )
 
 // DB represents an SSD-optimized mem store.
@@ -58,16 +59,24 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	internal := &_DB{
-		start:      time.Now(),
-		meter:      NewMeter(),
-		writeLockC: make(chan struct{}, 1),
-		timeMark:   newTimeMark(options.timeRecordInterval),
-		timeLock:   newTimeLock(),
+		start:    time.Now(),
+		meter:    NewMeter(),
+		timeMark: newTimeMark(options.timeRecordInterval),
+		timeLock: newTimeLock(),
 
 		// Close
 		closeC: make(chan struct{}),
 	}
 	internal.tinyBatch = &_TinyBatch{ID: int64(internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
+	logOpts := wal.Options{Path: options.logFilePath + "/" + logFileName, TargetSize: options.logSize, BufferSize: options.bufferSize, Reset: options.logResetFlag}
+	wal, needLogRecovery, err := wal.New(logOpts)
+	if err != nil {
+		wal.Close()
+		return nil, err
+	}
+
+	internal.closer = wal
+	internal.wal = wal
 
 	db := &DB{
 		opts:       options,
@@ -85,8 +94,10 @@ func Open(opts ...Options) (*DB, error) {
 
 	go db.tinyBatchLoop(db.opts.timeRecordInterval)
 
-	if err := db.startRecovery(options.logResetFlag); err != nil {
-		return nil, err
+	if needLogRecovery || !options.logResetFlag {
+		if err := db.startRecovery(options.logResetFlag); err != nil {
+			return nil, err
+		}
 	}
 
 	return db, nil
@@ -138,10 +149,38 @@ func (db *DB) Keys() []uint64 {
 	return keys
 }
 
-// TimeMark sets time mark.
-func (db *DB) TimeMark() *TimeMark {
-	db.internal.timeMark.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
-	return db.internal.timeMark
+// Lookup gets data for the time ID and provided key.
+func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
+	if err := db.ok(); err != nil {
+		return nil, err
+	}
+
+	db.mu.RLock()
+	block, ok := db.blockCache[_TimeID(timeID)]
+	db.mu.RUnlock()
+	if !ok {
+		return nil, errEntryDoesNotExist
+	}
+
+	block.RLock()
+	defer block.RUnlock()
+	// Get item from block.
+	off, ok := block.records[iKey(false, key)]
+	if !ok {
+		return nil, errEntryDoesNotExist
+	}
+	scratch, err := block.data.readRaw(off, 4) // read data length.
+	if err != nil {
+		return nil, err
+	}
+	dataLen := binary.LittleEndian.Uint32(scratch[:4])
+	data, err := block.data.readRaw(off, dataLen)
+	if err != nil {
+		return nil, err
+	}
+	db.internal.meter.Gets.Inc(1)
+
+	return data[8+1+4:], nil
 }
 
 // Get gets data from most recent time ID for the provided key.
@@ -165,6 +204,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	for tmID := range r.timeRecords {
 		timeRec = append(timeRec, tmID)
 	}
+	r.RUnlock()
 	sort.Slice(timeRec[:], func(i, j int) bool {
 		return timeRec[i] > timeRec[j]
 	})
@@ -176,7 +216,9 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 				b.RUnlock()
 				break
 			}
+			r.RLock()
 			fltr := r.timeRecords[tmID]
+			r.RUnlock()
 			if !fltr.Test(key) {
 				b.RUnlock()
 				break
@@ -184,7 +226,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 			b.RUnlock()
 		}
 	}
-	r.RUnlock()
+
 	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {
@@ -214,12 +256,17 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 // ForEachBlock gets all keys from mem store. This method is not thread safe.
 // It is mainly used during database recovery on DB open.
-func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
+func (db *DB) ForEachBlock(timeMarkExpDur time.Duration, f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
+	db.mu.RLock()
+	db.internal.timeMark.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
 	blocks := db.blockCache
+	db.mu.RUnlock()
 
 	for timeID := range blocks {
-		timeIDs = append(timeIDs, timeID)
+		if db.internal.timeMark.isReleased(timeID) {
+			timeIDs = append(timeIDs, timeID)
+		}
 	}
 
 	sort.Slice(timeIDs[:], func(i, j int) bool {
@@ -229,15 +276,22 @@ func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (e
 	for _, timeID := range timeIDs {
 		block := blocks[timeID]
 		var keys []uint64
+		block.RLock()
 		for ik := range block.records {
 			if ik.delFlag == 0 {
 				keys = append(keys, ik.key)
 			}
 		}
+		block.RUnlock()
+		sort.Slice(keys[:], func(i, j int) bool {
+			return keys[i] < keys[j]
+		})
 		if stop, err := f(int64(timeID), keys); stop || err != nil {
 			return err
 		}
 	}
+
+	go db.internal.timeMark.startReleaser(timeMarkExpDur)
 
 	return nil
 }
@@ -263,6 +317,7 @@ func (db *DB) Delete(key uint64) error {
 	for tmID := range r.timeRecords {
 		timeRec = append(timeRec, tmID)
 	}
+	r.RUnlock()
 	sort.Slice(timeRec[:], func(i, j int) bool {
 		return timeRec[i] > timeRec[j]
 	})
@@ -274,7 +329,9 @@ func (db *DB) Delete(key uint64) error {
 				b.RUnlock()
 				break
 			}
+			r.RLock()
 			fltr := r.timeRecords[tmID]
+			r.RUnlock()
 			if !fltr.Test(key) {
 				b.RUnlock()
 				break
@@ -282,7 +339,7 @@ func (db *DB) Delete(key uint64) error {
 			b.RUnlock()
 		}
 	}
-	r.RUnlock()
+
 	block, ok := db.blockCache[timeID]
 	db.mu.RUnlock()
 	if !ok {

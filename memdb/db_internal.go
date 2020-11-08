@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,10 +84,8 @@ type _DB struct {
 	// The metrics to measure timeseries on DB events.
 	meter *Meter
 
-	writeLockC chan struct{}
-
 	// time mark to manage time records
-	timeMark *TimeMark
+	timeMark *_TimeMark
 	timeLock _TimeLock
 
 	// tiny Batch
@@ -176,9 +173,6 @@ func (db *DB) close() error {
 	time.Sleep(db.opts.timeRecordInterval)
 	close(db.internal.closeC)
 	db.internal.batchPool.stopWait()
-
-	// Acquire lock.
-	db.internal.writeLockC <- struct{}{}
 
 	// Wait for all goroutines to exit.
 	db.internal.closeW.Wait()
@@ -352,12 +346,6 @@ func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
 		db.internal.closeW.Done()
 	}()
 
-	// commit writes batches into write ahead log. The write happen synchronously.
-	db.internal.writeLockC <- struct{}{}
-	defer func() {
-		<-db.internal.writeLockC
-	}()
-
 	if tinyBatch.len() == 0 {
 		return nil
 	}
@@ -375,26 +363,8 @@ func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
 
 // startRecovery recovers pending entries from the WAL.
 func (db *DB) startRecovery(reset bool) error {
-	// Make sure we have a directory
-	if err := os.MkdirAll(db.opts.logFilePath, 0777); err != nil {
-		return errors.New("db.Open, Unable to create db dir")
-	}
-
-	logOpts := wal.Options{Path: db.opts.logFilePath + "/" + logFileName, TargetSize: db.opts.logSize, BufferSize: db.opts.bufferSize, Reset: reset}
-	wal, needLogRecovery, err := wal.New(logOpts)
-	if err != nil {
-		wal.Close()
-		return err
-	}
-
-	db.internal.closer = wal
-	db.internal.wal = wal
-	if !needLogRecovery || reset {
-		return nil
-	}
-
 	// start log recovery
-	r, err := wal.NewReader()
+	r, err := db.internal.wal.NewReader()
 	if err != nil {
 		return err
 	}
@@ -424,15 +394,10 @@ func (db *DB) startRecovery(reset bool) error {
 		return false, nil
 	})
 
-	if err := wal.Reset(); err != nil {
+	if err := db.internal.wal.Reset(); err != nil {
 		return err
 	}
 
-	// acquire write lock on recovery.
-	db.internal.writeLockC <- struct{}{}
-	defer func() {
-		<-db.internal.writeLockC
-	}()
 	for k, val := range log {
 		if _, err := db.Put(k, val); err != nil {
 			return err
