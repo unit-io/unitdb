@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/hash"
 	"github.com/unit-io/unitdb/wal"
@@ -63,6 +64,9 @@ func Open(opts ...Options) (*DB, error) {
 		meter:    NewMeter(),
 		timeMark: newTimeMark(options.timeRecordInterval),
 		timeLock: newTimeLock(),
+
+		// buffer pool
+		bufPool: bpool.NewBufferPool(options.memdbSize, nil),
 
 		// Close
 		closeC: make(chan struct{}),
@@ -129,7 +133,7 @@ func (db *DB) IsOpen() bool {
 	return db.blockCache != nil
 }
 
-// Keys gets all keys from mem store.
+// Keys gets all keys from DB.
 func (db *DB) Keys() []uint64 {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -149,7 +153,7 @@ func (db *DB) Keys() []uint64 {
 	return keys
 }
 
-// Lookup gets data for the time ID and provided key.
+// Lookup gets data for the provided key and timeID.
 func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
@@ -169,12 +173,12 @@ func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
-	scratch, err := block.data.readRaw(off, 4) // read data length.
+	scratch, err := block.data.Slice(off, off+4) // read data length.
 	if err != nil {
 		return nil, err
 	}
-	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := block.data.readRaw(off, dataLen)
+	dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+	data, err := block.data.Slice(off, off+dataLen)
 	if err != nil {
 		return nil, err
 	}
@@ -240,12 +244,12 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
-	scratch, err := block.data.readRaw(off, 4) // read data length.
+	scratch, err := block.data.Slice(off, off+4) // read data length.
 	if err != nil {
 		return nil, err
 	}
-	dataLen := binary.LittleEndian.Uint32(scratch[:4])
-	data, err := block.data.readRaw(off, dataLen)
+	dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+	data, err := block.data.Slice(off, off+dataLen)
 	if err != nil {
 		return nil, err
 	}
@@ -254,8 +258,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	return data[8+1+4:], nil
 }
 
-// ForEachBlock gets all keys from mem store. This method is not thread safe.
-// It is mainly used during database recovery on DB open.
+// ForEachBlock gets all keys from DB.
 func (db *DB) ForEachBlock(timeMarkExpDur time.Duration, f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
 	db.mu.RLock()
@@ -296,7 +299,7 @@ func (db *DB) ForEachBlock(timeMarkExpDur time.Duration, f func(timeID int64, ke
 	return nil
 }
 
-// Delete deletes entry from mem store.
+// Delete deletes entry from DB.
 func (db *DB) Delete(key uint64) error {
 	if err := db.ok(); err != nil {
 		return err
@@ -377,7 +380,7 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 
 	block, ok := db.blockCache[timeID]
 	if !ok {
-		block = newBlock()
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
 		db.blockCache[timeID] = block
 	}
 	db.mu.Unlock()
@@ -424,12 +427,12 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
-// Free frees time block from mem store for a provided time ID and releases block from WAL.
+// Free frees time block from DB for a provided time ID and releases block from WAL.
 func (db *DB) Free(timeID int64) error {
 	return db.releaseLog(_TimeID(timeID))
 }
 
-// Size returns the total number of entries in mem store.
+// Size returns the total number of entries in DB.
 func (db *DB) Size() int64 {
 	size := int64(0)
 	db.mu.RLock()

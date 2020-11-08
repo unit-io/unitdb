@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/wal"
 )
@@ -37,7 +38,10 @@ const (
 
 	nPoolSize = 27
 
-	// defaultMemSize sets maximum memory usage limit for the mem store.
+	// nLocks sets maximum concurent timeLocks.
+	nLocks = 100000
+
+	// defaultMemSize sets maximum memory usage limit for the DB.
 	defaultMemSize = (int64(1) << 34) - 1
 
 	// defaultBufferSize sets Size of buffer to use for pooling.
@@ -70,7 +74,7 @@ type (
 	_BlockKey uint16
 	_Block    struct {
 		count        int64
-		data         _DataTable
+		data         *bpool.Buffer
 		records      map[_Key]int64 // map[key]offset
 		sync.RWMutex                // Read Write mutex, guards access to internal map.
 	}
@@ -92,6 +96,9 @@ type _DB struct {
 	tinyBatch *_TinyBatch
 	batchPool *_BatchPool
 
+	// buffer pool
+	bufPool *bpool.BufferPool
+
 	// Write ahead log
 	wal *wal.WAL
 
@@ -102,9 +109,9 @@ type _DB struct {
 	closer io.Closer
 }
 
-func newBlock() *_Block {
-	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
-}
+// func newBlock() *_Block {
+// 	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
+// }
 
 // blockID gets blockID for the Key using consistent hashing.
 func (db *DB) blockID(key uint64) _BlockKey {
@@ -203,14 +210,14 @@ func (db *DB) batch() *Batch {
 }
 
 func (b *_Block) put(ikey _Key, data []byte) error {
-	dataLen := uint32(len(data) + 8 + 1 + 4) // data len + key len + flag bit + scratch len
-	off, err := b.data.allocate(dataLen)
+	dataLen := int64(len(data) + 8 + 1 + 4) // data len + key len + flag bit + scratch len
+	off, err := b.data.Extend(dataLen)
 	if err != nil {
 		return err
 	}
 	var scratch [4]byte
-	binary.LittleEndian.PutUint32(scratch[0:4], dataLen)
-	if _, err := b.data.writeAt(scratch[:], off); err != nil {
+	binary.LittleEndian.PutUint32(scratch[0:4], uint32(dataLen))
+	if _, err := b.data.WriteAt(scratch[:], off); err != nil {
 		return err
 	}
 
@@ -218,11 +225,11 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 	var k [9]byte
 	k[0] = ikey.delFlag
 	binary.LittleEndian.PutUint64(k[1:], ikey.key)
-	if _, err := b.data.writeAt(k[:], off+4); err != nil {
+	if _, err := b.data.WriteAt(k[:], off+4); err != nil {
 		return err
 	}
 	b.records[ikey] = off
-	if _, err := b.data.writeAt(data, off+8+1+4); err != nil {
+	if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
 		return err
 	}
 	if ikey.delFlag == 0 {
@@ -242,7 +249,7 @@ func (db *DB) delete(key uint64) error {
 
 	block, ok := db.blockCache[timeID]
 	if !ok {
-		block = newBlock()
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
 		db.blockCache[timeID] = block
 	}
 	db.mu.Unlock()
@@ -276,12 +283,12 @@ func (db *DB) move(timeID _TimeID) error {
 	for _, ik := range dkeys {
 		off, ok := block.records[ik]
 		if ok {
-			scratch, err := block.data.readRaw(off, 4) // read data length.
+			scratch, err := block.data.Slice(off, off+4) // read data length.
 			if err != nil {
 				return err
 			}
-			dataLen := binary.LittleEndian.Uint32(scratch[:4])
-			data, err := block.data.readRaw(off, dataLen)
+			dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+			data, err := block.data.Slice(off, off+dataLen)
 			if err != nil {
 				return err
 			}
@@ -316,12 +323,12 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	block.RLock()
 	defer block.RUnlock()
 	for _, off := range block.records {
-		scratch, err := block.data.readRaw(off, 4) // read data length.
+		scratch, err := block.data.Slice(off, off+4) // read data length.
 		if err != nil {
 			return err
 		}
-		dataLen := binary.LittleEndian.Uint32(scratch[:4])
-		if data, err := block.data.readRaw(off, dataLen); err == nil {
+		dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+		if data, err := block.data.Slice(off, off+dataLen); err == nil {
 			if err := <-logWriter.Append(data[4:]); err != nil {
 				return err
 			}
@@ -421,7 +428,8 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 		return errEntryDoesNotExist
 	}
 
-	block.data.reset()
+	db.internal.bufPool.Put(block.data)
+	// block.data.Reset()
 	db.mu.Lock()
 	delete(db.blockCache, timeID)
 	db.mu.Unlock()

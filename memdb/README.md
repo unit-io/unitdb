@@ -10,7 +10,7 @@ The memdb is blazing fast specialized in memory key-value store for time-series 
 - All DB methods are safe for concurrent use by multiple goroutines.
 
 ## Quick Start
-To build unitdb from source code use go get command.
+To build memdb from source code use go get command.
 
 > go get -u github.com/unit-io/unitdb/memdb
 
@@ -69,6 +69,22 @@ Use DB.Get() function to read inserted value. It gets entry from most recent tim
 
 ```
 	if val, err := db.Get(1); err == nil {
+        log.Printf("%s ", val)
+    }
+
+```
+
+#### Read messages
+Use DB.Look() function to look entry for faster read.
+
+```
+	timeID, err := db.Put(1, []byte("msg 1"))
+	if err != nil {
+		log.Fatal(err)
+		return
+    }
+
+	if val, err := db.Lookup(timeID, 1); err == nil {
         log.Printf("%s ", val)
     }
 

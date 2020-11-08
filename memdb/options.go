@@ -23,7 +23,7 @@ import (
 type _Options struct {
 	logFilePath string
 
-	// memdbSize sets maximum size of mem store.
+	// memdbSize sets maximum size of DB.
 	memdbSize int64
 
 	// bufferSize sets size of buffer to use for buffer pooling.
@@ -87,7 +87,7 @@ func WithLogFilePath(path string) Options {
 	})
 }
 
-// WithMemdbSize sets max size of mem store.
+// WithMemdbSize sets max size of DB.
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.memdbSize = size

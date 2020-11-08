@@ -31,11 +31,11 @@ type _TimeLock struct {
 // newTimeLock creates mutex to perform time based lock/unlock.
 func newTimeLock() _TimeLock {
 	mu := _TimeLock{
-		internal:   make([]*sync.RWMutex, nBlocks),
-		consistent: hash.InitConsistent(int(nBlocks), int(nBlocks)),
+		internal:   make([]*sync.RWMutex, nLocks),
+		consistent: hash.InitConsistent(int(nLocks), int(nLocks)),
 	}
 
-	for i := 0; i < nBlocks; i++ {
+	for i := 0; i < nLocks; i++ {
 		mu.internal[i] = new(sync.RWMutex)
 	}
 

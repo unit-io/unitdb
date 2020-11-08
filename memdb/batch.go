@@ -57,7 +57,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	b.db.mu.Lock()
 	block, ok := b.db.blockCache[timeID]
 	if !ok {
-		block = newBlock()
+		block = &_Block{data: b.db.internal.bufPool.Get(), records: make(map[_Key]int64)}
 		b.db.blockCache[timeID] = block
 	}
 	b.db.mu.Unlock()
