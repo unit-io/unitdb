@@ -19,10 +19,10 @@ package unitdb
 import (
 	"errors"
 	"fmt"
-
-	// _ "net/http/pprof"
+	"time"
 
 	"github.com/unit-io/unitdb/message"
+	// _ "net/http/pprof"
 )
 
 func (db *_SyncHandle) recoverWindowBlocks(windowEntries map[uint64]_WindowEntries) error {
@@ -50,7 +50,6 @@ func (db *_SyncHandle) startRecovery() error {
 		db.internal.closeW.Done()
 	}()
 	fmt.Println("db.recoverLog: start recovery")
-
 	if ok := db.startSync(); !ok {
 		return nil
 	}
@@ -58,29 +57,23 @@ func (db *_SyncHandle) startRecovery() error {
 		db.finish()
 	}()
 
-	var e _Entry
-	topics := make(map[uint64]*message.Topic) // map[topicHash]*message.Topic
-	r, err := db.internal.wal.NewReader()
-	if err != nil {
-		return err
-	}
+	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
-	err = r.Read(func(timeID int64) (ok bool, err error) {
-		l := r.Count()
+
+	err := db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
-		for i := uint32(0); i < l; i++ {
-			logData, ok, err := r.Next()
-			if err != nil {
-				return false, err
+		for _, seq := range seqs {
+			memdata, err := db.internal.mem.Lookup(timeID, seq)
+			if err != nil || memdata == nil {
+				db.syncInfo.entriesInvalid++
+				logger.Error().Err(err).Str("context", "mem.Get")
+				err1 = err
+				continue
 			}
-			if !ok {
-				break
-			}
-			if err := e.UnmarshalBinary(logData[:entrySize]); err != nil {
-				return true, err
-			}
-			if db.internal.freeList.isFree(timeID, e.seq) {
-				// If seq is present in free list it mean it was deleted but not get released from the WAL.
+			var e _Entry
+			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+				db.syncInfo.entriesInvalid++
+				err1 = err
 				continue
 			}
 			if e.seq > db.syncInfo.upperSeq {
@@ -91,28 +84,27 @@ func (db *_SyncHandle) startRecovery() error {
 				topicSize: e.topicSize,
 				valueSize: e.valueSize,
 
-				cacheBlock: logData[entrySize:],
+				cache: memdata[entrySize:],
 			}
-			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
-				return true, err
+			if s.msgOffset, err = db.dataWriter.append(s.cache); err != nil {
+				return false, err
 			}
 			exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx)
 			if err != nil {
-				return true, err
+				return false, err
 			}
 			if exists {
 				db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
 				continue
 			}
-			if _, ok := topics[e.topicHash]; !ok && e.topicSize != 0 {
+			if e.topicSize != 0 {
 				rawtopic, _ := db.dataWriter.dataTable.readTopic(s)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {
-					return true, err
+					return false, err
 				}
 				db.internal.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
-				topics[e.topicHash] = t
 			}
 			if _, ok := winEntries[e.topicHash]; ok {
 				winEntries[e.topicHash] = append(winEntries[e.topicHash], newWinEntry(e.seq, e.expiresAt))
@@ -122,6 +114,9 @@ func (db *_SyncHandle) startRecovery() error {
 			db.internal.filter.Append(e.seq)
 			db.syncInfo.count++
 			db.syncInfo.inBytes += int64(e.valueSize)
+		}
+		if err1 != nil {
+			return true, err1
 		}
 
 		for h := range winEntries {
@@ -143,13 +138,19 @@ func (db *_SyncHandle) startRecovery() error {
 		if err := db.sync(true); err != nil {
 			return true, err
 		}
+		if db.syncInfo.syncComplete {
+			if err := db.internal.mem.Free(timeID); err != nil {
+				return true, err
+			}
+		}
+
 		return false, nil
 	})
-	if err != nil {
-		fmt.Println("db.Sync: error ", err)
+
+	if err != nil || err1 != nil {
 		db.syncInfo.syncComplete = false
 		db.abort()
-		return err
+		return err1
 	}
 
 	if err := db.recoverWindowBlocks(pendingEntries); err != nil {
@@ -172,6 +173,5 @@ func (db *DB) recoverLog() error {
 		return err
 	}
 
-	// reset log on successful recovery.
-	return db.internal.wal.Reset()
+	return nil
 }

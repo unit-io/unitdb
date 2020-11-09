@@ -94,7 +94,7 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 			continue
 		}
 		entryIdx := 0
-		for i := 0; i < seqsPerWindowBlock; i++ {
+		for i := 0; i < entriesPerWindowBlock; i++ {
 			e := b.entries[i]
 			if e.sequence == we.sequence { //record exist in db.
 				entryIdx = -1
@@ -104,7 +104,7 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 		if entryIdx == -1 {
 			continue
 		}
-		if b.entryIdx == seqsPerWindowBlock {
+		if b.entryIdx == entriesPerWindowBlock {
 			topicHash := b.topicHash
 			next := int64(blockSize * uint32(winIdx))
 			// set approximate cutoff on winBlock.
@@ -127,16 +127,17 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 }
 
 func (w *_WindowWriter) write() error {
-	for bIdx, win := range w.winBlocks {
-		if !win.leased || !win.dirty {
+	for bIdx, b := range w.winBlocks {
+		if !b.leased || !b.dirty {
 			continue
 		}
 		off := int64(blockSize * uint32(bIdx))
-		if _, err := w.timeWindowBucket.file.WriteAt(win.MarshalBinary(), off); err != nil {
+		if _, err := w.timeWindowBucket.file.WriteAt(b.MarshalBinary(), off); err != nil {
 			return err
 		}
-		win.dirty = false
-		w.winBlocks[bIdx] = win
+		b.dirty = false
+		w.winBlocks[bIdx] = b
+		// fmt.Println("timeWindow.write: topicHash, seq ", b.topicHash, b.entries[0])
 	}
 
 	// sort blocks by blockIdx.
@@ -159,21 +160,23 @@ func (w *_WindowWriter) write() error {
 		if len(blocks) == 1 {
 			bIdx := blocks[0]
 			off := int64(blockSize * uint32(bIdx))
-			wb := w.winBlocks[bIdx]
-			buf := wb.MarshalBinary()
+			b := w.winBlocks[bIdx]
+			buf := b.MarshalBinary()
 			if _, err := w.timeWindowBucket.file.WriteAt(buf, off); err != nil {
 				return err
 			}
-			wb.dirty = false
-			w.winBlocks[bIdx] = wb
+			b.dirty = false
+			w.winBlocks[bIdx] = b
+			// fmt.Println("timeWindow.write: topicHash, seq ", b.topicHash, b.entries[0])
 			continue
 		}
 		blockOff := int64(blockSize * uint32(blocks[0]))
 		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
-			wb := w.winBlocks[bIdx]
-			w.buffer.Write(wb.MarshalBinary())
-			wb.dirty = false
-			w.winBlocks[bIdx] = wb
+			b := w.winBlocks[bIdx]
+			w.buffer.Write(b.MarshalBinary())
+			b.dirty = false
+			w.winBlocks[bIdx] = b
+			// fmt.Println("timeWindow.write: topicHash, seq ", b.topicHash, b.entries[0])
 		}
 		blockData, err := w.buffer.Slice(bufOff, w.buffer.Size())
 		if err != nil {

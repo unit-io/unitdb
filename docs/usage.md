@@ -30,7 +30,6 @@ The unitdb is blazing fast specialized time-series database for microservices, I
  + [Batch operation](#Batch-operation)
    - [Writing to a batch](#Writing-to-a-batch)
    - [Writing to multiple topics in a batch](#Writing-to-multiple-topics-in-a-batch)
- * [Iterating over items](#Iterating-over-items)
  + [Advanced](#Advanced)
    - [Writing to wildcard topics](#Writing-to-wildcard-topics)
    - [Topic isolation in batch operation](#Topic-isolation-in-batch-operation)
@@ -165,7 +164,7 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into unitdb or bulk delete records from unitdb. See examples under cmd/benchmark folder.
+Use batch operation to bulk insert records into unitdb or bulk delete records from unitdb.
 
 #### Writing to a batch
 Use Batch.Put() to write to a single topic in a batch.
@@ -191,29 +190,6 @@ Use Batch.PutEntry() function to store messages to multiple topics in a batch.
 		b.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u2"), []byte("msg for team alpha channel1 receiver2")))
 		return nil
     })
-
-```
-
-### Iterating over items
-Use the DB.Items() function which returns a new instance of ItemIterator. 
-Specify topic to retrieve values and use last parameter to specify duration or specify number of recent messages to retrieve from the topic. for example, "last=1h" retrieves messages from unitdb stored in last 1 hour, or "last=100" to retrieves last 100 messages from the unitdb:
-
-```
-
-	topic := "teams.alpha.ch1.u1?last=1h"
-	it, err := db.Items(unitdb.NewQuery(topic))
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	for it.First(); it.Valid(); it.Next() {
-		err := it.Error()
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
-	}
 
 ```
 

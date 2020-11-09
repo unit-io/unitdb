@@ -19,9 +19,9 @@ package unitdb
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
-	"time"
 
+	"github.com/unit-io/bpool"
+	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
 )
 
@@ -35,20 +35,26 @@ func (b *Batch) SetOptions(opts ...Options) {
 }
 
 // Batch is a write batch.
-type Batch struct {
-	db      *DB
-	opts    *_Options
-	managed bool
+type (
+	_BatchIndex struct {
+		delFlag bool
+		offset  int64
+	}
 
-	//tiny Batch
-	tinyBatchLockC chan struct{}
-	tinyBatch      *_TinyBatch
+	Batch struct {
+		db      *DB
+		mem     *memdb.Batch
+		opts    *_Options
+		managed bool
 
-	tinyBatchGroup map[int64]*_TinyBatch // map[timeID]*tinyBatch
-	commitW        sync.WaitGroup
-	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
-	commitComplete chan struct{}
-}
+		index  []_BatchIndex
+		buffer *bpool.Buffer
+		size   int64
+
+		// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
+		commitComplete chan struct{}
+	}
+)
 
 // Put adds entry to batch for given topic->key/value.
 // Client must provide Topic to the BatchOptions.
@@ -73,28 +79,21 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	e.Encryption = e.Encryption || b.opts.batchOptions.encryption
-	if err := b.db.setEntry(b.tinyBatch.timeID(), e); err != nil {
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
-
-	b.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-b.tinyBatchLockC
-	}()
 
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.entry.cache)+4))
-	if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.tinyBatch.buffer.Write(e.entry.cache); err != nil {
+	if _, err := b.buffer.Write(e.entry.cache); err != nil {
 		return err
 	}
 
-	b.tinyBatch.index = append(b.tinyBatch.index, _BatchIndex{delFlag: false, offset: b.tinyBatch.size})
-	b.tinyBatch.size += int64(len(e.entry.cache) + 4)
-
-	b.tinyBatch.incount()
+	b.index = append(b.index, _BatchIndex{delFlag: false, offset: b.size})
+	b.size += int64(len(e.entry.cache) + 4)
 
 	// reset message entry
 	e.reset()
@@ -124,28 +123,21 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 
-	if err := b.db.setEntry(b.tinyBatch.timeID(), e); err != nil {
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
-
-	b.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-b.tinyBatchLockC
-	}()
 
 	var scratch [4]byte
 	binary.LittleEndian.PutUint32(scratch[0:4], uint32(len(e.entry.cache)+4))
-	if _, err := b.tinyBatch.buffer.Write(scratch[:]); err != nil {
+	if _, err := b.buffer.Write(scratch[:]); err != nil {
 		return err
 	}
-	if _, err := b.tinyBatch.buffer.Write(e.entry.cache); err != nil {
+	if _, err := b.buffer.Write(e.entry.cache); err != nil {
 		return err
 	}
 
-	b.tinyBatch.index = append(b.tinyBatch.index, _BatchIndex{delFlag: true, offset: b.tinyBatch.size})
-	b.tinyBatch.size += int64(len(e.entry.cache) + 4)
-
-	b.tinyBatch.incount()
+	b.index = append(b.index, _BatchIndex{delFlag: true, offset: b.size})
+	b.size += int64(len(e.entry.cache) + 4)
 
 	// reset message entry
 	e.reset()
@@ -153,22 +145,21 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 	return nil
 }
 
-func (b *Batch) _writeInternal(fn func(i int, e _Entry, data []byte) error) error {
+func (b *Batch) writeInternal(fn func(i int, e _Entry, data []byte) error) error {
 	if err := b.db.ok(); err != nil {
 		return err
 	}
 
-	// data := b.tinyBatch.buffer.Bytes()
 	var e _Entry
 
-	for i, index := range b.tinyBatch.index {
+	for i, index := range b.index {
 		off := index.offset
-		data, err := b.tinyBatch.buffer.Slice(off, off+4)
+		data, err := b.buffer.Slice(off, off+4)
 		if err != nil {
 			return err
 		}
 		dataLen := int64(binary.LittleEndian.Uint32(data))
-		entryData, err := b.tinyBatch.buffer.Slice(off+4, off+entrySize+4)
+		entryData, err := b.buffer.Slice(off+4, off+entrySize+4)
 		if err != nil {
 			return err
 		}
@@ -186,7 +177,7 @@ func (b *Batch) _writeInternal(fn func(i int, e _Entry, data []byte) error) erro
 
 		// put packed entry into memdb.
 		data = data[:0]
-		data, err = b.tinyBatch.buffer.Slice(off+4, off+dataLen)
+		data, err = b.buffer.Slice(off+4, off+dataLen)
 		if err != nil {
 			return err
 		}
@@ -201,16 +192,14 @@ func (b *Batch) _writeInternal(fn func(i int, e _Entry, data []byte) error) erro
 
 // Write starts writing entries into DB. It returns an error if batch write fails.
 func (b *Batch) Write() error {
-	if b.tinyBatch.len() == 0 {
+	if b.len() == 0 {
 		return nil
 	}
 
-	defer b.db.batchdb.bufPool.Put(b.tinyBatch.buffer)
-
 	topics := make(map[uint64]*message.Topic)
-	b.tinyBatchGroup[b.tinyBatch.timeID()] = b.tinyBatch
+	timeID := b.mem.TimeID()
 
-	b._writeInternal(func(i int, e _Entry, data []byte) error {
+	b.writeInternal(func(i int, e _Entry, data []byte) error {
 		if e.topicSize != 0 {
 			t, ok := topics[e.topicHash]
 			if !ok {
@@ -221,51 +210,26 @@ func (b *Batch) Write() error {
 			}
 			b.db.internal.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
 		}
-		blockID := startBlockIndex(e.seq)
-		memseq := b.db.internal.dbInfo.cacheID ^ e.seq
-		if err := b.db.internal.blockCache.Set(uint64(blockID), memseq, data); err != nil {
+		if err := b.mem.Put(e.seq, data); err != nil {
 			return err
 		}
-		if ok := b.db.internal.timeWindow.add(b.tinyBatch.timeID(), e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
+		if ok := b.db.internal.timeWindow.add(timeID, e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
 			return errForbidden
 		}
-		b.tinyBatch.entries = append(b.tinyBatch.entries, e.seq)
 		return nil
 	})
 
-	b.tinyBatchLockC <- struct{}{}
-	b.db.batchdb.batchPool.write(b.tinyBatch)
-	b.tinyBatch = b.db.newTinyBatch()
-	<-b.tinyBatchLockC
+	b.mem.Write()
+	b.reset()
 
 	return nil
-}
-
-// batchWriteLoop handles batch partial writes using tiny batches.
-func (b *Batch) _writeLoop(interval time.Duration) {
-	b.db.internal.closeW.Add(1)
-	defer b.db.internal.closeW.Done()
-	tinyBatchTicker := time.NewTicker(interval)
-	for {
-		select {
-		case <-b.commitComplete:
-			tinyBatchTicker.Stop()
-			return
-		case <-b.db.internal.closeC:
-			tinyBatchTicker.Stop()
-			return
-		case <-tinyBatchTicker.C:
-			if err := b.Write(); err != nil {
-				logger.Error().Err(err).Str("context", "batchWriteLoop").Msgf("Error writing tinyBatch")
-			}
-		}
-	}
 }
 
 // Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
 // On Commit complete batch operation signal to the caller if the batch is fully commited to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed batch commit not allowed")
+
 	b.db.internal.closeW.Add(1)
 	defer func() {
 		close(b.commitComplete)
@@ -273,27 +237,32 @@ func (b *Batch) Commit() error {
 		b.Abort()
 	}()
 
-	// Write if any pending entries in batch
+	// Write if any pending entries in batch.
 	if err := b.Write(); err != nil {
 		return err
 	}
-	for timeID, tinyBatch := range b.tinyBatchGroup {
-		<-tinyBatch.doneChan
-		b.db.releaseTimeID(timeID)
+
+	// Commit batch to database.
+	if err := b.mem.Commit(); err != nil {
+		return err
 	}
 
-	b.tinyBatchGroup = make(map[int64]*_TinyBatch)
 	return nil
+}
+
+func (b *Batch) reset() {
+	b.index = b.index[:0]
+	b.size = 0
+	b.buffer.Reset()
 }
 
 //Abort abort is a batch cleanup operation on batch complete.
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed batch abort not allowed")
-	for _, tinyBatch := range b.tinyBatchGroup {
-		b.db.rollback(tinyBatch)
-	}
-	// abort time window entries
-	b.db.abort()
+
+	b.reset()
+	b.mem.Abort()
+	b.db.internal.bufPool.Put(b.buffer)
 	b.db = nil
 }
 
@@ -304,12 +273,16 @@ func _assert(condition bool, msg string, v ...interface{}) {
 	}
 }
 
+func (b *Batch) len() int {
+	return len(b.index)
+}
+
 // setManaged sets batch managed.
-func (b *Batch) _setManaged() {
+func (b *Batch) setManaged() {
 	b.managed = true
 }
 
 // unsetManaged sets batch unmanaged.
-func (b *Batch) _unsetManaged() {
+func (b *Batch) unsetManaged() {
 	b.managed = false
 }

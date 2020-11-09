@@ -17,6 +17,7 @@
 package unitdb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -26,12 +27,12 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	bc "github.com/unit-io/unitdb/blockcache"
+	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/crypto"
 	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/fs"
+	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
-	"github.com/unit-io/unitdb/wal"
 )
 
 // DB represents the message storage for topic->keys-values.
@@ -43,9 +44,6 @@ type DB struct {
 	opts  *_Options
 
 	internal *_DB
-
-	//batchdb
-	batchdb *_Batchdb
 }
 
 // Open opens or creates a new DB.
@@ -68,22 +66,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	index, err := newFile(fs, path+indexPostfix)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := newFile(fs, path+dataPostfix)
-	if err != nil {
-		return nil, err
-	}
-
-	leaseFile, err := newFile(fs, path+leasePostfix)
-	if err != nil {
-		return nil, err
-	}
-	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
-
 	timeOptions := &_TimeOptions{
 		maxDuration:         options.syncDurationType * time.Duration(options.maxSyncDurations),
 		expDurationType:     time.Minute,
@@ -95,6 +77,64 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
+	index, err := newFile(fs, path+indexPostfix)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := newFile(fs, path+dataPostfix)
+	if err != nil {
+		return nil, err
+	}
+
+	dbInfo := _DBInfo{}
+	if index.Size() == 0 {
+		if data.Size() != 0 {
+			if err := timewindow.Close(); err != nil {
+				logger.Error().Err(err).Str("context", "db.Open")
+			}
+			if err := index.Close(); err != nil {
+				logger.Error().Err(err).Str("context", "db.Open")
+			}
+			if err := data.Close(); err != nil {
+				logger.Error().Err(err).Str("context", "db.Open")
+			}
+			if err := lock.Unlock(); err != nil {
+				logger.Error().Err(err).Str("context", "db.Open")
+			}
+
+			return nil, errCorrupted
+		}
+		dbInfo = _DBInfo{
+			header: _Header{
+				signature: signature,
+				version:   version,
+			},
+			blockIdx:  -1,
+			windowIdx: -1,
+		}
+		if _, err = index.extend(fixed); err != nil {
+			return nil, err
+		}
+		if err := index.writeMarshalableAt(dbInfo, 0); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := index.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
+		logger.Error().Err(err).Str("context", "db.readHeader")
+		return nil, err
+	}
+	if !bytes.Equal(dbInfo.header.signature[:], signature[:]) {
+		return nil, errCorrupted
+	}
+
+	leaseFile, err := newFile(fs, path+leasePostfix)
+	if err != nil {
+		return nil, err
+	}
+	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
+
 	filter, err := newFile(fs, path+filterPostfix)
 	if err != nil {
 		return nil, err
@@ -102,19 +142,38 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	internal := &_DB{
 		mutex:      newMutex(),
-		timeWindow: newTimeWindowBucket(timewindow, timeOptions),
+		dbInfo:     dbInfo,
+		timeWindow: newTimeWindowBucket(timewindow, dbInfo.windowIdx, timeOptions),
 		freeList:   lease,
 		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
 		syncLockC:  make(chan struct{}, 1),
-		dbInfo: _DBInfo{
-			blockIdx: -1,
-		},
-		trie:  newTrie(),
-		start: time.Now(),
-		meter: NewMeter(),
+		bufPool:    bpool.NewBufferPool(options.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
+		trie:       newTrie(),
+		start:      time.Now(),
+		meter:      NewMeter(),
+
 		// Close
 		closeC: make(chan struct{}),
 	}
+
+	// Create a new MAC from the key.
+	if internal.mac, err = crypto.New(options.encryptionKey); err != nil {
+		return nil, err
+	}
+
+	// set encryption flag to encrypt messages.
+	if options.flags.encryption {
+		internal.dbInfo.encryption = 1
+	}
+
+	// Create a blockcache.
+	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.blockCacheSize))
+	if err != nil {
+		return nil, err
+	}
+	internal.mem = memdb
+
+	internal.filter.blockCache = internal.mem
 
 	db := &DB{
 		lock:  lock,
@@ -123,76 +182,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		opts:  options,
 
 		internal: internal,
-		batchdb:  &_Batchdb{},
 	}
-
-	if index.size == 0 {
-		if data.size != 0 {
-			if err := index.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := data.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := lock.Unlock(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			// Data file exists, but index is missing.
-			return nil, errCorrupted
-		}
-		// memdb blockcache id.
-		db.internal.dbInfo.cacheID = uint64(rand.Uint32())<<32 + uint64(rand.Uint32())
-		if err != nil {
-			return nil, err
-		}
-		if _, err = db.index.extend(headerSize); err != nil {
-			return nil, err
-		}
-		if _, err = db.data.extend(headerSize); err != nil {
-			return nil, err
-		}
-		if err := db.writeHeader(); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := db.readHeader(); err != nil {
-			if err := index.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := data.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := lock.Unlock(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			return nil, err
-		}
-	}
-
-	// Create a new MAC from the key.
-	if db.internal.mac, err = crypto.New(options.encryptionKey); err != nil {
-		return nil, err
-	}
-
-	// set encryption flag to encrypt messages.
-	if db.opts.flags.encryption {
-		db.internal.dbInfo.encryption = 1
-	}
-
-	// Create a blockcache.
-	blockCache, err := bc.Open(options.blockCacheSize, &bc.Options{MaxElapsedTime: 2 * time.Second})
-	if err != nil {
-		return nil, err
-	}
-	db.internal.blockCache = blockCache
-
-	//initbatchdb
-	if err = db.initbatchdb(options); err != nil {
-		return nil, err
-	}
-
-	db.internal.filter.blockCache = db.internal.blockCache
-	db.internal.filter.cacheID = db.internal.dbInfo.cacheID
 
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
@@ -204,20 +194,9 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	logOpts := wal.Options{Path: path + logPostfix, TargetSize: options.logSize, BufferSize: options.bufferSize}
-	wal, needLogRecovery, err := wal.New(logOpts)
-	if err != nil {
-		wal.Close()
-		logger.Error().Err(err).Str("context", "wal.New")
-		return nil, err
-	}
-	db.internal.closer = wal
-	db.internal.wal = wal
-	if needLogRecovery {
-		if err := db.recoverLog(); err != nil {
-			// if unable to recover db then close db.
-			panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
-		}
+	if err := db.recoverLog(); err != nil {
+		// if unable to recover db then close db.
+		panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
 	}
 
 	db.internal.syncHandle = _SyncHandle{DB: db}
@@ -266,13 +245,13 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	sort.Slice(q.internal.winEntries[:], func(i, j int) bool {
 		return q.internal.winEntries[i].seq > q.internal.winEntries[j].seq
 	})
-	invalidCount := 0
 	start := 0
 	limit := q.Limit
 	if len(q.internal.winEntries) < int(q.Limit) {
 		limit = len(q.internal.winEntries)
 	}
 	for {
+		invalidCount := 0
 		for _, we := range q.internal.winEntries[start:limit] {
 			err = func() error {
 				if we.seq == 0 {
@@ -338,26 +317,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	return items, nil
 }
 
-// Items returns a new ItemIterator.
-func (db *DB) Items(q *Query) (*ItemIterator, error) {
-	if err := db.ok(); err != nil {
-		return nil, err
-	}
-	switch {
-	case len(q.Topic) == 0:
-		return nil, errTopicEmpty
-	case len(q.Topic) > maxTopicLength:
-		return nil, errTopicTooLarge
-	}
-
-	q.internal.opts = &_QueryOptions{defaultQueryLimit: db.opts.queryOptions.defaultQueryLimit, maxQueryLimit: db.opts.queryOptions.maxQueryLimit}
-	if err := q.parse(); err != nil {
-		return nil, err
-	}
-
-	return &ItemIterator{db: db, query: q}, nil
-}
-
 // NewContract generates a new Contract.
 func (db *DB) NewContract() (uint32, error) {
 	raw := make([]byte, 4)
@@ -399,13 +358,17 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	db.batchdb.tinyBatchLockC <- struct{}{}
-	defer func() {
-		<-db.batchdb.tinyBatchLockC
-	}()
-
-	if err := db.setEntry(db.batchdb.tinyBatch.timeID(), e); err != nil {
+	if err := db.setEntry(e); err != nil {
 		return err
+	}
+
+	timeID, err := db.internal.mem.Put(e.entry.seq, e.entry.cache)
+	if err != nil {
+		return err
+	}
+
+	if ok := db.internal.timeWindow.add(timeID, e.entry.topicHash, newWinEntry(e.entry.seq, e.entry.expiresAt)); !ok {
+		return errForbidden
 	}
 
 	if e.entry.topicSize != 0 {
@@ -415,18 +378,8 @@ func (db *DB) PutEntry(e *Entry) error {
 		db.internal.trie.add(newTopic(e.entry.topicHash, 0), t.Parts, t.Depth)
 	}
 
-	blockID := startBlockIndex(e.entry.seq)
-	memseq := db.internal.dbInfo.cacheID ^ e.entry.seq
-	if err := db.internal.blockCache.Set(uint64(blockID), memseq, e.entry.cache); err != nil {
-		return err
-	}
+	db.internal.meter.Puts.Inc(1)
 
-	if ok := db.internal.timeWindow.add(db.batchdb.tinyBatch.timeID(), e.entry.topicHash, newWinEntry(e.entry.seq, e.entry.expiresAt)); !ok {
-		return errForbidden
-	}
-
-	db.batchdb.tinyBatch.entries = append(db.batchdb.tinyBatch.entries, e.entry.seq)
-	db.batchdb.tinyBatch.incount()
 	// reset message entry.
 	e.reset()
 	return nil
@@ -468,6 +421,28 @@ func (db *DB) DeleteEntry(e *Entry) error {
 	}
 
 	return nil
+}
+
+// Batch executes a function within the context of a read-write managed transaction.
+// If no error is returned from the function then the transaction is written.
+// If an error is returned then the entire transaction is rolled back.
+// Any error that is returned from the function or returned from the write is
+// returned from the Batch() method.
+//
+// Attempting to manually commit or rollback within the function will cause a panic.
+func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
+	b := db.batch()
+
+	b.setManaged()
+
+	// If an error is returned from the function then rollback and return error.
+	if err := fn(b, b.commitComplete); err != nil {
+		b.Abort()
+		close(b.commitComplete)
+		return err
+	}
+	b.unsetManaged()
+	return b.Commit()
 }
 
 // Sync syncs entries into DB. Sync happens synchronously.

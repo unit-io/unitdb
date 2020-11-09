@@ -18,7 +18,6 @@ package unitdb
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"sync/atomic"
 	"time"
@@ -63,9 +62,9 @@ func (db *_SyncHandle) startSync() bool {
 	}
 	db.syncInfo.startBlockIdx = db.blocks()
 
-	db.rawWindow = db.batchdb.bufPool.Get()
-	db.rawBlock = db.batchdb.bufPool.Get()
-	db.rawData = db.batchdb.bufPool.Get()
+	db.rawWindow = db.internal.bufPool.Get()
+	db.rawBlock = db.internal.bufPool.Get()
+	db.rawData = db.internal.bufPool.Get()
 
 	db.windowWriter = newWindowWriter(db.internal.timeWindow, db.rawWindow)
 	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
@@ -84,9 +83,9 @@ func (db *_SyncHandle) finish() error {
 		return nil
 	}
 
-	db.batchdb.bufPool.Put(db.rawWindow)
-	db.batchdb.bufPool.Put(db.rawBlock)
-	db.batchdb.bufPool.Put(db.rawData)
+	db.internal.bufPool.Put(db.rawWindow)
+	db.internal.bufPool.Put(db.rawBlock)
+	db.internal.bufPool.Put(db.rawData)
 
 	db.syncInfo.syncStatusOk = false
 	return nil
@@ -174,8 +173,8 @@ func (db *DB) startExpirer(durType time.Duration, maxDur int) {
 }
 
 func (db *DB) sync() error {
-	// writeHeader information to persist correct seq information to disk, also sync freeblocks to disk.
-	if err := db.writeHeader(); err != nil {
+	// writeInfo information to persist correct seq information to disk.
+	if err := db.writeInfo(); err != nil {
 		return err
 	}
 	if err := db.internal.timeWindow.file.Sync(); err != nil {
@@ -240,22 +239,17 @@ func (db *_SyncHandle) Sync() error {
 	// defer profile.Start().Stop()
 	var err1 error
 	baseSeq := db.syncInfo.lastSyncSeq
-	err := db.internal.timeWindow.foreachTimeWindow(func(timeID int64, wEntries _WindowEntries) (bool, error) {
+	timeRelease := db.internal.timeWindow.release()
+	err := db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
-		for _, we := range wEntries {
-			if we.seq() == 0 {
-				db.syncInfo.entriesInvalid++
-				continue
+		for _, seq := range seqs {
+			if seq < baseSeq {
+				baseSeq = seq
 			}
-			if we.seq() < baseSeq {
-				baseSeq = we.seq()
+			if seq > db.syncInfo.upperSeq {
+				db.syncInfo.upperSeq = seq
 			}
-			if we.seq() > db.syncInfo.upperSeq {
-				db.syncInfo.upperSeq = we.seq()
-			}
-			blockID := startBlockIndex(we.seq())
-			mseq := db.internal.dbInfo.cacheID ^ uint64(we.seq())
-			memdata, err := db.internal.blockCache.Get(uint64(blockID), mseq)
+			memdata, err := db.internal.mem.Lookup(timeID, seq)
 			if err != nil || memdata == nil {
 				db.syncInfo.entriesInvalid++
 				logger.Error().Err(err).Str("context", "mem.Get")
@@ -273,9 +267,10 @@ func (db *_SyncHandle) Sync() error {
 				topicSize: e.topicSize,
 				valueSize: e.valueSize,
 
-				cacheBlock: memdata[entrySize:],
+				cache: memdata[entrySize:],
 			}
-			if s.msgOffset, err = db.dataWriter.append(s.cacheBlock); err != nil {
+
+			if s.msgOffset, err = db.dataWriter.append(s.cache); err != nil {
 				return true, err
 			}
 			if exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx); exists || err != nil {
@@ -286,13 +281,12 @@ func (db *_SyncHandle) Sync() error {
 				db.syncInfo.entriesInvalid++
 				continue
 			}
-
+			we := newWinEntry(seq, e.expiresAt)
 			if _, ok := winEntries[e.topicHash]; ok {
 				winEntries[e.topicHash] = append(winEntries[e.topicHash], we)
 			} else {
 				winEntries[e.topicHash] = _WindowEntries{we}
 			}
-
 			db.internal.filter.Append(we.seq())
 			db.syncInfo.count++
 			db.syncInfo.inBytes += int64(e.valueSize)
@@ -310,8 +304,6 @@ func (db *_SyncHandle) Sync() error {
 				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
 			}
 		}
-		blockID := startBlockIndex(baseSeq)
-		db.internal.blockCache.Free(uint64(blockID), db.internal.dbInfo.cacheID^baseSeq)
 		if err1 != nil {
 			return true, err1
 		}
@@ -320,23 +312,20 @@ func (db *_SyncHandle) Sync() error {
 			return true, err
 		}
 		if db.syncInfo.syncComplete {
-			if err := db.internal.wal.SignalLogApplied(timeID); err != nil {
-				logger.Error().Err(err).Str("context", "wal.SignalLogApplied")
+			if err := timeRelease(timeID); err != nil {
+				return false, err
+			}
+			if err := db.internal.mem.Free(timeID); err != nil {
 				return true, err
 			}
+			db.internal.freeList.releaseLease(timeID)
 		}
-		// db.freeList.releaseLease(timeID)
+
 		return false, nil
 	})
 	if err != nil || err1 != nil {
-		fmt.Println("db.Sync: error ", err, err1)
 		db.syncInfo.syncComplete = false
 		db.abort()
-		// run db recovery if an error occur with the db sync.
-		if err := db.startRecovery(); err != nil {
-			// if unable to recover db then close db.
-			panic(fmt.Sprintf("db.Sync: Unable to recover db on sync error %v. Closing db...", err))
-		}
 	}
 
 	return db.sync(false)

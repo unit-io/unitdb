@@ -17,15 +17,15 @@
 package unitdb
 
 import (
-	bc "github.com/unit-io/unitdb/blockcache"
 	"github.com/unit-io/unitdb/filter"
+	"github.com/unit-io/unitdb/memdb"
 )
 
 // Filter filter is bloom filter generator.
 type Filter struct {
 	file        _File
 	filterBlock *filter.Generator
-	blockCache  *bc.Cache
+	blockCache  *memdb.DB
 	cacheID     uint64
 }
 
@@ -34,7 +34,7 @@ func (f *Filter) Append(h uint64) {
 	f.filterBlock.Append(h)
 }
 
-// Test tests entry in bloom filter. It returns false if entry definitely does not exist or entry maybe existing in DB.
+// Test tests entry in bloom filter. It returns false if entry definitely does not exist or true may be entry exist in DB.
 func (f *Filter) Test(h uint64) bool {
 	/// Test filter block for presence.
 	fltr, _ := f.getFilterBlock(true)
@@ -70,7 +70,7 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 	var cacheKey uint64
 	if f.blockCache != nil {
 		cacheKey = f.cacheID ^ uint64(f.file.size)
-		if data, err := f.blockCache.Get(0, cacheKey); data != nil {
+		if data, err := f.blockCache.Get(cacheKey); data != nil {
 			return filter.NewFilterBlock(data), err
 		}
 	}
@@ -81,7 +81,7 @@ func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
 	}
 
 	if f.blockCache != nil && fillCache {
-		f.blockCache.Set(0, cacheKey, raw)
+		f.blockCache.Put(cacheKey, raw)
 	}
 	return filter.NewFilterBlock(raw), nil
 }

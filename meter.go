@@ -72,7 +72,6 @@ func NewMeter() *Meter {
 	Metrics.GetOrRegister("InMsgs", c.InMsgs)
 	Metrics.GetOrRegister("OutMsgs", c.OutMsgs)
 	Metrics.GetOrRegister("InBytes", c.InBytes)
-	Metrics.GetOrRegister("Gets", c.Gets)
 
 	return c
 }

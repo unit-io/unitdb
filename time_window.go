@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sort"
 	"sync"
 	"time"
 
@@ -34,7 +33,7 @@ type (
 	}
 	_WinBlock struct {
 		topicHash  uint64
-		entries    [seqsPerWindowBlock]_WinEntry
+		entries    [entriesPerWindowBlock]_WinEntry
 		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order).
 		cutoffTime int64
 		entryIdx   uint16
@@ -68,7 +67,7 @@ func (b _WinBlock) cutoff(cutoff int64) bool {
 func (b _WinBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
-	for i := 0; i < seqsPerWindowBlock; i++ {
+	for i := 0; i < entriesPerWindowBlock; i++ {
 		e := b.entries[i]
 		binary.LittleEndian.PutUint64(buf[:8], e.sequence)
 		binary.LittleEndian.PutUint32(buf[8:12], e.expiresAt)
@@ -83,7 +82,7 @@ func (b _WinBlock) MarshalBinary() []byte {
 
 // UnmarshalBinary de-serialized window block from binary data.
 func (b *_WinBlock) UnmarshalBinary(data []byte) error {
-	for i := 0; i < seqsPerWindowBlock; i++ {
+	for i := 0; i < entriesPerWindowBlock; i++ {
 		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
 		b.entries[i].sequence = binary.LittleEndian.Uint64(data[:8])
 		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[8:12])
@@ -128,7 +127,7 @@ type (
 		sync.RWMutex
 		file               _File
 		timeInfo           _TimeInfo
-		timeMark           _TimeMark
+		timeIDs            map[int64]struct{}
 		windowBlocks       *_WindowBlocks
 		expiryWindowBucket *_ExpiryWindowBucket
 		opts               *_TimeOptions
@@ -191,9 +190,9 @@ func (w *_WindowBlocks) getWindowBlock(blockID uint64) *_TimeWindow {
 	return w.window[w.consistent.FindBlock(blockID)]
 }
 
-func newTimeWindowBucket(f _File, opts *_TimeOptions) *_TimeWindowBucket {
+func newTimeWindowBucket(f _File, windowIdx int32, opts *_TimeOptions) *_TimeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &_TimeWindowBucket{file: f, timeInfo: _TimeInfo{windowIdx: -1}, timeMark: newTimeMark()}
+	l := &_TimeWindowBucket{file: f, timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -202,78 +201,54 @@ func newTimeWindowBucket(f _File, opts *_TimeOptions) *_TimeWindowBucket {
 
 func (tw *_TimeWindowBucket) add(timeID int64, topicHash uint64, e _WinEntry) (ok bool) {
 	// get windowBlock shard.
-	wb := tw.windowBlocks.getWindowBlock(topicHash)
-	wb.mu.Lock()
-	defer wb.mu.Unlock()
+	tw.RLock()
+	b := tw.windowBlocks.getWindowBlock(topicHash)
+	tw.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	key := _Key{
 		timeID:    timeID,
 		topicHash: topicHash,
 	}
 
-	if _, ok := wb.entries[key]; ok {
-		wb.entries[key] = append(wb.entries[key], e)
+	if _, ok := b.entries[key]; ok {
+		b.entries[key] = append(b.entries[key], e)
 	} else {
-		wb.entries[key] = _WindowEntries{e}
+		b.entries[key] = _WindowEntries{e}
+		tw.timeIDs[timeID] = struct{}{}
 	}
 	return true
 }
-
-// foreachTimeWindow iterates timewindow entries during sync or recovery process when writing entries to window file.
-func (tw *_TimeWindowBucket) foreachTimeWindow(f func(timeID int64, w _WindowEntries) (bool, error)) (err error) {
-	tw.Lock()
-	tw.timeMark.timeRecord = _TimeRecord{lastUnref: time.Now().UTC().UnixNano()}
-	tw.Unlock()
-
-	var keys []_Key
+func (tw *_TimeWindowBucket) release() func(timeID int64) error {
+	releasedKeys := make(map[int64][]_Key)
 	for i := 0; i < nShards; i++ {
 		wb := tw.windowBlocks.window[i]
 		wb.mu.RLock()
 		for k := range wb.entries {
-			keys = append(keys, k)
+			if _, ok := releasedKeys[k.timeID]; ok {
+				releasedKeys[k.timeID] = append(releasedKeys[k.timeID], k)
+			} else {
+				releasedKeys[k.timeID] = []_Key{k}
+			}
 		}
 		wb.mu.RUnlock()
 	}
 
-	sort.Slice(keys[:], func(i, j int) bool {
-		return keys[i].timeID < keys[j].timeID
-	})
-
-	tw.RLock()
-	unReleasedtimeIDs := make(map[int64]struct{})
-	for _, k := range keys {
-		if !tw.timeMark.isReleased(k.timeID) {
-			unReleasedtimeIDs[k.timeID] = struct{}{}
+	return func(timeID int64) error {
+		keys, ok := releasedKeys[timeID]
+		if !ok {
+			return errBadRequest
 		}
+		for _, k := range keys {
+			b := tw.windowBlocks.getWindowBlock(k.topicHash)
+			b.mu.Lock()
+			delete(b.entries, k)
+			b.mu.Unlock()
+		}
+
+		return nil
 	}
-	tw.RUnlock()
-
-	for _, k := range keys {
-		// Skip unreleased timeIDs.
-		if _, ok := unReleasedtimeIDs[k.timeID]; ok {
-			continue
-		}
-
-		for i := 0; i < nShards; i++ {
-			wb := tw.windowBlocks.window[i]
-			wb.mu.Lock()
-			if _, ok := wb.entries[k]; !ok {
-				wb.mu.Unlock()
-				continue
-			}
-			stop, err1 := f(k.timeID, wb.entries[k])
-			if stop || err != nil {
-				err = err1
-				wb.mu.Unlock()
-				continue
-			}
-			delete(wb.entries, k)
-			wb.mu.Unlock()
-		}
-	}
-
-	go tw.startReleaser()
-	return err
 }
 
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
@@ -293,6 +268,7 @@ func (tw *_TimeWindowBucket) foreachWindowBlock(f func(startSeq, topicHash uint6
 		if h.winBlock.entryIdx == 0 || h.winBlock.next != 0 {
 			continue
 		}
+		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", h.winBlock.topicHash, h.winBlock.entries[0].sequence)
 		if stop, err := f(h.winBlock.entries[0].sequence, h.winBlock.topicHash, h.offset); stop || err != nil {
 			return err
 		}
@@ -304,23 +280,22 @@ func (tw *_TimeWindowBucket) foreachWindowBlock(f func(startSeq, topicHash uint6
 func (tw *_TimeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries _WindowEntries) {
 	winEntries = make([]_WinEntry, 0)
 	// get windowBlock shard.
-	wb := tw.windowBlocks.getWindowBlock(topicHash)
-	wb.mu.RLock()
-	defer wb.mu.RUnlock()
+	b := tw.windowBlocks.getWindowBlock(topicHash)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	var l int
 	var expiryCount int
 
-	for key := range wb.entries {
-		if key.topicHash != topicHash || tw.timeMark.isAborted(key.timeID) {
+	for key := range b.entries {
+		if key.topicHash != topicHash {
 			continue
 		}
-		wEntries := wb.entries[key]
+		wEntries := b.entries[key]
 		if len(wEntries) > 0 {
 			l = limit + expiryCount - l
 			if len(wEntries) < l {
 				l = len(wEntries)
 			}
-			// for _, we := range wEntries[len(wEntries)-l:] {
 			for i := len(wEntries) - 1; i >= len(wEntries)-l; i-- {
 				we := wEntries[i]
 				if we.isExpired() {
@@ -416,57 +391,11 @@ func (b _WinBlock) validation(topicHash uint64) error {
 	return nil
 }
 
-// abort iterates timewindow entries during rollback process and aborts time window entries.
-func (tw *_TimeWindowBucket) abort(f func(w _WindowEntries) (bool, error)) (err error) {
-	tw.RLock()
-	releasedRecords := tw.timeMark.releasedRecords
-	defer tw.RUnlock()
-	for timeID, timeRecord := range releasedRecords {
-		if timeRecord.refs == -1 {
-			for i := 0; i < nShards; i++ {
-				wb := tw.windowBlocks.window[i]
-				wb.mu.Lock()
-				for k := range wb.entries {
-					if k.timeID != timeID {
-						continue
-					}
-					stop, err1 := f(wb.entries[k])
-					if stop || err != nil {
-						err = err1
-						continue
-					}
-					delete(wb.entries, k)
-				}
-				wb.mu.Unlock()
-			}
-		}
-	}
-	return nil
-}
-
-func (tw *_TimeWindowBucket) startReleaser() {
-	tw.Lock()
-	defer tw.Unlock()
-
-	tw.timeMark.startReleaser(tw.opts.maxDuration)
-
-	for i := 0; i < nShards; i++ {
-		wb := tw.windowBlocks.window[i]
-		wb.mu.Lock()
-		for k := range wb.entries {
-			if _, ok := tw.timeMark.releasedRecords[k.timeID]; !ok {
-				delete(wb.entries, k)
-			}
-		}
-		wb.mu.Unlock()
-	}
-}
-
 func (tw *_TimeWindowBucket) windowIndex() int32 {
 	return tw.timeInfo.windowIdx
 }
 
-func (tw *_TimeWindowBucket) setWindowIndex(windowIdx int32) error {
-	tw.timeInfo.windowIdx = windowIdx
-	return nil
-}
+// func (tw *_TimeWindowBucket) setWindowIndex(windowIdx int32) error {
+// 	tw.timeInfo.windowIdx = windowIdx
+// 	return nil
+// }

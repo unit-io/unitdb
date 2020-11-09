@@ -24,8 +24,8 @@ type _DataTable struct {
 }
 
 func (dt *_DataTable) readMessage(s _Slot) ([]byte, []byte, error) {
-	if s.cacheBlock != nil {
-		return s.cacheBlock[:idSize], s.cacheBlock[s.topicSize+idSize:], nil
+	if s.cache != nil {
+		return s.cache[:idSize], s.cache[s.topicSize+idSize:], nil
 	}
 	message, err := dt.file.Slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
 	if err != nil {
@@ -35,8 +35,8 @@ func (dt *_DataTable) readMessage(s _Slot) ([]byte, []byte, error) {
 }
 
 func (dt *_DataTable) readTopic(s _Slot) ([]byte, error) {
-	if s.cacheBlock != nil {
-		return s.cacheBlock[idSize : s.topicSize+idSize], nil
+	if s.cache != nil {
+		return s.cache[idSize : s.topicSize+idSize], nil
 	}
 	return dt.file.Slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
 }

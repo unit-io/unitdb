@@ -27,7 +27,7 @@ import (
 func cleanup(path string) {
 	os.Remove(path + indexPostfix)
 	os.Remove(path + dataPostfix)
-	os.Remove(path + logPostfix)
+	// os.Remove(path + logPostfix)
 	os.Remove(path + lockPostfix)
 	os.Remove(path + windowPostfix)
 	os.Remove(path + filterPostfix)
@@ -102,7 +102,7 @@ func TestSimple(t *testing.T) {
 		}
 		ids = append(ids, messageID)
 	}
-	db.tinyCommit(db.batchdb.tinyBatch)
+	// db.tinyCommit(db.batchdb.tinyBatch)
 	verifyMsgsAndClose()
 
 	db, err = Open("test.db", WithMutable())

@@ -64,7 +64,7 @@ Note, if key exists then it overrides key-value when the writes happen within sa
 
 ```
 
-#### Read messages
+#### Read message
 Use DB.Get() function to read inserted value. It gets entry from most recent timeID for the provided key. 
 
 ```
@@ -74,8 +74,8 @@ Use DB.Get() function to read inserted value. It gets entry from most recent tim
 
 ```
 
-#### Read messages
-Use DB.Look() function to look entry for faster read.
+#### Lookup message
+Use DB.Lookup() function to lookup entry for faster read.
 
 ```
 	timeID, err := db.Put(1, []byte("msg 1"))

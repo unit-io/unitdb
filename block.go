@@ -35,7 +35,7 @@ type (
 		valueSize uint32
 		msgOffset int64
 
-		cacheBlock []byte // block from memdb if it exist
+		cache []byte // block from memdb if it exist
 	}
 
 	_Block struct {
@@ -61,9 +61,9 @@ func startBlockIndex(seq uint64) int32 {
 
 func blockOffset(idx int32) int64 {
 	if idx == -1 {
-		return int64(headerSize)
+		return int64(fixed)
 	}
-	return int64(headerSize + (blockSize * uint32(idx)))
+	return int64(fixed + (blockSize * uint32(idx)))
 }
 
 func (s _Slot) mSize() uint32 {
