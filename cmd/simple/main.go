@@ -85,20 +85,4 @@ func main() {
 			log.Printf("%s ", msg)
 		}
 	}
-
-	// Iterating over items
-	topic = []byte("teams.alpha.ch1.u1?ttl=1m")
-	it, err := db.Items(unitdb.NewQuery(topic))
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	for it.First(); it.Valid(); it.Next() {
-		err := it.Error()
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
-		log.Printf("%s %s", it.Item().Topic(), it.Item().Value())
-	}
 }
