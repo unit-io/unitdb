@@ -111,7 +111,6 @@ type (
 	}
 	_TimeWindowBucket struct {
 		sync.RWMutex
-		file               _FileSet
 		timeInfo           _TimeInfo
 		timeIDs            map[int64]struct{}
 		windowBlocks       *_WindowBlocks
@@ -176,9 +175,9 @@ func (w *_WindowBlocks) getWindowBlock(blockID uint64) *_TimeWindow {
 	return w.window[w.consistent.FindBlock(blockID)]
 }
 
-func newTimeWindowBucket(fs _FileSet, windowIdx int32, opts *_TimeOptions) *_TimeWindowBucket {
+func newTimeWindowBucket(windowIdx int32, opts *_TimeOptions) _TimeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := &_TimeWindowBucket{file: fs, timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
+	l := _TimeWindowBucket{timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()
@@ -238,12 +237,12 @@ func (tw *_TimeWindowBucket) release() func(timeID int64) error {
 }
 
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
-func (tw *_TimeWindowBucket) foreachWindowBlock(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
+func (tw *_TimeWindowBucket) foreachWindowBlock(winFile *_File, f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
 	winBlockIdx := int32(0)
 	nWinBlocks := tw.windowIndex()
+	r := newWindowReader(winFile)
 	for winBlockIdx <= nWinBlocks {
 		off := winBlockOffset(winBlockIdx)
-		r := newWindowReader(&tw.file)
 		b, err := r.readBlock(off)
 		if err != nil {
 			if err == io.EOF {
@@ -301,14 +300,14 @@ func (tw *_TimeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries _W
 }
 
 // lookup lookups window entries from window file.
-func (tw *_TimeWindowBucket) lookup(topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
+func (tw *_TimeWindowBucket) lookup(winFile *_File, topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
 	winEntries = make([]_WinEntry, 0)
 	winEntries = tw.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
 		return winEntries
 	}
+	r := newWindowReader(winFile)
 	next := func(blockOff int64, f func(_WinBlock) (bool, error)) error {
-		r := newWindowReader(&tw.file)
 		for {
 			b, err := r.readBlock(blockOff)
 			if err != nil {

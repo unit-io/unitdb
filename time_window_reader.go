@@ -18,11 +18,11 @@ package unitdb
 
 type _WindowReader struct {
 	winBlock _WinBlock
-	file     *_FileSet
+	file     *_File
 }
 
-func newWindowReader(fs *_FileSet) *_WindowReader {
-	return &_WindowReader{file: fs}
+func newWindowReader(f *_File) *_WindowReader {
+	return &_WindowReader{file: f}
 }
 
 func (r *_WindowReader) readBlock(off int64) (_WinBlock, error) {

@@ -32,13 +32,14 @@ type FileType int
 
 // File types.
 const (
-	TypeTimeWindow FileType = iota
+	TypeInfo FileType = iota
+	TypeTimeWindow
 	TypeIndex
 	TypeData
 	TypeLease
 	TypeFilter
 
-	TypeAll = TypeTimeWindow | TypeIndex | TypeData | TypeLease | TypeFilter
+	TypeAll = TypeInfo | TypeTimeWindow | TypeIndex | TypeData | TypeLease | TypeFilter
 
 	indexDir = "index"
 	dataDir  = "data"
@@ -64,7 +65,9 @@ func filePath(prefix string, fd FileDesc) string {
 		return name
 	}
 	switch fd.Type {
-
+	case TypeInfo:
+		suffix := fmt.Sprintf("%s.info", prefix)
+		return suffix
 	case TypeTimeWindow:
 		suffix := fmt.Sprintf("%s%04d.win", prefix, fd.Num)
 		return path.Join(winDir, suffix)
@@ -99,23 +102,6 @@ type (
 		*_File
 	}
 )
-
-// func newFile(fs fs.FileSystem, name string) (_File, error) {
-// 	fileFlag := os.O_CREATE | os.O_RDWR
-// 	fileMode := os.FileMode(0666)
-// 	fi, err := fs.OpenFile(name, fileFlag, fileMode)
-// 	f := _File{}
-// 	if err != nil {
-// 		return f, err
-// 	}
-// 	f.FileManager = fi
-// 	stat, err := fi.Stat()
-// 	if err != nil {
-// 		return f, err
-// 	}
-// 	f.size = stat.Size()
-// 	return f, err
-// }
 
 func newFile(fsys fs.FileSystem, l int16, name string, fd FileDesc) (_FileSet, error) {
 	if l == 0 {
@@ -198,6 +184,24 @@ func (f *_File) currSize() int64 {
 func (f *_File) Size() int64 {
 	stat, _ := f.Stat()
 	return stat.Size()
+}
+
+func (fs *_FileSet) getFile(fd FileDesc) (*_File, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, fileset := range fs.list {
+		if fileset.fd.Type == fd.Type {
+			if fileset.fd.Num == fd.Num {
+				return fileset._File, nil
+			}
+			if f, ok := fileset.fileMap[fd.Num]; ok {
+				fileset.fileMap[fileset.fd.Num] = *fileset._File // keep current file into map
+				fileset._File = &f
+				return &f, nil
+			}
+		}
+	}
+	return &_File{}, errors.New("file not found")
 }
 
 func (fs *_FileSet) sync() error {

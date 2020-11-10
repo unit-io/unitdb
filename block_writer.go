@@ -26,13 +26,13 @@ import (
 type _BlockWriter struct {
 	blocks map[int32]_Block // map[blockIdx]block
 
-	file   *_FileSet
+	file   *_File
 	buffer *bpool.Buffer
 
 	leasing map[uint64]struct{}
 }
 
-func newBlockWriter(f *_FileSet, buf *bpool.Buffer) *_BlockWriter {
+func newBlockWriter(f *_File, buf *bpool.Buffer) *_BlockWriter {
 	return &_BlockWriter{blocks: make(map[int32]_Block), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
 }
 

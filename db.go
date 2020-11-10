@@ -58,12 +58,17 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	fs := options.fileSystem
-	lock, err := fs.CreateLockFile(path + lockPostfix)
+	fsys := options.fileSystem
+	lock, err := fsys.CreateLockFile(path + lockPostfix)
 	if err != nil {
 		if err == os.ErrExist {
 			err = errLocked
 		}
+		return nil, err
+	}
+
+	infoFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeInfo})
+	if err != nil {
 		return nil, err
 	}
 
@@ -73,23 +78,23 @@ func Open(path string, opts ...Options) (*DB, error) {
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.flags.backgroundKeyExpiry,
 	}
-	winFile, err := newFile(fs, int16(maxRetention/maxWindowDur), path, FileDesc{Type: TypeTimeWindow, Num: 0})
+	winFile, err := newFile(fsys, int16(maxRetention/maxWindowDur), path, FileDesc{Type: TypeTimeWindow})
 	if err != nil {
 		return nil, err
 	}
 
-	indexFile, err := newFile(fs, 1, path, FileDesc{Type: TypeIndex, Num: 0})
+	indexFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeIndex})
 	if err != nil {
 		return nil, err
 	}
 
-	dataFile, err := newFile(fs, 1, path, FileDesc{Type: TypeData, Num: 0})
+	dataFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeData})
 	if err != nil {
 		return nil, err
 	}
 
 	dbInfo := _DBInfo{}
-	if indexFile.Size() == 0 {
+	if infoFile.Size() == 0 {
 		dbInfo = _DBInfo{
 			header: _Header{
 				signature: signature,
@@ -98,15 +103,15 @@ func Open(path string, opts ...Options) (*DB, error) {
 			blockIdx:  -1,
 			windowIdx: -1,
 		}
-		if _, err = indexFile.extend(fixed); err != nil {
+		if _, err = infoFile.extend(fixed); err != nil {
 			return nil, err
 		}
-		if err := indexFile.writeMarshalableAt(dbInfo, 0); err != nil {
+		if err := infoFile.writeMarshalableAt(dbInfo, 0); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := indexFile.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
+	if err := infoFile.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err
 	}
@@ -114,13 +119,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, errCorrupted
 	}
 
-	leaseFile, err := newFile(fs, 1, path, FileDesc{Type: TypeLease, Num: 0})
+	leaseFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeLease})
 	if err != nil {
 		return nil, err
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
-	filterFile, err := newFile(fs, 1, path, FileDesc{Type: TypeFilter, Num: 0})
+	filterFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeFilter})
 	if err != nil {
 		return nil, err
 	}
@@ -128,9 +133,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 	internal := &_DB{
 		mutex:      newMutex(),
 		dbInfo:     dbInfo,
+		info:       infoFile,
 		index:      indexFile,
-		data:       _DataTable{file: dataFile, lease: lease, offset: dataFile.Size()},
-		timeWindow: newTimeWindowBucket(winFile, dbInfo.windowIdx, timeOptions),
+		data:       _DataTable{lease: lease, offset: dataFile.Size()},
+		timeWindow: newTimeWindowBucket(dbInfo.windowIdx, timeOptions),
 		freeList:   lease,
 		filter:     Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
 		syncLockC:  make(chan struct{}, 1),
@@ -162,7 +168,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	internal.filter.blockCache = internal.mem
 
-	fileset := _FileSet{mu: new(sync.RWMutex), list: []_FileSet{winFile, indexFile, dataFile, leaseFile, filterFile}}
+	fileset := _FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile}}
 
 	db := &DB{
 		opts: options,
@@ -239,6 +245,13 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	if len(q.internal.winEntries) < int(q.Limit) {
 		limit = len(q.internal.winEntries)
 	}
+
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return nil, err
+	}
+	data := newDataReader(db.internal.data, dataFile)
+
 	for {
 		invalidCount := 0
 		for _, we := range q.internal.winEntries[start:limit] {
@@ -255,7 +268,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
-				data := newDataReader(&db.internal.data)
 				id, val, err := data.readMessage(s)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
@@ -465,15 +477,25 @@ func (db *DB) Sync() error {
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
 	var err error
-	is, err := db.internal.index.Stat()
+	size := int64(0)
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
-	ds, err := db.internal.data.file.Stat()
+	index := newBlockReader(indexFile)
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
-	return is.Size() + ds.Size(), nil
+	data := newDataReader(db.internal.data, dataFile)
+
+	if s, err := index.size(); err == nil {
+		size += s
+	}
+	if s, err := data.size(); err == nil {
+		size += s
+	}
+	return size, err
 }
 
 // Count returns the number of items in the DB.

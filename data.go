@@ -17,7 +17,7 @@
 package unitdb
 
 type _DataTable struct {
-	file  _FileSet
+	// file  _FileSet
 	lease *_Lease
 
 	offset int64

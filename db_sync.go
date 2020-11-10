@@ -65,13 +65,26 @@ func (db *_SyncHandle) startSync() bool {
 	db.rawBlock = db.internal.bufPool.Get()
 	db.rawData = db.internal.bufPool.Get()
 
-	db.windowWriter = newWindowWriter(db.internal.timeWindow, db.rawWindow)
-	db.blockWriter = newBlockWriter(&db.internal.index, db.rawBlock)
-	db.dataWriter = newDataWriter(&db.internal.data, db.rawData)
+	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	if err != nil {
+		return false
+	}
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return false
+	}
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return false
+	}
 
-	db.winOff = db.internal.timeWindow.file.currSize()
-	db.blockOff = db.internal.index.currSize()
-	db.dataOff = db.internal.data.file.currSize()
+	db.windowWriter = newWindowWriter(db.internal.timeWindow, winFile, db.rawWindow)
+	db.blockWriter = newBlockWriter(indexFile, db.rawBlock)
+	db.dataWriter = newDataWriter(db.internal.data, dataFile, db.rawData)
+
+	db.winOff = winFile.currSize()
+	db.blockOff = indexFile.currSize()
+	db.dataOff = dataFile.currSize()
 	db.syncInfo.syncStatusOk = true
 
 	return db.syncInfo.syncStatusOk
@@ -105,9 +118,22 @@ func (db *_SyncHandle) reset() error {
 	db.rawBlock.Reset()
 	db.rawData.Reset()
 
-	db.winOff = db.internal.timeWindow.file.currSize()
-	db.blockOff = db.internal.index.currSize()
-	db.dataOff = db.internal.data.file.currSize()
+	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	if err != nil {
+		return err
+	}
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return err
+	}
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return err
+	}
+
+	db.winOff = winFile.currSize()
+	db.blockOff = indexFile.currSize()
+	db.dataOff = dataFile.currSize()
 
 	return nil
 }
@@ -118,9 +144,22 @@ func (db *_SyncHandle) abort() error {
 		return nil
 	}
 	// rollback blocks.
-	db.internal.data.file.truncate(db.dataOff)
-	db.internal.index.truncate(db.blockOff)
-	db.internal.timeWindow.file.truncate(db.winOff)
+	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	if err != nil {
+		return err
+	}
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return err
+	}
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return err
+	}
+
+	dataFile.truncate(db.dataOff)
+	indexFile.truncate(db.blockOff)
+	winFile.truncate(db.winOff)
 	atomic.StoreInt32(&db.internal.dbInfo.blockIdx, db.syncInfo.startBlockIdx)
 	db.decount(uint64(db.syncInfo.count))
 
@@ -339,8 +378,12 @@ func (db *DB) expireEntries() error {
 		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
-		r := newBlockReader(&db.internal.index)
-		s, err := r.read(we.seq())
+		indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+		if err != nil {
+			return err
+		}
+		index := newBlockReader(indexFile)
+		s, err := index.read(we.seq())
 		if err != nil {
 			return err
 		}

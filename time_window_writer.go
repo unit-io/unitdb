@@ -24,7 +24,8 @@ import (
 )
 
 type _WindowWriter struct {
-	timeWindowBucket *_TimeWindowBucket
+	timeWindowBucket _TimeWindowBucket
+	file             *_File
 	winBlocks        map[int32]_WinBlock // map[windowIdx]winBlock
 
 	buffer *bpool.Buffer
@@ -32,13 +33,13 @@ type _WindowWriter struct {
 	leasing map[int32][]uint64 // map[blockIdx][]seq
 }
 
-func newWindowWriter(tw *_TimeWindowBucket, buf *bpool.Buffer) *_WindowWriter {
-	return &_WindowWriter{winBlocks: make(map[int32]_WinBlock), timeWindowBucket: tw, buffer: buf, leasing: make(map[int32][]uint64)}
+func newWindowWriter(tw _TimeWindowBucket, f *_File, buf *bpool.Buffer) *_WindowWriter {
+	return &_WindowWriter{timeWindowBucket: tw, file: f, winBlocks: make(map[int32]_WinBlock), buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
 func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	off := int64(blockSize * uint32(winIdx))
-	r := newWindowReader(&w.timeWindowBucket.file)
+	r := newWindowReader(w.file)
 	b, err := r.readBlock(off)
 	if err != nil {
 		return err
@@ -81,7 +82,7 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b, ok = w.winBlocks[winIdx]
 	if !ok && off > 0 {
 		if winIdx <= w.timeWindowBucket.timeInfo.windowIdx {
-			r := newWindowReader(&w.timeWindowBucket.file)
+			r := newWindowReader(w.file)
 			b, err := r.readBlock(off)
 			if err != nil {
 				return off, err
@@ -134,7 +135,7 @@ func (w *_WindowWriter) write() error {
 			continue
 		}
 		off := int64(blockSize * uint32(bIdx))
-		if _, err := w.timeWindowBucket.file.WriteAt(b.MarshalBinary(), off); err != nil {
+		if _, err := w.file.WriteAt(b.MarshalBinary(), off); err != nil {
 			return err
 		}
 		b.dirty = false
@@ -164,7 +165,7 @@ func (w *_WindowWriter) write() error {
 			off := int64(blockSize * uint32(bIdx))
 			b := w.winBlocks[bIdx]
 			buf := b.MarshalBinary()
-			if _, err := w.timeWindowBucket.file.WriteAt(buf, off); err != nil {
+			if _, err := w.file.WriteAt(buf, off); err != nil {
 				return err
 			}
 			b.dirty = false
@@ -184,7 +185,7 @@ func (w *_WindowWriter) write() error {
 		if err != nil {
 			return err
 		}
-		if _, err := w.timeWindowBucket.file.WriteAt(blockData, blockOff); err != nil {
+		if _, err := w.file.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
 		bufOff = w.buffer.Size()

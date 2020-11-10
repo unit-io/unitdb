@@ -19,15 +19,17 @@ package unitdb
 import "github.com/unit-io/bpool"
 
 type _DataWriter struct {
-	dataTable *_DataTable
-	buffer    *bpool.Buffer
+	dataTable _DataTable
+	file      *_File
+
+	buffer *bpool.Buffer
 
 	leasing       map[int64]uint32 // map[offset]size
 	writeComplete bool
 }
 
-func newDataWriter(dt *_DataTable, buf *bpool.Buffer) *_DataWriter {
-	return &_DataWriter{dataTable: dt, buffer: buf, leasing: make(map[int64]uint32)}
+func newDataWriter(dt _DataTable, f *_File, buf *bpool.Buffer) *_DataWriter {
+	return &_DataWriter{dataTable: dt, file: f, buffer: buf, leasing: make(map[int64]uint32)}
 }
 
 func (w *_DataWriter) append(data []byte) (off int64, err error) {
@@ -40,7 +42,7 @@ func (w *_DataWriter) append(data []byte) (off int64, err error) {
 	if off != -1 {
 		buf := make([]byte, dataLen)
 		copy(buf, data)
-		if _, err = w.dataTable.file.WriteAt(buf, off); err != nil {
+		if _, err = w.file.WriteAt(buf, off); err != nil {
 			return 0, err
 		}
 		w.leasing[off] = uint32(dataLen)
@@ -59,7 +61,7 @@ func (w *_DataWriter) append(data []byte) (off int64, err error) {
 }
 
 func (w *_DataWriter) write() (int, error) {
-	n, err := w.dataTable.file.write(w.buffer.Bytes())
+	n, err := w.file.write(w.buffer.Bytes())
 	if err != nil {
 		return 0, err
 	}

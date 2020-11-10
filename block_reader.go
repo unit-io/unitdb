@@ -19,10 +19,10 @@ package unitdb
 type _BlockReader struct {
 	block _Block
 
-	file *_FileSet
+	file *_File
 }
 
-func newBlockReader(f *_FileSet) *_BlockReader {
+func newBlockReader(f *_File) *_BlockReader {
 	return &_BlockReader{file: f}
 }
 
@@ -55,4 +55,13 @@ func (r *_BlockReader) read(seq uint64) (_Slot, error) {
 	}
 
 	return r.block.entries[entryIdx], nil
+}
+
+func (r *_BlockReader) size() (int64, error) {
+	ds, err := r.file.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	return ds.Size(), nil
 }

@@ -38,13 +38,8 @@ const (
 	nBlocks               = 100000
 	nShards               = 27
 	nPoolSize             = 27
-	indexPostfix          = ".index"
-	dataPostfix           = ".data"
-	windowPostfix         = ".win"
-	leasePostfix          = ".lease"
 	lockPostfix           = ".lock"
 	idSize                = 9 // message ID prefix with additional encryption bit.
-	filterPostfix         = ".filter"
 	version               = 1 // file format version.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
@@ -83,6 +78,7 @@ type (
 
 		dbInfo _DBInfo
 
+		info     _FileSet
 		index    _FileSet
 		data     _DataTable
 		filter   Filter
@@ -91,7 +87,7 @@ type (
 		mem     *memdb.DB
 		bufPool *bpool.BufferPool
 
-		timeWindow *_TimeWindowBucket
+		timeWindow _TimeWindowBucket
 
 		//trie
 		trie *_Trie
@@ -122,7 +118,7 @@ func (db *DB) writeInfo() error {
 		windowIdx:  db.internal.timeWindow.windowIndex(),
 	}
 
-	return db.internal.index.writeMarshalableAt(inf, 0)
+	return db.internal.info.writeMarshalableAt(inf, 0)
 }
 
 // Close closes the DB.
@@ -174,14 +170,27 @@ func (db *DB) close() error {
 
 // loadTopicHash loads topic and offset from window file.
 func (db *DB) loadTrie() error {
-	err := db.internal.timeWindow.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
+	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	if err != nil {
+		return err
+	}
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return err
+	}
+	index := newBlockReader(indexFile)
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return err
+	}
+	data := newDataReader(db.internal.data, dataFile)
+
+	err = db.internal.timeWindow.foreachWindowBlock(winFile, func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
-		r := newBlockReader(&db.internal.index)
-		s, err := r.read(startSeq)
+		s, err := index.read(startSeq)
 		if err != nil {
 			return true, err
 		}
-		data := newDataReader(&db.internal.data)
 		rawtopic, err := data.readTopic(s)
 		if err != nil {
 			return true, err
@@ -218,8 +227,12 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_Slot, error) {
 		return s, nil
 	}
 
-	r := newBlockReader(&db.internal.index)
-	return r.read(seq)
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return _Slot{}, err
+	}
+	index := newBlockReader(indexFile)
+	return index.read(seq)
 }
 
 // lookups are performed in following order
@@ -230,12 +243,16 @@ func (db *DB) lookup(q *Query) error {
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
+	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	if err != nil {
+		return err
+	}
 	for _, topic := range topics {
 		if len(q.internal.winEntries) > q.Limit {
 			break
 		}
 		limit := q.Limit - len(q.internal.winEntries)
-		wEntries := db.internal.timeWindow.lookup(topic.hash, topic.offset, q.internal.cutoff, limit)
+		wEntries := db.internal.timeWindow.lookup(winFile, topic.hash, topic.offset, q.internal.cutoff, limit)
 		for _, we := range wEntries {
 			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}
@@ -368,8 +385,12 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if blockIdx > db.blocks() {
 		return nil // no record to delete.
 	}
-	blockWriter := newBlockWriter(&db.internal.index, nil)
-	e, err := blockWriter.del(seq)
+	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	if err != nil {
+		return err
+	}
+	index := newBlockWriter(indexFile, nil)
+	e, err := index.del(seq)
 	if err != nil {
 		return err
 	}

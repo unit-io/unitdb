@@ -59,9 +59,13 @@ func (db *_SyncHandle) startRecovery() error {
 
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
-	data := newDataReader(&db.internal.data)
+	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	if err != nil {
+		return err
+	}
+	data := newDataReader(db.internal.data, dataFile)
 
-	err := db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
+	err = db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
 		for _, seq := range seqs {
 			memdata, err := db.internal.mem.Lookup(timeID, seq)

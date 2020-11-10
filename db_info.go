@@ -40,7 +40,7 @@ type (
 	}
 )
 
-// MarshalBinary serializes header into binary data.
+// MarshalBinary serializes db info into binary data.
 func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, fixed)
 	copy(buf[:7], inf.header.signature[:])
@@ -54,7 +54,7 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalBinary de-serializes header from binary data.
+// UnmarshalBinary de-serializes db info from binary data.
 func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
 	copy(inf.header.signature[:], data[:7])
 	inf.header.version = binary.LittleEndian.Uint32(data[7:11])
