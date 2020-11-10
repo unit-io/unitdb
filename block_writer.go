@@ -26,27 +26,27 @@ import (
 type _BlockWriter struct {
 	blocks map[int32]_Block // map[blockIdx]block
 
-	file   *_File
+	file   *_FileSet
 	buffer *bpool.Buffer
 
 	leasing map[uint64]struct{}
 }
 
-func newBlockWriter(f *_File, buf *bpool.Buffer) *_BlockWriter {
+func newBlockWriter(f *_FileSet, buf *bpool.Buffer) *_BlockWriter {
 	return &_BlockWriter{blocks: make(map[int32]_Block), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
 }
 
 func (w *_BlockWriter) del(seq uint64) (_Slot, error) {
 	var delEntry _Slot
-	blockIdx := startBlockIndex(seq)
-	off := blockOffset(blockIdx)
-	b := _BlockHandle{file: w.file, offset: off}
-	if err := b.read(); err != nil {
-		return delEntry, err
+	startBlockIdx := startBlockIndex(seq)
+	r := newBlockReader(w.file)
+	b, err := r.readBlock(seq)
+	if err != nil {
+		return _Slot{}, err
 	}
 	entryIdx := -1
-	for i := 0; i < int(b.block.entryIdx); i++ {
-		e := b.block.entries[i]
+	for i := 0; i < int(b.entryIdx); i++ {
+		e := b.entries[i]
 		if e.seq == seq { //record exist in db
 			entryIdx = i
 			break
@@ -55,14 +55,16 @@ func (w *_BlockWriter) del(seq uint64) (_Slot, error) {
 	if entryIdx == -1 {
 		return delEntry, nil // no entry in db to delete
 	}
-	delEntry = b.block.entries[entryIdx]
-	b.block.entryIdx--
+	delEntry = b.entries[entryIdx]
+	b.dirty = true
+	b.entryIdx--
 
 	i := entryIdx
 	for ; i < entriesPerIndexBlock-1; i++ {
-		b.block.entries[i] = b.block.entries[i+1]
+		b.entries[i] = b.entries[i+1]
 	}
-	b.block.entries[i] = _Slot{}
+	b.entries[i] = _Slot{}
+	w.blocks[startBlockIdx] = b
 
 	return delEntry, nil
 }
@@ -77,12 +79,11 @@ func (w *_BlockWriter) append(s _Slot, blockIdx int32) (exists bool, err error) 
 	b, ok = w.blocks[startBlockIdx]
 	if !ok {
 		if startBlockIdx <= blockIdx {
-			off := blockOffset(startBlockIdx)
-			bh := _BlockHandle{file: w.file, offset: off}
-			if err := bh.read(); err != nil {
+			r := newBlockReader(w.file)
+			b, err := r.readBlock(s.seq)
+			if err != nil {
 				return false, err
 			}
-			b = bh.block
 
 			b.leased = true
 		}

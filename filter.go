@@ -23,7 +23,7 @@ import (
 
 // Filter filter is bloom filter generator.
 type Filter struct {
-	file        _File
+	file        _FileSet
 	filterBlock *filter.Generator
 	blockCache  *memdb.DB
 	cacheID     uint64

@@ -16,9 +16,21 @@
 
 package unitdb
 
-type _DataTable struct {
-	file  _FileSet
-	lease *_Lease
+type _WindowReader struct {
+	winBlock _WinBlock
+	file     *_FileSet
+}
 
-	offset int64
+func newWindowReader(fs *_FileSet) *_WindowReader {
+	return &_WindowReader{file: fs}
+}
+
+func (r *_WindowReader) readBlock(off int64) (_WinBlock, error) {
+	buf, err := r.file.Slice(off, off+int64(blockSize))
+	if err != nil {
+		return _WinBlock{}, err
+	}
+	r.winBlock.UnmarshalBinary(buf)
+
+	return r.winBlock, nil
 }

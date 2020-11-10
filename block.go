@@ -19,8 +19,6 @@ package unitdb
 import (
 	"encoding/binary"
 	"fmt"
-
-	"github.com/unit-io/unitdb/fs"
 )
 
 const (
@@ -46,12 +44,6 @@ type (
 
 		dirty  bool
 		leased bool
-	}
-
-	_BlockHandle struct {
-		block  _Block
-		file   fs.FileManager
-		offset int64
 	}
 )
 
@@ -123,12 +115,4 @@ func (b *_Block) UnmarshalBinary(data []byte) error {
 	b.next = binary.LittleEndian.Uint32(data[:4])
 	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
 	return nil
-}
-
-func (h *_BlockHandle) read() error {
-	buf, err := h.file.Slice(h.offset, h.offset+int64(blockSize))
-	if err != nil {
-		return err
-	}
-	return h.block.UnmarshalBinary(buf)
 }

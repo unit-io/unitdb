@@ -38,6 +38,7 @@ type File interface {
 type FileManager interface {
 	File
 	Type() string
+	Fd() uintptr
 	Slice(start int64, end int64) ([]byte, error)
 }
 

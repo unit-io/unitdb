@@ -59,6 +59,7 @@ func (db *_SyncHandle) startRecovery() error {
 
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
+	data := newDataReader(&db.internal.data)
 
 	err := db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
@@ -98,7 +99,7 @@ func (db *_SyncHandle) startRecovery() error {
 				continue
 			}
 			if e.topicSize != 0 {
-				rawtopic, _ := db.dataWriter.dataTable.readTopic(s)
+				rawtopic, _ := data.readTopic(s)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {

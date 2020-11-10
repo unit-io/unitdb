@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,10 +39,10 @@ import (
 // DB represents the message storage for topic->keys-values.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
-	lock  fs.LockFile
-	index _File
-	data  _DataTable
-	opts  *_Options
+	opts *_Options
+
+	lock fs.LockFile
+	fs   _FileSet
 
 	internal *_DB
 }
@@ -72,39 +73,23 @@ func Open(path string, opts ...Options) (*DB, error) {
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.flags.backgroundKeyExpiry,
 	}
-	timewindow, err := newFile(fs, path+windowPostfix)
+	winFile, err := newFile(fs, int16(maxRetention/maxWindowDur), path, FileDesc{Type: TypeTimeWindow, Num: 0})
 	if err != nil {
 		return nil, err
 	}
 
-	index, err := newFile(fs, path+indexPostfix)
+	indexFile, err := newFile(fs, 1, path, FileDesc{Type: TypeIndex, Num: 0})
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := newFile(fs, path+dataPostfix)
+	dataFile, err := newFile(fs, 1, path, FileDesc{Type: TypeData, Num: 0})
 	if err != nil {
 		return nil, err
 	}
 
 	dbInfo := _DBInfo{}
-	if index.Size() == 0 {
-		if data.Size() != 0 {
-			if err := timewindow.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := index.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := data.Close(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-			if err := lock.Unlock(); err != nil {
-				logger.Error().Err(err).Str("context", "db.Open")
-			}
-
-			return nil, errCorrupted
-		}
+	if indexFile.Size() == 0 {
 		dbInfo = _DBInfo{
 			header: _Header{
 				signature: signature,
@@ -113,15 +98,15 @@ func Open(path string, opts ...Options) (*DB, error) {
 			blockIdx:  -1,
 			windowIdx: -1,
 		}
-		if _, err = index.extend(fixed); err != nil {
+		if _, err = indexFile.extend(fixed); err != nil {
 			return nil, err
 		}
-		if err := index.writeMarshalableAt(dbInfo, 0); err != nil {
+		if err := indexFile.writeMarshalableAt(dbInfo, 0); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := index.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
+	if err := indexFile.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err
 	}
@@ -129,13 +114,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, errCorrupted
 	}
 
-	leaseFile, err := newFile(fs, path+leasePostfix)
+	leaseFile, err := newFile(fs, 1, path, FileDesc{Type: TypeLease, Num: 0})
 	if err != nil {
 		return nil, err
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
-	filter, err := newFile(fs, path+filterPostfix)
+	filterFile, err := newFile(fs, 1, path, FileDesc{Type: TypeFilter, Num: 0})
 	if err != nil {
 		return nil, err
 	}
@@ -143,9 +128,11 @@ func Open(path string, opts ...Options) (*DB, error) {
 	internal := &_DB{
 		mutex:      newMutex(),
 		dbInfo:     dbInfo,
-		timeWindow: newTimeWindowBucket(timewindow, dbInfo.windowIdx, timeOptions),
+		index:      indexFile,
+		data:       _DataTable{file: dataFile, lease: lease, offset: dataFile.Size()},
+		timeWindow: newTimeWindowBucket(winFile, dbInfo.windowIdx, timeOptions),
 		freeList:   lease,
-		filter:     Filter{file: filter, filterBlock: fltr.NewFilterGenerator()},
+		filter:     Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
 		syncLockC:  make(chan struct{}, 1),
 		bufPool:    bpool.NewBufferPool(options.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
 		trie:       newTrie(),
@@ -175,11 +162,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	internal.filter.blockCache = internal.mem
 
+	fileset := _FileSet{mu: new(sync.RWMutex), list: []_FileSet{winFile, indexFile, dataFile, leaseFile, filterFile}}
+
 	db := &DB{
-		lock:  lock,
-		index: index,
-		data:  _DataTable{file: data, lease: lease, offset: data.Size()},
-		opts:  options,
+		opts: options,
+
+		lock: lock,
+		fs:   fileset,
 
 		internal: internal,
 	}
@@ -266,7 +255,8 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
-				id, val, err := db.data.readMessage(s)
+				data := newDataReader(&db.internal.data)
+				id, val, err := data.readMessage(s)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -475,11 +465,11 @@ func (db *DB) Sync() error {
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
 	var err error
-	is, err := db.index.Stat()
+	is, err := db.internal.index.Stat()
 	if err != nil {
 		return -1, err
 	}
-	ds, err := db.data.file.Stat()
+	ds, err := db.internal.data.file.Stat()
 	if err != nil {
 		return -1, err
 	}

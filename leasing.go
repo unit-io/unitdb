@@ -39,7 +39,7 @@ type _FreeSlots struct {
 // A "thread" safe lease freeblocks.
 // To avoid lock bottlenecks slots are divided into several shards (nShards).
 type _Lease struct {
-	file                  _File
+	file                  _FileSet
 	leases                []*_Leases
 	slots                 []*_FreeSlots
 	blocks                []*_FreeBlocks
@@ -60,9 +60,9 @@ type _FreeBlocks struct {
 }
 
 // newLeaswing creates a new concurrent freeblocks.
-func newLease(f _File, minimumSize int64) *_Lease {
+func newLease(fs _FileSet, minimumSize int64) *_Lease {
 	l := &_Lease{
-		file:                  f,
+		file:                  fs,
 		leases:                make([]*_Leases, nShards),
 		slots:                 make([]*_FreeSlots, nShards),
 		blocks:                make([]*_FreeBlocks, nShards),

@@ -17,7 +17,6 @@
 package unitdb
 
 import (
-	"io"
 	"sort"
 	"time"
 
@@ -37,15 +36,16 @@ func newWindowWriter(tw *_TimeWindowBucket, buf *bpool.Buffer) *_WindowWriter {
 	return &_WindowWriter{winBlocks: make(map[int32]_WinBlock), timeWindowBucket: tw, buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
-func (w *_WindowWriter) del(seq uint64, bIdx int32) error {
-	off := int64(blockSize * uint32(bIdx))
-	h := _WindowHandle{file: w.timeWindowBucket.file, offset: off}
-	if err := h.read(); err != nil {
+func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
+	off := int64(blockSize * uint32(winIdx))
+	r := newWindowReader(&w.timeWindowBucket.file)
+	b, err := r.readBlock(off)
+	if err != nil {
 		return err
 	}
 	entryIdx := -1
-	for i := 0; i < int(h.winBlock.entryIdx); i++ {
-		e := h.winBlock.entries[i]
+	for i := 0; i < int(b.entryIdx); i++ {
+		e := b.entries[i]
 		if e.sequence == seq { //record exist in db.
 			entryIdx = i
 			break
@@ -54,14 +54,16 @@ func (w *_WindowWriter) del(seq uint64, bIdx int32) error {
 	if entryIdx == -1 {
 		return nil // no entry in db to delete.
 	}
-	h.winBlock.entryIdx--
+	b.dirty = true
+	b.entryIdx--
 
 	i := entryIdx
 	for ; i < entriesPerIndexBlock-1; i++ {
-		h.winBlock.entries[i] = h.winBlock.entries[i+1]
+		b.entries[i] = b.entries[i+1]
 	}
-	h.winBlock.entries[i] = _WinEntry{}
+	b.entries[i] = _WinEntry{}
 
+	w.winBlocks[winIdx] = b
 	return nil
 }
 
@@ -79,11 +81,11 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b, ok = w.winBlocks[winIdx]
 	if !ok && off > 0 {
 		if winIdx <= w.timeWindowBucket.timeInfo.windowIdx {
-			h := _WindowHandle{file: w.timeWindowBucket.file, offset: off}
-			if err := h.read(); err != nil && err != io.EOF {
+			r := newWindowReader(&w.timeWindowBucket.file)
+			b, err := r.readBlock(off)
+			if err != nil {
 				return off, err
 			}
-			b = h.winBlock
 			b.validation(topicHash)
 			b.leased = true
 		}

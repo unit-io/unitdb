@@ -52,6 +52,12 @@ const (
 	// all expired keys are deleted from db in 1 minutes
 	maxExpDur = 1
 
+	// maxWindowDur duration in hours to save summary of records to timewindow files
+	maxWindowDur = 24 * 7
+
+	// maxRetention in hours
+	maxRetention = 28 * 24
+
 	// maxTopicLength is the maximum size of a topic in bytes.
 	maxTopicLength = 1 << 16
 
@@ -75,7 +81,10 @@ type (
 		// The metrics to measure timeseries on message events.
 		meter *Meter
 
-		dbInfo   _DBInfo
+		dbInfo _DBInfo
+
+		index    _FileSet
+		data     _DataTable
 		filter   Filter
 		freeList *_Lease
 
@@ -113,7 +122,7 @@ func (db *DB) writeInfo() error {
 		windowIdx:  db.internal.timeWindow.windowIndex(),
 	}
 
-	return db.index.writeMarshalableAt(inf, 0)
+	return db.internal.index.writeMarshalableAt(inf, 0)
 }
 
 // Close closes the DB.
@@ -143,16 +152,7 @@ func (db *DB) close() error {
 	if err := db.internal.freeList.write(); err != nil {
 		return err
 	}
-	if err := db.internal.timeWindow.file.Close(); err != nil {
-		return err
-	}
-	if err := db.data.file.Close(); err != nil {
-		return err
-	}
-	if err := db.index.Close(); err != nil {
-		return err
-	}
-	if err := db.internal.filter.close(); err != nil {
+	if err := db.fs.close(); err != nil {
 		return err
 	}
 	if err := db.lock.Unlock(); err != nil {
@@ -176,28 +176,13 @@ func (db *DB) close() error {
 func (db *DB) loadTrie() error {
 	err := db.internal.timeWindow.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
-		blockOff := blockOffset(startBlockIndex(startSeq))
-		b := _BlockHandle{file: db.index, offset: blockOff}
-		if err := b.read(); err != nil {
-			if err == io.EOF {
-				return false, nil
-			}
+		r := newBlockReader(&db.internal.index)
+		s, err := r.read(startSeq)
+		if err != nil {
 			return true, err
 		}
-		entryIdx := -1
-		for i := 0; i < entriesPerIndexBlock; i++ {
-			s := b.block.entries[i]
-			if s.topicSize != 0 { //topic exist in db
-				entryIdx = i
-				break
-			}
-		}
-		if entryIdx == -1 {
-			return false, nil
-		}
-		s := b.block.entries[entryIdx]
-
-		rawtopic, err := db.data.readTopic(s)
+		data := newDataReader(&db.internal.data)
+		rawtopic, err := data.readTopic(s)
 		if err != nil {
 			return true, err
 		}
@@ -233,19 +218,8 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_Slot, error) {
 		return s, nil
 	}
 
-	off := blockOffset(startBlockIndex(seq))
-	bh := _BlockHandle{file: db.index, offset: off}
-	if err := bh.read(); err != nil {
-		return _Slot{}, err
-	}
-
-	for i := 0; i < entriesPerIndexBlock; i++ {
-		s := bh.block.entries[i]
-		if s.seq == seq {
-			return s, nil
-		}
-	}
-	return _Slot{}, nil
+	r := newBlockReader(&db.internal.index)
+	return r.read(seq)
 }
 
 // lookups are performed in following order
@@ -273,14 +247,14 @@ func (db *DB) lookup(q *Query) error {
 
 // newBlock adds new block to DB and it returns block offset.
 func (db *DB) newBlock() (int64, error) {
-	off, err := db.index.extend(blockSize)
+	off, err := db.internal.index.extend(blockSize)
 	db.addBlocks(1)
 	return off, err
 }
 
 // extendBlocks adds blocks to DB.
 func (db *DB) extendBlocks(nBlocks int32) error {
-	if _, err := db.index.extend(uint32(nBlocks) * blockSize); err != nil {
+	if _, err := db.internal.index.extend(uint32(nBlocks) * blockSize); err != nil {
 		return err
 	}
 	db.addBlocks(nBlocks)
@@ -394,7 +368,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if blockIdx > db.blocks() {
 		return nil // no record to delete.
 	}
-	blockWriter := newBlockWriter(&db.index, nil)
+	blockWriter := newBlockWriter(&db.internal.index, nil)
 	e, err := blockWriter.del(seq)
 	if err != nil {
 		return err

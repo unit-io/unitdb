@@ -18,7 +18,6 @@ package unitdb
 
 import (
 	"errors"
-	"io"
 	"sync/atomic"
 	"time"
 
@@ -67,12 +66,12 @@ func (db *_SyncHandle) startSync() bool {
 	db.rawData = db.internal.bufPool.Get()
 
 	db.windowWriter = newWindowWriter(db.internal.timeWindow, db.rawWindow)
-	db.blockWriter = newBlockWriter(&db.index, db.rawBlock)
-	db.dataWriter = newDataWriter(&db.data, db.rawData)
+	db.blockWriter = newBlockWriter(&db.internal.index, db.rawBlock)
+	db.dataWriter = newDataWriter(&db.internal.data, db.rawData)
 
 	db.winOff = db.internal.timeWindow.file.currSize()
-	db.blockOff = db.index.currSize()
-	db.dataOff = db.data.file.currSize()
+	db.blockOff = db.internal.index.currSize()
+	db.dataOff = db.internal.data.file.currSize()
 	db.syncInfo.syncStatusOk = true
 
 	return db.syncInfo.syncStatusOk
@@ -107,8 +106,8 @@ func (db *_SyncHandle) reset() error {
 	db.rawData.Reset()
 
 	db.winOff = db.internal.timeWindow.file.currSize()
-	db.blockOff = db.index.currSize()
-	db.dataOff = db.data.file.currSize()
+	db.blockOff = db.internal.index.currSize()
+	db.dataOff = db.internal.data.file.currSize()
 
 	return nil
 }
@@ -119,8 +118,8 @@ func (db *_SyncHandle) abort() error {
 		return nil
 	}
 	// rollback blocks.
-	db.data.file.truncate(db.dataOff)
-	db.index.truncate(db.blockOff)
+	db.internal.data.file.truncate(db.dataOff)
+	db.internal.index.truncate(db.blockOff)
 	db.internal.timeWindow.file.truncate(db.winOff)
 	atomic.StoreInt32(&db.internal.dbInfo.blockIdx, db.syncInfo.startBlockIdx)
 	db.decount(uint64(db.syncInfo.count))
@@ -177,15 +176,10 @@ func (db *DB) sync() error {
 	if err := db.writeInfo(); err != nil {
 		return err
 	}
-	if err := db.internal.timeWindow.file.Sync(); err != nil {
-		return err
+	if err := db.fs.sync(); err != nil {
+		return nil
 	}
-	if err := db.index.Sync(); err != nil {
-		return err
-	}
-	if err := db.data.file.Sync(); err != nil {
-		return err
-	}
+
 	return nil
 }
 
@@ -345,27 +339,12 @@ func (db *DB) expireEntries() error {
 		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
-		off := blockOffset(startBlockIndex(we.seq()))
-		b := _BlockHandle{file: db.index, offset: off}
-		if err := b.read(); err != nil {
-			if err == io.EOF {
-				return nil
-			}
+		r := newBlockReader(&db.internal.index)
+		s, err := r.read(we.seq())
+		if err != nil {
 			return err
 		}
-		entryIdx := -1
-		for i := 0; i < entriesPerIndexBlock; i++ {
-			e := b.block.entries[i]
-			if e.seq == we.seq() { //record exist in db.
-				entryIdx = i
-				break
-			}
-		}
-		if entryIdx == -1 {
-			return nil
-		}
-		e := b.block.entries[entryIdx]
-		db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
+		db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
 		db.decount(1)
 	}
 
