@@ -23,8 +23,6 @@ import (
 	"os"
 	"path"
 	"sync"
-
-	"github.com/unit-io/unitdb/fs"
 )
 
 // FileType represent a file type.
@@ -88,9 +86,14 @@ func filePath(prefix string, fd FileDesc) string {
 	}
 }
 
+// LockFile represents a lock file.
+type LockFile interface {
+	Unlock() error
+}
+
 type (
 	_File struct {
-		fs.FileManager
+		*os.File
 		fd   FileDesc
 		size int64
 	}
@@ -103,7 +106,12 @@ type (
 	}
 )
 
-func newFile(fsys fs.FileSystem, l int16, name string, fd FileDesc) (_FileSet, error) {
+// createLockFile to create lock file.
+func createLockFile(name string) (LockFile, error) {
+	return newLockFile(name)
+}
+
+func newFile(name string, l int16, fd FileDesc) (_FileSet, error) {
 	if l == 0 {
 		return _FileSet{}, errors.New("no new file")
 	}
@@ -114,11 +122,12 @@ func newFile(fsys fs.FileSystem, l int16, name string, fd FileDesc) (_FileSet, e
 	for i := int16(0); i < l; i++ {
 		fd.Num = i
 		path := filePath(name, fd)
-		fi, err := fsys.OpenFile(path, fileFlag, fileMode)
+		fi, err := os.OpenFile(path, fileFlag, fileMode)
 		if err != nil {
 			return fs, err
 		}
-		f.FileManager = fi
+		f.File = fi
+
 		fd.fd = fi.Fd()
 		f.fd = fd
 		stat, err := fi.Stat()
@@ -128,7 +137,6 @@ func newFile(fsys fs.FileSystem, l int16, name string, fd FileDesc) (_FileSet, e
 		f.size = stat.Size()
 		fs.fileMap[int16(i)] = f
 	}
-	// atomic.StorePointer(&fs.file, f)
 	fs._File = &f
 	return fs, nil
 }
@@ -149,6 +157,13 @@ func (f *_File) extend(size uint32) (int64, error) {
 	f.size += int64(size)
 
 	return off, nil
+}
+
+// slice provide the data for start and end offset.
+func (f *_File) slice(start int64, end int64) ([]byte, error) {
+	buf := make([]byte, end-start)
+	_, err := f.ReadAt(buf, start)
+	return buf, err
 }
 
 func (f *_File) write(data []byte) (int, error) {

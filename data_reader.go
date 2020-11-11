@@ -29,7 +29,7 @@ func (r *_DataReader) readMessage(s _Slot) ([]byte, []byte, error) {
 	if s.cache != nil {
 		return s.cache[:idSize], s.cache[s.topicSize+idSize:], nil
 	}
-	message, err := r.file.Slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
+	message, err := r.file.slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -40,7 +40,7 @@ func (r *_DataReader) readTopic(s _Slot) ([]byte, error) {
 	if s.cache != nil {
 		return s.cache[idSize : s.topicSize+idSize], nil
 	}
-	return r.file.Slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
+	return r.file.slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
 }
 
 func (r *_DataReader) size() (int64, error) {

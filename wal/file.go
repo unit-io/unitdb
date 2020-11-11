@@ -19,9 +19,8 @@ package wal
 import (
 	"encoding"
 	"fmt"
+	"io"
 	"os"
-
-	"github.com/unit-io/unitdb/fs"
 )
 
 type (
@@ -30,7 +29,7 @@ type (
 		size   uint32
 	}
 	_File struct {
-		fs.FileManager
+		*os.File
 		segments   _Segments
 		size       int64
 		targetSize int64
@@ -42,14 +41,13 @@ type _Segments [3]_Segment
 func openFile(name string, targetSize int64) (_File, error) {
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
-	fs := fs.FileIO
 
-	fi, err := fs.OpenFile(name, fileFlag, fileMode)
 	f := _File{}
+	fi, err := os.OpenFile(name, fileFlag, fileMode)
 	if err != nil {
 		return f, err
 	}
-	f.FileManager = fi
+	f.File = fi
 
 	stat, err := fi.Stat()
 	if err != nil {
@@ -141,9 +139,42 @@ func (f *_File) truncate(size int64) error {
 	return nil
 }
 
+// copy copies the file to a new file.
+func (f *_File) copy() (int64, error) {
+	if err := f.File.Sync(); err != nil {
+		return 0, err
+	}
+	if stat, err := f.File.Stat(); err != nil || stat.Size() == int64(0) {
+		return 0, err
+	}
+	newName := fmt.Sprintf("%s.%d", f.File.Name(), f.File.Fd())
+	newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR, os.FileMode(0666))
+	if err != nil {
+		return 0, err
+	}
+
+	buf := make([]byte, 4096)
+	size := int64(0)
+	for {
+		n, err := f.File.Read(buf)
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if n == 0 {
+			break
+		}
+
+		if _, err := newFile.Write(buf[:n]); err != nil {
+			return 0, err
+		}
+		size += int64(n)
+	}
+	return size, err
+}
+
 func (f *_File) reset() error {
 	// copy file before reseting.
-	if _, err := f.Copy(); err != nil {
+	if _, err := f.copy(); err != nil {
 		return err
 	}
 	f.size = 0

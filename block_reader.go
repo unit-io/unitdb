@@ -28,7 +28,7 @@ func newBlockReader(f *_File) *_BlockReader {
 
 func (r *_BlockReader) readBlock(seq uint64) (_Block, error) {
 	off := blockOffset(startBlockIndex(seq))
-	buf, err := r.file.Slice(off, off+int64(blockSize))
+	buf, err := r.file.slice(off, off+int64(blockSize))
 	if err != nil {
 		return _Block{}, err
 	}

@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package fs
+package unitdb
 
 import (
 	"os"

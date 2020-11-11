@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/unit-io/unitdb"
 )
@@ -136,4 +137,6 @@ func main() {
 		log.Fatal(err)
 		return
 	}
+
+	time.Sleep(1 * time.Second)
 }

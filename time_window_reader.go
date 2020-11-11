@@ -26,7 +26,7 @@ func newWindowReader(f *_File) *_WindowReader {
 }
 
 func (r *_WindowReader) readBlock(off int64) (_WinBlock, error) {
-	buf, err := r.file.Slice(off, off+int64(blockSize))
+	buf, err := r.file.slice(off, off+int64(blockSize))
 	if err != nil {
 		return _WinBlock{}, err
 	}

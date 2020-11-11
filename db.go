@@ -31,7 +31,6 @@ import (
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/crypto"
 	fltr "github.com/unit-io/unitdb/filter"
-	"github.com/unit-io/unitdb/fs"
 	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
 )
@@ -41,7 +40,7 @@ import (
 type DB struct {
 	opts *_Options
 
-	lock fs.LockFile
+	lock LockFile
 	fs   _FileSet
 
 	internal *_DB
@@ -58,8 +57,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	fsys := options.fileSystem
-	lock, err := fsys.CreateLockFile(path + lockPostfix)
+	// fsys := options.fileSystem
+	lock, err := createLockFile(path + lockPostfix)
 	if err != nil {
 		if err == os.ErrExist {
 			err = errLocked
@@ -67,7 +66,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	infoFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeInfo})
+	infoFile, err := newFile(path, 1, FileDesc{Type: TypeInfo})
 	if err != nil {
 		return nil, err
 	}
@@ -78,17 +77,17 @@ func Open(path string, opts ...Options) (*DB, error) {
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.flags.backgroundKeyExpiry,
 	}
-	winFile, err := newFile(fsys, int16(maxRetention/maxWindowDur), path, FileDesc{Type: TypeTimeWindow})
+	winFile, err := newFile(path, 1, FileDesc{Type: TypeTimeWindow})
 	if err != nil {
 		return nil, err
 	}
 
-	indexFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeIndex})
+	indexFile, err := newFile(path, 1, FileDesc{Type: TypeIndex})
 	if err != nil {
 		return nil, err
 	}
 
-	dataFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeData})
+	dataFile, err := newFile(path, 1, FileDesc{Type: TypeData})
 	if err != nil {
 		return nil, err
 	}
@@ -119,13 +118,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, errCorrupted
 	}
 
-	leaseFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeLease})
+	leaseFile, err := newFile(path, 1, FileDesc{Type: TypeLease})
 	if err != nil {
 		return nil, err
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
-	filterFile, err := newFile(fsys, 1, path, FileDesc{Type: TypeFilter})
+	filterFile, err := newFile(path, 1, FileDesc{Type: TypeFilter})
 	if err != nil {
 		return nil, err
 	}

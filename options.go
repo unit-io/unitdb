@@ -19,7 +19,6 @@ package unitdb
 import (
 	"time"
 
-	"github.com/unit-io/unitdb/fs"
 	"github.com/unit-io/unitdb/message"
 )
 
@@ -84,9 +83,6 @@ type _Options struct {
 
 	// minimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
 	minimumFreeBlocksSize int64
-
-	// fileSystem file storage type.
-	fileSystem fs.FileSystem
 }
 
 // Options it contains configurable options and flags for DB.
@@ -177,9 +173,6 @@ func WithBatchWriteInterval(dur time.Duration) Options {
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
 	return newFuncOption(func(o *_Options) {
-		if o.fileSystem == nil {
-			o.fileSystem = fs.FileIO
-		}
 		if o.maxSyncDurations == 0 {
 			o.maxSyncDurations = 1
 		}
