@@ -25,12 +25,11 @@ import (
 )
 
 func cleanup(path string) {
-	os.Remove(path + indexPostfix)
-	os.Remove(path + dataPostfix)
-	// os.Remove(path + logPostfix)
+	// os.Remove(path + indexPostfix)
+	// os.Remove(path + dataPostfix)
 	os.Remove(path + lockPostfix)
-	os.Remove(path + windowPostfix)
-	os.Remove(path + filterPostfix)
+	// os.Remove(path + windowPostfix)
+	// os.Remove(path + filterPostfix)
 }
 
 func TestSimple(t *testing.T) {

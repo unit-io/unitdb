@@ -65,15 +65,15 @@ func (db *_SyncHandle) startSync() bool {
 	db.rawBlock = db.internal.bufPool.Get()
 	db.rawData = db.internal.bufPool.Get()
 
-	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return false
 	}
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return false
 	}
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return false
 	}
@@ -118,15 +118,15 @@ func (db *_SyncHandle) reset() error {
 	db.rawBlock.Reset()
 	db.rawData.Reset()
 
-	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return err
 	}
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return err
 	}
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return err
 	}
@@ -144,15 +144,15 @@ func (db *_SyncHandle) abort() error {
 		return nil
 	}
 	// rollback blocks.
-	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return err
 	}
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return err
 	}
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return err
 	}
@@ -250,10 +250,10 @@ func (db *_SyncHandle) sync(recovery bool) error {
 		return err
 	}
 
+	db.incount(uint64(db.syncInfo.count))
 	if err := db.DB.sync(); err != nil {
 		return err
 	}
-	db.incount(uint64(db.syncInfo.count))
 	if recovery {
 		db.internal.meter.Recovers.Inc(db.syncInfo.count)
 	}
@@ -378,7 +378,7 @@ func (db *DB) expireEntries() error {
 		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
-		indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+		indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 		if err != nil {
 			return err
 		}

@@ -40,7 +40,7 @@ import (
 type DB struct {
 	opts *_Options
 
-	lock LockFile
+	lock _LockFile
 	fs   _FileSet
 
 	internal *_DB
@@ -66,7 +66,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	infoFile, err := newFile(path, 1, FileDesc{Type: TypeInfo})
+	infoFile, err := newFile(path, 1, _FileDesc{fileType: typeInfo})
 	if err != nil {
 		return nil, err
 	}
@@ -77,17 +77,17 @@ func Open(path string, opts ...Options) (*DB, error) {
 		maxExpDurations:     maxExpDur,
 		backgroundKeyExpiry: options.flags.backgroundKeyExpiry,
 	}
-	winFile, err := newFile(path, 1, FileDesc{Type: TypeTimeWindow})
+	winFile, err := newFile(path, 1, _FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return nil, err
 	}
 
-	indexFile, err := newFile(path, 1, FileDesc{Type: TypeIndex})
+	indexFile, err := newFile(path, 1, _FileDesc{fileType: typeIndex})
 	if err != nil {
 		return nil, err
 	}
 
-	dataFile, err := newFile(path, 1, FileDesc{Type: TypeData})
+	dataFile, err := newFile(path, 1, _FileDesc{fileType: typeData})
 	if err != nil {
 		return nil, err
 	}
@@ -118,13 +118,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, errCorrupted
 	}
 
-	leaseFile, err := newFile(path, 1, FileDesc{Type: TypeLease})
+	leaseFile, err := newFile(path, 1, _FileDesc{fileType: typeLease})
 	if err != nil {
 		return nil, err
 	}
 	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
 
-	filterFile, err := newFile(path, 1, FileDesc{Type: TypeFilter})
+	filterFile, err := newFile(path, 1, _FileDesc{fileType: typeFilter})
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		limit = len(q.internal.winEntries)
 	}
 
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return nil, err
 	}
@@ -477,12 +477,12 @@ func (db *DB) Sync() error {
 func (db *DB) FileSize() (int64, error) {
 	var err error
 	size := int64(0)
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return 0, err
 	}
 	index := newBlockReader(indexFile)
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return 0, err
 	}

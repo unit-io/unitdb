@@ -300,6 +300,7 @@ func (wal *WAL) Close() error {
 	// Make sure sync thread isn't running.
 	wal.wg.Wait()
 
+	// fmt.Println("wal.close: WALInfo ", wal.WALInfo)
 	return wal.logFile.Close()
 }
 

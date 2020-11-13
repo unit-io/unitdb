@@ -39,8 +39,8 @@ type _WindowsFileLock struct {
 	name string
 }
 
-// Unlock removes the lock from file.
-func (fl *_WindowsFileLock) Unlock() error {
+// unlock removes the lock from file.
+func (fl *_WindowsFileLock) unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func lockFile(h syscall.Handle, flags, reserved, locklow, lockhigh uint32, ol *s
 	return nil
 }
 
-func newLockFile(name string) (LockFile, error) {
+func newLockFile(name string) (_LockFile, error) {
 	path, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
 		return nil, err

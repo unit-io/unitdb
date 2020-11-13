@@ -175,9 +175,9 @@ func (w *_WindowBlocks) getWindowBlock(blockID uint64) *_TimeWindow {
 	return w.window[w.consistent.FindBlock(blockID)]
 }
 
-func newTimeWindowBucket(windowIdx int32, opts *_TimeOptions) _TimeWindowBucket {
+func newTimeWindowBucket(windowIdx int32, opts *_TimeOptions) *_TimeWindowBucket {
 	opts = opts.copyWithDefaults()
-	l := _TimeWindowBucket{timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
+	l := &_TimeWindowBucket{timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	l.opts = opts.copyWithDefaults()

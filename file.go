@@ -25,34 +25,34 @@ import (
 	"sync"
 )
 
-// FileType represent a file type.
-type FileType int
+// _FileType represent a file type.
+type _FileType int
 
 // File types.
 const (
-	TypeInfo FileType = iota
-	TypeTimeWindow
-	TypeIndex
-	TypeData
-	TypeLease
-	TypeFilter
+	typeInfo _FileType = iota
+	typeTimeWindow
+	typeIndex
+	typeData
+	typeLease
+	typeFilter
 
-	TypeAll = TypeInfo | TypeTimeWindow | TypeIndex | TypeData | TypeLease | TypeFilter
+	typeAll = typeInfo | typeTimeWindow | typeIndex | typeData | typeLease | typeFilter
 
 	indexDir = "index"
 	dataDir  = "data"
 	winDir   = "window"
 )
 
-// FileDesc is a 'file descriptor'.
-type FileDesc struct {
-	Type FileType
-	Num  int16
-	fd   uintptr
+// _FileDesc is a 'file descriptor'.
+type _FileDesc struct {
+	fileType _FileType
+	num      int16
+	fd       uintptr
 }
 
-func filePath(prefix string, fd FileDesc) string {
-	name := fmt.Sprintf("%#x-%d", fd.Type, fd.Num)
+func filePath(prefix string, fd _FileDesc) string {
+	name := fmt.Sprintf("%#x-%d", fd.fileType, fd.num)
 	if err := ensureDir(indexDir); err != nil {
 		return name
 	}
@@ -62,39 +62,39 @@ func filePath(prefix string, fd FileDesc) string {
 	if err := ensureDir(winDir); err != nil {
 		return name
 	}
-	switch fd.Type {
-	case TypeInfo:
+	switch fd.fileType {
+	case typeInfo:
 		suffix := fmt.Sprintf("%s.info", prefix)
 		return suffix
-	case TypeTimeWindow:
-		suffix := fmt.Sprintf("%s%04d.win", prefix, fd.Num)
+	case typeTimeWindow:
+		suffix := fmt.Sprintf("%s%04d.win", prefix, fd.num)
 		return path.Join(winDir, suffix)
-	case TypeIndex:
-		suffix := fmt.Sprintf("%s%04d.index", prefix, fd.Num)
+	case typeIndex:
+		suffix := fmt.Sprintf("%s%04d.index", prefix, fd.num)
 		return path.Join(indexDir, suffix)
-	case TypeData:
-		suffix := fmt.Sprintf("%s%04d.data", prefix, fd.Num)
+	case typeData:
+		suffix := fmt.Sprintf("%s%04d.data", prefix, fd.num)
 		return path.Join(dataDir, suffix)
-	case TypeLease:
+	case typeLease:
 		suffix := fmt.Sprintf("%s.lease", prefix)
 		return suffix
-	case TypeFilter:
+	case typeFilter:
 		suffix := fmt.Sprintf("%s.filter", prefix)
 		return suffix
 	default:
-		return fmt.Sprintf("%#x-%d", fd.Type, fd.Num)
+		return fmt.Sprintf("%#x-%d", fd.fileType, fd.num)
 	}
 }
 
-// LockFile represents a lock file.
-type LockFile interface {
-	Unlock() error
+// _LockFile represents a lock file.
+type _LockFile interface {
+	unlock() error
 }
 
 type (
 	_File struct {
 		*os.File
-		fd   FileDesc
+		fd   _FileDesc
 		size int64
 	}
 	_FileSet struct {
@@ -107,11 +107,11 @@ type (
 )
 
 // createLockFile to create lock file.
-func createLockFile(name string) (LockFile, error) {
+func createLockFile(name string) (_LockFile, error) {
 	return newLockFile(name)
 }
 
-func newFile(name string, l int16, fd FileDesc) (_FileSet, error) {
+func newFile(name string, l int16, fd _FileDesc) (_FileSet, error) {
 	if l == 0 {
 		return _FileSet{}, errors.New("no new file")
 	}
@@ -120,7 +120,7 @@ func newFile(name string, l int16, fd FileDesc) (_FileSet, error) {
 	f := _File{}
 	fs := _FileSet{mu: new(sync.RWMutex), fileMap: make(map[int16]_File, l)}
 	for i := int16(0); i < l; i++ {
-		fd.Num = i
+		fd.num = i
 		path := filePath(name, fd)
 		fi, err := os.OpenFile(path, fileFlag, fileMode)
 		if err != nil {
@@ -201,16 +201,16 @@ func (f *_File) Size() int64 {
 	return stat.Size()
 }
 
-func (fs *_FileSet) getFile(fd FileDesc) (*_File, error) {
+func (fs *_FileSet) getFile(fd _FileDesc) (*_File, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	for _, fileset := range fs.list {
-		if fileset.fd.Type == fd.Type {
-			if fileset.fd.Num == fd.Num {
+		if fileset.fd.fileType == fd.fileType {
+			if fileset.fd.num == fd.num {
 				return fileset._File, nil
 			}
-			if f, ok := fileset.fileMap[fd.Num]; ok {
-				fileset.fileMap[fileset.fd.Num] = *fileset._File // keep current file into map
+			if f, ok := fileset.fileMap[fd.num]; ok {
+				fileset.fileMap[fileset.fd.num] = *fileset._File // keep current file into map
 				fileset._File = &f
 				return &f, nil
 			}

@@ -29,7 +29,7 @@ type _UnixFileLock struct {
 }
 
 // Unlock removes the lock from file.
-func (fl *_UnixFileLock) Unlock() error {
+func (fl *_UnixFileLock) unlock() error {
 	if err := os.Remove(fl.name); err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func lockFile(f *os.File) error {
 	return nil
 }
 
-func newLockFile(name string) (LockFile, error) {
+func newLockFile(name string) (_LockFile, error) {
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, err

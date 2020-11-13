@@ -87,7 +87,7 @@ type (
 		mem     *memdb.DB
 		bufPool *bpool.BufferPool
 
-		timeWindow _TimeWindowBucket
+		timeWindow *_TimeWindowBucket
 
 		//trie
 		trie *_Trie
@@ -151,7 +151,7 @@ func (db *DB) close() error {
 	if err := db.fs.close(); err != nil {
 		return err
 	}
-	if err := db.lock.Unlock(); err != nil {
+	if err := db.lock.unlock(); err != nil {
 		return err
 	}
 
@@ -170,16 +170,16 @@ func (db *DB) close() error {
 
 // loadTopicHash loads topic and offset from window file.
 func (db *DB) loadTrie() error {
-	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return err
 	}
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return err
 	}
 	index := newBlockReader(indexFile)
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return err
 	}
@@ -190,6 +190,9 @@ func (db *DB) loadTrie() error {
 		s, err := index.read(startSeq)
 		if err != nil {
 			return true, err
+		}
+		if s.topicSize == 0 {
+			return false, nil
 		}
 		rawtopic, err := data.readTopic(s)
 		if err != nil {
@@ -227,7 +230,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_Slot, error) {
 		return s, nil
 	}
 
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return _Slot{}, err
 	}
@@ -243,7 +246,7 @@ func (db *DB) lookup(q *Query) error {
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
-	winFile, err := db.fs.getFile(FileDesc{Type: TypeTimeWindow})
+	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return err
 	}
@@ -385,7 +388,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if blockIdx > db.blocks() {
 		return nil // no record to delete.
 	}
-	indexFile, err := db.fs.getFile(FileDesc{Type: TypeIndex})
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return err
 	}

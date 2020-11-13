@@ -59,7 +59,7 @@ func (db *_SyncHandle) startRecovery() error {
 
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
-	dataFile, err := db.fs.getFile(FileDesc{Type: TypeData})
+	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return err
 	}

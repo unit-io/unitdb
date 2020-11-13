@@ -24,7 +24,7 @@ import (
 )
 
 type _WindowWriter struct {
-	timeWindowBucket _TimeWindowBucket
+	timeWindowBucket *_TimeWindowBucket
 	file             *_File
 	winBlocks        map[int32]_WinBlock // map[windowIdx]winBlock
 
@@ -33,7 +33,7 @@ type _WindowWriter struct {
 	leasing map[int32][]uint64 // map[blockIdx][]seq
 }
 
-func newWindowWriter(tw _TimeWindowBucket, f *_File, buf *bpool.Buffer) *_WindowWriter {
+func newWindowWriter(tw *_TimeWindowBucket, f *_File, buf *bpool.Buffer) *_WindowWriter {
 	return &_WindowWriter{timeWindowBucket: tw, file: f, winBlocks: make(map[int32]_WinBlock), buffer: buf, leasing: make(map[int32][]uint64)}
 }
 
