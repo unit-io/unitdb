@@ -60,10 +60,11 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	internal := &_DB{
-		start:    time.Now(),
-		meter:    NewMeter(),
-		timeMark: newTimeMark(options.timeRecordInterval),
-		timeLock: newTimeLock(),
+		start:      time.Now(),
+		meter:      NewMeter(),
+		timeMark:   newTimeMark(options.timeRecordInterval),
+		timeLock:   newTimeLock(),
+		writeLockC: make(chan struct{}, 1),
 
 		// buffer pool
 		bufPool: bpool.NewBufferPool(options.memdbSize, nil),
@@ -99,7 +100,7 @@ func Open(opts ...Options) (*DB, error) {
 	go db.tinyBatchLoop(db.opts.timeRecordInterval)
 
 	if needLogRecovery || !options.logResetFlag {
-		if err := db.startRecovery(options.logResetFlag); err != nil {
+		if err := db.startRecovery(); err != nil {
 			return nil, err
 		}
 	}
@@ -197,12 +198,12 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	// Get time block
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
+	db.mu.RUnlock()
 	if !ok {
-		db.mu.RUnlock()
 		return nil, errEntryDoesNotExist
 	}
 
-	var timeID _TimeID
+	// var timeID _TimeID
 	var timeRec []_TimeID
 	r.RLock()
 	for tmID := range r.timeRecords {
@@ -212,50 +213,44 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	sort.Slice(timeRec[:], func(i, j int) bool {
 		return timeRec[i] > timeRec[j]
 	})
-	for _, tmID := range timeRec {
-		if b, ok := db.blockCache[tmID]; ok {
-			b.RLock()
-			if _, ok := b.records[iKey(false, key)]; ok {
-				timeID = tmID
-				b.RUnlock()
-				break
+	for _, timeID := range timeRec {
+		db.mu.RLock()
+		block, ok := db.blockCache[timeID]
+		db.mu.RUnlock()
+		if ok {
+			block.RLock()
+			_, ok := block.records[iKey(false, key)]
+			block.RUnlock()
+			if !ok {
+				r.RLock()
+				fltr := r.timeRecords[timeID]
+				r.RUnlock()
+				if !fltr.Test(key) {
+					break
+				}
+				continue
 			}
-			r.RLock()
-			fltr := r.timeRecords[tmID]
-			r.RUnlock()
-			if !fltr.Test(key) {
-				b.RUnlock()
-				break
+			// Get item from block.
+			off, ok := block.records[iKey(false, key)]
+			if !ok {
+				return nil, errEntryDoesNotExist
 			}
-			b.RUnlock()
+			scratch, err := block.data.Slice(off, off+4) // read data length.
+			if err != nil {
+				return nil, err
+			}
+			dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+			data, err := block.data.Slice(off, off+dataLen)
+			if err != nil {
+				return nil, err
+			}
+			db.internal.meter.Gets.Inc(1)
+
+			return data[8+1+4:], nil
 		}
 	}
 
-	block, ok := db.blockCache[timeID]
-	db.mu.RUnlock()
-	if !ok {
-		return nil, errEntryDoesNotExist
-	}
-
-	block.RLock()
-	defer block.RUnlock()
-	// Get item from block.
-	off, ok := block.records[iKey(false, key)]
-	if !ok {
-		return nil, errEntryDoesNotExist
-	}
-	scratch, err := block.data.Slice(off, off+4) // read data length.
-	if err != nil {
-		return nil, err
-	}
-	dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
-	data, err := block.data.Slice(off, off+dataLen)
-	if err != nil {
-		return nil, err
-	}
-	db.internal.meter.Gets.Inc(1)
-
-	return data[8+1+4:], nil
+	return nil, errEntryDoesNotExist
 }
 
 // ForEachBlock gets all keys from DB.
@@ -309,12 +304,11 @@ func (db *DB) Delete(key uint64) error {
 	// Get time block
 	blockKey := db.blockID(key)
 	r, ok := db.timeBlocks[blockKey]
+	db.mu.RUnlock()
 	if !ok {
-		db.mu.RUnlock()
 		return errEntryDoesNotExist
 	}
 
-	var timeID _TimeID
 	var timeRec []_TimeID
 	r.RLock()
 	for tmID := range r.timeRecords {
@@ -324,46 +318,41 @@ func (db *DB) Delete(key uint64) error {
 	sort.Slice(timeRec[:], func(i, j int) bool {
 		return timeRec[i] > timeRec[j]
 	})
-	for _, tmID := range timeRec {
-		if b, ok := db.blockCache[tmID]; ok {
-			b.RLock()
-			if _, ok := b.records[iKey(false, key)]; ok {
-				timeID = tmID
-				b.RUnlock()
-				break
+	for _, timeID := range timeRec {
+		db.mu.RLock()
+		block, ok := db.blockCache[timeID]
+		db.mu.RUnlock()
+		if ok {
+			block.RLock()
+			_, ok := block.records[iKey(false, key)]
+			block.RUnlock()
+			if !ok {
+				r.RLock()
+				fltr := r.timeRecords[timeID]
+				r.RUnlock()
+				if !fltr.Test(key) {
+					break
+				}
+				continue
 			}
-			r.RLock()
-			fltr := r.timeRecords[tmID]
-			r.RUnlock()
-			if !fltr.Test(key) {
-				b.RUnlock()
-				break
+			block.Lock()
+			ikey := iKey(false, key)
+			delete(block.records, ikey)
+			block.count--
+			count := block.count
+			block.Unlock()
+
+			db.delete(key)
+			db.internal.meter.Dels.Inc(1)
+
+			if count == 0 {
+				return db.releaseLog(timeID)
 			}
-			b.RUnlock()
+			return nil
 		}
 	}
 
-	block, ok := db.blockCache[timeID]
-	db.mu.RUnlock()
-	if !ok {
-		return errEntryDoesNotExist
-	}
-
-	block.Lock()
-	ikey := iKey(false, key)
-	delete(block.records, ikey)
-	block.count--
-	count := block.count
-	block.Unlock()
-
-	db.delete(key)
-	db.internal.meter.Dels.Inc(1)
-
-	if count == 0 {
-		return db.releaseLog(timeID)
-	}
-
-	return nil
+	return errEntryDoesNotExist
 }
 
 // Put sets a new key-value pait to the DB.
@@ -372,12 +361,14 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		return 0, err
 	}
 
-	db.mu.Lock()
-	timeID := db.internal.tinyBatch.timeID()
-	timeLock := db.internal.timeLock.getTimeLock(timeID)
-	timeLock.Lock()
-	defer timeLock.Unlock()
+	db.internal.writeLockC <- struct{}{}
+	defer func() {
+		<-db.internal.writeLockC
+	}()
 
+	timeID := db.internal.tinyBatch.timeID()
+
+	db.mu.Lock()
 	block, ok := db.blockCache[timeID]
 	if !ok {
 		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}

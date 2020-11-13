@@ -19,6 +19,7 @@ package memdb
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -93,8 +94,9 @@ type _DB struct {
 	timeLock _TimeLock
 
 	// tiny Batch
-	tinyBatch *_TinyBatch
-	batchPool *_BatchPool
+	writeLockC chan struct{}
+	tinyBatch  *_TinyBatch
+	batchPool  *_BatchPool
 
 	// buffer pool
 	bufPool *bpool.BufferPool
@@ -108,10 +110,6 @@ type _DB struct {
 	closed uint32
 	closer io.Closer
 }
-
-// func newBlock() *_Block {
-// 	return &_Block{data: _DataTable{}, records: make(map[_Key]int64)}
-// }
 
 // blockID gets blockID for the Key using consistent hashing.
 func (db *DB) blockID(key uint64) _BlockKey {
@@ -179,6 +177,7 @@ func (db *DB) close() error {
 	// Signal all goroutines.
 	time.Sleep(db.opts.timeRecordInterval)
 	close(db.internal.closeC)
+
 	db.internal.batchPool.stopWait()
 
 	// Wait for all goroutines to exit.
@@ -240,13 +239,14 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 }
 
 func (db *DB) delete(key uint64) error {
-	db.mu.Lock()
+	db.internal.writeLockC <- struct{}{}
+	defer func() {
+		<-db.internal.writeLockC
+	}()
 
 	timeID := db.internal.tinyBatch.timeID()
-	timeLock := db.internal.timeLock.getTimeLock(timeID)
-	timeLock.Lock()
-	defer timeLock.Unlock()
 
+	db.mu.Lock()
 	block, ok := db.blockCache[timeID]
 	if !ok {
 		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
@@ -261,6 +261,9 @@ func (db *DB) delete(key uint64) error {
 	block.put(ikey, data[:])
 	db.internal.tinyBatch.incount()
 
+	if key == 2 {
+		fmt.Println("db.delete: key ", key)
+	}
 	return nil
 }
 
@@ -369,7 +372,7 @@ func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
 }
 
 // startRecovery recovers pending entries from the WAL.
-func (db *DB) startRecovery(reset bool) error {
+func (db *DB) startRecovery() error {
 	// start log recovery
 	r, err := db.internal.wal.NewReader()
 	if err != nil {
@@ -391,6 +394,7 @@ func (db *DB) startRecovery(reset bool) error {
 			key := binary.LittleEndian.Uint64(logData[1:9])
 			val := logData[9:]
 			if dBit == 1 {
+				fmt.Println("db.recovery: delete ", key)
 				if _, exists := log[key]; exists {
 					delete(log, key)
 				}
@@ -429,7 +433,6 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	}
 
 	db.internal.bufPool.Put(block.data)
-	// block.data.Reset()
 	db.mu.Lock()
 	delete(db.blockCache, timeID)
 	db.mu.Unlock()
@@ -448,16 +451,12 @@ func (db *DB) tinyBatchLoop(interval time.Duration) {
 			tinyBatchTicker.Stop()
 			return
 		case <-tinyBatchTicker.C:
-			db.mu.Lock()
-			timeID := db.internal.tinyBatch.timeID()
-			timeLock := db.internal.timeLock.getTimeLock(timeID)
-			timeLock.RLock()
+			db.internal.writeLockC <- struct{}{}
 			if db.internal.tinyBatch.len() != 0 {
 				db.internal.batchPool.write(db.internal.tinyBatch)
 			}
 			db.internal.tinyBatch = db.newTinyBatch()
-			db.mu.Unlock()
-			timeLock.RUnlock()
+			<-db.internal.writeLockC
 		}
 	}
 }

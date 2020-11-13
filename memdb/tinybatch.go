@@ -17,6 +17,7 @@
 package memdb
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,12 +90,11 @@ func (p *_BatchPool) size() int {
 
 // stop tells dispatcher to exit, and wether or not complete queued batches.
 func (p *_BatchPool) stop(wait bool) {
-	p.db.mu.RLock()
-	timeID := p.db.internal.tinyBatch.timeID()
-	timeLock := p.db.internal.timeLock.getTimeLock(timeID)
-	timeLock.Lock()
-	p.db.mu.RUnlock()
-	defer timeLock.Unlock()
+	// Acquire tinyBatch write lock
+	p.db.internal.writeLockC <- struct{}{}
+	defer func() {
+		<-p.db.internal.writeLockC
+	}()
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
@@ -191,7 +191,7 @@ Loop:
 		p.batchQueue <- nil
 		batchCount--
 	}
-
+	fmt.Println("batchPool.dispatch: stop")
 	timeout.Stop()
 }
 
@@ -248,7 +248,7 @@ func (p *_BatchPool) killIdleBatch() bool {
 // runQueuedBatches removes each batch from the waiting queue and
 // process it until queue is empty.
 func (p *_BatchPool) runQueuedBatches() {
-	if p.waitingQueue.len() != 0 {
+	for p.waitingQueue.len() != 0 {
 		p.batchQueue <- p.waitingQueue.pop()
 		atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
 	}
