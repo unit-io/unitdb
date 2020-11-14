@@ -17,7 +17,6 @@
 package memdb
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -191,7 +190,6 @@ Loop:
 		p.batchQueue <- nil
 		batchCount--
 	}
-	fmt.Println("batchPool.dispatch: stop")
 	timeout.Stop()
 }
 

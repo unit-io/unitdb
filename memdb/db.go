@@ -62,7 +62,7 @@ func Open(opts ...Options) (*DB, error) {
 	internal := &_DB{
 		start:      time.Now(),
 		meter:      NewMeter(),
-		timeMark:   newTimeMark(options.timeRecordInterval),
+		timeMark:   newTimeMark(options.timeMarkExpiryDuration),
 		timeLock:   newTimeLock(),
 		writeLockC: make(chan struct{}, 1),
 
@@ -254,7 +254,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 }
 
 // ForEachBlock gets all keys from DB.
-func (db *DB) ForEachBlock(timeMarkExpDur time.Duration, f func(timeID int64, keys []uint64) (bool, error)) (err error) {
+func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
 	db.mu.RLock()
 	db.internal.timeMark.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
@@ -281,15 +281,12 @@ func (db *DB) ForEachBlock(timeMarkExpDur time.Duration, f func(timeID int64, ke
 			}
 		}
 		block.RUnlock()
-		sort.Slice(keys[:], func(i, j int) bool {
-			return keys[i] < keys[j]
-		})
 		if stop, err := f(int64(timeID), keys); stop || err != nil {
 			return err
 		}
 	}
 
-	go db.internal.timeMark.startReleaser(timeMarkExpDur)
+	go db.internal.timeMark.startExpirer()
 
 	return nil
 }

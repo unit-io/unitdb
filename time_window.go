@@ -330,7 +330,7 @@ func (tw *_TimeWindowBucket) lookup(winFile *_File, topicHash uint64, off, cutof
 		}
 		if len(winEntries) > limit-int(b.entryIdx) {
 			limit = limit - len(winEntries)
-			for i := len(b.entries) - 1; i >= len(b.entries)-limit; i-- {
+			for i := len(b.entries[:b.entryIdx]) - 1; i >= len(b.entries[:b.entryIdx])-limit; i-- {
 				we := b.entries[i]
 				if we.isExpired() {
 					if err := tw.expiryWindowBucket.addExpiry(we); err != nil {
@@ -346,7 +346,7 @@ func (tw *_TimeWindowBucket) lookup(winFile *_File, topicHash uint64, off, cutof
 				return true, nil
 			}
 		}
-		for i := len(b.entries) - 1; i >= 0; i-- {
+		for i := len(b.entries[:b.entryIdx]) - 1; i >= 0; i-- {
 			we := b.entries[i]
 			if we.isExpired() {
 				if err := tw.expiryWindowBucket.addExpiry(we); err != nil {

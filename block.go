@@ -27,7 +27,7 @@ const (
 )
 
 type (
-	_Slot struct {
+	_IndexEntry struct {
 		seq       uint64
 		topicSize uint16
 		valueSize uint32
@@ -36,8 +36,8 @@ type (
 		cache []byte // block from memdb if it exist
 	}
 
-	_Block struct {
-		entries  [entriesPerIndexBlock]_Slot
+	_IndexBlock struct {
+		entries  [entriesPerIndexBlock]_IndexEntry
 		baseSeq  uint64
 		next     uint32
 		entryIdx uint16
@@ -58,11 +58,11 @@ func blockOffset(idx int32) int64 {
 	return int64(blockSize * uint32(idx))
 }
 
-func (s _Slot) mSize() uint32 {
-	return idSize + uint32(s.topicSize) + s.valueSize
+func (e _IndexEntry) mSize() uint32 {
+	return idSize + uint32(e.topicSize) + e.valueSize
 }
 
-func (b _Block) validation(blockIdx int32) error {
+func (b _IndexBlock) validation(blockIdx int32) error {
 	startBlockIdx := startBlockIndex(b.entries[0].seq)
 	if startBlockIdx != blockIdx {
 		return fmt.Errorf("validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
@@ -71,7 +71,7 @@ func (b _Block) validation(blockIdx int32) error {
 }
 
 // MarshalBinary serialized entries block into binary data.
-func (b _Block) MarshalBinary() []byte {
+func (b _IndexBlock) MarshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 
@@ -96,7 +96,7 @@ func (b _Block) MarshalBinary() []byte {
 }
 
 // UnmarshalBinary de-serialized entries block from binary data.
-func (b *_Block) UnmarshalBinary(data []byte) error {
+func (b *_IndexBlock) UnmarshalBinary(data []byte) error {
 	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
 	data = data[8:]
 	for i := 0; i < entriesPerIndexBlock; i++ {

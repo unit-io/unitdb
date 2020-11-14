@@ -192,6 +192,7 @@ func (db *DB) loadTrie() error {
 			return true, err
 		}
 		if s.topicSize == 0 {
+			// fmt.Println("db.loadTrie: topic not found topicHash, seq ", topicHash, startSeq)
 			return false, nil
 		}
 		rawtopic, err := data.readTopic(s)
@@ -212,27 +213,27 @@ func (db *DB) loadTrie() error {
 	return err
 }
 
-func (db *DB) readEntry(topicHash uint64, seq uint64) (_Slot, error) {
+func (db *DB) readEntry(topicHash uint64, seq uint64) (_IndexEntry, error) {
 	data, err := db.internal.mem.Get(seq)
 	if err != nil {
-		return _Slot{}, errMsgIDDeleted
+		return _IndexEntry{}, errMsgIDDeleted
 	}
 	if data != nil {
-		var e _Entry
-		e.UnmarshalBinary(data[:entrySize])
-		s := _Slot{
-			seq:       e.seq,
-			topicSize: e.topicSize,
-			valueSize: e.valueSize,
+		var m _Entry
+		m.UnmarshalBinary(data[:entrySize])
+		e := _IndexEntry{
+			seq:       m.seq,
+			topicSize: m.topicSize,
+			valueSize: m.valueSize,
 
 			cache: data[entrySize:],
 		}
-		return s, nil
+		return e, nil
 	}
 
 	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
-		return _Slot{}, err
+		return _IndexEntry{}, err
 	}
 	index := newBlockReader(indexFile)
 	return index.read(seq)
@@ -259,7 +260,7 @@ func (db *DB) lookup(q *Query) error {
 		for _, we := range wEntries {
 			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}
-		// fmt.Println("db.lookup: topicHash ", topic.hash)
+		// fmt.Println("db.lookup: topicHash, count ", topic.hash, len(wEntries))
 	}
 
 	return nil
@@ -326,14 +327,8 @@ func (db *DB) setEntry(e *Entry) error {
 	if e.ID != nil {
 		id = message.ID(e.ID)
 		seq = id.Sequence()
-		// db.internal.freeList.addLease(db.internal.mem.TimeID(), seq)
 	} else {
-		if ok, s := db.internal.freeList.getSlot(); ok {
-			db.internal.meter.Leases.Inc(1)
-			seq = s
-		} else {
-			seq = db.nextSeq()
-		}
+		seq = db.nextSeq()
 		id = message.NewID(seq)
 	}
 	if seq == 0 {
@@ -373,7 +368,6 @@ func (db *DB) delete(topicHash, seq uint64) error {
 		return nil
 	}
 
-	db.internal.freeList.freeSlot(seq)
 	db.internal.meter.Dels.Inc(1)
 	if err := db.internal.mem.Delete(seq); err != nil {
 		return err

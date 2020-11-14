@@ -25,29 +25,29 @@ func newDataReader(dt _DataTable, f *_File) *_DataReader {
 	return &_DataReader{dataTable: dt, file: f}
 }
 
-func (r *_DataReader) readMessage(s _Slot) ([]byte, []byte, error) {
-	if s.cache != nil {
-		return s.cache[:idSize], s.cache[s.topicSize+idSize:], nil
+func (r *_DataReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
+	if e.cache != nil {
+		return e.cache[:idSize], e.cache[e.topicSize+idSize:], nil
 	}
-	message, err := r.file.slice(s.msgOffset, s.msgOffset+int64(s.mSize()))
+	message, err := r.file.slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
-	return message[:idSize], message[s.topicSize+idSize:], nil
+	return message[:idSize], message[e.topicSize+idSize:], nil
 }
 
-func (r *_DataReader) readTopic(s _Slot) ([]byte, error) {
-	if s.cache != nil {
-		return s.cache[idSize : s.topicSize+idSize], nil
+func (r *_DataReader) readTopic(e _IndexEntry) ([]byte, error) {
+	if e.cache != nil {
+		return e.cache[idSize : e.topicSize+idSize], nil
 	}
-	return r.file.slice(s.msgOffset+int64(idSize), s.msgOffset+int64(s.topicSize)+int64(idSize))
+	return r.file.slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
 }
 
 func (r *_DataReader) size() (int64, error) {
-	ds, err := r.file.Stat()
+	s, err := r.file.Stat()
 	if err != nil {
 		return 0, err
 	}
 
-	return ds.Size(), nil
+	return s.Size(), nil
 }

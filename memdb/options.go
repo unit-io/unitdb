@@ -36,6 +36,8 @@ type _Options struct {
 	logResetFlag bool
 
 	timeRecordInterval time.Duration
+
+	timeMarkExpiryDuration time.Duration
 }
 
 // Options it contains configurable options and flags for DB.
@@ -76,6 +78,9 @@ func WithDefaultOptions() Options {
 		}
 		if o.timeRecordInterval == 0 {
 			o.timeRecordInterval = 15 * time.Millisecond
+		}
+		if o.timeMarkExpiryDuration == 0 {
+			o.timeMarkExpiryDuration = 1 * time.Second
 		}
 	})
 }

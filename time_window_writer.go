@@ -83,7 +83,7 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	if !ok && off > 0 {
 		if winIdx <= w.timeWindowBucket.timeInfo.windowIdx {
 			r := newWindowReader(w.file)
-			b, err := r.readBlock(off)
+			b, err = r.readBlock(off)
 			if err != nil {
 				return off, err
 			}
@@ -94,17 +94,6 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b.topicHash = topicHash
 	for _, we := range wEntries {
 		if we.sequence == 0 {
-			continue
-		}
-		entryIdx := 0
-		for i := 0; i < entriesPerWindowBlock; i++ {
-			e := b.entries[i]
-			if e.sequence == we.sequence { //record exist in db.
-				entryIdx = -1
-				break
-			}
-		}
-		if entryIdx == -1 {
 			continue
 		}
 		if b.entryIdx == entriesPerWindowBlock {

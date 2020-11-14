@@ -24,7 +24,7 @@ import (
 )
 
 type _BlockWriter struct {
-	blocks map[int32]_Block // map[blockIdx]block
+	blocks map[int32]_IndexBlock // map[blockIdx]block
 
 	file   *_File
 	buffer *bpool.Buffer
@@ -33,16 +33,16 @@ type _BlockWriter struct {
 }
 
 func newBlockWriter(f *_File, buf *bpool.Buffer) *_BlockWriter {
-	return &_BlockWriter{blocks: make(map[int32]_Block), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
+	return &_BlockWriter{blocks: make(map[int32]_IndexBlock), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
 }
 
-func (w *_BlockWriter) del(seq uint64) (_Slot, error) {
-	var delEntry _Slot
+func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
+	var delEntry _IndexEntry
 	startBlockIdx := startBlockIndex(seq)
 	r := newBlockReader(w.file)
 	b, err := r.readBlock(seq)
 	if err != nil {
-		return _Slot{}, err
+		return _IndexEntry{}, err
 	}
 	entryIdx := -1
 	for i := 0; i < int(b.entryIdx); i++ {
@@ -63,14 +63,14 @@ func (w *_BlockWriter) del(seq uint64) (_Slot, error) {
 	for ; i < entriesPerIndexBlock-1; i++ {
 		b.entries[i] = b.entries[i+1]
 	}
-	b.entries[i] = _Slot{}
+	b.entries[i] = _IndexEntry{}
 	w.blocks[startBlockIdx] = b
 
 	return delEntry, nil
 }
 
-func (w *_BlockWriter) append(s _Slot, blockIdx int32) (exists bool, err error) {
-	var b _Block
+func (w *_BlockWriter) append(s _IndexEntry, blockIdx int32) (exists bool, err error) {
+	var b _IndexBlock
 	var ok bool
 	if s.seq == 0 {
 		panic("unable to append zero sequence")
@@ -80,7 +80,7 @@ func (w *_BlockWriter) append(s _Slot, blockIdx int32) (exists bool, err error) 
 	if !ok {
 		if startBlockIdx <= blockIdx {
 			r := newBlockReader(w.file)
-			b, err := r.readBlock(s.seq)
+			b, err = r.readBlock(s.seq)
 			if err != nil {
 				return false, err
 			}

@@ -18,6 +18,7 @@ package unitdb
 
 import (
 	"errors"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -229,11 +230,6 @@ func (db *_SyncHandle) sync(recovery bool) error {
 	db.syncInfo.syncComplete = false
 	defer db.abort()
 
-	if _, err := db.dataWriter.write(); err != nil {
-		logger.Error().Err(err).Str("context", "data.write")
-		return err
-	}
-
 	nBlocks := int32((db.syncInfo.upperSeq - 1) / entriesPerIndexBlock)
 	if nBlocks > db.blocks() {
 		if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
@@ -247,6 +243,10 @@ func (db *_SyncHandle) sync(recovery bool) error {
 	}
 	if err := db.blockWriter.write(); err != nil {
 		logger.Error().Err(err).Str("context", "block.write")
+		return err
+	}
+	if _, err := db.dataWriter.write(); err != nil {
+		logger.Error().Err(err).Str("context", "data.write")
 		return err
 	}
 
@@ -271,17 +271,16 @@ func (db *_SyncHandle) Sync() error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	var err1 error
-	baseSeq := db.syncInfo.lastSyncSeq
 	timeRelease := db.internal.timeWindow.release()
-	err := db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
+	err := db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
+		sort.Slice(seqs[:], func(i, j int) bool {
+			return seqs[i] < seqs[j]
+		})
+		if seqs[len(seqs)-1] > db.syncInfo.upperSeq {
+			db.syncInfo.upperSeq = seqs[len(seqs)-1]
+		}
 		for _, seq := range seqs {
-			if seq < baseSeq {
-				baseSeq = seq
-			}
-			if seq > db.syncInfo.upperSeq {
-				db.syncInfo.upperSeq = seq
-			}
 			memdata, err := db.internal.mem.Lookup(timeID, seq)
 			if err != nil || memdata == nil {
 				db.syncInfo.entriesInvalid++
@@ -289,36 +288,36 @@ func (db *_SyncHandle) Sync() error {
 				err1 = err
 				continue
 			}
-			var e _Entry
-			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+			var m _Entry
+			if err = m.UnmarshalBinary(memdata[:entrySize]); err != nil {
 				db.syncInfo.entriesInvalid++
 				err1 = err
 				continue
 			}
-			s := _Slot{
-				seq:       e.seq,
-				topicSize: e.topicSize,
-				valueSize: e.valueSize,
+			e := _IndexEntry{
+				seq:       m.seq,
+				topicSize: m.topicSize,
+				valueSize: m.valueSize,
 
 				cache: memdata[entrySize:],
 			}
 
-			if s.msgOffset, err = db.dataWriter.append(s.cache); err != nil {
+			if e.msgOffset, err = db.dataWriter.append(e.cache); err != nil {
 				return true, err
 			}
-			if exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx); exists || err != nil {
+			if exists, err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); exists || err != nil {
 				if err != nil {
 					return true, err
 				}
-				db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
+				db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
 				db.syncInfo.entriesInvalid++
 				continue
 			}
-			we := newWinEntry(seq, e.expiresAt)
-			if _, ok := winEntries[e.topicHash]; ok {
-				winEntries[e.topicHash] = append(winEntries[e.topicHash], we)
+			we := newWinEntry(seq, m.expiresAt)
+			if _, ok := winEntries[m.topicHash]; ok {
+				winEntries[m.topicHash] = append(winEntries[m.topicHash], we)
 			} else {
-				winEntries[e.topicHash] = _WindowEntries{we}
+				winEntries[m.topicHash] = _WindowEntries{we}
 			}
 			db.internal.filter.Append(we.seq())
 			db.syncInfo.count++
@@ -351,7 +350,6 @@ func (db *_SyncHandle) Sync() error {
 			if err := db.internal.mem.Free(timeID); err != nil {
 				return true, err
 			}
-			db.internal.freeList.releaseLease(timeID)
 		}
 
 		return false, nil

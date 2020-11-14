@@ -17,7 +17,7 @@
 package unitdb
 
 type _BlockReader struct {
-	block _Block
+	block _IndexBlock
 
 	file *_File
 }
@@ -26,20 +26,20 @@ func newBlockReader(f *_File) *_BlockReader {
 	return &_BlockReader{file: f}
 }
 
-func (r *_BlockReader) readBlock(seq uint64) (_Block, error) {
+func (r *_BlockReader) readBlock(seq uint64) (_IndexBlock, error) {
 	off := blockOffset(startBlockIndex(seq))
 	buf, err := r.file.slice(off, off+int64(blockSize))
 	if err != nil {
-		return _Block{}, err
+		return _IndexBlock{}, err
 	}
 	r.block.UnmarshalBinary(buf)
 
 	return r.block, nil
 }
 
-func (r *_BlockReader) read(seq uint64) (_Slot, error) {
+func (r *_BlockReader) read(seq uint64) (_IndexEntry, error) {
 	if _, err := r.readBlock(seq); err != nil {
-		return _Slot{}, err
+		return _IndexEntry{}, err
 	}
 
 	entryIdx := -1
@@ -51,17 +51,17 @@ func (r *_BlockReader) read(seq uint64) (_Slot, error) {
 		}
 	}
 	if entryIdx == -1 {
-		return _Slot{}, errEntryInvalid
+		return _IndexEntry{}, errEntryInvalid
 	}
 
 	return r.block.entries[entryIdx], nil
 }
 
 func (r *_BlockReader) size() (int64, error) {
-	ds, err := r.file.Stat()
+	s, err := r.file.Stat()
 	if err != nil {
 		return 0, err
 	}
 
-	return ds.Size(), nil
+	return s.Size(), nil
 }

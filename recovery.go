@@ -19,7 +19,7 @@ package unitdb
 import (
 	"errors"
 	"fmt"
-	"time"
+	"sort"
 
 	"github.com/unit-io/unitdb/message"
 	// _ "net/http/pprof"
@@ -65,8 +65,14 @@ func (db *_SyncHandle) startRecovery() error {
 	}
 	data := newDataReader(db.internal.data, dataFile)
 
-	err = db.internal.mem.ForEachBlock(db.opts.syncDurationType*time.Duration(db.opts.maxSyncDurations), func(timeID int64, seqs []uint64) (bool, error) {
+	err = db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
+		sort.Slice(seqs[:], func(i, j int) bool {
+			return seqs[i] < seqs[j]
+		})
+		if seqs[len(seqs)-1] > db.syncInfo.upperSeq {
+			db.syncInfo.upperSeq = seqs[len(seqs)-1]
+		}
 		for _, seq := range seqs {
 			memdata, err := db.internal.mem.Lookup(timeID, seq)
 			if err != nil || memdata == nil {
@@ -75,46 +81,43 @@ func (db *_SyncHandle) startRecovery() error {
 				err1 = err
 				continue
 			}
-			var e _Entry
-			if err = e.UnmarshalBinary(memdata[:entrySize]); err != nil {
+			var m _Entry
+			if err = m.UnmarshalBinary(memdata[:entrySize]); err != nil {
 				db.syncInfo.entriesInvalid++
 				err1 = err
 				continue
 			}
-			if e.seq > db.syncInfo.upperSeq {
-				db.syncInfo.upperSeq = e.seq
-			}
-			s := _Slot{
-				seq:       e.seq,
-				topicSize: e.topicSize,
-				valueSize: e.valueSize,
+			e := _IndexEntry{
+				seq:       m.seq,
+				topicSize: m.topicSize,
+				valueSize: m.valueSize,
 
 				cache: memdata[entrySize:],
 			}
-			if s.msgOffset, err = db.dataWriter.append(s.cache); err != nil {
+			if e.msgOffset, err = db.dataWriter.append(e.cache); err != nil {
 				return false, err
 			}
-			exists, err := db.blockWriter.append(s, db.syncInfo.startBlockIdx)
+			exists, err := db.blockWriter.append(e, db.syncInfo.startBlockIdx)
 			if err != nil {
 				return false, err
 			}
 			if exists {
-				db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
+				db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
 				continue
 			}
-			if e.topicSize != 0 {
-				rawtopic, _ := data.readTopic(s)
+			if m.topicSize != 0 {
+				rawtopic, _ := data.readTopic(e)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {
 					return false, err
 				}
-				db.internal.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
+				db.internal.trie.add(newTopic(m.topicHash, 0), t.Parts, t.Depth)
 			}
-			if _, ok := winEntries[e.topicHash]; ok {
-				winEntries[e.topicHash] = append(winEntries[e.topicHash], newWinEntry(e.seq, e.expiresAt))
+			if _, ok := winEntries[m.topicHash]; ok {
+				winEntries[m.topicHash] = append(winEntries[m.topicHash], newWinEntry(e.seq, m.expiresAt))
 			} else {
-				winEntries[e.topicHash] = _WindowEntries{newWinEntry(e.seq, e.expiresAt)}
+				winEntries[m.topicHash] = _WindowEntries{newWinEntry(m.seq, m.expiresAt)}
 			}
 			db.internal.filter.Append(e.seq)
 			db.syncInfo.count++

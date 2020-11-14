@@ -36,8 +36,8 @@ type (
 	}
 )
 
-func newTimeMark(maxDur time.Duration) *_TimeMark {
-	return &_TimeMark{durations: maxDur, timeRecord: _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
+func newTimeMark(expiryDuration time.Duration) *_TimeMark {
+	return &_TimeMark{durations: expiryDuration, timeRecord: _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
 func (r _TimeRecord) isExpired(expDur time.Duration) bool {
@@ -83,8 +83,8 @@ func (tm *_TimeMark) release(timeID _TimeID) {
 		tm.records[timeID] = timeMark
 	} else {
 		delete(tm.records, timeID)
-		timeMark.lastUnref = _TimeID(time.Now().UTC().UnixNano())
-		// timeMark.lastUnref = tm.timeRecord.lastUnref
+		// timeMark.lastUnref = _TimeID(time.Now().UTC().UnixNano())
+		timeMark.lastUnref = tm.timeRecord.lastUnref
 		tm.releasedRecords[timeID] = timeMark
 	}
 }
@@ -127,12 +127,12 @@ func (tm *_TimeMark) abort(timeID _TimeID) {
 	tm.releasedRecords[timeID] = r
 }
 
-func (tm *_TimeMark) startReleaser(dur time.Duration) {
+func (tm *_TimeMark) startExpirer() {
 	tm.Lock()
 	defer tm.Unlock()
 
 	for timeID, r := range tm.releasedRecords {
-		if r.isExpired(dur) {
+		if r.isExpired(tm.durations) {
 			delete(tm.releasedRecords, timeID)
 		}
 	}
