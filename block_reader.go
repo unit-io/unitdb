@@ -17,34 +17,38 @@
 package unitdb
 
 type _BlockReader struct {
-	block _IndexBlock
+	indexBlock _IndexBlock
 
-	file *_File
+	fs *_FileSet
 }
 
-func newBlockReader(f *_File) *_BlockReader {
-	return &_BlockReader{file: f}
+func newBlockReader(fs *_FileSet) *_BlockReader {
+	return &_BlockReader{fs: fs}
 }
 
-func (r *_BlockReader) readBlock(seq uint64) (_IndexBlock, error) {
-	off := blockOffset(startBlockIndex(seq))
-	buf, err := r.file.slice(off, off+int64(blockSize))
+func (r *_BlockReader) readIndexBlock(seq uint64) (_IndexBlock, error) {
+	off := blockOffset(blockIndex(seq))
+	indexFile, err := r.fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
 		return _IndexBlock{}, err
 	}
-	r.block.UnmarshalBinary(buf)
+	buf, err := indexFile.slice(off, off+int64(blockSize))
+	if err != nil {
+		return _IndexBlock{}, err
+	}
+	r.indexBlock.UnmarshalBinary(buf)
 
-	return r.block, nil
+	return r.indexBlock, nil
 }
 
-func (r *_BlockReader) read(seq uint64) (_IndexEntry, error) {
-	if _, err := r.readBlock(seq); err != nil {
+func (r *_BlockReader) readIndexEntry(seq uint64) (_IndexEntry, error) {
+	if _, err := r.readIndexBlock(seq); err != nil {
 		return _IndexEntry{}, err
 	}
 
 	entryIdx := -1
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		s := r.block.entries[i]
+		s := r.indexBlock.entries[i]
 		if s.seq == seq { //topic exist in db
 			entryIdx = i
 			break
@@ -54,14 +58,31 @@ func (r *_BlockReader) read(seq uint64) (_IndexEntry, error) {
 		return _IndexEntry{}, errEntryInvalid
 	}
 
-	return r.block.entries[entryIdx], nil
+	return r.indexBlock.entries[entryIdx], nil
 }
 
-func (r *_BlockReader) size() (int64, error) {
-	s, err := r.file.Stat()
-	if err != nil {
-		return 0, err
+func (r *_BlockReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
+	if e.cache != nil {
+		return e.cache[:idSize], e.cache[e.topicSize+idSize:], nil
 	}
+	dataFile, err := r.fs.getFile(_FileDesc{fileType: typeData})
+	if err != nil {
+		return nil, nil, err
+	}
+	message, err := dataFile.slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
+	if err != nil {
+		return nil, nil, err
+	}
+	return message[:idSize], message[e.topicSize+idSize:], nil
+}
 
-	return s.Size(), nil
+func (r *_BlockReader) readTopic(e _IndexEntry) ([]byte, error) {
+	if e.cache != nil {
+		return e.cache[idSize : e.topicSize+idSize], nil
+	}
+	dataFile, err := r.fs.getFile(_FileDesc{fileType: typeData})
+	if err != nil {
+		return nil, err
+	}
+	return dataFile.slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
 }

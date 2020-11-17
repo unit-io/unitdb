@@ -42,7 +42,6 @@ type (
 
 		windowWriter *_WindowWriter
 		blockWriter  *_BlockWriter
-		dataWriter   *_DataWriter
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
@@ -80,9 +79,10 @@ func (db *_SyncHandle) startSync() bool {
 	}
 
 	db.windowWriter = newWindowWriter(db.internal.timeWindow, winFile, db.rawWindow)
-	db.blockWriter = newBlockWriter(indexFile, db.rawBlock)
-	db.dataWriter = newDataWriter(db.internal.data, dataFile, db.rawData)
-
+	db.blockWriter, err = newBlockWriter(db.fs, db.internal.freeList, db.rawBlock)
+	if err != nil {
+		return false
+	}
 	db.winOff = winFile.currSize()
 	db.blockOff = indexFile.currSize()
 	db.dataOff = dataFile.currSize()
@@ -164,9 +164,6 @@ func (db *_SyncHandle) abort() error {
 	atomic.StoreInt32(&db.internal.dbInfo.blockIdx, db.syncInfo.startBlockIdx)
 	db.decount(uint64(db.syncInfo.count))
 
-	if err := db.dataWriter.rollback(); err != nil {
-		return err
-	}
 	if err := db.blockWriter.rollback(); err != nil {
 		return err
 	}
@@ -232,10 +229,11 @@ func (db *_SyncHandle) sync(recovery bool) error {
 
 	nBlocks := int32((db.syncInfo.upperSeq - 1) / entriesPerIndexBlock)
 	if nBlocks > db.blocks() {
-		if err := db.extendBlocks(nBlocks - db.blocks()); err != nil {
+		if _, err := db.blockWriter.extend(uint32(nBlocks-db.blocks()) * blockSize); err != nil {
 			logger.Error().Err(err).Str("context", "db.extendBlocks")
 			return err
 		}
+		db.addBlocks(nBlocks - db.blocks())
 	}
 	if err := db.windowWriter.write(); err != nil {
 		logger.Error().Err(err).Str("context", "timeWindow.write")
@@ -243,10 +241,6 @@ func (db *_SyncHandle) sync(recovery bool) error {
 	}
 	if err := db.blockWriter.write(); err != nil {
 		logger.Error().Err(err).Str("context", "block.write")
-		return err
-	}
-	if _, err := db.dataWriter.write(); err != nil {
-		logger.Error().Err(err).Str("context", "data.write")
 		return err
 	}
 
@@ -301,24 +295,20 @@ func (db *_SyncHandle) Sync() error {
 
 				cache: memdata[entrySize:],
 			}
-
-			if e.msgOffset, err = db.dataWriter.append(e.cache); err != nil {
+			if err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); err != nil {
+				if err == errEntryExist {
+					continue
+				}
 				return true, err
 			}
-			if exists, err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); exists || err != nil {
-				if err != nil {
-					return true, err
-				}
-				db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
-				db.syncInfo.entriesInvalid++
-				continue
-			}
+
 			we := newWinEntry(seq, m.expiresAt)
 			if _, ok := winEntries[m.topicHash]; ok {
 				winEntries[m.topicHash] = append(winEntries[m.topicHash], we)
 			} else {
 				winEntries[m.topicHash] = _WindowEntries{we}
 			}
+
 			db.internal.filter.Append(we.seq())
 			db.syncInfo.count++
 			db.syncInfo.inBytes += int64(e.valueSize)
@@ -376,16 +366,11 @@ func (db *DB) expireEntries() error {
 		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
-		indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
+		e, err := db.internal.reader.readIndexEntry(we.seq())
 		if err != nil {
 			return err
 		}
-		index := newBlockReader(indexFile)
-		s, err := index.read(we.seq())
-		if err != nil {
-			return err
-		}
-		db.internal.freeList.free(s.seq, s.msgOffset, s.mSize())
+		db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
 	}
 

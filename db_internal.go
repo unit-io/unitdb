@@ -79,13 +79,11 @@ type (
 		dbInfo _DBInfo
 
 		info     _FileSet
-		index    _FileSet
-		data     _DataTable
 		filter   Filter
 		freeList *_Lease
-
-		mem     *memdb.DB
-		bufPool *bpool.BufferPool
+		reader   *_BlockReader
+		mem      *memdb.DB
+		bufPool  *bpool.BufferPool
 
 		timeWindow *_TimeWindowBucket
 
@@ -174,28 +172,17 @@ func (db *DB) loadTrie() error {
 	if err != nil {
 		return err
 	}
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return err
-	}
-	index := newBlockReader(indexFile)
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return err
-	}
-	data := newDataReader(db.internal.data, dataFile)
-
 	err = db.internal.timeWindow.foreachWindowBlock(winFile, func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
-		s, err := index.read(startSeq)
+		e, err := db.internal.reader.readIndexEntry(startSeq)
 		if err != nil {
 			return true, err
 		}
-		if s.topicSize == 0 {
+		if e.topicSize == 0 {
 			// fmt.Println("db.loadTrie: topic not found topicHash, seq ", topicHash, startSeq)
 			return false, nil
 		}
-		rawtopic, err := data.readTopic(s)
+		rawtopic, err := db.internal.reader.readTopic(e)
 		if err != nil {
 			return true, err
 		}
@@ -231,12 +218,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_IndexEntry, error) {
 		return e, nil
 	}
 
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return _IndexEntry{}, err
-	}
-	index := newBlockReader(indexFile)
-	return index.read(seq)
+	return db.internal.reader.readIndexEntry(seq)
 }
 
 // lookups are performed in following order
@@ -263,22 +245,6 @@ func (db *DB) lookup(q *Query) error {
 		// fmt.Println("db.lookup: topicHash, count ", topic.hash, len(wEntries))
 	}
 
-	return nil
-}
-
-// newBlock adds new block to DB and it returns block offset.
-func (db *DB) newBlock() (int64, error) {
-	off, err := db.internal.index.extend(blockSize)
-	db.addBlocks(1)
-	return off, err
-}
-
-// extendBlocks adds blocks to DB.
-func (db *DB) extendBlocks(nBlocks int32) error {
-	if _, err := db.internal.index.extend(uint32(nBlocks) * blockSize); err != nil {
-		return err
-	}
-	db.addBlocks(nBlocks)
 	return nil
 }
 
@@ -378,16 +344,15 @@ func (db *DB) delete(topicHash, seq uint64) error {
 		return nil
 	}
 
-	blockIdx := startBlockIndex(seq)
-	if blockIdx > db.blocks() {
+	bIdx := blockIndex(seq)
+	if bIdx > db.blocks() {
 		return nil // no record to delete.
 	}
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
+	w, err := newBlockWriter(db.fs, db.internal.freeList, nil)
 	if err != nil {
 		return err
 	}
-	index := newBlockWriter(indexFile, nil)
-	e, err := index.del(seq)
+	e, err := w.del(seq)
 	if err != nil {
 		return err
 	}

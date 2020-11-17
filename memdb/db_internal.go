@@ -19,7 +19,6 @@ package memdb
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -261,9 +260,6 @@ func (db *DB) delete(key uint64) error {
 	block.put(ikey, data[:])
 	db.internal.tinyBatch.incount()
 
-	if key == 2 {
-		fmt.Println("db.delete: key ", key)
-	}
 	return nil
 }
 
@@ -394,7 +390,6 @@ func (db *DB) startRecovery() error {
 			key := binary.LittleEndian.Uint64(logData[1:9])
 			val := logData[9:]
 			if dBit == 1 {
-				fmt.Println("db.recovery: delete ", key)
 				if _, exists := log[key]; exists {
 					delete(log, key)
 				}

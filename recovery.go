@@ -59,13 +59,8 @@ func (db *_SyncHandle) startRecovery() error {
 
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return err
-	}
-	data := newDataReader(db.internal.data, dataFile)
 
-	err = db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
+	err := db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
 		sort.Slice(seqs[:], func(i, j int) bool {
 			return seqs[i] < seqs[j]
@@ -94,19 +89,14 @@ func (db *_SyncHandle) startRecovery() error {
 
 				cache: memdata[entrySize:],
 			}
-			if e.msgOffset, err = db.dataWriter.append(e.cache); err != nil {
-				return false, err
-			}
-			exists, err := db.blockWriter.append(e, db.syncInfo.startBlockIdx)
-			if err != nil {
-				return false, err
-			}
-			if exists {
-				db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
-				continue
+			if err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); err != nil {
+				if err == errEntryExist {
+					continue
+				}
+				return true, err
 			}
 			if m.topicSize != 0 {
-				rawtopic, _ := data.readTopic(e)
+				rawtopic, _ := db.internal.reader.readTopic(e)
 
 				t := new(message.Topic)
 				if err := t.Unmarshal(rawtopic); err != nil {

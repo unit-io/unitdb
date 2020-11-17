@@ -254,7 +254,7 @@ func (tw *_TimeWindowBucket) foreachWindowBlock(winFile *_File, f func(startSeq,
 		if b.entryIdx == 0 || b.next != 0 {
 			continue
 		}
-		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", h.winBlock.topicHash, h.winBlock.entries[0].sequence)
+		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", b.topicHash, b.entries[0].sequence)
 		if stop, err := f(b.entries[0].sequence, b.topicHash, off); stop || err != nil {
 			return err
 		}

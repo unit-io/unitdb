@@ -24,23 +24,43 @@ import (
 )
 
 type _BlockWriter struct {
-	blocks map[int32]_IndexBlock // map[blockIdx]block
+	indexBlocks map[int32]_IndexBlock // map[blockIdx]block
 
-	file   *_File
+	fs     *_FileSet
+	lease  *_Lease
 	buffer *bpool.Buffer
 
-	leasing map[uint64]struct{}
+	indexLeases map[uint64]struct{} //map[seq]struct
+	dataLeases  map[int64]uint32    // map[offset]size
+	dataOffset  int64
 }
 
-func newBlockWriter(f *_File, buf *bpool.Buffer) *_BlockWriter {
-	return &_BlockWriter{blocks: make(map[int32]_IndexBlock), file: f, buffer: buf, leasing: make(map[uint64]struct{})}
+func newBlockWriter(fs *_FileSet, lease *_Lease, buf *bpool.Buffer) (*_BlockWriter, error) {
+	w := &_BlockWriter{indexBlocks: make(map[int32]_IndexBlock), fs: fs, lease: lease, buffer: buf}
+	w.indexLeases = make(map[uint64]struct{})
+	w.dataLeases = make(map[int64]uint32)
+
+	dataFile, err := fs.getFile(_FileDesc{fileType: typeData})
+	if err != nil {
+		return nil, err
+	}
+	w.dataOffset = dataFile.Size()
+	return w, nil
+}
+
+func (w *_BlockWriter) extend(size uint32) (int64, error) {
+	indexFile, err := w.fs.getFile(_FileDesc{fileType: typeIndex})
+	if err != nil {
+		return 0, err
+	}
+	return indexFile.extend(size)
 }
 
 func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	var delEntry _IndexEntry
-	startBlockIdx := startBlockIndex(seq)
-	r := newBlockReader(w.file)
-	b, err := r.readBlock(seq)
+	bIdx := blockIndex(seq)
+	r := newBlockReader(w.fs)
+	b, err := r.readIndexBlock(seq)
 	if err != nil {
 		return _IndexEntry{}, err
 	}
@@ -64,25 +84,25 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 		b.entries[i] = b.entries[i+1]
 	}
 	b.entries[i] = _IndexEntry{}
-	w.blocks[startBlockIdx] = b
+	w.indexBlocks[bIdx] = b
 
 	return delEntry, nil
 }
 
-func (w *_BlockWriter) append(s _IndexEntry, blockIdx int32) (exists bool, err error) {
+func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
 	var b _IndexBlock
 	var ok bool
-	if s.seq == 0 {
+	if e.seq == 0 {
 		panic("unable to append zero sequence")
 	}
-	startBlockIdx := startBlockIndex(s.seq)
-	b, ok = w.blocks[startBlockIdx]
+	bIdx := blockIndex(e.seq)
+	b, ok = w.indexBlocks[bIdx]
 	if !ok {
-		if startBlockIdx <= blockIdx {
-			r := newBlockReader(w.file)
-			b, err = r.readBlock(s.seq)
+		if bIdx <= blockIdx {
+			r := newBlockReader(w.fs)
+			b, err = r.readIndexBlock(e.seq)
 			if err != nil {
-				return false, err
+				return err
 			}
 
 			b.leased = true
@@ -90,31 +110,77 @@ func (w *_BlockWriter) append(s _IndexEntry, blockIdx int32) (exists bool, err e
 	}
 	entryIdx := 0
 	for i := 0; i < int(b.entryIdx); i++ {
-		if b.entries[i].seq == s.seq { //record exist in db
+		if b.entries[i].seq == e.seq { //record exist in db
 			entryIdx = -1
 			break
 		}
 	}
 	if entryIdx == -1 {
-		return true, nil
+		return errEntryExist
 	}
+
+	if len(e.cache) == 0 {
+		return errEntryInvalid
+	}
+
+	dataLen := len(e.cache)
+	off := w.lease.allocate(uint32(dataLen))
+	if off != -1 {
+		buf := make([]byte, dataLen)
+		copy(buf, e.cache)
+		dataFile, err := w.fs.getFile(_FileDesc{fileType: typeData})
+		if err != nil {
+			return err
+		}
+		if _, err = dataFile.WriteAt(buf, off); err != nil {
+			return err
+		}
+		w.dataLeases[off] = uint32(dataLen)
+	} else {
+		off = w.dataOffset
+		offset, err := w.buffer.Extend(int64(dataLen))
+		if err != nil {
+			return err
+		}
+		if _, err := w.buffer.WriteAt(e.cache, offset); err != nil {
+			return err
+		}
+		w.dataOffset += int64(dataLen)
+	}
+	e.msgOffset = off
 
 	if b.leased {
-		w.leasing[s.seq] = struct{}{}
+		w.indexLeases[e.seq] = struct{}{}
 	}
-	b.entries[b.entryIdx] = s
+
+	b.entries[b.entryIdx] = e
 	b.dirty = true
 	b.entryIdx++
-	if err := b.validation(startBlockIdx); err != nil {
-		return false, err
+	if err := b.validation(bIdx); err != nil {
+		return err
 	}
-	w.blocks[startBlockIdx] = b
+	w.indexBlocks[bIdx] = b
 
-	return false, nil
+	return nil
 }
 
 func (w *_BlockWriter) write() error {
-	for bIdx, b := range w.blocks {
+	// write data blocks
+	dataFile, err := w.fs.getFile(_FileDesc{fileType: typeData})
+	if err != nil {
+		return err
+	}
+	if _, err := dataFile.write(w.buffer.Bytes()); err != nil {
+		return err
+	}
+
+	// Reset buffer before reusing it.
+	w.buffer.Reset()
+	indexFile, err := w.fs.getFile(_FileDesc{fileType: typeIndex})
+	if err != nil {
+		return err
+	}
+	for bIdx, b := range w.indexBlocks {
 		if !b.leased || !b.dirty {
 			continue
 		}
@@ -123,17 +189,17 @@ func (w *_BlockWriter) write() error {
 		}
 		off := blockOffset(bIdx)
 		buf := b.MarshalBinary()
-		if _, err := w.file.WriteAt(buf, off); err != nil {
+		if _, err := indexFile.WriteAt(buf, off); err != nil {
 			return err
 		}
 		b.dirty = false
-		w.blocks[bIdx] = b
+		w.indexBlocks[bIdx] = b
 	}
 
 	// sort blocks by blockIdx.
 	var blockIdx []int32
-	for bIdx := range w.blocks {
-		if w.blocks[bIdx].leased || !w.blocks[bIdx].dirty {
+	for bIdx := range w.indexBlocks {
+		if w.indexBlocks[bIdx].leased || !w.indexBlocks[bIdx].dirty {
 			continue
 		}
 		blockIdx = append(blockIdx, bIdx)
@@ -148,33 +214,33 @@ func (w *_BlockWriter) write() error {
 		if len(blocks) == 1 {
 			bIdx := blocks[0]
 			off := blockOffset(bIdx)
-			b := w.blocks[bIdx]
+			b := w.indexBlocks[bIdx]
 			if err := b.validation(bIdx); err != nil {
 				return err
 			}
 			buf := b.MarshalBinary()
-			if _, err := w.file.WriteAt(buf, off); err != nil {
+			if _, err := indexFile.WriteAt(buf, off); err != nil {
 				return err
 			}
 			b.dirty = false
-			w.blocks[bIdx] = b
+			w.indexBlocks[bIdx] = b
 			continue
 		}
 		blockOff := blockOffset(blocks[0])
 		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
-			b := w.blocks[bIdx]
+			b := w.indexBlocks[bIdx]
 			if err := b.validation(bIdx); err != nil {
 				return err
 			}
 			w.buffer.Write(b.MarshalBinary())
 			b.dirty = false
-			w.blocks[bIdx] = b
+			w.indexBlocks[bIdx] = b
 		}
 		blockData, err := w.buffer.Slice(bufOff, w.buffer.Size())
 		if err != nil {
 			return err
 		}
-		if _, err := w.file.WriteAt(blockData, blockOff); err != nil {
+		if _, err := indexFile.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
 		bufOff = w.buffer.Size()
@@ -215,7 +281,13 @@ func blockRange(idx []int32) ([][]int32, error) {
 }
 
 func (w *_BlockWriter) rollback() error {
-	for seq := range w.leasing {
+	// rollback data leases
+	for off, size := range w.dataLeases {
+		w.lease.freeBlock(off, size)
+	}
+
+	// roll back index leases
+	for seq := range w.indexLeases {
 		if _, err := w.del(seq); err != nil {
 			return err
 		}

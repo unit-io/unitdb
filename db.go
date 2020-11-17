@@ -41,7 +41,7 @@ type DB struct {
 	opts *_Options
 
 	lock _LockFile
-	fs   _FileSet
+	fs   *_FileSet
 
 	internal *_DB
 }
@@ -129,15 +129,15 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
+	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile}}
 	internal := &_DB{
 		mutex:      newMutex(),
 		dbInfo:     dbInfo,
 		info:       infoFile,
-		index:      indexFile,
-		data:       _DataTable{lease: lease, offset: dataFile.Size()},
 		timeWindow: newTimeWindowBucket(dbInfo.windowIdx, timeOptions),
-		freeList:   lease,
 		filter:     Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
+		freeList:   lease,
+		reader:     newBlockReader(fileset),
 		syncLockC:  make(chan struct{}, 1),
 		bufPool:    bpool.NewBufferPool(options.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
 		trie:       newTrie(),
@@ -166,8 +166,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 	internal.mem = memdb
 
 	internal.filter.blockCache = internal.mem
-
-	fileset := _FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile}}
 
 	db := &DB{
 		opts: options,
@@ -245,12 +243,6 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		limit = len(q.internal.winEntries)
 	}
 
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return nil, err
-	}
-	data := newDataReader(db.internal.data, dataFile)
-
 	for {
 		invalidCount := 0
 		for _, we := range q.internal.winEntries[start:limit] {
@@ -267,7 +259,7 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 					logger.Error().Err(err).Str("context", "db.readEntry")
 					return err
 				}
-				id, val, err := data.readMessage(s)
+				id, val, err := db.internal.reader.readMessage(s)
 				if err != nil {
 					logger.Error().Err(err).Str("context", "data.readMessage")
 					return err
@@ -475,26 +467,7 @@ func (db *DB) Sync() error {
 
 // FileSize returns the total size of the disk storage used by the DB.
 func (db *DB) FileSize() (int64, error) {
-	var err error
-	size := int64(0)
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return 0, err
-	}
-	index := newBlockReader(indexFile)
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return 0, err
-	}
-	data := newDataReader(db.internal.data, dataFile)
-
-	if s, err := index.size(); err == nil {
-		size += s
-	}
-	if s, err := data.size(); err == nil {
-		size += s
-	}
-	return size, err
+	return db.fs.size()
 }
 
 // Count returns the number of items in the DB.

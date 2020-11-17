@@ -230,6 +230,20 @@ func (fs *_FileSet) sync() error {
 	return nil
 }
 
+func (fs *_FileSet) size() (int64, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	size := int64(0)
+	for _, f := range fs.fileMap {
+		stat, err := f.Stat()
+		if err != nil {
+			return size, err
+		}
+		size += stat.Size()
+	}
+	return size, nil
+}
+
 func (fs *_FileSet) close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

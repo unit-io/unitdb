@@ -32,6 +32,7 @@ var (
 	errValueEmpty          = errors.New("Payload is empty")
 	errValueTooLarge       = errors.New("value is too large")
 	errEntryInvalid        = errors.New("entry is invalid")
+	errEntryExist          = errors.New("entry exist in database")
 	errImmutable           = errors.New("database is immutable")
 	errFull                = errors.New("database is full")
 	errCorrupted           = errors.New("database is corrupted")

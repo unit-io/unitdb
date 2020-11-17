@@ -47,7 +47,7 @@ type (
 	}
 )
 
-func startBlockIndex(seq uint64) int32 {
+func blockIndex(seq uint64) int32 {
 	return int32(float64(seq-1) / float64(entriesPerIndexBlock))
 }
 
@@ -63,9 +63,9 @@ func (e _IndexEntry) mSize() uint32 {
 }
 
 func (b _IndexBlock) validation(blockIdx int32) error {
-	startBlockIdx := startBlockIndex(b.entries[0].seq)
-	if startBlockIdx != blockIdx {
-		return fmt.Errorf("validation failed blockIdx %d, startBlockIdx %d", blockIdx, startBlockIdx)
+	bIdx := blockIndex(b.entries[0].seq)
+	if bIdx != blockIdx {
+		return fmt.Errorf("validation failed blockIdx %d, startBlockIdx %d", blockIdx, bIdx)
 	}
 	return nil
 }
