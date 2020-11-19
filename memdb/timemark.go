@@ -54,6 +54,12 @@ func (r _TimeRecord) isReleased(lastUnref _TimeID) bool {
 	return false
 }
 
+func (tm *_TimeMark) newTimeRecord() {
+	tm.Lock()
+	defer tm.Unlock()
+	tm.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
+}
+
 func (tm *_TimeMark) newTimeID() _TimeID {
 	timeID := _TimeID(time.Now().UTC().UnixNano())
 	tm.add(timeID)

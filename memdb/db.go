@@ -257,15 +257,15 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	var timeIDs []_TimeID
 	db.mu.RLock()
-	db.internal.timeMark.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
+	db.internal.timeMark.newTimeRecord()
 	blocks := db.blockCache
-	db.mu.RUnlock()
 
 	for timeID := range blocks {
 		if db.internal.timeMark.isReleased(timeID) {
 			timeIDs = append(timeIDs, timeID)
 		}
 	}
+	db.mu.RUnlock()
 
 	sort.Slice(timeIDs[:], func(i, j int) bool {
 		return timeIDs[i] < timeIDs[j]
