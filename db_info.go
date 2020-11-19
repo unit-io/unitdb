@@ -22,7 +22,7 @@ import (
 
 var (
 	signature = [7]byte{'u', 'n', 'i', 't', 'd', 'b', '\x0e'}
-	fixed     = uint32(64)
+	fixed     = uint32(32)
 )
 
 type (
@@ -35,8 +35,6 @@ type (
 		encryption int8
 		sequence   uint64
 		count      uint64
-		blockIdx   int32
-		windowIdx  int32
 	}
 )
 
@@ -48,8 +46,6 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf[12] = uint8(inf.encryption)
 	binary.LittleEndian.PutUint64(buf[12:20], inf.sequence)
 	binary.LittleEndian.PutUint64(buf[20:28], inf.count)
-	binary.LittleEndian.PutUint32(buf[28:32], uint32(inf.windowIdx))
-	binary.LittleEndian.PutUint32(buf[32:36], uint32(inf.blockIdx))
 
 	return buf, nil
 }
@@ -61,8 +57,6 @@ func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
 	inf.encryption = int8(data[7])
 	inf.sequence = binary.LittleEndian.Uint64(data[12:20])
 	inf.count = binary.LittleEndian.Uint64(data[20:28])
-	inf.windowIdx = int32(binary.LittleEndian.Uint32(data[28:32]))
-	inf.blockIdx = int32(binary.LittleEndian.Uint32(data[32:36]))
 
 	return nil
 }

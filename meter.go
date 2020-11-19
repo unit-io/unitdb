@@ -88,7 +88,6 @@ type Varz struct {
 	Uptime   string    `json:"uptime"`
 	Seq      int64     `json:"seq"`
 	Count    int64     `json:"count"`
-	Blocks   int64     `json:"blocks"`
 	Gets     int64     `json:"gets"`
 	Puts     int64     `json:"puts"`
 	Leases   int64     `json:"leases"`
@@ -146,7 +145,6 @@ func (db *DB) Varz() (*Varz, error) {
 	v.Uptime = uptime(time.Since(db.internal.start))
 	v.Seq = int64(db.internal.dbInfo.sequence)
 	v.Count = int64(db.Count())
-	v.Blocks = int64(db.blocks())
 	v.Gets = db.internal.meter.Gets.Count()
 	v.Puts = db.internal.meter.Puts.Count()
 	v.Leases = db.internal.meter.Leases.Count()

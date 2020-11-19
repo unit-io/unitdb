@@ -140,11 +140,12 @@ func (f *_File) truncate(size int64) error {
 }
 
 // copy copies the file to a new file.
-func (f *_File) copy() (int64, error) {
+func (f *_File) copy(bufferSize int64) (int64, error) {
 	if err := f.File.Sync(); err != nil {
 		return 0, err
 	}
-	if stat, err := f.File.Stat(); err != nil || stat.Size() == int64(0) {
+	stat, err := f.File.Stat()
+	if err != nil || stat.Size() == int64(0) {
 		return 0, err
 	}
 	newName := fmt.Sprintf("%s.%d", f.File.Name(), f.File.Fd())
@@ -153,7 +154,12 @@ func (f *_File) copy() (int64, error) {
 		return 0, err
 	}
 
-	buf := make([]byte, 4096)
+	bufSize := stat.Size()
+	if bufSize > bufferSize {
+		bufSize = bufferSize
+	}
+
+	buf := make([]byte, bufSize)
 	size := int64(0)
 	for {
 		n, err := f.File.Read(buf)
@@ -168,15 +174,15 @@ func (f *_File) copy() (int64, error) {
 			return 0, err
 		}
 		size += int64(n)
+		if bufSize <= stat.Size()-size {
+			bufSize = stat.Size() - size
+			buf = make([]byte, bufSize)
+		}
 	}
 	return size, err
 }
 
 func (f *_File) reset() error {
-	// copy file before reseting.
-	if _, err := f.copy(); err != nil {
-		return err
-	}
 	f.size = 0
 	if err := f.truncate(0); err != nil {
 		return err

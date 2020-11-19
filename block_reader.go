@@ -19,20 +19,31 @@ package unitdb
 type _BlockReader struct {
 	indexBlock _IndexBlock
 
-	fs *_FileSet
+	fs                  *_FileSet
+	indexFile, dataFile *_File
 }
 
 func newBlockReader(fs *_FileSet) *_BlockReader {
-	return &_BlockReader{fs: fs}
+	r := &_BlockReader{fs: fs}
+
+	indexFile, err := fs.getFile(_FileDesc{fileType: typeIndex})
+	if err != nil {
+		return nil
+	}
+	r.indexFile = indexFile
+
+	dataFile, err := fs.getFile(_FileDesc{fileType: typeData})
+	if err != nil {
+		return nil
+	}
+	r.dataFile = dataFile
+
+	return r
 }
 
-func (r *_BlockReader) readIndexBlock(seq uint64) (_IndexBlock, error) {
-	off := blockOffset(blockIndex(seq))
-	indexFile, err := r.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return _IndexBlock{}, err
-	}
-	buf, err := indexFile.slice(off, off+int64(blockSize))
+func (r *_BlockReader) readIndexBlock(blockIdx int32) (_IndexBlock, error) {
+	off := blockOffset(blockIdx)
+	buf, err := r.indexFile.slice(off, off+int64(blockSize))
 	if err != nil {
 		return _IndexBlock{}, err
 	}
@@ -42,7 +53,8 @@ func (r *_BlockReader) readIndexBlock(seq uint64) (_IndexBlock, error) {
 }
 
 func (r *_BlockReader) readIndexEntry(seq uint64) (_IndexEntry, error) {
-	if _, err := r.readIndexBlock(seq); err != nil {
+	bIdx := blockIndex(seq)
+	if _, err := r.readIndexBlock(bIdx); err != nil {
 		return _IndexEntry{}, err
 	}
 
@@ -65,11 +77,7 @@ func (r *_BlockReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
 	if e.cache != nil {
 		return e.cache[:idSize], e.cache[e.topicSize+idSize:], nil
 	}
-	dataFile, err := r.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return nil, nil, err
-	}
-	message, err := dataFile.slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
+	message, err := r.dataFile.slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -80,9 +88,5 @@ func (r *_BlockReader) readTopic(e _IndexEntry) ([]byte, error) {
 	if e.cache != nil {
 		return e.cache[idSize : e.topicSize+idSize], nil
 	}
-	dataFile, err := r.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return nil, err
-	}
-	return dataFile.slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
+	return r.dataFile.slice(e.msgOffset+int64(idSize), e.msgOffset+int64(e.topicSize)+int64(idSize))
 }

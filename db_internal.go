@@ -112,8 +112,6 @@ func (db *DB) writeInfo() error {
 		encryption: db.internal.dbInfo.encryption,
 		sequence:   atomic.LoadUint64(&db.internal.dbInfo.sequence),
 		count:      atomic.LoadUint64(&db.internal.dbInfo.count),
-		blockIdx:   db.blocks(),
-		windowIdx:  db.internal.timeWindow.windowIndex(),
 	}
 
 	return db.internal.info.writeMarshalableAt(inf, 0)
@@ -172,7 +170,8 @@ func (db *DB) loadTrie() error {
 	if err != nil {
 		return err
 	}
-	err = db.internal.timeWindow.foreachWindowBlock(winFile, func(startSeq, topicHash uint64, off int64) (bool, error) {
+	r := newWindowReader(winFile)
+	err = r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
 		e, err := db.internal.reader.readIndexEntry(startSeq)
 		if err != nil {
@@ -344,10 +343,6 @@ func (db *DB) delete(topicHash, seq uint64) error {
 		return nil
 	}
 
-	bIdx := blockIndex(seq)
-	if bIdx > db.blocks() {
-		return nil // no record to delete.
-	}
 	w, err := newBlockWriter(db.fs, db.internal.freeList, nil)
 	if err != nil {
 		return err
@@ -383,16 +378,6 @@ func (db *DB) seq() uint64 {
 
 func (db *DB) nextSeq() uint64 {
 	return atomic.AddUint64(&db.internal.dbInfo.sequence, 1)
-}
-
-// blocks returns the total blocks in the DB.
-func (db *DB) blocks() int32 {
-	return atomic.LoadInt32(&db.internal.dbInfo.blockIdx)
-}
-
-// addBlock adds new block to the DB.
-func (db *DB) addBlocks(nBlocks int32) int32 {
-	return atomic.AddInt32(&db.internal.dbInfo.blockIdx, nBlocks)
 }
 
 func (db *DB) incount(count uint64) uint64 {

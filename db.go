@@ -93,14 +93,12 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	dbInfo := _DBInfo{}
-	if infoFile.Size() == 0 {
+	if infoFile.currSize() == 0 {
 		dbInfo = _DBInfo{
 			header: _Header{
 				signature: signature,
 				version:   version,
 			},
-			blockIdx:  -1,
-			windowIdx: -1,
 		}
 		if _, err = infoFile.extend(fixed); err != nil {
 			return nil, err
@@ -134,7 +132,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		mutex:      newMutex(),
 		dbInfo:     dbInfo,
 		info:       infoFile,
-		timeWindow: newTimeWindowBucket(dbInfo.windowIdx, timeOptions),
+		timeWindow: newTimeWindowBucket(timeOptions),
 		filter:     Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
 		freeList:   lease,
 		reader:     newBlockReader(fileset),

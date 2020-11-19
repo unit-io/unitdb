@@ -24,43 +24,69 @@ import (
 )
 
 type _BlockWriter struct {
+	blockIdx    int32
 	indexBlocks map[int32]_IndexBlock // map[blockIdx]block
 
 	fs     *_FileSet
 	lease  *_Lease
 	buffer *bpool.Buffer
 
-	indexLeases map[uint64]struct{} //map[seq]struct
-	dataLeases  map[int64]uint32    // map[offset]size
-	dataOffset  int64
+	indexLeases                     map[uint64]struct{} //map[seq]struct
+	dataLeases                      map[int64]uint32    // map[offset]size
+	indexFile, dataFile             *_File
+	offset, indexOffset, dataOffset int64
 }
 
 func newBlockWriter(fs *_FileSet, lease *_Lease, buf *bpool.Buffer) (*_BlockWriter, error) {
-	w := &_BlockWriter{indexBlocks: make(map[int32]_IndexBlock), fs: fs, lease: lease, buffer: buf}
+	w := &_BlockWriter{blockIdx: -1, indexBlocks: make(map[int32]_IndexBlock), fs: fs, lease: lease, buffer: buf}
 	w.indexLeases = make(map[uint64]struct{})
 	w.dataLeases = make(map[int64]uint32)
+
+	indexFile, err := fs.getFile(_FileDesc{fileType: typeIndex})
+	if err != nil {
+		return nil, err
+	}
+	w.indexFile = indexFile
+	w.indexOffset = indexFile.currSize()
+	if w.indexOffset > 0 {
+		w.blockIdx = int32(w.indexOffset / int64(blockSize))
+		// read final block from index file.
+		if w.indexOffset > int64(w.blockIdx*blockSize) {
+			r := newBlockReader(w.fs)
+			b, err := r.readIndexBlock(w.blockIdx)
+			if err != nil {
+				return nil, err
+			}
+			w.indexBlocks[w.blockIdx] = b
+		}
+	}
 
 	dataFile, err := fs.getFile(_FileDesc{fileType: typeData})
 	if err != nil {
 		return nil, err
 	}
-	w.dataOffset = dataFile.Size()
+	w.dataFile = dataFile
+	w.offset = dataFile.currSize()
+	w.dataOffset = dataFile.currSize()
 	return w, nil
 }
 
-func (w *_BlockWriter) extend(size uint32) (int64, error) {
-	indexFile, err := w.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return 0, err
+func (w *_BlockWriter) extend(upperSeq uint64) (int64, error) {
+	off := blockOffset(blockIndex(upperSeq))
+	if off <= w.indexFile.currSize() {
+		return w.indexFile.currSize(), nil
 	}
-	return indexFile.extend(size)
+	return w.indexFile.extend(uint32(off - w.indexFile.currSize()))
 }
 
 func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	var delEntry _IndexEntry
 	bIdx := blockIndex(seq)
+	if bIdx > w.blockIdx {
+		return delEntry, nil // no entry in db to delete
+	}
 	r := newBlockReader(w.fs)
-	b, err := r.readIndexBlock(seq)
+	b, err := r.readIndexBlock(bIdx)
 	if err != nil {
 		return _IndexEntry{}, err
 	}
@@ -89,7 +115,7 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	return delEntry, nil
 }
 
-func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
+func (w *_BlockWriter) append(e _IndexEntry) (err error) {
 	var b _IndexBlock
 	var ok bool
 	if e.seq == 0 {
@@ -98,9 +124,9 @@ func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
 	bIdx := blockIndex(e.seq)
 	b, ok = w.indexBlocks[bIdx]
 	if !ok {
-		if bIdx <= blockIdx {
+		if bIdx < w.blockIdx {
 			r := newBlockReader(w.fs)
-			b, err = r.readIndexBlock(e.seq)
+			b, err = r.readIndexBlock(bIdx)
 			if err != nil {
 				return err
 			}
@@ -128,16 +154,12 @@ func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
 	if off != -1 {
 		buf := make([]byte, dataLen)
 		copy(buf, e.cache)
-		dataFile, err := w.fs.getFile(_FileDesc{fileType: typeData})
-		if err != nil {
-			return err
-		}
-		if _, err = dataFile.WriteAt(buf, off); err != nil {
+		if _, err = w.dataFile.WriteAt(buf, off); err != nil {
 			return err
 		}
 		w.dataLeases[off] = uint32(dataLen)
 	} else {
-		off = w.dataOffset
+		off = w.offset
 		offset, err := w.buffer.Extend(int64(dataLen))
 		if err != nil {
 			return err
@@ -145,7 +167,7 @@ func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
 		if _, err := w.buffer.WriteAt(e.cache, offset); err != nil {
 			return err
 		}
-		w.dataOffset += int64(dataLen)
+		w.offset += int64(dataLen)
 	}
 	e.msgOffset = off
 
@@ -166,20 +188,12 @@ func (w *_BlockWriter) append(e _IndexEntry, blockIdx int32) (err error) {
 
 func (w *_BlockWriter) write() error {
 	// write data blocks
-	dataFile, err := w.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return err
-	}
-	if _, err := dataFile.write(w.buffer.Bytes()); err != nil {
+	if _, err := w.dataFile.write(w.buffer.Bytes()); err != nil {
 		return err
 	}
 
 	// Reset buffer before reusing it.
 	w.buffer.Reset()
-	indexFile, err := w.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return err
-	}
 	for bIdx, b := range w.indexBlocks {
 		if !b.leased || !b.dirty {
 			continue
@@ -189,7 +203,7 @@ func (w *_BlockWriter) write() error {
 		}
 		off := blockOffset(bIdx)
 		buf := b.MarshalBinary()
-		if _, err := indexFile.WriteAt(buf, off); err != nil {
+		if _, err := w.indexFile.WriteAt(buf, off); err != nil {
 			return err
 		}
 		b.dirty = false
@@ -219,7 +233,7 @@ func (w *_BlockWriter) write() error {
 				return err
 			}
 			buf := b.MarshalBinary()
-			if _, err := indexFile.WriteAt(buf, off); err != nil {
+			if _, err := w.indexFile.WriteAt(buf, off); err != nil {
 				return err
 			}
 			b.dirty = false
@@ -240,7 +254,7 @@ func (w *_BlockWriter) write() error {
 		if err != nil {
 			return err
 		}
-		if _, err := indexFile.WriteAt(blockData, blockOff); err != nil {
+		if _, err := w.indexFile.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
 		bufOff = w.buffer.Size()
@@ -293,4 +307,22 @@ func (w *_BlockWriter) rollback() error {
 		}
 	}
 	return nil
+}
+
+func (w *_BlockWriter) reset() error {
+	w.buffer.Reset()
+
+	w.indexOffset = w.indexFile.currSize()
+	w.blockIdx = int32(w.indexOffset / int64(blockSize))
+
+	w.dataOffset = w.dataFile.currSize()
+
+	return nil
+}
+
+func (w *_BlockWriter) abort() error {
+	w.indexFile.truncate(w.indexOffset)
+	w.dataFile.truncate(w.dataOffset)
+
+	return w.rollback()
 }

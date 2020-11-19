@@ -64,18 +64,18 @@ func (f *Filter) writeFilterBlock() error {
 }
 
 func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
-	if f.file.Size() <= 0 {
+	if f.file.currSize() <= 0 {
 		return nil, nil
 	}
 	var cacheKey uint64
 	if f.blockCache != nil {
-		cacheKey = f.cacheID ^ uint64(f.file.Size())
+		cacheKey = f.cacheID ^ uint64(f.file.currSize())
 		if data, err := f.blockCache.Get(cacheKey); data != nil {
 			return filter.NewFilterBlock(data), err
 		}
 	}
 
-	raw := make([]byte, f.file.Size())
+	raw := make([]byte, f.file.currSize())
 	if _, err := f.file.ReadAt(raw, 0); err != nil {
 		return nil, err
 	}

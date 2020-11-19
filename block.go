@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	slotSize         = 16
-	blockSize uint32 = 4096
+	slotSize        = 16
+	blockSize int32 = 4096
 )
 
 type (
@@ -55,7 +55,7 @@ func blockOffset(idx int32) int64 {
 	if idx == -1 {
 		return int64(0)
 	}
-	return int64(blockSize * uint32(idx))
+	return int64(blockSize * idx)
 }
 
 func (e _IndexEntry) mSize() uint32 {

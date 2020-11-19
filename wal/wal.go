@@ -267,6 +267,10 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 // Reset resets log file and log segments.
 func (wal *WAL) Reset() error {
 	wal.logs = make(map[int64][]_LogInfo)
+	// copy file before reseting.
+	if _, err := wal.logFile.copy(wal.opts.BufferSize); err != nil {
+		return err
+	}
 	if err := wal.logFile.reset(); err != nil {
 		return err
 	}

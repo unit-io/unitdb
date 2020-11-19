@@ -89,7 +89,7 @@ func (db *_SyncHandle) startRecovery() error {
 
 				cache: memdata[entrySize:],
 			}
-			if err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); err != nil {
+			if err := db.blockWriter.append(e); err != nil {
 				if err == errEntryExist {
 					continue
 				}

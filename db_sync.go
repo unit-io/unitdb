@@ -19,7 +19,6 @@ package unitdb
 import (
 	"errors"
 	"sort"
-	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -27,7 +26,6 @@ import (
 
 type (
 	_SyncInfo struct {
-		startBlockIdx  int32
 		lastSyncSeq    uint64
 		upperSeq       uint64
 		syncStatusOk   bool
@@ -45,12 +43,9 @@ type (
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
-		rawData   *bpool.Buffer
 
 		// offsets for rollback in case of sync error.
-		winOff   int64
-		blockOff int64
-		dataOff  int64
+		winOff int64
 	}
 )
 
@@ -59,33 +54,20 @@ func (db *_SyncHandle) startSync() bool {
 		db.syncInfo.syncStatusOk = false
 		return db.syncInfo.syncStatusOk
 	}
-	db.syncInfo.startBlockIdx = db.blocks()
 
 	db.rawWindow = db.internal.bufPool.Get()
 	db.rawBlock = db.internal.bufPool.Get()
-	db.rawData = db.internal.bufPool.Get()
 
 	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
 	if err != nil {
 		return false
 	}
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return false
-	}
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return false
-	}
-
-	db.windowWriter = newWindowWriter(db.internal.timeWindow, winFile, db.rawWindow)
+	db.windowWriter = newWindowWriter(winFile, db.rawWindow)
 	db.blockWriter, err = newBlockWriter(db.fs, db.internal.freeList, db.rawBlock)
 	if err != nil {
 		return false
 	}
 	db.winOff = winFile.currSize()
-	db.blockOff = indexFile.currSize()
-	db.dataOff = dataFile.currSize()
 	db.syncInfo.syncStatusOk = true
 
 	return db.syncInfo.syncStatusOk
@@ -98,7 +80,6 @@ func (db *_SyncHandle) finish() error {
 
 	db.internal.bufPool.Put(db.rawWindow)
 	db.internal.bufPool.Put(db.rawBlock)
-	db.internal.bufPool.Put(db.rawData)
 
 	db.syncInfo.syncStatusOk = false
 	return nil
@@ -113,28 +94,13 @@ func (db *_SyncHandle) reset() error {
 	db.syncInfo.count = 0
 	db.syncInfo.inBytes = 0
 	db.syncInfo.upperSeq = 0
-	db.syncInfo.startBlockIdx = db.blocks()
 
-	db.rawWindow.Reset()
-	db.rawBlock.Reset()
-	db.rawData.Reset()
-
-	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
-	if err != nil {
+	if err := db.windowWriter.reset(); err != nil {
 		return err
 	}
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
+	if err := db.blockWriter.reset(); err != nil {
 		return err
 	}
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
-		return err
-	}
-
-	db.winOff = winFile.currSize()
-	db.blockOff = indexFile.currSize()
-	db.dataOff = dataFile.currSize()
 
 	return nil
 }
@@ -144,32 +110,16 @@ func (db *_SyncHandle) abort() error {
 	if db.syncInfo.syncComplete {
 		return nil
 	}
-	// rollback blocks.
-	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
-	if err != nil {
-		return err
-	}
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return err
-	}
-	dataFile, err := db.fs.getFile(_FileDesc{fileType: typeData})
-	if err != nil {
+	// Rollback.
+	if err := db.windowWriter.abort(); err != nil {
 		return err
 	}
 
-	dataFile.truncate(db.dataOff)
-	indexFile.truncate(db.blockOff)
-	winFile.truncate(db.winOff)
-	atomic.StoreInt32(&db.internal.dbInfo.blockIdx, db.syncInfo.startBlockIdx)
+	if err := db.blockWriter.abort(); err != nil {
+		return err
+	}
+
 	db.decount(uint64(db.syncInfo.count))
-
-	if err := db.blockWriter.rollback(); err != nil {
-		return err
-	}
-	if err := db.windowWriter.rollback(); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -227,13 +177,9 @@ func (db *_SyncHandle) sync(recovery bool) error {
 	db.syncInfo.syncComplete = false
 	defer db.abort()
 
-	nBlocks := int32((db.syncInfo.upperSeq - 1) / entriesPerIndexBlock)
-	if nBlocks > db.blocks() {
-		if _, err := db.blockWriter.extend(uint32(nBlocks-db.blocks()) * blockSize); err != nil {
-			logger.Error().Err(err).Str("context", "db.extendBlocks")
-			return err
-		}
-		db.addBlocks(nBlocks - db.blocks())
+	if _, err := db.blockWriter.extend(db.syncInfo.upperSeq); err != nil {
+		logger.Error().Err(err).Str("context", "db.extendBlocks")
+		return err
 	}
 	if err := db.windowWriter.write(); err != nil {
 		logger.Error().Err(err).Str("context", "timeWindow.write")
@@ -295,7 +241,7 @@ func (db *_SyncHandle) Sync() error {
 
 				cache: memdata[entrySize:],
 			}
-			if err := db.blockWriter.append(e, db.syncInfo.startBlockIdx); err != nil {
+			if err := db.blockWriter.append(e); err != nil {
 				if err == errEntryExist {
 					continue
 				}

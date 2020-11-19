@@ -111,15 +111,15 @@ func createLockFile(name string) (_LockFile, error) {
 	return newLockFile(name)
 }
 
-func newFile(name string, l int16, fd _FileDesc) (_FileSet, error) {
-	if l == 0 {
+func newFile(name string, nFiles int16, fd _FileDesc) (_FileSet, error) {
+	if nFiles == 0 {
 		return _FileSet{}, errors.New("no new file")
 	}
 	fileFlag := os.O_CREATE | os.O_RDWR
 	fileMode := os.FileMode(0666)
 	f := _File{}
-	fs := _FileSet{mu: new(sync.RWMutex), fileMap: make(map[int16]_File, l)}
-	for i := int16(0); i < l; i++ {
+	fs := _FileSet{mu: new(sync.RWMutex), fileMap: make(map[int16]_File, nFiles)}
+	for i := int16(0); i < nFiles; i++ {
 		fd.num = i
 		path := filePath(name, fd)
 		fi, err := os.OpenFile(path, fileFlag, fileMode)
@@ -235,11 +235,7 @@ func (fs *_FileSet) size() (int64, error) {
 	defer fs.mu.RUnlock()
 	size := int64(0)
 	for _, f := range fs.fileMap {
-		stat, err := f.Stat()
-		if err != nil {
-			return size, err
-		}
-		size += stat.Size()
+		size += f.currSize()
 	}
 	return size, nil
 }

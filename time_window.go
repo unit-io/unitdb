@@ -19,7 +19,6 @@ package unitdb
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -96,7 +95,7 @@ func (b *_WinBlock) UnmarshalBinary(data []byte) error {
 }
 
 func winBlockOffset(idx int32) int64 {
-	return (int64(blockSize) * int64(idx))
+	return int64(blockSize * idx)
 }
 
 type (
@@ -106,35 +105,14 @@ type (
 		maxExpDurations     int
 		backgroundKeyExpiry bool
 	}
-	_TimeInfo struct {
-		windowIdx int32
-	}
 	_TimeWindowBucket struct {
 		sync.RWMutex
-		timeInfo           _TimeInfo
 		timeIDs            map[int64]struct{}
 		windowBlocks       *_WindowBlocks
 		expiryWindowBucket *_ExpiryWindowBucket
 		opts               *_TimeOptions
 	}
 )
-
-func (src *_TimeOptions) copyWithDefaults() *_TimeOptions {
-	opts := _TimeOptions{}
-	if src != nil {
-		opts = *src
-	}
-	if opts.maxDuration == 0 {
-		opts.maxDuration = 1 * time.Second
-	}
-	if opts.expDurationType == 0 {
-		opts.expDurationType = time.Minute
-	}
-	if opts.maxExpDurations == 0 {
-		opts.maxExpDurations = 1
-	}
-	return &opts
-}
 
 type _WindowEntries []_WinEntry
 type _Key struct {
@@ -175,12 +153,10 @@ func (w *_WindowBlocks) getWindowBlock(blockID uint64) *_TimeWindow {
 	return w.window[w.consistent.FindBlock(blockID)]
 }
 
-func newTimeWindowBucket(windowIdx int32, opts *_TimeOptions) *_TimeWindowBucket {
-	opts = opts.copyWithDefaults()
-	l := &_TimeWindowBucket{timeInfo: _TimeInfo{windowIdx: windowIdx}, timeIDs: make(map[int64]struct{})}
+func newTimeWindowBucket(opts *_TimeOptions) *_TimeWindowBucket {
+	l := &_TimeWindowBucket{timeIDs: make(map[int64]struct{})}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
-	l.opts = opts.copyWithDefaults()
 	return l
 }
 
@@ -234,32 +210,6 @@ func (tw *_TimeWindowBucket) release() func(timeID int64) error {
 
 		return nil
 	}
-}
-
-// foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
-func (tw *_TimeWindowBucket) foreachWindowBlock(winFile *_File, f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
-	winBlockIdx := int32(0)
-	nWinBlocks := tw.windowIndex()
-	r := newWindowReader(winFile)
-	for winBlockIdx <= nWinBlocks {
-		off := winBlockOffset(winBlockIdx)
-		b, err := r.readBlock(off)
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		winBlockIdx++
-		if b.entryIdx == 0 || b.next != 0 {
-			continue
-		}
-		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", b.topicHash, b.entries[0].sequence)
-		if stop, err := f(b.entries[0].sequence, b.topicHash, off); stop || err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ilookup lookups window entries from timeWindowBucket and not yet sync to DB.
@@ -376,8 +326,4 @@ func (b _WinBlock) validation(topicHash uint64) error {
 		return fmt.Errorf("timeWindow.write: validation failed block topicHash %d, topicHash %d", b.topicHash, topicHash)
 	}
 	return nil
-}
-
-func (tw *_TimeWindowBucket) windowIndex() int32 {
-	return tw.timeInfo.windowIdx
 }
