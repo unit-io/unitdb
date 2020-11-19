@@ -39,6 +39,7 @@ const (
 
 	typeAll = typeInfo | typeTimeWindow | typeIndex | typeData | typeLease | typeFilter
 
+	prefix   = "unitdb"
 	indexDir = "index"
 	dataDir  = "data"
 	winDir   = "window"
@@ -51,36 +52,36 @@ type _FileDesc struct {
 	fd       uintptr
 }
 
-func filePath(prefix string, fd _FileDesc) string {
+func filePath(dirName string, fd _FileDesc) string {
 	name := fmt.Sprintf("%#x-%d", fd.fileType, fd.num)
-	if err := ensureDir(indexDir); err != nil {
+	if err := ensureDir(path.Join(dirName, indexDir)); err != nil {
 		return name
 	}
-	if err := ensureDir(dataDir); err != nil {
+	if err := ensureDir(path.Join(dirName, dataDir)); err != nil {
 		return name
 	}
-	if err := ensureDir(winDir); err != nil {
+	if err := ensureDir(path.Join(dirName, winDir)); err != nil {
 		return name
 	}
 	switch fd.fileType {
 	case typeInfo:
 		suffix := fmt.Sprintf("%s.info", prefix)
-		return suffix
+		return path.Join(dirName, suffix)
 	case typeTimeWindow:
 		suffix := fmt.Sprintf("%s%04d.win", prefix, fd.num)
-		return path.Join(winDir, suffix)
+		return path.Join(dirName, winDir, suffix)
 	case typeIndex:
 		suffix := fmt.Sprintf("%s%04d.index", prefix, fd.num)
-		return path.Join(indexDir, suffix)
+		return path.Join(dirName, indexDir, suffix)
 	case typeData:
 		suffix := fmt.Sprintf("%s%04d.data", prefix, fd.num)
-		return path.Join(dataDir, suffix)
+		return path.Join(dirName, dataDir, suffix)
 	case typeLease:
 		suffix := fmt.Sprintf("%s.lease", prefix)
-		return suffix
+		return path.Join(dirName, suffix)
 	case typeFilter:
 		suffix := fmt.Sprintf("%s.filter", prefix)
-		return suffix
+		return path.Join(dirName, suffix)
 	default:
 		return fmt.Sprintf("%#x-%d", fd.fileType, fd.num)
 	}
@@ -107,11 +108,16 @@ type (
 )
 
 // createLockFile to create lock file.
-func createLockFile(name string) (_LockFile, error) {
-	return newLockFile(name)
+func createLockFile(dirName string) (_LockFile, error) {
+	if err := ensureDir(dirName); err != nil {
+		return nil, err
+	}
+	suffix := fmt.Sprintf("%s.lock", prefix)
+
+	return newLockFile(path.Join(dirName, suffix))
 }
 
-func newFile(name string, nFiles int16, fd _FileDesc) (_FileSet, error) {
+func newFile(path string, nFiles int16, fd _FileDesc) (_FileSet, error) {
 	if nFiles == 0 {
 		return _FileSet{}, errors.New("no new file")
 	}
@@ -121,7 +127,7 @@ func newFile(name string, nFiles int16, fd _FileDesc) (_FileSet, error) {
 	fs := _FileSet{mu: new(sync.RWMutex), fileMap: make(map[int16]_File, nFiles)}
 	for i := int16(0); i < nFiles; i++ {
 		fd.num = i
-		path := filePath(name, fd)
+		path := filePath(path, fd)
 		fi, err := os.OpenFile(path, fileFlag, fileMode)
 		if err != nil {
 			return fs, err

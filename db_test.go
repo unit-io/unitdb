@@ -24,20 +24,20 @@ import (
 	"time"
 )
 
-func cleanup(path string) {
-	// os.Remove(path + indexPostfix)
-	// os.Remove(path + dataPostfix)
-	os.Remove(path + lockPostfix)
-	// os.Remove(path + windowPostfix)
-	// os.Remove(path + filterPostfix)
+var (
+	dbPath = "test"
+)
+
+func cleanup() {
+	os.RemoveAll(dbPath)
 }
 
 func TestSimple(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<4), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16))
+	db, err := Open(dbPath, WithBufferSize(1<<4), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var i uint16
 	var n uint16 = 1000
 
@@ -103,11 +103,13 @@ func TestSimple(t *testing.T) {
 	}
 	verifyMsgsAndClose()
 
-	db, err = Open("test.db", WithMutable())
+	db, err = Open(dbPath, WithMutable())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	defer cleanup()
+
 	_, err = db.Get(NewQuery(topic).WithContract(contract).WithLimit(int(n)))
 	if err != nil {
 		t.Fatal(err)
@@ -133,12 +135,12 @@ func TestSimple(t *testing.T) {
 }
 
 func TestBatch(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	defer cleanup()
 
 	contract, err := db.NewContract()
 	if err != nil {
@@ -196,12 +198,13 @@ func TestBatch(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	defer cleanup()
+
 	contract, err := db.NewContract()
 	if err != nil {
 		t.Fatal(err)
@@ -237,12 +240,13 @@ func TestExpiry(t *testing.T) {
 }
 
 func TestLeasing(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	defer cleanup()
+
 	var i uint16
 	var n uint16 = 100
 
@@ -282,12 +286,12 @@ func TestLeasing(t *testing.T) {
 }
 
 func TestWildcardTopics(t *testing.T) {
-	cleanup("test.db")
-	db, err := Open("test.db", WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithBlockCacheSize(1<<16), WithLogSize(1<<16), WithMinimumFreeBlocksSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	defer cleanup()
 
 	tests := []struct {
 		wtopic []byte

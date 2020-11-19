@@ -17,21 +17,31 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 )
 
-func newTestWal(path string, del bool) (*WAL, bool, error) {
-	logOpts := Options{Path: path + ".log", TargetSize: 1 << 8, BufferSize: 1 << 8}
+var (
+	dbPath      = "test"
+	logFileName = "test.log"
+)
+
+func newTestWal(del bool) (*WAL, bool, error) {
+	logOpts := Options{Path: dbPath + "/" + logFileName, TargetSize: 1 << 8, BufferSize: 1 << 8}
 	if del {
-		os.Remove(logOpts.Path)
+		os.RemoveAll(dbPath)
+	}
+	// Make sure we have a directory.
+	if err := os.MkdirAll(dbPath, 0777); err != nil {
+		return nil, false, errors.New("newTestWal, Unable to create dir")
 	}
 	return New(logOpts)
 }
 
 func TestEmptyLog(t *testing.T) {
-	wal, needRecover, err := newTestWal("test.db", true)
+	wal, needRecover, err := newTestWal(true)
 	if needRecover || err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +49,7 @@ func TestEmptyLog(t *testing.T) {
 }
 
 func TestRecovery(t *testing.T) {
-	wal, needRecovery, err := newTestWal("test.db", true)
+	wal, needRecovery, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +82,14 @@ func TestRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wal, needRecovery, err = newTestWal("test.db", false)
+	wal, needRecovery, err = newTestWal(false)
 	if !needRecovery || err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLogApplied(t *testing.T) {
-	wal, _, err := newTestWal("test.db", true)
+	wal, _, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +116,7 @@ func TestLogApplied(t *testing.T) {
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wal, needRecovery, err := newTestWal("test.db", false)
+	wal, needRecovery, err := newTestWal(false)
 	if !needRecovery || err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +144,7 @@ func TestLogApplied(t *testing.T) {
 }
 
 func TestSimple(t *testing.T) {
-	wal, _, err := newTestWal("test.db", true)
+	wal, _, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,8 +57,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	// fsys := options.fileSystem
-	lock, err := createLockFile(path + lockPostfix)
+	lock, err := createLockFile(path)
 	if err != nil {
 		if err == os.ErrExist {
 			err = errLocked
@@ -129,18 +128,28 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile}}
 	internal := &_DB{
-		mutex:      newMutex(),
-		dbInfo:     dbInfo,
-		info:       infoFile,
+		mutex: newMutex(),
+		start: time.Now(),
+		meter: NewMeter(),
+
+		dbInfo: dbInfo,
+
+		bufPool: bpool.NewBufferPool(options.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
+
+		info:     infoFile,
+		filter:   Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
+		freeList: lease,
+
 		timeWindow: newTimeWindowBucket(timeOptions),
-		filter:     Filter{file: filterFile, filterBlock: fltr.NewFilterGenerator()},
-		freeList:   lease,
-		reader:     newBlockReader(fileset),
-		syncLockC:  make(chan struct{}, 1),
-		bufPool:    bpool.NewBufferPool(options.bufferSize, &bpool.Options{MaxElapsedTime: 10 * time.Second}),
-		trie:       newTrie(),
-		start:      time.Now(),
-		meter:      NewMeter(),
+
+		// Trie
+		trie: newTrie(),
+
+		// Block reader
+		reader: newBlockReader(fileset),
+
+		// Sync Handler
+		syncLockC: make(chan struct{}, 1),
 
 		// Close
 		closeC: make(chan struct{}),
@@ -178,7 +187,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 	}
 
-	// Read freeList before DB recovery
+	// Read freeList.
 	if err := db.internal.freeList.read(); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err

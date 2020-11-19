@@ -69,26 +69,28 @@ const (
 type (
 	_DB struct {
 		mutex _Mutex
-		mac   *crypto.MAC
+
 		// The db start time.
 		start time.Time
-
 		// The metrics to measure timeseries on message events.
 		meter *Meter
 
 		dbInfo _DBInfo
+		mac    *crypto.MAC
 
+		mem      *memdb.DB
+		bufPool  *bpool.BufferPool
 		info     _FileSet
 		filter   Filter
 		freeList *_Lease
-		reader   *_BlockReader
-		mem      *memdb.DB
-		bufPool  *bpool.BufferPool
 
 		timeWindow *_TimeWindowBucket
 
-		//trie
+		// Trie
 		trie *_Trie
+
+		// Block reader
+		reader *_BlockReader
 
 		// sync handler
 		syncLockC  chan struct{}
@@ -166,12 +168,8 @@ func (db *DB) close() error {
 
 // loadTopicHash loads topic and offset from window file.
 func (db *DB) loadTrie() error {
-	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
-	if err != nil {
-		return err
-	}
-	r := newWindowReader(winFile)
-	err = r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
+	r := newWindowReader(db.fs)
+	err := r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
 		e, err := db.internal.reader.readIndexEntry(startSeq)
 		if err != nil {
@@ -228,16 +226,12 @@ func (db *DB) lookup(q *Query) error {
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
-	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
-	if err != nil {
-		return err
-	}
 	for _, topic := range topics {
 		if len(q.internal.winEntries) > q.Limit {
 			break
 		}
 		limit := q.Limit - len(q.internal.winEntries)
-		wEntries := db.internal.timeWindow.lookup(winFile, topic.hash, topic.offset, q.internal.cutoff, limit)
+		wEntries := db.internal.timeWindow.lookup(db.fs, topic.hash, topic.offset, q.internal.cutoff, limit)
 		for _, we := range wEntries {
 			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}

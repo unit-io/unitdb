@@ -21,19 +21,27 @@ import "io"
 type _WindowReader struct {
 	windowIdx int32
 	winBlock  _WinBlock
-	file      *_File
+
+	fs      *_FileSet
+	winFile *_File
 }
 
-func newWindowReader(f *_File) *_WindowReader {
-	w := &_WindowReader{windowIdx: -1, file: f}
-	if f.currSize() > 0 {
-		w.windowIdx = int32(f.currSize() / int64(blockSize))
+func newWindowReader(fs *_FileSet) *_WindowReader {
+	w := &_WindowReader{windowIdx: -1, fs: fs}
+	winFile, err := fs.getFile(_FileDesc{fileType: typeTimeWindow})
+	if err != nil {
+		return w
+	}
+	w.winFile = winFile
+
+	if winFile.currSize() > 0 {
+		w.windowIdx = int32(winFile.currSize() / int64(blockSize))
 	}
 	return w
 }
 
 func (r *_WindowReader) readBlock(off int64) (_WinBlock, error) {
-	buf, err := r.file.slice(off, off+int64(blockSize))
+	buf, err := r.winFile.slice(off, off+int64(blockSize))
 	if err != nil {
 		return _WinBlock{}, err
 	}

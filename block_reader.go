@@ -28,7 +28,7 @@ func newBlockReader(fs *_FileSet) *_BlockReader {
 
 	indexFile, err := fs.getFile(_FileDesc{fileType: typeIndex})
 	if err != nil {
-		return nil
+		return r
 	}
 	r.indexFile = indexFile
 

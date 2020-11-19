@@ -28,24 +28,30 @@ type _WindowWriter struct {
 	winBlocks map[int32]_WinBlock // map[windowIdx]winBlock
 	winLeases map[int32][]uint64  // map[blockIdx][]seq
 
-	file      *_File
+	fs        *_FileSet
 	buffer    *bpool.Buffer
+	winFile   *_File
 	winOffset int64
 }
 
-func newWindowWriter(f *_File, buf *bpool.Buffer) *_WindowWriter {
-	w := &_WindowWriter{windowIdx: -1, winBlocks: make(map[int32]_WinBlock), winLeases: make(map[int32][]uint64), file: f, buffer: buf}
-	w.winOffset = f.currSize()
+func newWindowWriter(fs *_FileSet, buf *bpool.Buffer) (*_WindowWriter, error) {
+	w := &_WindowWriter{windowIdx: -1, winBlocks: make(map[int32]_WinBlock), winLeases: make(map[int32][]uint64), fs: fs, buffer: buf}
+	winFile, err := fs.getFile(_FileDesc{fileType: typeTimeWindow})
+	if err != nil {
+		return nil, err
+	}
+	w.winFile = winFile
+	w.winOffset = winFile.currSize()
 	if w.winOffset > 0 {
 		w.windowIdx = int32(w.winOffset / int64(blockSize))
 	}
 
-	return w
+	return w, nil
 }
 
 func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	off := int64(blockSize * winIdx)
-	r := newWindowReader(w.file)
+	r := newWindowReader(w.fs)
 	b, err := r.readBlock(off)
 	if err != nil {
 		return err
@@ -88,7 +94,7 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b, ok = w.winBlocks[wIdx]
 	if !ok && off > 0 {
 		if wIdx <= w.windowIdx {
-			r := newWindowReader(w.file)
+			r := newWindowReader(w.fs)
 			b, err = r.readBlock(off)
 			if err != nil {
 				return off, err
@@ -130,7 +136,7 @@ func (w *_WindowWriter) write() error {
 			continue
 		}
 		off := int64(blockSize * bIdx)
-		if _, err := w.file.WriteAt(b.MarshalBinary(), off); err != nil {
+		if _, err := w.winFile.WriteAt(b.MarshalBinary(), off); err != nil {
 			return err
 		}
 		b.dirty = false
@@ -160,7 +166,7 @@ func (w *_WindowWriter) write() error {
 			off := int64(blockSize * bIdx)
 			b := w.winBlocks[bIdx]
 			buf := b.MarshalBinary()
-			if _, err := w.file.WriteAt(buf, off); err != nil {
+			if _, err := w.winFile.WriteAt(buf, off); err != nil {
 				return err
 			}
 			b.dirty = false
@@ -180,7 +186,7 @@ func (w *_WindowWriter) write() error {
 		if err != nil {
 			return err
 		}
-		if _, err := w.file.WriteAt(blockData, blockOff); err != nil {
+		if _, err := w.winFile.WriteAt(blockData, blockOff); err != nil {
 			return err
 		}
 		bufOff = w.buffer.Size()
@@ -201,13 +207,13 @@ func (w *_WindowWriter) rollback() error {
 
 func (w *_WindowWriter) reset() error {
 	w.buffer.Reset()
-	w.winOffset = w.file.currSize()
+	w.winOffset = w.winFile.currSize()
 
 	return nil
 }
 
 func (w *_WindowWriter) abort() error {
-	w.file.truncate(w.winOffset)
+	w.winFile.truncate(w.winOffset)
 
 	return w.rollback()
 }

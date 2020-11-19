@@ -250,13 +250,13 @@ func (tw *_TimeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries _W
 }
 
 // lookup lookups window entries from window file.
-func (tw *_TimeWindowBucket) lookup(winFile *_File, topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
+func (tw *_TimeWindowBucket) lookup(fileSet *_FileSet, topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
 	winEntries = make([]_WinEntry, 0)
 	winEntries = tw.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
 		return winEntries
 	}
-	r := newWindowReader(winFile)
+	r := newWindowReader(fileSet)
 	next := func(blockOff int64, f func(_WinBlock) (bool, error)) error {
 		for {
 			b, err := r.readBlock(blockOff)

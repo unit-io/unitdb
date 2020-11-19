@@ -43,9 +43,6 @@ type (
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
-
-		// offsets for rollback in case of sync error.
-		winOff int64
 	}
 )
 
@@ -58,16 +55,17 @@ func (db *_SyncHandle) startSync() bool {
 	db.rawWindow = db.internal.bufPool.Get()
 	db.rawBlock = db.internal.bufPool.Get()
 
-	winFile, err := db.fs.getFile(_FileDesc{fileType: typeTimeWindow})
+	var err error
+	db.windowWriter, err = newWindowWriter(db.fs, db.rawWindow)
 	if err != nil {
+		logger.Error().Err(err).Str("context", "startSync").Msg("Error syncing to db")
 		return false
 	}
-	db.windowWriter = newWindowWriter(winFile, db.rawWindow)
 	db.blockWriter, err = newBlockWriter(db.fs, db.internal.freeList, db.rawBlock)
 	if err != nil {
+		logger.Error().Err(err).Str("context", "startSync").Msg("Error syncing to db")
 		return false
 	}
-	db.winOff = winFile.currSize()
 	db.syncInfo.syncStatusOk = true
 
 	return db.syncInfo.syncStatusOk
