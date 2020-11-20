@@ -51,14 +51,13 @@ func newWindowWriter(fs *_FileSet, buf *bpool.Buffer) (*_WindowWriter, error) {
 
 func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	off := int64(blockSize * winIdx)
-	r := newWindowReader(w.fs)
-	b, err := r.readBlock(off)
-	if err != nil {
+	h := _WindowHandle{file: w.winFile, offset: off}
+	if err := h.read(); err != nil {
 		return err
 	}
 	entryIdx := -1
-	for i := 0; i < int(b.entryIdx); i++ {
-		e := b.entries[i]
+	for i := 0; i < int(h.winBlock.entryIdx); i++ {
+		e := h.winBlock.entries[i]
 		if e.sequence == seq { //record exist in db.
 			entryIdx = i
 			break
@@ -67,16 +66,16 @@ func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	if entryIdx == -1 {
 		return nil // no entry in db to delete.
 	}
-	b.dirty = true
-	b.entryIdx--
+	h.winBlock.dirty = true
+	h.winBlock.entryIdx--
 
 	i := entryIdx
 	for ; i < entriesPerIndexBlock-1; i++ {
-		b.entries[i] = b.entries[i+1]
+		h.winBlock.entries[i] = h.winBlock.entries[i+1]
 	}
-	b.entries[i] = _WinEntry{}
+	h.winBlock.entries[i] = _WinEntry{}
 
-	w.winBlocks[winIdx] = b
+	w.winBlocks[winIdx] = h.winBlock
 	return nil
 }
 
@@ -94,11 +93,11 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b, ok = w.winBlocks[wIdx]
 	if !ok && off > 0 {
 		if wIdx <= w.windowIdx {
-			r := newWindowReader(w.fs)
-			b, err = r.readBlock(off)
-			if err != nil {
+			h := _WindowHandle{file: w.winFile, offset: off}
+			if err := h.read(); err != nil {
 				return off, err
 			}
+			b = h.winBlock
 			b.validation(topicHash)
 			b.leased = true
 		}

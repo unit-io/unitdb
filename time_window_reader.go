@@ -20,10 +20,8 @@ import "io"
 
 type _WindowReader struct {
 	windowIdx int32
-	winBlock  _WinBlock
-
-	fs      *_FileSet
-	winFile *_File
+	fs        *_FileSet
+	winFile   *_File
 }
 
 func newWindowReader(fs *_FileSet) *_WindowReader {
@@ -40,35 +38,25 @@ func newWindowReader(fs *_FileSet) *_WindowReader {
 	return w
 }
 
-func (r *_WindowReader) readBlock(off int64) (_WinBlock, error) {
-	buf, err := r.winFile.slice(off, off+int64(blockSize))
-	if err != nil {
-		return _WinBlock{}, err
-	}
-	r.winBlock.UnmarshalBinary(buf)
-
-	return r.winBlock, nil
-}
-
 // foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
 func (r *_WindowReader) foreachWindowBlock(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
 	windowIdx := int32(0)
 	nBlocks := r.windowIdx
 	for windowIdx <= nBlocks {
 		off := winBlockOffset(windowIdx)
-		b, err := r.readBlock(off)
-		if err != nil {
+		h := _WindowHandle{file: r.winFile, offset: off}
+		if err := h.read(); err != nil {
 			if err == io.EOF {
 				return nil
 			}
 			return err
 		}
 		windowIdx++
-		if b.entryIdx == 0 || b.next != 0 {
+		if h.winBlock.entryIdx == 0 || h.winBlock.next != 0 {
 			continue
 		}
 		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", b.topicHash, b.entries[0].sequence)
-		if stop, err := f(b.entries[0].sequence, b.topicHash, off); stop || err != nil {
+		if stop, err := f(h.winBlock.entries[0].sequence, h.winBlock.topicHash, off); stop || err != nil {
 			return err
 		}
 	}

@@ -310,7 +310,7 @@ func (db *DB) expireEntries() error {
 		if !db.internal.filter.Test(we.seq()) {
 			continue
 		}
-		e, err := db.internal.reader.readIndexEntry(we.seq())
+		e, err := db.internal.reader.readEntry(we.seq())
 		if err != nil {
 			return err
 		}

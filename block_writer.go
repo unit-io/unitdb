@@ -52,12 +52,11 @@ func newBlockWriter(fs *_FileSet, lease *_Lease, buf *bpool.Buffer) (*_BlockWrit
 		w.blockIdx = int32(w.indexOffset / int64(blockSize))
 		// read final block from index file.
 		if w.indexOffset > int64(w.blockIdx*blockSize) {
-			r := newBlockReader(w.fs)
-			b, err := r.readIndexBlock(w.blockIdx)
-			if err != nil {
+			h := _BlockHandle{file: w.indexFile, offset: blockOffset(w.blockIdx)}
+			if err := h.read(); err != nil {
 				return nil, err
 			}
-			w.indexBlocks[w.blockIdx] = b
+			w.indexBlocks[w.blockIdx] = h.indexBlock
 		}
 	}
 
@@ -85,14 +84,13 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	if bIdx > w.blockIdx {
 		return delEntry, nil // no entry in db to delete
 	}
-	r := newBlockReader(w.fs)
-	b, err := r.readIndexBlock(bIdx)
-	if err != nil {
+	h := _BlockHandle{file: w.indexFile, offset: blockOffset(bIdx)}
+	if err := h.read(); err != nil {
 		return _IndexEntry{}, err
 	}
 	entryIdx := -1
-	for i := 0; i < int(b.entryIdx); i++ {
-		e := b.entries[i]
+	for i := 0; i < int(h.indexBlock.entryIdx); i++ {
+		e := h.indexBlock.entries[i]
 		if e.seq == seq { //record exist in db
 			entryIdx = i
 			break
@@ -101,16 +99,16 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	if entryIdx == -1 {
 		return delEntry, nil // no entry in db to delete
 	}
-	delEntry = b.entries[entryIdx]
-	b.dirty = true
-	b.entryIdx--
+	delEntry = h.indexBlock.entries[entryIdx]
+	h.indexBlock.dirty = true
+	h.indexBlock.entryIdx--
 
 	i := entryIdx
 	for ; i < entriesPerIndexBlock-1; i++ {
-		b.entries[i] = b.entries[i+1]
+		h.indexBlock.entries[i] = h.indexBlock.entries[i+1]
 	}
-	b.entries[i] = _IndexEntry{}
-	w.indexBlocks[bIdx] = b
+	h.indexBlock.entries[i] = _IndexEntry{}
+	w.indexBlocks[bIdx] = h.indexBlock
 
 	return delEntry, nil
 }
@@ -125,12 +123,11 @@ func (w *_BlockWriter) append(e _IndexEntry) (err error) {
 	b, ok = w.indexBlocks[bIdx]
 	if !ok {
 		if bIdx < w.blockIdx {
-			r := newBlockReader(w.fs)
-			b, err = r.readIndexBlock(bIdx)
-			if err != nil {
+			h := _BlockHandle{file: w.indexFile, offset: blockOffset(bIdx)}
+			if err := h.read(); err != nil {
 				return err
 			}
-
+			b = h.indexBlock
 			b.leased = true
 		}
 	}

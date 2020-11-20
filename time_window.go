@@ -98,6 +98,20 @@ func winBlockOffset(idx int32) int64 {
 	return int64(blockSize * idx)
 }
 
+type _WindowHandle struct {
+	winBlock _WinBlock
+	file     *_File
+	offset   int64
+}
+
+func (h *_WindowHandle) read() error {
+	buf, err := h.file.slice(h.offset, h.offset+int64(blockSize))
+	if err != nil {
+		return err
+	}
+	return h.winBlock.UnmarshalBinary(buf)
+}
+
 type (
 	_TimeOptions struct {
 		maxDuration         time.Duration
@@ -250,30 +264,33 @@ func (tw *_TimeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries _W
 }
 
 // lookup lookups window entries from window file.
-func (tw *_TimeWindowBucket) lookup(fileSet *_FileSet, topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
+func (tw *_TimeWindowBucket) lookup(fs *_FileSet, topicHash uint64, off, cutoff int64, limit int) (winEntries _WindowEntries) {
 	winEntries = make([]_WinEntry, 0)
 	winEntries = tw.ilookup(topicHash, limit)
 	if len(winEntries) >= limit {
 		return winEntries
 	}
-	r := newWindowReader(fileSet)
+	winFile, err := fs.getFile(_FileDesc{fileType: typeTimeWindow})
+	if err != nil {
+		return winEntries
+	}
 	next := func(blockOff int64, f func(_WinBlock) (bool, error)) error {
 		for {
-			b, err := r.readBlock(blockOff)
-			if err != nil {
+			h := _WindowHandle{file: winFile, offset: blockOff}
+			if err := h.read(); err != nil {
 				return err
 			}
-			if stop, err := f(b); stop || err != nil {
+			if stop, err := f(h.winBlock); stop || err != nil {
 				return err
 			}
-			if b.next == 0 {
+			if h.winBlock.next == 0 {
 				return nil
 			}
-			blockOff = b.next
+			blockOff = h.winBlock.next
 		}
 	}
 	expiryCount := 0
-	err := next(off, func(curb _WinBlock) (bool, error) {
+	err = next(off, func(curb _WinBlock) (bool, error) {
 		b := &curb
 		if b.topicHash != topicHash {
 			return true, nil

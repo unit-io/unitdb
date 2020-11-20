@@ -171,7 +171,7 @@ func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
 	err := r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
-		e, err := db.internal.reader.readIndexEntry(startSeq)
+		e, err := db.internal.reader.readEntry(startSeq)
 		if err != nil {
 			return true, err
 		}
@@ -215,7 +215,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_IndexEntry, error) {
 		return e, nil
 	}
 
-	return db.internal.reader.readIndexEntry(seq)
+	return db.internal.reader.readEntry(seq)
 }
 
 // lookups are performed in following order

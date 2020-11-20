@@ -35,7 +35,6 @@ type (
 
 		cache []byte // block from memdb if it exist
 	}
-
 	_IndexBlock struct {
 		entries  [entriesPerIndexBlock]_IndexEntry
 		baseSeq  uint64
@@ -44,6 +43,11 @@ type (
 
 		dirty  bool
 		leased bool
+	}
+	_BlockHandle struct {
+		indexBlock _IndexBlock
+		file       *_File
+		offset     int64
 	}
 )
 
@@ -115,4 +119,12 @@ func (b *_IndexBlock) UnmarshalBinary(data []byte) error {
 	b.next = binary.LittleEndian.Uint32(data[:4])
 	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
 	return nil
+}
+
+func (h *_BlockHandle) read() error {
+	buf, err := h.file.slice(h.offset, h.offset+int64(blockSize))
+	if err != nil {
+		return err
+	}
+	return h.indexBlock.UnmarshalBinary(buf)
 }
