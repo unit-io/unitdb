@@ -31,14 +31,20 @@ type (
 		expiresAt uint32
 	}
 	_WinBlock struct {
-		topicHash  uint64
-		entries    [entriesPerWindowBlock]_WinEntry
-		next       int64 //next stores offset that links multiple winBlocks for a topic hash. Most recent offset is stored into the trie to iterate entries in reverse order).
+		topicHash uint64
+		entries   [entriesPerWindowBlock]_WinEntry
+
+		// Next stores offset that links multiple winBlocks for a topic hash.
+		// Most recent offset is stored into the trie to iterate entries in reverse time order.
+		next       int64
 		cutoffTime int64
 		entryIdx   uint16
 
-		dirty  bool // dirty used during timeWindow append and not persisted.
-		leased bool // leased used in timeWindow write and not persisted.
+		// dirty used during timeWindow append and not persisted.
+		dirty bool
+
+		// leased used in timeWindow write and not persisted.
+		leased bool
 	}
 )
 
@@ -62,8 +68,8 @@ func (b _WinBlock) cutoff(cutoff int64) bool {
 	return b.cutoffTime != 0 && b.cutoffTime < cutoff
 }
 
-// MarshalBinary serialized window block into binary data.
-func (b _WinBlock) MarshalBinary() []byte {
+// marshalBinary serialized window block into binary data.
+func (b _WinBlock) marshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 	for i := 0; i < entriesPerWindowBlock; i++ {
@@ -79,8 +85,8 @@ func (b _WinBlock) MarshalBinary() []byte {
 	return data
 }
 
-// UnmarshalBinary de-serialized window block from binary data.
-func (b *_WinBlock) UnmarshalBinary(data []byte) error {
+// unmarshalBinary de-serialized window block from binary data.
+func (b *_WinBlock) unmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerWindowBlock; i++ {
 		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
 		b.entries[i].sequence = binary.LittleEndian.Uint64(data[:8])
@@ -96,20 +102,6 @@ func (b *_WinBlock) UnmarshalBinary(data []byte) error {
 
 func winBlockOffset(idx int32) int64 {
 	return int64(blockSize * idx)
-}
-
-type _WindowHandle struct {
-	winBlock _WinBlock
-	file     *_File
-	offset   int64
-}
-
-func (h *_WindowHandle) read() error {
-	buf, err := h.file.slice(h.offset, h.offset+int64(blockSize))
-	if err != nil {
-		return err
-	}
-	return h.winBlock.UnmarshalBinary(buf)
 }
 
 type (
@@ -276,17 +268,18 @@ func (tw *_TimeWindowBucket) lookup(fs *_FileSet, topicHash uint64, off, cutoff 
 	}
 	next := func(blockOff int64, f func(_WinBlock) (bool, error)) error {
 		for {
-			h := _WindowHandle{file: winFile, offset: blockOff}
-			if err := h.read(); err != nil {
+			r := _WindowReader{winFile: winFile, offset: blockOff}
+			b, err := r.readWindowBlock()
+			if err != nil {
 				return err
 			}
-			if stop, err := f(h.winBlock); stop || err != nil {
+			if stop, err := f(b); stop || err != nil {
 				return err
 			}
-			if h.winBlock.next == 0 {
+			if b.next == 0 {
 				return nil
 			}
-			blockOff = h.winBlock.next
+			blockOff = b.next
 		}
 	}
 	expiryCount := 0

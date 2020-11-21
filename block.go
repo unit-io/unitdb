@@ -36,18 +36,13 @@ type (
 		cache []byte // block from memdb if it exist
 	}
 	_IndexBlock struct {
-		entries  [entriesPerIndexBlock]_IndexEntry
-		baseSeq  uint64
-		next     uint32
+		entries [entriesPerIndexBlock]_IndexEntry
+		baseSeq uint64
+		// next     uint32
 		entryIdx uint16
 
 		dirty  bool
 		leased bool
-	}
-	_BlockHandle struct {
-		indexBlock _IndexBlock
-		file       *_File
-		offset     int64
 	}
 )
 
@@ -74,8 +69,8 @@ func (b _IndexBlock) validation(blockIdx int32) error {
 	return nil
 }
 
-// MarshalBinary serialized entries block into binary data.
-func (b _IndexBlock) MarshalBinary() []byte {
+// marshalBinary serialized entries block into binary data.
+func (b _IndexBlock) marshalBinary() []byte {
 	buf := make([]byte, blockSize)
 	data := buf
 
@@ -94,13 +89,12 @@ func (b _IndexBlock) MarshalBinary() []byte {
 		binary.LittleEndian.PutUint64(buf[8:16], uint64(s.msgOffset))
 		buf = buf[16:]
 	}
-	binary.LittleEndian.PutUint32(buf[:4], b.next)
-	binary.LittleEndian.PutUint16(buf[4:6], b.entryIdx)
+	binary.LittleEndian.PutUint16(buf[:2], b.entryIdx)
 	return data
 }
 
-// UnmarshalBinary de-serialized entries block from binary data.
-func (b *_IndexBlock) UnmarshalBinary(data []byte) error {
+// unmarshalBinary de-serialized entries block from binary data.
+func (b *_IndexBlock) unmarshalBinary(data []byte) error {
 	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
 	data = data[8:]
 	for i := 0; i < entriesPerIndexBlock; i++ {
@@ -116,15 +110,6 @@ func (b *_IndexBlock) UnmarshalBinary(data []byte) error {
 		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[8:16]))
 		data = data[16:]
 	}
-	b.next = binary.LittleEndian.Uint32(data[:4])
-	b.entryIdx = binary.LittleEndian.Uint16(data[4:6])
+	b.entryIdx = binary.LittleEndian.Uint16(data[:2])
 	return nil
-}
-
-func (h *_BlockHandle) read() error {
-	buf, err := h.file.slice(h.offset, h.offset+int64(blockSize))
-	if err != nil {
-		return err
-	}
-	return h.indexBlock.UnmarshalBinary(buf)
 }

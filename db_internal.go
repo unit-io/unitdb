@@ -197,11 +197,8 @@ func (db *DB) loadTrie() error {
 	return err
 }
 
-func (db *DB) readEntry(topicHash uint64, seq uint64) (_IndexEntry, error) {
-	data, err := db.internal.mem.Get(seq)
-	if err != nil {
-		return _IndexEntry{}, errMsgIDDeleted
-	}
+func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
+	data, _ := db.internal.mem.Get(q.seq)
 	if data != nil {
 		var m _Entry
 		m.UnmarshalBinary(data[:entrySize])
@@ -215,7 +212,7 @@ func (db *DB) readEntry(topicHash uint64, seq uint64) (_IndexEntry, error) {
 		return e, nil
 	}
 
-	return db.internal.reader.readEntry(seq)
+	return db.internal.reader.readEntry(q.seq)
 }
 
 // lookups are performed in following order

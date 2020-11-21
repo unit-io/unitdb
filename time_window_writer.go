@@ -28,10 +28,10 @@ type _WindowWriter struct {
 	winBlocks map[int32]_WinBlock // map[windowIdx]winBlock
 	winLeases map[int32][]uint64  // map[blockIdx][]seq
 
-	fs        *_FileSet
-	buffer    *bpool.Buffer
-	winFile   *_File
-	winOffset int64
+	fs      *_FileSet
+	buffer  *bpool.Buffer
+	winFile *_File
+	offset  int64
 }
 
 func newWindowWriter(fs *_FileSet, buf *bpool.Buffer) (*_WindowWriter, error) {
@@ -41,23 +41,23 @@ func newWindowWriter(fs *_FileSet, buf *bpool.Buffer) (*_WindowWriter, error) {
 		return nil, err
 	}
 	w.winFile = winFile
-	w.winOffset = winFile.currSize()
-	if w.winOffset > 0 {
-		w.windowIdx = int32(w.winOffset / int64(blockSize))
+	w.offset = winFile.currSize()
+	if w.offset > 0 {
+		w.windowIdx = int32(w.offset / int64(blockSize))
 	}
 
 	return w, nil
 }
 
 func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
-	off := int64(blockSize * winIdx)
-	h := _WindowHandle{file: w.winFile, offset: off}
-	if err := h.read(); err != nil {
+	r := _WindowReader{winFile: w.winFile, offset: winBlockOffset(winIdx)}
+	b, err := r.readWindowBlock()
+	if err != nil {
 		return err
 	}
 	entryIdx := -1
-	for i := 0; i < int(h.winBlock.entryIdx); i++ {
-		e := h.winBlock.entries[i]
+	for i := 0; i < int(b.entryIdx); i++ {
+		e := b.entries[i]
 		if e.sequence == seq { //record exist in db.
 			entryIdx = i
 			break
@@ -66,16 +66,16 @@ func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	if entryIdx == -1 {
 		return nil // no entry in db to delete.
 	}
-	h.winBlock.dirty = true
-	h.winBlock.entryIdx--
+	b.dirty = true
+	b.entryIdx--
 
 	i := entryIdx
 	for ; i < entriesPerIndexBlock-1; i++ {
-		h.winBlock.entries[i] = h.winBlock.entries[i+1]
+		b.entries[i] = b.entries[i+1]
 	}
-	h.winBlock.entries[i] = _WinEntry{}
+	b.entries[i] = _WinEntry{}
 
-	w.winBlocks[winIdx] = h.winBlock
+	w.winBlocks[winIdx] = b
 	return nil
 }
 
@@ -93,11 +93,11 @@ func (w *_WindowWriter) append(topicHash uint64, off int64, wEntries _WindowEntr
 	b, ok = w.winBlocks[wIdx]
 	if !ok && off > 0 {
 		if wIdx <= w.windowIdx {
-			h := _WindowHandle{file: w.winFile, offset: off}
-			if err := h.read(); err != nil {
-				return off, err
+			r := _WindowReader{winFile: w.winFile, offset: off}
+			b, err = r.readWindowBlock()
+			if err != nil {
+				return 0, err
 			}
-			b = h.winBlock
 			b.validation(topicHash)
 			b.leased = true
 		}
@@ -135,7 +135,7 @@ func (w *_WindowWriter) write() error {
 			continue
 		}
 		off := int64(blockSize * bIdx)
-		if _, err := w.winFile.WriteAt(b.MarshalBinary(), off); err != nil {
+		if _, err := w.winFile.WriteAt(b.marshalBinary(), off); err != nil {
 			return err
 		}
 		b.dirty = false
@@ -164,7 +164,7 @@ func (w *_WindowWriter) write() error {
 			bIdx := blocks[0]
 			off := int64(blockSize * bIdx)
 			b := w.winBlocks[bIdx]
-			buf := b.MarshalBinary()
+			buf := b.marshalBinary()
 			if _, err := w.winFile.WriteAt(buf, off); err != nil {
 				return err
 			}
@@ -176,7 +176,7 @@ func (w *_WindowWriter) write() error {
 		blockOff := int64(blockSize * blocks[0])
 		for bIdx := blocks[0]; bIdx <= blocks[1]; bIdx++ {
 			b := w.winBlocks[bIdx]
-			w.buffer.Write(b.MarshalBinary())
+			w.buffer.Write(b.marshalBinary())
 			b.dirty = false
 			w.winBlocks[bIdx] = b
 			// fmt.Println("timeWindow.write: topicHash, seq ", b.topicHash, b.entries[0])
@@ -206,13 +206,13 @@ func (w *_WindowWriter) rollback() error {
 
 func (w *_WindowWriter) reset() error {
 	w.buffer.Reset()
-	w.winOffset = w.winFile.currSize()
+	w.offset = w.winFile.currSize()
 
 	return nil
 }
 
 func (w *_WindowWriter) abort() error {
-	w.winFile.truncate(w.winOffset)
+	w.winFile.truncate(w.offset)
 
 	return w.rollback()
 }

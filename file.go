@@ -199,6 +199,8 @@ func (f *_File) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, o
 }
 
 func (f *_File) currSize() int64 {
+	stat, _ := f.Stat()
+	f.size = stat.Size()
 	return f.size
 }
 

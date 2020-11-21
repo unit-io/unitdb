@@ -252,12 +252,12 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 
 	for {
 		invalidCount := 0
-		for _, we := range q.internal.winEntries[start:limit] {
+		for _, query := range q.internal.winEntries[start:limit] {
 			err = func() error {
-				if we.seq == 0 {
+				if query.seq == 0 {
 					return nil
 				}
-				s, err := db.readEntry(we.topicHash, we.seq)
+				s, err := db.readEntry(query)
 				if err != nil {
 					if err == errMsgIDDeleted {
 						invalidCount++

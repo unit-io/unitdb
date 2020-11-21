@@ -17,8 +17,10 @@
 package unitdb
 
 type _BlockReader struct {
+	indexBlock          _IndexBlock
 	fs                  *_FileSet
 	indexFile, dataFile *_File
+	offset              int64
 }
 
 func newBlockReader(fs *_FileSet) *_BlockReader {
@@ -39,16 +41,28 @@ func newBlockReader(fs *_FileSet) *_BlockReader {
 	return r
 }
 
-func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
-	bIdx := blockIndex(seq)
-	h := _BlockHandle{file: r.indexFile, offset: blockOffset(bIdx)}
-	if err := h.read(); err != nil {
-		return _IndexEntry{}, err
+func (r *_BlockReader) readIndexBlock() (_IndexBlock, error) {
+	buf, err := r.indexFile.slice(r.offset, r.offset+int64(blockSize))
+	if err != nil {
+		return _IndexBlock{}, err
+	}
+	if err := r.indexBlock.unmarshalBinary(buf); err != nil {
+		return _IndexBlock{}, err
 	}
 
+	return r.indexBlock, nil
+}
+
+func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
+	bIdx := blockIndex(seq)
+	r.offset = blockOffset(bIdx)
+	b, err := r.readIndexBlock()
+	if err != nil {
+		return _IndexEntry{}, err
+	}
 	entryIdx := -1
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		s := h.indexBlock.entries[i]
+		s := b.entries[i]
 		if s.seq == seq { //topic exist in db
 			entryIdx = i
 			break
@@ -58,7 +72,7 @@ func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
 		return _IndexEntry{}, errEntryInvalid
 	}
 
-	return h.indexBlock.entries[entryIdx], nil
+	return b.entries[entryIdx], nil
 }
 
 func (r *_BlockReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
