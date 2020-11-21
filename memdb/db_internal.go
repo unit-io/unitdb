@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,6 +104,9 @@ type _DB struct {
 	// Write ahead log
 	wal *wal.WAL
 
+	// query
+	queryPlan *_LogicalPlan
+
 	// close
 	closeW sync.WaitGroup
 	closeC chan struct{}
@@ -132,7 +136,9 @@ func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 	defer r.Unlock()
 	if ok {
 		if _, ok := r.timeRecords[timeID]; !ok {
+			db.mu.Lock()
 			r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
+			db.mu.Unlock()
 		}
 
 		// Append key to bloom filter
@@ -205,6 +211,84 @@ func (db *DB) batch() *Batch {
 	b.commitComplete = make(chan struct{})
 
 	return b
+}
+
+func (db *DB) newQueryPlan() *_LogicalPlan {
+	queryPlan := &_LogicalPlan{blockCache: make(map[_TimeID]*_Block), timeBlocks: make(map[_BlockKey]*_TimeBlock)}
+	for i := 0; i < nBlocks; i++ {
+		queryPlan.timeBlocks[_BlockKey(i)] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+	}
+
+	return queryPlan
+}
+
+// seek finds timeRecords and blockCache for the provided key and cutoff duration and caches those for query.
+func (db *DB) seek(key uint64, cutoff int64) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+
+	db.mu.RLock()
+	// Get time block
+	blockKey := db.blockID(key)
+	r, ok := db.timeBlocks[blockKey]
+	db.mu.RUnlock()
+	if !ok {
+		return errEntryDoesNotExist
+	}
+
+	var timeRec []_TimeID
+	r.RLock()
+	for tmID := range r.timeRecords {
+		timeRec = append(timeRec, tmID)
+	}
+	r.RUnlock()
+	sort.Slice(timeRec[:], func(i, j int) bool {
+		return timeRec[i] > timeRec[j]
+	})
+	for _, timeID := range timeRec {
+		db.mu.RLock()
+		block, ok := db.blockCache[timeID]
+		db.mu.RUnlock()
+		if ok {
+			block.RLock()
+			_, ok := block.records[iKey(false, key)]
+			block.RUnlock()
+			if ok {
+				b, ok := db.internal.queryPlan.timeBlocks[blockKey]
+				if ok {
+					b.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
+				}
+				db.internal.queryPlan.blockCache[timeID] = block
+				if cutoff != 0 {
+					db.internal.queryPlan.cutoff = _TimeID(cutoff)
+				}
+				return nil
+			}
+			r.RLock()
+			fltr := r.timeRecords[timeID]
+			r.RUnlock()
+			if !fltr.Test(key) {
+				return errEntryDoesNotExist
+			}
+		}
+	}
+
+	return errEntryDoesNotExist
+}
+
+func (b *_Block) get(off int64) ([]byte, error) {
+	scratch, err := b.data.Slice(off, off+4) // read data length.
+	if err != nil {
+		return nil, err
+	}
+	dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
+	data, err := b.data.Slice(off, off+dataLen)
+	if err != nil {
+		return nil, err
+	}
+
+	return data[8+1+4:], nil
 }
 
 func (b *_Block) put(ikey _Key, data []byte) error {

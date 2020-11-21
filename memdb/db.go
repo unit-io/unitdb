@@ -95,6 +95,8 @@ func Open(opts ...Options) (*DB, error) {
 		db.timeBlocks[_BlockKey(i)] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
+	// Query plan
+	db.internal.queryPlan = db.newQueryPlan()
 	db.internal.batchPool = db.newBatchPool(nPoolSize)
 
 	go db.tinyBatchLoop(db.opts.timeRecordInterval)
@@ -197,13 +199,39 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	// Get time block
 	blockKey := db.blockID(key)
-	r, ok := db.timeBlocks[blockKey]
+	db.mu.RUnlock()
+
+	// first execute query plan
+	if len(db.internal.queryPlan.timeBlocks[blockKey].timeRecords) == 0 {
+		if err := db.seek(key, 0); err != nil {
+			return nil, err
+		}
+	}
+
+	// Lookup key first for the current timeRecord.
+	block, ok := db.internal.queryPlan.blockCache[db.internal.queryPlan.timeRcord]
+	if ok {
+		block.RLock()
+		off, ok := block.records[iKey(false, key)]
+		block.RUnlock()
+		if ok {
+			block.RLock()
+			defer block.RUnlock()
+
+			db.internal.meter.Gets.Inc(1)
+
+			return block.get(off)
+		}
+	}
+
+	db.mu.RLock()
+	// Get time block
+	r, ok := db.internal.queryPlan.timeBlocks[blockKey]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
 
-	// var timeID _TimeID
 	var timeRec []_TimeID
 	r.RLock()
 	for tmID := range r.timeRecords {
@@ -214,43 +242,32 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return timeRec[i] > timeRec[j]
 	})
 	for _, timeID := range timeRec {
-		db.mu.RLock()
-		block, ok := db.blockCache[timeID]
-		db.mu.RUnlock()
+		block, ok := db.internal.queryPlan.blockCache[timeID]
 		if ok {
 			block.RLock()
-			_, ok := block.records[iKey(false, key)]
-			block.RUnlock()
-			if !ok {
-				r.RLock()
-				fltr := r.timeRecords[timeID]
-				r.RUnlock()
-				if !fltr.Test(key) {
-					break
-				}
-				continue
-			}
-			// Get item from block.
 			off, ok := block.records[iKey(false, key)]
-			if !ok {
-				return nil, errEntryDoesNotExist
-			}
-			scratch, err := block.data.Slice(off, off+4) // read data length.
-			if err != nil {
-				return nil, err
-			}
-			dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
-			data, err := block.data.Slice(off, off+dataLen)
-			if err != nil {
-				return nil, err
-			}
-			db.internal.meter.Gets.Inc(1)
+			block.RUnlock()
+			if ok {
+				block.RLock()
+				defer block.RUnlock()
+				db.internal.meter.Gets.Inc(1)
+				db.internal.queryPlan.timeRcord = timeID
 
-			return data[8+1+4:], nil
+				return block.get(off)
+			}
+			r.RLock()
+			fltr := r.timeRecords[timeID]
+			r.RUnlock()
+			if !fltr.Test(key) {
+				break
+			}
 		}
 	}
 
-	return nil, errEntryDoesNotExist
+	// reset timeBlock and start over
+	db.internal.queryPlan.timeBlocks[blockKey] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+
+	return db.Get(key)
 }
 
 // ForEachBlock gets all keys from DB.
@@ -272,7 +289,9 @@ func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (e
 	})
 
 	for _, timeID := range timeIDs {
+		db.mu.RLock()
 		block := blocks[timeID]
+		db.mu.RUnlock()
 		var keys []uint64
 		block.RLock()
 		for ik := range block.records {

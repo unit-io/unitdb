@@ -66,7 +66,6 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	if err := block.put(ikey, data); err != nil {
 		return err
 	}
-
 	b.db.addTimeBlock(timeID, key)
 
 	b.tinyBatch.incount()
