@@ -119,7 +119,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	lease := newLease(leaseFile, options.minimumFreeBlocksSize)
+	lease := newLease(leaseFile, options.freeBlockSize)
 
 	filterFile, err := newFile(path, 1, _FileDesc{fileType: typeFilter})
 	if err != nil {
@@ -166,7 +166,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// Create a blockcache.
-	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.blockCacheSize))
+	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize))
 	if err != nil {
 		return nil, err
 	}

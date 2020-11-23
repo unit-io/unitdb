@@ -15,5 +15,5 @@ jobs:
     script:
     - go get github.com/mattn/goveralls
     - go get -u github.com/rakyll/gotest
-    - gotest -v -covermode=count -coverprofile=coverage.out ./ ./wal/...
+    - gotest -v -covermode=count -coverprofile=coverage.out ./ ./wal/... ./memdb/...
     - "$GOPATH/bin/goveralls -coverprofile=coverage.out -service=travis-pro"

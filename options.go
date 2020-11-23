@@ -75,14 +75,14 @@ type _Options struct {
 	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
 
-	// blockCacheSize sets Size of blockcache.
-	blockCacheSize int64
+	// memdbSize sets Size of blockcache.
+	memdbSize int64
 
 	// logSize sets Size of write ahead log.
 	logSize int64
 
-	// minimumFreeBlocksSize minimum freeblocks size before free blocks are allocated and reused.
-	minimumFreeBlocksSize int64
+	// freeBlockSize minimum freeblocks size before free blocks are allocated and reused.
+	freeBlockSize int64
 }
 
 // Options it contains configurable options and flags for DB.
@@ -191,14 +191,14 @@ func WithDefaultOptions() Options {
 		if o.bufferSize == 0 {
 			o.bufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
 		}
-		if o.blockCacheSize == 0 {
-			o.blockCacheSize = 1 << 31 // maximum size of blockcache (2GB).
+		if o.memdbSize == 0 {
+			o.memdbSize = 1 << 31 // maximum size of blockcache (2GB).
 		}
 		if o.logSize == 0 {
 			o.logSize = 1 << 31 // maximum size of log to grow before allocating free segments (2GB).
 		}
-		if o.minimumFreeBlocksSize == 0 {
-			o.minimumFreeBlocksSize = 1 << 27 // minimum size of (128MB).
+		if o.freeBlockSize == 0 {
+			o.freeBlockSize = 1 << 27 // minimum size of (128MB).
 		}
 		if o.encryptionKey == nil {
 			o.encryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
@@ -245,10 +245,10 @@ func WithBufferSize(size int64) Options {
 	})
 }
 
-// WithBlockCacheSize sets Size of blockcache.
-func WithBlockCacheSize(size int64) Options {
+// WithMemdbSize sets Size of blockcache.
+func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
-		o.blockCacheSize = size
+		o.memdbSize = size
 	})
 }
 
@@ -261,9 +261,9 @@ func WithLogSize(size int64) Options {
 
 // WithMinimumFreeBlocksSize sets minimum freeblocks size
 // before free blocks are allocated and reused.
-func WithMinimumFreeBlocksSize(size int64) Options {
+func WithFreeBlockSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
-		o.minimumFreeBlocksSize = size
+		o.freeBlockSize = size
 	})
 }
 
