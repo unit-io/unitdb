@@ -356,9 +356,8 @@ func (db *DB) Delete(key uint64) error {
 			delete(block.records, ikey)
 			block.count--
 			count := block.count
-			block.Unlock()
-
 			db.delete(key)
+			block.Unlock()
 			db.internal.meter.Dels.Inc(1)
 
 			if count == 0 {
@@ -387,7 +386,7 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	db.mu.Lock()
 	block, ok := db.blockCache[timeID]
 	if !ok {
-		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
 		db.blockCache[timeID] = block
 	}
 	db.mu.Unlock()

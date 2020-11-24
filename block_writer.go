@@ -102,14 +102,16 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 		return delEntry, nil // no entry in db to delete
 	}
 	delEntry = b.entries[entryIdx]
+	delEntry.msgOffset = -1
+	b.entries[entryIdx] = delEntry
 	b.dirty = true
-	b.entryIdx--
+	// b.entryIdx--
 
-	i := entryIdx
-	for ; i < entriesPerIndexBlock-1; i++ {
-		b.entries[i] = b.entries[i+1]
-	}
-	b.entries[i] = _IndexEntry{}
+	// i := entryIdx
+	// for ; i < entriesPerIndexBlock-1; i++ {
+	// 	b.entries[i] = b.entries[i+1]
+	// }
+	// b.entries[i] = _IndexEntry{}
 	w.indexBlocks[bIdx] = b
 
 	return delEntry, nil

@@ -262,7 +262,7 @@ func (fs *_FileSet) close() error {
 }
 
 func ensureDir(dirName string) error {
-	err := os.Mkdir(dirName, os.ModeDir)
+	err := os.Mkdir(dirName, 0777)
 	if err == nil || os.IsExist(err) {
 		return nil
 	} else {

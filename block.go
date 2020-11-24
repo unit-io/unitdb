@@ -36,9 +36,8 @@ type (
 		cache []byte // block from memdb if it exist
 	}
 	_IndexBlock struct {
-		entries [entriesPerIndexBlock]_IndexEntry
-		baseSeq uint64
-		// next     uint32
+		entries  [entriesPerIndexBlock]_IndexEntry
+		baseSeq  uint64
 		entryIdx uint16
 
 		dirty  bool

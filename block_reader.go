@@ -62,8 +62,11 @@ func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
 	}
 	entryIdx := -1
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		s := b.entries[i]
-		if s.seq == seq { //topic exist in db
+		e := b.entries[i]
+		if e.seq == seq { //topic exist in db
+			if e.msgOffset == -1 {
+				return _IndexEntry{}, errMsgIDDeleted
+			}
 			entryIdx = i
 			break
 		}

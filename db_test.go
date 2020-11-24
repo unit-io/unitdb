@@ -135,6 +135,7 @@ func TestSimple(t *testing.T) {
 }
 
 func TestBatch(t *testing.T) {
+	cleanup()
 	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
@@ -156,18 +157,18 @@ func TestBatch(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		// var v, vals [][]byte
-		_, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
+		var v, vals [][]byte
+		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
 		if err != nil {
 			t.Fatal(err)
 		}
-		// for i = 0; i < n; i++ {
-		// 	val := []byte(fmt.Sprintf("msg.%2d", n-i-1))
-		// 	vals = append(vals, val)
-		// }
-		// if !reflect.DeepEqual(vals, v) {
-		// 	t.Fatalf("expected %v; got %v", vals, v)
-		// }
+		for i = 0; i < n; i++ {
+			val := []byte(fmt.Sprintf("msg.%2d", n-i-1))
+			vals = append(vals, val)
+		}
+		if !reflect.DeepEqual(vals, v) {
+			t.Fatalf("expected %v; got %v", vals, v)
+		}
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -197,6 +198,7 @@ func TestBatch(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
+	cleanup()
 	db, err := Open(dbPath, WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +240,7 @@ func TestExpiry(t *testing.T) {
 }
 
 func TestLeasing(t *testing.T) {
+	cleanup()
 	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
@@ -283,6 +286,7 @@ func TestLeasing(t *testing.T) {
 }
 
 func TestWildcardTopics(t *testing.T) {
+	cleanup()
 	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)

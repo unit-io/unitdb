@@ -325,9 +325,7 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	}
 
 	db.internal.meter.Dels.Inc(1)
-	if err := db.internal.mem.Delete(seq); err != nil {
-		return err
-	}
+	db.internal.mem.Delete(seq)
 
 	// Test filter block for the message id presence.
 	if !db.internal.filter.Test(seq) {

@@ -192,7 +192,7 @@ func WithDefaultOptions() Options {
 			o.bufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
 		}
 		if o.memdbSize == 0 {
-			o.memdbSize = 1 << 31 // maximum size of blockcache (2GB).
+			o.memdbSize = 1 << 32 // maximum size of blockcache (4GB).
 		}
 		if o.logSize == 0 {
 			o.logSize = 1 << 31 // maximum size of log to grow before allocating free segments (2GB).

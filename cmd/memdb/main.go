@@ -69,7 +69,6 @@ func main() {
 	fmt.Println("main: Delete 4-5")
 	deletes(4, 5)
 	gets(1, 10)
-
 	// print stats
 	if varz, err := db.Varz(); err == nil {
 		fmt.Printf("%+v\n", varz)

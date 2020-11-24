@@ -76,8 +76,9 @@ type (
 	_Block    struct {
 		count        int64
 		data         *bpool.Buffer
-		records      map[_Key]int64 // map[key]offset
-		sync.RWMutex                // Read Write mutex, guards access to internal map.
+		records      map[_Key]int64     // map[key]offset
+		delRecords   map[_TimeID][]_Key // map[_TimeID][]_Key
+		sync.RWMutex                    // Read Write mutex, guards access to internal map.
 	}
 )
 
@@ -310,13 +311,14 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 	if _, err := b.data.WriteAt(k[:], off+4); err != nil {
 		return err
 	}
-	b.records[ikey] = off
-	if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
-		return err
-	}
 	if ikey.delFlag == 0 {
+		b.records[ikey] = off
+		if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
+			return err
+		}
 		b.count++
 	}
+	b.records[ikey] = off
 
 	return nil
 }
@@ -332,16 +334,20 @@ func (db *DB) delete(key uint64) error {
 	db.mu.Lock()
 	block, ok := db.blockCache[timeID]
 	if !ok {
-		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
 		db.blockCache[timeID] = block
 	}
 	db.mu.Unlock()
 
 	// set key is deleted to persist key with timeID to the log.
 	ikey := iKey(true, key)
-	var data [8]byte
-	binary.LittleEndian.PutUint64(data[0:8], uint64(timeID))
-	block.put(ikey, data[:])
+	if _, ok := block.delRecords[timeID]; ok {
+		block.delRecords[timeID] = append(block.delRecords[timeID], ikey)
+	} else {
+		block.delRecords[timeID] = []_Key{ikey}
+	}
+
+	block.put(ikey, nil)
 	db.internal.tinyBatch.incount()
 
 	return nil
@@ -352,41 +358,20 @@ func (db *DB) move(timeID _TimeID) error {
 	db.mu.RLock()
 	block := db.blockCache[timeID]
 	db.mu.RUnlock()
-	block.RLock()
-	defer block.RUnlock()
+	block.Lock()
+	defer block.Unlock()
 
-	// get all deleted keys
-	var dkeys []_Key
-	for ik := range block.records {
-		if ik.delFlag == 1 {
-			dkeys = append(dkeys, ik)
-		}
-	}
-
-	for _, ik := range dkeys {
-		off, ok := block.records[ik]
+	for timeID, dkeys := range block.delRecords {
+		db.mu.RLock()
+		_, ok := db.blockCache[timeID]
+		db.mu.RUnlock()
 		if ok {
-			scratch, err := block.data.Slice(off, off+4) // read data length.
-			if err != nil {
-				return err
-			}
-			dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
-			data, err := block.data.Slice(off, off+dataLen)
-			if err != nil {
-				return err
-			}
-			if dataLen != 8+1+4+8 {
-				return errBadRequest
-			}
-			timeID := _TimeID(binary.LittleEndian.Uint64(data[8+1+4 : dataLen]))
-			db.mu.RLock()
-			_, ok := db.blockCache[timeID]
-			db.mu.RUnlock()
-			if ok {
-				return db.delete(ik.key)
+			for _, ik := range dkeys {
+				db.delete(ik.key)
 			}
 		}
 	}
+
 	return nil
 }
 

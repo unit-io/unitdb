@@ -61,6 +61,8 @@ func main() {
 	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), []byte("msg for team alpha channel1 receiver1")).WithID(messageId)
 	db.PutEntry(entry)
 
+	db.Sync()
+
 	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.u1"), nil).WithID(messageId))
 	if err != nil {
 		log.Fatal(err)
