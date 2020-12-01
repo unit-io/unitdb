@@ -55,10 +55,10 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	timeID := b.tinyBatch.timeID()
 	ikey := iKey(false, key)
 	b.db.mu.Lock()
-	block, ok := b.db.blockCache[timeID]
+	block, ok := b.db.timeBlocks[timeID]
 	if !ok {
 		block = &_Block{data: b.db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		b.db.blockCache[timeID] = block
+		b.db.timeBlocks[timeID] = block
 	}
 	b.db.mu.Unlock()
 	block.Lock()
@@ -115,7 +115,6 @@ func (b *Batch) Commit() error {
 func (b *Batch) Abort() error {
 	_assert(!b.managed, "managed batch abort not allowed")
 	for timeID := range b.tinyBatchGroup {
-		b.db.internal.timeMark.abort(timeID)
 		if err := b.db.releaseLog(timeID); err != nil {
 			return err
 		}

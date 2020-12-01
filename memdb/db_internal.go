@@ -37,7 +37,7 @@ const (
 
 	nBlocks = 27
 
-	nPoolSize = 27
+	nPoolSize = 10
 
 	// nLocks sets maximum concurent timeLocks.
 	nLocks = 100000
@@ -54,8 +54,8 @@ const (
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	_TimeID    int64
-	_TimeBlock struct {
+	_TimeID     int64
+	_TimeFilter struct {
 		timeRecords map[_TimeID]*filter.Block
 		// bloom filter adds keys to the filter for all entries in a time block.
 		// filter is checked during get or delete operation
@@ -63,7 +63,7 @@ type (
 		filter       *filter.Generator
 		sync.RWMutex // Read Write mutex, guards access to internal map.
 	}
-	_BlockCache map[_TimeID]*_Block
+	_TimeBlocks map[_TimeID]*_Block
 )
 
 type (
@@ -132,7 +132,7 @@ func iKey(delFlag bool, k uint64) _Key {
 // addTimeBlock adds unique time block to the set.
 func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 	blockKey := db.blockID(key)
-	r, ok := db.timeBlocks[blockKey]
+	r, ok := db.timeFilters[blockKey]
 	r.Lock()
 	defer r.Unlock()
 	if ok {
@@ -151,7 +151,8 @@ func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 
 func (db *DB) newTinyBatch() *_TinyBatch {
 	tinyBatch := &_TinyBatch{doneChan: make(chan struct{})}
-	tinyBatch.setTimeID(db.internal.timeMark.newTimeID())
+	timeID := db.internal.timeMark.newTimeID()
+	tinyBatch.setTimeID(timeID)
 	return tinyBatch
 }
 
@@ -215,9 +216,9 @@ func (db *DB) batch() *Batch {
 }
 
 func (db *DB) newQueryPlan() *_LogicalPlan {
-	queryPlan := &_LogicalPlan{blockCache: make(map[_TimeID]*_Block), timeBlocks: make(map[_BlockKey]*_TimeBlock)}
+	queryPlan := &_LogicalPlan{timeBlocks: make(map[_TimeID]*_Block), timeFilters: make(map[_BlockKey]*_TimeFilter)}
 	for i := 0; i < nBlocks; i++ {
-		queryPlan.timeBlocks[_BlockKey(i)] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+		queryPlan.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
 	return queryPlan
@@ -232,7 +233,7 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 	db.mu.RLock()
 	// Get time block
 	blockKey := db.blockID(key)
-	r, ok := db.timeBlocks[blockKey]
+	r, ok := db.timeFilters[blockKey]
 	db.mu.RUnlock()
 	if !ok {
 		return errEntryDoesNotExist
@@ -249,18 +250,18 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 	})
 	for _, timeID := range timeRec {
 		db.mu.RLock()
-		block, ok := db.blockCache[timeID]
+		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
 		if ok {
 			block.RLock()
 			_, ok := block.records[iKey(false, key)]
 			block.RUnlock()
 			if ok {
-				b, ok := db.internal.queryPlan.timeBlocks[blockKey]
+				b, ok := db.internal.queryPlan.timeFilters[blockKey]
 				if ok {
 					b.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
 				}
-				db.internal.queryPlan.blockCache[timeID] = block
+				db.internal.queryPlan.timeBlocks[timeID] = block
 				if cutoff != 0 {
 					db.internal.queryPlan.cutoff = _TimeID(cutoff)
 				}
@@ -332,10 +333,10 @@ func (db *DB) delete(key uint64) error {
 	timeID := db.internal.tinyBatch.timeID()
 
 	db.mu.Lock()
-	block, ok := db.blockCache[timeID]
+	block, ok := db.timeBlocks[timeID]
 	if !ok {
 		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		db.blockCache[timeID] = block
+		db.timeBlocks[timeID] = block
 	}
 	db.mu.Unlock()
 
@@ -356,14 +357,14 @@ func (db *DB) delete(key uint64) error {
 // move moves deleted records to new block cache before releasing the block from the WAL.
 func (db *DB) move(timeID _TimeID) error {
 	db.mu.RLock()
-	block := db.blockCache[timeID]
+	block := db.timeBlocks[timeID]
 	db.mu.RUnlock()
 	block.Lock()
 	defer block.Unlock()
 
 	for timeID, dkeys := range block.delRecords {
 		db.mu.RLock()
-		_, ok := db.blockCache[timeID]
+		_, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
 		if ok {
 			for _, ik := range dkeys {
@@ -383,7 +384,7 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	}
 
 	db.mu.RLock()
-	block, ok := db.blockCache[tinyBatch.timeID()]
+	block, ok := db.timeBlocks[tinyBatch.timeID()]
 	db.mu.RUnlock()
 	if !ok {
 		return nil
@@ -488,17 +489,15 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	db.move(timeID)
 
 	db.mu.RLock()
-	block, ok := db.blockCache[timeID]
+	block, ok := db.timeBlocks[timeID]
 	db.mu.RUnlock()
-	block.Lock()
-	defer block.Unlock()
 	if !ok {
 		return errEntryDoesNotExist
 	}
 
-	db.internal.bufPool.Put(block.data)
 	db.mu.Lock()
-	delete(db.blockCache, timeID)
+	db.internal.bufPool.Put(block.data)
+	delete(db.timeBlocks, timeID)
 	db.mu.Unlock()
 
 	return db.internal.wal.SignalLogApplied(int64(timeID))

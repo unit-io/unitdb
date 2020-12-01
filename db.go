@@ -166,7 +166,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// Create a blockcache.
-	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize))
+	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize), memdb.WithLogSize(options.logSize), memdb.WithBufferSize(options.bufferSize))
 	if err != nil {
 		return nil, err
 	}

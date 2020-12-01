@@ -95,7 +95,7 @@ func (w *Writer) Append(data []byte) <-chan error {
 }
 
 // writeLog writes log by setting correct header and status.
-func (w *Writer) writeLog(id int64) error {
+func (w *Writer) writeLog(timeID int64) error {
 	w.writeCompleted <- struct{}{}
 	w.wal.mu.Lock()
 	w.wal.wg.Add(1)
@@ -116,12 +116,12 @@ func (w *Writer) writeLog(id int64) error {
 	}
 	h := _LogInfo{
 		status:     logStatusWritten,
-		timeID:     id,
+		timeID:     timeID,
 		entryCount: w.entryCount,
 		size:       dataLen,
 		offset:     int64(off),
 	}
-	if err := w.wal.put(id, h); err != nil {
+	if err := w.wal.put(timeID, h); err != nil {
 		return err
 	}
 	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
@@ -141,7 +141,7 @@ func (w *Writer) writeLog(id int64) error {
 // SignalInitWrite will signal to the WAL that log append has
 // completed, and that the WAL can safely write log and being
 // applied atomically.
-func (w *Writer) SignalInitWrite(id int64) <-chan error {
+func (w *Writer) SignalInitWrite(timeID int64) <-chan error {
 	done := make(chan error, 1)
 	if w.writeComplete || w.releaseComplete {
 		done <- errors.New("misuse of log write - call each of the signaling methods exactly ones, in serial, in order")
@@ -150,7 +150,7 @@ func (w *Writer) SignalInitWrite(id int64) <-chan error {
 
 	// Write the log non-blocking.
 	go func() {
-		done <- w.writeLog(id)
+		done <- w.writeLog(timeID)
 	}()
 	return done
 }

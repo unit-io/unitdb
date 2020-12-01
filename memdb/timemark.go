@@ -17,6 +17,7 @@
 package memdb
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,35 +30,29 @@ type (
 
 	_TimeMark struct {
 		sync.RWMutex
-		durations       time.Duration
-		timeRecord      _TimeRecord
+		expiryDurations time.Duration
+		timeRef         _TimeID
 		records         map[_TimeID]_TimeRecord
 		releasedRecords map[_TimeID]_TimeRecord
 	}
 )
 
 func newTimeMark(expiryDuration time.Duration) *_TimeMark {
-	return &_TimeMark{durations: expiryDuration, timeRecord: _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
+	return &_TimeMark{expiryDurations: expiryDuration, timeRef: _TimeID(time.Now().UTC().UnixNano()), records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
 func (r _TimeRecord) isExpired(expDur time.Duration) bool {
-	if r.lastUnref > 0 && int64(r.lastUnref)+expDur.Nanoseconds() <= int64(time.Now().UTC().Nanosecond()) {
+	if r.lastUnref > 0 && int64(time.Unix(int64(r.lastUnref), 0).UTC().Add(expDur).Nanosecond()) <= int64(time.Now().UTC().Nanosecond()) {
 		return true
 	}
 	return false
 }
 
-func (r _TimeRecord) isReleased(lastUnref _TimeID) bool {
-	if r.lastUnref > 0 && r.lastUnref < lastUnref {
+func (r _TimeRecord) isReleased(timeRef _TimeID) bool {
+	if r.lastUnref > 0 && r.lastUnref < timeRef {
 		return true
 	}
 	return false
-}
-
-func (tm *_TimeMark) newTimeRecord() {
-	tm.Lock()
-	defer tm.Unlock()
-	tm.timeRecord = _TimeRecord{lastUnref: _TimeID(time.Now().UTC().UnixNano())}
 }
 
 func (tm *_TimeMark) newTimeID() _TimeID {
@@ -89,48 +84,27 @@ func (tm *_TimeMark) release(timeID _TimeID) {
 		tm.records[timeID] = timeMark
 	} else {
 		delete(tm.records, timeID)
-		// timeMark.lastUnref = _TimeID(time.Now().UTC().UnixNano())
-		timeMark.lastUnref = tm.timeRecord.lastUnref
+		timeMark.lastUnref = tm.timeRef
 		tm.releasedRecords[timeID] = timeMark
 	}
 }
 
-func (tm *_TimeMark) isReleased(timeID _TimeID) bool {
-	tm.RLock()
-	defer tm.RUnlock()
-	if r, ok := tm.releasedRecords[timeID]; ok {
-		if r.refs == -1 {
-			// time ID is aborted
-			return false
-		}
-		if r.isReleased(tm.timeRecord.lastUnref) {
-			return true
-		}
-	}
-	return false
-}
-
-func (tm *_TimeMark) isAborted(timeID _TimeID) bool {
-	tm.RLock()
-	defer tm.RUnlock()
-	if r, ok := tm.releasedRecords[timeID]; ok {
-		if r.refs == -1 {
-			// time ID is aborted
-			return true
-		}
-	}
-	return false
-}
-
-func (tm *_TimeMark) abort(timeID _TimeID) {
+func (tm *_TimeMark) getRecords() (timeIDs []_TimeID) {
 	tm.Lock()
-	defer tm.Unlock()
-
-	if _, ok := tm.records[timeID]; ok {
-		delete(tm.records, timeID)
+	tm.timeRef = _TimeID(time.Now().UTC().UnixNano())
+	tm.Unlock()
+	tm.RLock()
+	defer tm.RUnlock()
+	for timeID, r := range tm.releasedRecords {
+		if r.isReleased(tm.timeRef) {
+			timeIDs = append(timeIDs, timeID)
+		}
 	}
-	r := _TimeRecord{refs: -1, lastUnref: tm.timeRecord.lastUnref}
-	tm.releasedRecords[timeID] = r
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] < timeIDs[j]
+	})
+
+	return timeIDs
 }
 
 func (tm *_TimeMark) startExpirer() {
@@ -138,7 +112,7 @@ func (tm *_TimeMark) startExpirer() {
 	defer tm.Unlock()
 
 	for timeID, r := range tm.releasedRecords {
-		if r.isExpired(tm.durations) {
+		if r.isExpired(tm.expiryDurations) {
 			delete(tm.releasedRecords, timeID)
 		}
 	}

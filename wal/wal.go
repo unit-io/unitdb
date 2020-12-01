@@ -19,6 +19,7 @@ package wal
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -193,14 +194,14 @@ func (wal *WAL) recoverWal() error {
 	return wal.recoverLogHeaders()
 }
 
-func (wal *WAL) put(id int64, log _LogInfo) error {
+func (wal *WAL) put(timeID int64, log _LogInfo) error {
 	log.version = version
 	wal.logCountWritten++
 	wal.entriesWritten += int64(log.entryCount)
-	if _, ok := wal.logs[id]; ok {
-		wal.logs[id] = append(wal.logs[id], log)
+	if _, ok := wal.logs[timeID]; ok {
+		wal.logs[timeID] = append(wal.logs[timeID], log)
 	} else {
-		wal.logs[id] = []_LogInfo{log}
+		wal.logs[timeID] = []_LogInfo{log}
 	}
 	return nil
 }
@@ -219,7 +220,7 @@ func (wal *WAL) logMerge(log _LogInfo) error {
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
-func (wal *WAL) SignalLogApplied(id int64) error {
+func (wal *WAL) SignalLogApplied(timeID int64) error {
 	wal.mu.Lock()
 	wal.wg.Add(1)
 	defer func() {
@@ -228,7 +229,7 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 	}()
 
 	var err1 error
-	logs := wal.logs[id]
+	logs := wal.logs[timeID]
 
 	// sort wal logs by offset so that adjacent free blocks can be merged
 	sort.Slice(logs[:], func(i, j int) bool {
@@ -241,22 +242,23 @@ func (wal *WAL) SignalLogApplied(id int64) error {
 		}
 		logs[i].status = logStatusApplied
 		if err := wal.logMerge(logs[i]); err != nil {
+			fmt.Println("wal.LogApplied: merge error ", err)
 			return err
 		}
 		if logs[i].status == logStatusReleased {
 			continue
 		}
-		if _, ok := wal.releasedLogs[id]; ok {
-			wal.releasedLogs[id] = append(wal.releasedLogs[id], logs[i])
+		if _, ok := wal.releasedLogs[timeID]; ok {
+			wal.releasedLogs[timeID] = append(wal.releasedLogs[timeID], logs[i])
 		} else {
-			wal.releasedLogs[id] = []_LogInfo{logs[i]}
+			wal.releasedLogs[timeID] = []_LogInfo{logs[i]}
 		}
 		if err := wal.logFile.writeMarshalableAt(logs[i], logs[i].offset); err != nil {
 			err1 = err
 			continue
 		}
 	}
-	delete(wal.logs, id)
+	delete(wal.logs, timeID)
 	if err := wal.writeHeader(); err != nil {
 		return err
 	}

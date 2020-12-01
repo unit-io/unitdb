@@ -38,10 +38,10 @@ type DB struct {
 	opts    *_Options
 
 	// block cache
-	internal   *_DB
-	consistent *hash.Consistent
-	blockCache _BlockCache
-	timeBlocks map[_BlockKey]*_TimeBlock
+	internal    *_DB
+	consistent  *hash.Consistent
+	timeBlocks  _TimeBlocks
+	timeFilters map[_BlockKey]*_TimeFilter
 }
 
 // Open initializes database.
@@ -84,15 +84,15 @@ func Open(opts ...Options) (*DB, error) {
 	internal.wal = wal
 
 	db := &DB{
-		opts:       options,
-		internal:   internal,
-		consistent: hash.InitConsistent(nBlocks, nBlocks),
-		blockCache: make(map[_TimeID]*_Block),
-		timeBlocks: make(map[_BlockKey]*_TimeBlock),
+		opts:        options,
+		internal:    internal,
+		consistent:  hash.InitConsistent(nBlocks, nBlocks),
+		timeBlocks:  make(map[_TimeID]*_Block),
+		timeFilters: make(map[_BlockKey]*_TimeFilter),
 	}
 
 	for i := 0; i < nBlocks; i++ {
-		db.timeBlocks[_BlockKey(i)] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+		db.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
 	// Query plan
@@ -119,8 +119,8 @@ func (db *DB) Close() error {
 		return err
 	}
 
-	if db.blockCache != nil {
-		db.blockCache = nil
+	if db.timeBlocks != nil {
+		db.timeBlocks = nil
 		db.version = -1
 
 	}
@@ -133,7 +133,7 @@ func (db *DB) Close() error {
 func (db *DB) IsOpen() bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	return db.blockCache != nil
+	return db.timeBlocks != nil
 }
 
 // Keys gets all keys from DB.
@@ -143,7 +143,7 @@ func (db *DB) Keys() []uint64 {
 
 	var keys []uint64
 
-	for _, block := range db.blockCache {
+	for _, block := range db.timeBlocks {
 		block.RLock()
 		for ik := range block.records {
 			if ik.delFlag == 0 {
@@ -163,7 +163,7 @@ func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
 	}
 
 	db.mu.RLock()
-	block, ok := db.blockCache[_TimeID(timeID)]
+	block, ok := db.timeBlocks[_TimeID(timeID)]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDoesNotExist
@@ -202,14 +202,14 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RUnlock()
 
 	// first execute query plan
-	if len(db.internal.queryPlan.timeBlocks[blockKey].timeRecords) == 0 {
+	if len(db.internal.queryPlan.timeFilters[blockKey].timeRecords) == 0 {
 		if err := db.seek(key, 0); err != nil {
 			return nil, err
 		}
 	}
 
 	// Lookup key first for the current timeRecord.
-	block, ok := db.internal.queryPlan.blockCache[db.internal.queryPlan.timeRcord]
+	block, ok := db.internal.queryPlan.timeBlocks[db.internal.queryPlan.timeRcord]
 	if ok {
 		block.RLock()
 		off, ok := block.records[iKey(false, key)]
@@ -226,7 +226,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 	db.mu.RLock()
 	// Get time block
-	r, ok := db.internal.queryPlan.timeBlocks[blockKey]
+	r, ok := db.internal.queryPlan.timeFilters[blockKey]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDoesNotExist
@@ -242,7 +242,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return timeRec[i] > timeRec[j]
 	})
 	for _, timeID := range timeRec {
-		block, ok := db.internal.queryPlan.blockCache[timeID]
+		block, ok := db.internal.queryPlan.timeBlocks[timeID]
 		if ok {
 			block.RLock()
 			off, ok := block.records[iKey(false, key)]
@@ -265,33 +265,22 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	}
 
 	// reset timeBlock and start over
-	db.internal.queryPlan.timeBlocks[blockKey] = &_TimeBlock{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+	db.internal.queryPlan.timeFilters[blockKey] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 
 	return db.Get(key)
 }
 
-// ForEachBlock gets all keys from DB.
+// ForEachBlock gets all keys from DB committed to WAL.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
-	var timeIDs []_TimeID
-	db.mu.RLock()
-	db.internal.timeMark.newTimeRecord()
-	blocks := db.blockCache
-
-	for timeID := range blocks {
-		if db.internal.timeMark.isReleased(timeID) {
-			timeIDs = append(timeIDs, timeID)
-		}
-	}
-	db.mu.RUnlock()
-
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] < timeIDs[j]
-	})
-
+	// Get timeIDs successfully committed to WAL.
+	timeIDs := db.internal.timeMark.getRecords()
 	for _, timeID := range timeIDs {
 		db.mu.RLock()
-		block := blocks[timeID]
+		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
+		if !ok {
+			continue
+		}
 		var keys []uint64
 		block.RLock()
 		for ik := range block.records {
@@ -319,7 +308,7 @@ func (db *DB) Delete(key uint64) error {
 	db.mu.RLock()
 	// Get time block
 	blockKey := db.blockID(key)
-	r, ok := db.timeBlocks[blockKey]
+	r, ok := db.timeFilters[blockKey]
 	db.mu.RUnlock()
 	if !ok {
 		return errEntryDoesNotExist
@@ -336,7 +325,7 @@ func (db *DB) Delete(key uint64) error {
 	})
 	for _, timeID := range timeRec {
 		db.mu.RLock()
-		block, ok := db.blockCache[timeID]
+		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
 		if ok {
 			block.RLock()
@@ -384,10 +373,10 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	timeID := db.internal.tinyBatch.timeID()
 
 	db.mu.Lock()
-	block, ok := db.blockCache[timeID]
+	block, ok := db.timeBlocks[timeID]
 	if !ok {
 		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		db.blockCache[timeID] = block
+		db.timeBlocks[timeID] = block
 	}
 	db.mu.Unlock()
 
@@ -444,7 +433,7 @@ func (db *DB) Size() int64 {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	for _, block := range db.blockCache {
+	for _, block := range db.timeBlocks {
 		block.RLock()
 		for ik := range block.records {
 			if ik.delFlag == 0 {

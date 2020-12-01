@@ -17,9 +17,9 @@
 package memdb
 
 type _LogicalPlan struct {
-	timeRcord  _TimeID
-	timeBlocks map[_BlockKey]*_TimeBlock
-	blockCache _BlockCache
+	timeRcord   _TimeID
+	timeFilters map[_BlockKey]*_TimeFilter
+	timeBlocks  _TimeBlocks
 
 	cutoff _TimeID
 	limit  int
