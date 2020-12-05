@@ -35,9 +35,9 @@ type _Options struct {
 	// logResetFlag flag to skips log recovery on DB open and reset WAL.
 	logResetFlag bool
 
-	timeRecordInterval time.Duration
+	logInterval time.Duration
 
-	timeMarkExpiryDuration time.Duration
+	timeBlockDuration time.Duration
 }
 
 // Options it contains configurable options and flags for DB.
@@ -68,7 +68,7 @@ func WithDefaultOptions() Options {
 			o.logFilePath = "/tmp/unitdb"
 		}
 		if o.memdbSize == 0 {
-			o.memdbSize = defaultMemSize
+			o.memdbSize = defaultMemdbSize
 		}
 		if o.bufferSize == 0 {
 			o.bufferSize = defaultBufferSize
@@ -76,11 +76,11 @@ func WithDefaultOptions() Options {
 		if o.logSize == 0 {
 			o.logSize = defaultLogSize
 		}
-		if o.timeRecordInterval == 0 {
-			o.timeRecordInterval = 15 * time.Millisecond
+		if o.logInterval == 0 {
+			o.logInterval = 15 * time.Millisecond
 		}
-		if o.timeMarkExpiryDuration == 0 {
-			o.timeMarkExpiryDuration = 1 * time.Second
+		if o.timeBlockDuration == 0 {
+			o.timeBlockDuration = 1 * time.Second
 		}
 	})
 }
@@ -120,9 +120,16 @@ func WithLogReset() Options {
 	})
 }
 
-// WithTimeBlockInterval sets interval for a time block. Block is pushed to the queue to write it to the log file.
-func WithTimeRecordInterval(dur time.Duration) Options {
+// WithLogInterval sets interval for a time block. Block is pushed to the queue to write it to the log file.
+func WithLogInterval(dur time.Duration) Options {
 	return newFuncOption(func(o *_Options) {
-		o.timeRecordInterval = dur
+		o.logInterval = dur
+	})
+}
+
+// WithTimeBlockInterval sets interval for a time block. Block is pushed to the queue to write it to the log file.
+func WithTimeBlockInterval(dur time.Duration) Options {
+	return newFuncOption(func(o *_Options) {
+		o.timeBlockDuration = dur
 	})
 }

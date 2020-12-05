@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	slotSize        = 16
 	blockSize int32 = 4096
 )
 

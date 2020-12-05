@@ -26,11 +26,11 @@ type Batch struct {
 	opts    *_Options
 	managed bool
 
-	//tiny Batch
-	tinyBatchLockC chan struct{}
-	tinyBatch      *_TinyBatch
+	//tiny Log
+	writeLockC chan struct{}
+	tinyLog    *_TinyLog
 
-	tinyBatchGroup map[_TimeID]*_TinyBatch
+	tinyLogGroup map[_TimeID]*_TinyLog
 
 	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 	commitComplete chan struct{}
@@ -38,7 +38,7 @@ type Batch struct {
 
 // TimeID returns time ID for the batch.
 func (b *Batch) TimeID() int64 {
-	return int64(b.tinyBatch.timeID())
+	return int64(b.db.internal.timeMark.timeID(b.tinyLog.ID()))
 }
 
 // Put adds a new key-value pair to the batch.
@@ -47,28 +47,27 @@ func (b *Batch) Put(key uint64, data []byte) error {
 		return err
 	}
 
-	b.tinyBatchLockC <- struct{}{}
+	b.writeLockC <- struct{}{}
 	defer func() {
-		<-b.tinyBatchLockC
+		<-b.writeLockC
 	}()
 
-	timeID := b.tinyBatch.timeID()
-	ikey := iKey(false, key)
-	b.db.mu.Lock()
+	timeID := b.db.internal.timeMark.timeID(b.tinyLog.ID())
+	b.db.mu.RLock()
 	block, ok := b.db.timeBlocks[timeID]
+	b.db.mu.RUnlock()
 	if !ok {
-		block = &_Block{data: b.db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		b.db.timeBlocks[timeID] = block
+		return errForbidden
 	}
-	b.db.mu.Unlock()
 	block.Lock()
 	defer block.Unlock()
+	ikey := iKey(false, key)
 	if err := block.put(ikey, data); err != nil {
 		return err
 	}
-	b.db.addTimeBlock(timeID, key)
+	b.db.addTimeFilter(timeID, key)
 
-	b.tinyBatch.incount()
+	b.tinyLog.incount()
 	b.db.internal.meter.Puts.Inc(1)
 
 	return nil
@@ -76,11 +75,11 @@ func (b *Batch) Put(key uint64, data []byte) error {
 
 // Write starts writing entries into DB.
 func (b *Batch) Write() error {
-	b.tinyBatchLockC <- struct{}{}
-	b.tinyBatchGroup[b.tinyBatch.timeID()] = b.tinyBatch
-	b.db.internal.batchPool.write(b.tinyBatch)
-	b.tinyBatch = b.db.newTinyBatch()
-	<-b.tinyBatchLockC
+	b.writeLockC <- struct{}{}
+	b.tinyLogGroup[b.tinyLog.ID()] = b.tinyLog
+	b.db.internal.workerPool.write(b.tinyLog)
+	b.tinyLog = b.db.newTinyLog()
+	<-b.writeLockC
 
 	return nil
 }
@@ -101,12 +100,12 @@ func (b *Batch) Commit() error {
 		return err
 	}
 
-	for timeID, tinyBatch := range b.tinyBatchGroup {
-		<-tinyBatch.doneChan
-		b.db.internal.timeMark.release(timeID)
+	for ID, tinyLog := range b.tinyLogGroup {
+		<-tinyLog.doneChan
+		b.db.internal.timeMark.release(ID)
 	}
 
-	b.tinyBatchGroup = make(map[_TimeID]*_TinyBatch)
+	b.tinyLogGroup = make(map[_TimeID]*_TinyLog)
 
 	return nil
 }
@@ -114,8 +113,8 @@ func (b *Batch) Commit() error {
 //Abort aborts batch or perform cleanup operation on batch complete.
 func (b *Batch) Abort() error {
 	_assert(!b.managed, "managed batch abort not allowed")
-	for timeID := range b.tinyBatchGroup {
-		if err := b.db.releaseLog(timeID); err != nil {
+	for ID := range b.tinyLogGroup {
+		if err := b.db.releaseLog(ID); err != nil {
 			return err
 		}
 	}

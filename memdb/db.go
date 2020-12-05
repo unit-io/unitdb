@@ -62,7 +62,7 @@ func Open(opts ...Options) (*DB, error) {
 	internal := &_DB{
 		start:      time.Now(),
 		meter:      NewMeter(),
-		timeMark:   newTimeMark(options.timeMarkExpiryDuration),
+		timeMark:   newTimeMark(options.timeBlockDuration),
 		timeLock:   newTimeLock(),
 		writeLockC: make(chan struct{}, 1),
 
@@ -72,7 +72,7 @@ func Open(opts ...Options) (*DB, error) {
 		// Close
 		closeC: make(chan struct{}),
 	}
-	internal.tinyBatch = &_TinyBatch{ID: int64(internal.timeMark.newTimeID()), doneChan: make(chan struct{})}
+	internal.tinyLog = &_TinyLog{id: int64(internal.timeMark.timeNow()), doneChan: make(chan struct{})}
 	logOpts := wal.Options{Path: options.logFilePath + "/" + logFileName, TargetSize: options.logSize, BufferSize: options.bufferSize, Reset: options.logResetFlag}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
@@ -97,9 +97,10 @@ func Open(opts ...Options) (*DB, error) {
 
 	// Query plan
 	db.internal.queryPlan = db.newQueryPlan()
-	db.internal.batchPool = db.newBatchPool(nPoolSize)
+	db.internal.workerPool = db.newWorkerPool(nPoolSize)
 
-	go db.tinyBatchLoop(db.opts.timeRecordInterval)
+	db.newTinyLog()
+	go db.tinyLogLoop(db.opts.logInterval)
 
 	if needLogRecovery || !options.logResetFlag {
 		if err := db.startRecovery(); err != nil {
@@ -126,14 +127,6 @@ func (db *DB) Close() error {
 	}
 
 	return nil
-}
-
-// IsOpen returns true if connection to the database has been established. It does not check if
-// connection is actually live.
-func (db *DB) IsOpen() bool {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.timeBlocks != nil
 }
 
 // Keys gets all keys from DB.
@@ -232,16 +225,16 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return nil, errEntryDoesNotExist
 	}
 
-	var timeRec []_TimeID
+	var timeIDs []_TimeID
 	r.RLock()
-	for tmID := range r.timeRecords {
-		timeRec = append(timeRec, tmID)
+	for timeID := range r.timeRecords {
+		timeIDs = append(timeIDs, timeID)
 	}
 	r.RUnlock()
-	sort.Slice(timeRec[:], func(i, j int) bool {
-		return timeRec[i] > timeRec[j]
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] > timeIDs[j]
 	})
-	for _, timeID := range timeRec {
+	for _, timeID := range timeIDs {
 		block, ok := db.internal.queryPlan.timeBlocks[timeID]
 		if ok {
 			block.RLock()
@@ -272,8 +265,8 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 // ForEachBlock gets all keys from DB committed to WAL.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
-	// Get timeIDs successfully committed to WAL.
-	timeIDs := db.internal.timeMark.getRecords()
+	// Get timeIDs of timeBlock successfully committed to WAL.
+	timeUnref, timeIDs := db.internal.timeMark.timeRefs()
 	for _, timeID := range timeIDs {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
@@ -289,12 +282,15 @@ func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (e
 			}
 		}
 		block.RUnlock()
+		if len(keys) == 0 {
+			continue
+		}
 		if stop, err := f(int64(timeID), keys); stop || err != nil {
 			return err
 		}
 	}
 
-	go db.internal.timeMark.startExpirer()
+	db.internal.timeMark.timeUnref(timeUnref)
 
 	return nil
 }
@@ -314,16 +310,16 @@ func (db *DB) Delete(key uint64) error {
 		return errEntryDoesNotExist
 	}
 
-	var timeRec []_TimeID
+	var timeIDs []_TimeID
 	r.RLock()
-	for tmID := range r.timeRecords {
-		timeRec = append(timeRec, tmID)
+	for timeID := range r.timeRecords {
+		timeIDs = append(timeIDs, timeID)
 	}
 	r.RUnlock()
-	sort.Slice(timeRec[:], func(i, j int) bool {
-		return timeRec[i] > timeRec[j]
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] > timeIDs[j]
 	})
-	for _, timeID := range timeRec {
+	for _, timeID := range timeIDs {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
@@ -343,14 +339,19 @@ func (db *DB) Delete(key uint64) error {
 			block.Lock()
 			ikey := iKey(false, key)
 			delete(block.records, ikey)
-			block.count--
-			count := block.count
+			count := len(block.records)
 			db.delete(key)
 			block.Unlock()
 			db.internal.meter.Dels.Inc(1)
 
 			if count == 0 {
-				return db.releaseLog(timeID)
+				if err := db.releaseLog(timeID); err != nil {
+					return err
+				}
+
+				db.mu.Lock()
+				defer db.mu.Unlock()
+				delete(db.timeBlocks, _TimeID(timeID))
 			}
 			return nil
 		}
@@ -370,15 +371,13 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		<-db.internal.writeLockC
 	}()
 
-	timeID := db.internal.tinyBatch.timeID()
-
-	db.mu.Lock()
+	timeID := db.internal.timeMark.timeID(db.internal.tinyLog.ID())
+	db.mu.RLock()
 	block, ok := db.timeBlocks[timeID]
+	db.mu.RUnlock()
 	if !ok {
-		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		db.timeBlocks[timeID] = block
+		return int64(timeID), errForbidden
 	}
-	db.mu.Unlock()
 
 	block.Lock()
 	defer block.Unlock()
@@ -387,9 +386,9 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		return int64(timeID), err
 	}
 
-	db.addTimeBlock(timeID, key)
+	db.addTimeFilter(timeID, key)
 
-	db.internal.tinyBatch.incount()
+	db.internal.tinyLog.incount()
 	db.internal.meter.Puts.Inc(1)
 
 	return int64(timeID), nil
@@ -424,7 +423,15 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 
 // Free frees time block from DB for a provided time ID and releases block from WAL.
 func (db *DB) Free(timeID int64) error {
-	return db.releaseLog(_TimeID(timeID))
+	if err := db.releaseLog(_TimeID(timeID)); err != nil {
+		return err
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	delete(db.timeBlocks, _TimeID(timeID))
+
+	return nil
 }
 
 // Size returns the total number of entries in DB.

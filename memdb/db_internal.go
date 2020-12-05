@@ -42,8 +42,8 @@ const (
 	// nLocks sets maximum concurent timeLocks.
 	nLocks = 100000
 
-	// defaultMemSize sets maximum memory usage limit for the DB.
-	defaultMemSize = (int64(1) << 34) - 1
+	// defaultMemdbSize sets maximum memory usage limit for the DB.
+	defaultMemdbSize = (int64(1) << 34) - 1
 
 	// defaultBufferSize sets Size of buffer to use for pooling.
 	defaultBufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
@@ -74,8 +74,8 @@ type (
 	}
 	_BlockKey uint16
 	_Block    struct {
-		count        int64
 		data         *bpool.Buffer
+		timeRefs     []_TimeID
 		records      map[_Key]int64     // map[key]offset
 		delRecords   map[_TimeID][]_Key // map[_TimeID][]_Key
 		sync.RWMutex                    // Read Write mutex, guards access to internal map.
@@ -94,10 +94,10 @@ type _DB struct {
 	timeMark *_TimeMark
 	timeLock _TimeLock
 
-	// tiny Batch
+	// tiny Log
 	writeLockC chan struct{}
-	tinyBatch  *_TinyBatch
-	batchPool  *_BatchPool
+	tinyLog    *_TinyLog
+	workerPool *_WorkerPool
 
 	// buffer pool
 	bufPool *bpool.BufferPool
@@ -129,8 +129,8 @@ func iKey(delFlag bool, k uint64) _Key {
 	return _Key{delFlag: dFlag, key: k}
 }
 
-// addTimeBlock adds unique time block to the set.
-func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
+// addTimeFilter adds unique time block to the set.
+func (db *DB) addTimeFilter(timeID _TimeID, key uint64) error {
 	blockKey := db.blockID(key)
 	r, ok := db.timeFilters[blockKey]
 	r.Lock()
@@ -149,28 +149,44 @@ func (db *DB) addTimeBlock(timeID _TimeID, key uint64) error {
 	return nil
 }
 
-func (db *DB) newTinyBatch() *_TinyBatch {
-	tinyBatch := &_TinyBatch{doneChan: make(chan struct{})}
-	timeID := db.internal.timeMark.newTimeID()
-	tinyBatch.setTimeID(timeID)
-	return tinyBatch
-}
+func (db *DB) newTinyLog() *_TinyLog {
+	tinyLog := &_TinyLog{doneChan: make(chan struct{})}
+	ID := db.internal.timeMark.timeNow()
+	tinyLog.setID(ID)
 
-func (db *DB) newBatchPool(maxBatches int) *_BatchPool {
-	// There must be at least one batch.
-	if maxBatches < 1 {
-		maxBatches = 1
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	timeID := db.internal.timeMark.timeID(ID)
+	block, ok := db.timeBlocks[timeID]
+	if !ok {
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
+		db.timeBlocks[timeID] = block
 	}
 
-	pool := &_BatchPool{
+	db.internal.tinyLog = tinyLog
+
+	block.Lock()
+	block.timeRefs = append(block.timeRefs, tinyLog.ID())
+	block.Unlock()
+
+	return tinyLog
+}
+
+func (db *DB) newWorkerPool(size int) *_WorkerPool {
+	// There must be at least one job.
+	if size < 1 {
+		size = 1
+	}
+
+	pool := &_WorkerPool{
 		db:          db,
-		maxBatches:  maxBatches,
-		writeQueue:  make(chan *_TinyBatch, 1),
-		batchQueue:  make(chan *_TinyBatch),
+		maxSize:     size,
+		writeQueue:  make(chan *_TinyLog, 1),
+		logQueue:    make(chan *_TinyLog),
 		stoppedChan: make(chan struct{}),
 	}
 
-	// start the batch dispatcher
+	// start the log dispatcher
 	go pool.dispatch()
 
 	return pool
@@ -182,10 +198,10 @@ func (db *DB) close() error {
 	}
 
 	// Signal all goroutines.
-	time.Sleep(db.opts.timeRecordInterval)
+	time.Sleep(db.opts.logInterval)
 	close(db.internal.closeC)
 
-	db.internal.batchPool.stopWait()
+	db.internal.workerPool.stopWait()
 
 	// Wait for all goroutines to exit.
 	db.internal.closeW.Wait()
@@ -205,12 +221,27 @@ func (db *DB) close() error {
 
 // batch starts a new batch.
 func (db *DB) batch() *Batch {
-	b := &Batch{db: db, tinyBatchLockC: make(chan struct{}, 1), tinyBatchGroup: make(map[_TimeID]*_TinyBatch)}
+	b := &Batch{db: db, writeLockC: make(chan struct{}, 1), tinyLogGroup: make(map[_TimeID]*_TinyLog)}
 
-	timeID := time.Now().UTC().UnixNano()
-	db.internal.timeMark.add(_TimeID(timeID))
-	b.tinyBatch = &_TinyBatch{ID: timeID, doneChan: make(chan struct{})}
+	tinyLog := &_TinyLog{doneChan: make(chan struct{})}
+	ID := db.internal.timeMark.timeNow()
+	tinyLog.setID(ID)
+
+	b.tinyLog = tinyLog
 	b.commitComplete = make(chan struct{})
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	timeID := db.internal.timeMark.timeID(ID)
+	block, ok := db.timeBlocks[timeID]
+	if !ok {
+		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
+		db.timeBlocks[timeID] = block
+	}
+
+	block.Lock()
+	block.timeRefs = append(block.timeRefs, tinyLog.ID())
+	block.Unlock()
 
 	return b
 }
@@ -224,7 +255,7 @@ func (db *DB) newQueryPlan() *_LogicalPlan {
 	return queryPlan
 }
 
-// seek finds timeRecords and blockCache for the provided key and cutoff duration and caches those for query.
+// seek finds timeRecords and timeBlock for the provided key and cutoff duration and caches those for query.
 func (db *DB) seek(key uint64, cutoff int64) error {
 	if err := db.ok(); err != nil {
 		return err
@@ -239,16 +270,16 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 		return errEntryDoesNotExist
 	}
 
-	var timeRec []_TimeID
+	var timeIDs []_TimeID
 	r.RLock()
-	for tmID := range r.timeRecords {
-		timeRec = append(timeRec, tmID)
+	for timeID := range r.timeRecords {
+		timeIDs = append(timeIDs, timeID)
 	}
 	r.RUnlock()
-	sort.Slice(timeRec[:], func(i, j int) bool {
-		return timeRec[i] > timeRec[j]
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] > timeIDs[j]
 	})
-	for _, timeID := range timeRec {
+	for _, timeID := range timeIDs {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()
@@ -317,7 +348,6 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 		if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
 			return err
 		}
-		b.count++
 	}
 	b.records[ikey] = off
 
@@ -330,17 +360,15 @@ func (db *DB) delete(key uint64) error {
 		<-db.internal.writeLockC
 	}()
 
-	timeID := db.internal.tinyBatch.timeID()
-
-	db.mu.Lock()
+	db.mu.RLock()
+	timeID := db.internal.timeMark.timeID(db.internal.tinyLog.ID())
 	block, ok := db.timeBlocks[timeID]
+	db.mu.RUnlock()
 	if !ok {
-		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64), delRecords: make(map[_TimeID][]_Key)}
-		db.timeBlocks[timeID] = block
+		return errForbidden
 	}
-	db.mu.Unlock()
 
-	// set key is deleted to persist key with timeID to the log.
+	// add deleted key to time block to persist it to the log.
 	ikey := iKey(true, key)
 	if _, ok := block.delRecords[timeID]; ok {
 		block.delRecords[timeID] = append(block.delRecords[timeID], ikey)
@@ -349,7 +377,7 @@ func (db *DB) delete(key uint64) error {
 	}
 
 	block.put(ikey, nil)
-	db.internal.tinyBatch.incount()
+	db.internal.tinyLog.incount()
 
 	return nil
 }
@@ -376,15 +404,16 @@ func (db *DB) move(timeID _TimeID) error {
 	return nil
 }
 
-// tinyWrite writes tiny batch to the WAL.
-func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
+// tinyWrite writes tiny log to the WAL.
+func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	logWriter, err := db.internal.wal.NewWriter()
 	if err != nil {
 		return err
 	}
 
 	db.mu.RLock()
-	block, ok := db.timeBlocks[tinyBatch.timeID()]
+	timeID := db.internal.timeMark.timeID(tinyLog.ID())
+	block, ok := db.timeBlocks[timeID]
 	db.mu.RUnlock()
 	if !ok {
 		return nil
@@ -405,7 +434,7 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 		}
 	}
 
-	if err := <-logWriter.SignalInitWrite(int64(tinyBatch.timeID())); err != nil {
+	if err := <-logWriter.SignalInitWrite(int64(tinyLog.ID())); err != nil {
 		return err
 	}
 
@@ -414,24 +443,24 @@ func (db *DB) tinyWrite(tinyBatch *_TinyBatch) error {
 	return nil
 }
 
-// tinyCommit commits tiny batch to DB.
-func (db *DB) tinyCommit(tinyBatch *_TinyBatch) error {
+// tinyCommit commits tiny log to DB.
+func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 	db.internal.closeW.Add(1)
 	defer func() {
-		tinyBatch.abort()
+		tinyLog.abort()
 		db.internal.closeW.Done()
 	}()
 
-	if tinyBatch.len() == 0 {
+	if tinyLog.len() == 0 {
 		return nil
 	}
 
-	if err := db.tinyWrite(tinyBatch); err != nil {
+	if err := db.tinyWrite(tinyLog); err != nil {
 		return err
 	}
 
-	if !tinyBatch.managed {
-		db.internal.timeMark.release(tinyBatch.timeID())
+	if !tinyLog.managed {
+		db.internal.timeMark.release(tinyLog.ID())
 	}
 
 	return nil
@@ -446,7 +475,7 @@ func (db *DB) startRecovery() error {
 	}
 
 	log := make(map[uint64][]byte)
-	err = r.Read(func(timeID int64) (ok bool, err error) {
+	err = r.Read(func(ID int64) (ok bool, err error) {
 		l := r.Count()
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
@@ -485,9 +514,6 @@ func (db *DB) startRecovery() error {
 }
 
 func (db *DB) releaseLog(timeID _TimeID) error {
-	// move moves deleted keys before releasing log.
-	db.move(timeID)
-
 	db.mu.RLock()
 	block, ok := db.timeBlocks[timeID]
 	db.mu.RUnlock()
@@ -495,31 +521,38 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 		return errEntryDoesNotExist
 	}
 
-	db.mu.Lock()
-	db.internal.bufPool.Put(block.data)
-	delete(db.timeBlocks, timeID)
-	db.mu.Unlock()
+	// move moves deleted keys before releasing log.
+	db.move(timeID)
 
-	return db.internal.wal.SignalLogApplied(int64(timeID))
+	for _, ID := range block.timeRefs {
+		if err := db.internal.wal.SignalLogApplied(int64(ID)); err != nil {
+			return err
+		}
+	}
+
+	db.internal.bufPool.Put(block.data)
+
+	return nil
 }
 
-// tinyBatchLoop handles writing tiny batches to the log.
-func (db *DB) tinyBatchLoop(interval time.Duration) {
+// tinyLogLoop handles writing tiny logs to the WAL.
+func (db *DB) tinyLogLoop(interval time.Duration) {
 	db.internal.closeW.Add(1)
 	defer db.internal.closeW.Done()
-	tinyBatchTicker := time.NewTicker(interval)
+	logTicker := time.NewTimer(interval)
 	for {
 		select {
 		case <-db.internal.closeC:
-			tinyBatchTicker.Stop()
+			logTicker.Stop()
 			return
-		case <-tinyBatchTicker.C:
-			db.internal.writeLockC <- struct{}{}
-			if db.internal.tinyBatch.len() != 0 {
-				db.internal.batchPool.write(db.internal.tinyBatch)
+		case <-logTicker.C:
+			if db.internal.tinyLog.len() != 0 {
+				db.internal.writeLockC <- struct{}{}
+				db.internal.workerPool.write(db.internal.tinyLog)
+				db.newTinyLog()
+				<-db.internal.writeLockC
 			}
-			db.internal.tinyBatch = db.newTinyBatch()
-			<-db.internal.writeLockC
+			logTicker.Reset(interval)
 		}
 	}
 }

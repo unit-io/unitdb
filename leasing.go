@@ -26,12 +26,12 @@ import (
 )
 
 type _Leases struct {
-	ls           map[int64]map[uint64]struct{} // map[timeID]map[seq]
-	sync.RWMutex                               // Read Write mutex, guards access to internal collection.
+	ls           map[uint64]struct{} // map[timeID]map[seq]
+	sync.RWMutex                     // Read Write mutex, guards access to internal collection.
 }
 
 // A "thread" safe lease freeblocks.
-// To avoid lock bottlenecks slots are divided into several shards (nShards).
+// To avoid lock bottlenecks blocks are divided into several shards (nShards).
 type _Lease struct {
 	file                  _FileSet
 	leases                []*_Leases
@@ -63,7 +63,7 @@ func newLease(fs _FileSet, minimumSize int64) *_Lease {
 	}
 
 	for i := 0; i < nShards; i++ {
-		l.leases[i] = &_Leases{ls: make(map[int64]map[uint64]struct{})}
+		l.leases[i] = &_Leases{ls: make(map[uint64]struct{})}
 	}
 
 	for i := 0; i < nShards; i++ {

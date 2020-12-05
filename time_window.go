@@ -113,7 +113,6 @@ type (
 	}
 	_TimeWindowBucket struct {
 		sync.RWMutex
-		timeIDs            map[int64]struct{}
 		windowBlocks       *_WindowBlocks
 		expiryWindowBucket *_ExpiryWindowBucket
 		opts               *_TimeOptions
@@ -160,7 +159,7 @@ func (w *_WindowBlocks) getWindowBlock(blockID uint64) *_TimeWindow {
 }
 
 func newTimeWindowBucket(opts *_TimeOptions) *_TimeWindowBucket {
-	l := &_TimeWindowBucket{timeIDs: make(map[int64]struct{})}
+	l := &_TimeWindowBucket{}
 	l.windowBlocks = newWindowBlocks()
 	l.expiryWindowBucket = newExpiryWindowBucket(opts.backgroundKeyExpiry, opts.expDurationType, opts.maxExpDurations)
 	return l
@@ -183,7 +182,6 @@ func (tw *_TimeWindowBucket) add(timeID int64, topicHash uint64, e _WinEntry) (o
 		b.entries[key] = append(b.entries[key], e)
 	} else {
 		b.entries[key] = _WindowEntries{e}
-		tw.timeIDs[timeID] = struct{}{}
 	}
 	return true
 }
