@@ -92,6 +92,7 @@ type (
 		TargetSize int64
 		BufferSize int64
 		Reset      bool
+		Backup     bool
 	}
 )
 
@@ -112,6 +113,12 @@ func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
 	if err != nil {
 		return wal, false, err
+	}
+	if opts.Backup && wal.logFile.size != 0 {
+		// copy file.
+		if _, err := wal.logFile.copy(wal.opts.BufferSize); err != nil {
+			return wal, false, err
+		}
 	}
 	if opts.Reset {
 		if err := wal.logFile.reset(); err != nil {
@@ -269,10 +276,6 @@ func (wal *WAL) SignalLogApplied(timeID int64) error {
 // Reset resets log file and log segments.
 func (wal *WAL) Reset() error {
 	wal.logs = make(map[int64][]_LogInfo)
-	// copy file before reseting.
-	if _, err := wal.logFile.copy(wal.opts.BufferSize); err != nil {
-		return err
-	}
 	if err := wal.logFile.reset(); err != nil {
 		return err
 	}
