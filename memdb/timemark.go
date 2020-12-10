@@ -40,16 +40,8 @@ func newTimeMark(maxDuration time.Duration) *_TimeMark {
 	return &_TimeMark{maxDuration: maxDuration, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
-func (r _TimeRecord) isReleased(timeUnref _TimeID) bool {
-	if r.lastUnref > 0 && r.lastUnref < timeUnref {
-		return true
-	}
-	return false
-}
-
 func (tm *_TimeMark) timeNow() _TimeID {
 	ID := _TimeID(time.Now().UTC().UnixNano())
-	tm.add(ID)
 
 	return ID
 }
@@ -58,10 +50,9 @@ func (tm *_TimeMark) timeID(ID _TimeID) _TimeID {
 	return _TimeID(time.Unix(int64(ID), 0).UTC().Truncate(tm.maxDuration).Unix())
 }
 
-func (tm *_TimeMark) add(ID _TimeID) {
+func (tm *_TimeMark) add(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
-	timeID := tm.timeID(ID)
 	if r, ok := tm.records[timeID]; ok {
 		r.refs++
 	}
@@ -82,17 +73,17 @@ func (tm *_TimeMark) release(ID _TimeID) {
 		tm.records[timeID] = timeMark
 	} else {
 		delete(tm.records, timeID)
-		timeMark.lastUnref = _TimeID(time.Now().UTC().UnixNano())
+		timeMark.lastUnref = timeID
 		tm.releasedRecords[timeID] = timeMark
 	}
 }
 
-func (tm *_TimeMark) timeRefs() (timeUnref _TimeID, timeIDs []_TimeID) {
-	timeUnref = _TimeID(time.Now().UTC().UnixNano())
+func (tm *_TimeMark) timeRefs() (timeRef _TimeID, timeIDs []_TimeID) {
+	timeRef = tm.timeID(_TimeID(time.Now().UTC().UnixNano()))
 	tm.RLock()
 	defer tm.RUnlock()
 	for timeID, r := range tm.releasedRecords {
-		if r.isReleased(timeUnref) {
+		if r.lastUnref > 0 && r.lastUnref < timeRef {
 			timeIDs = append(timeIDs, timeID)
 		}
 	}
@@ -100,15 +91,15 @@ func (tm *_TimeMark) timeRefs() (timeUnref _TimeID, timeIDs []_TimeID) {
 		return timeIDs[i] < timeIDs[j]
 	})
 
-	return timeUnref, timeIDs
+	return timeRef, timeIDs
 }
 
-func (tm *_TimeMark) timeUnref(timeUnref _TimeID) {
+func (tm *_TimeMark) timeUnref(timeRef _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 
 	for timeID, r := range tm.releasedRecords {
-		if r.lastUnref < timeUnref {
+		if r.lastUnref > 0 && r.lastUnref < timeRef {
 			delete(tm.releasedRecords, timeID)
 		}
 	}

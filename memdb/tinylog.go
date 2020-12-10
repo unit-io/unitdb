@@ -59,16 +59,6 @@ func (b *_TinyLog) abort() {
 	close(b.doneChan)
 }
 
-// setManaged sets log is managed.
-func (b *_TinyLog) setManaged() {
-	b.managed = true
-}
-
-// unsetManaged sets batch to unmanaged.
-func (b *_TinyLog) unsetManaged() {
-	b.managed = false
-}
-
 type _WorkerPool struct {
 	db           *DB
 	maxSize      int
@@ -80,6 +70,8 @@ type _WorkerPool struct {
 	stopped      int32
 	waiting      int32
 	wait         bool
+	// close
+	closeW sync.WaitGroup
 }
 
 // size returns maximum number of concurrent jobs.
@@ -89,11 +81,8 @@ func (p *_WorkerPool) size() int {
 
 // stop tells dispatcher to exit, and wether or not complete queued jobs.
 func (p *_WorkerPool) stop(wait bool) {
-	// Acquire write lock
-	p.db.internal.writeLockC <- struct{}{}
-	defer func() {
-		<-p.db.internal.writeLockC
-	}()
+	// Wait for all goroutines to exit.
+	p.closeW.Wait()
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
@@ -120,6 +109,8 @@ func (p *_WorkerPool) waitQueueSize() int {
 
 // write enqueues a log to write.
 func (p *_WorkerPool) write(tinyLog *_TinyLog) {
+	p.closeW.Add(1)
+	defer p.closeW.Done()
 	if tinyLog != nil {
 		p.writeQueue <- tinyLog
 	}
@@ -130,6 +121,8 @@ func (p *_WorkerPool) writeWait(tinyLog *_TinyLog) {
 	if tinyLog == nil {
 		return
 	}
+	p.closeW.Add(1)
+	defer p.closeW.Done()
 	p.writeQueue <- tinyLog
 	<-tinyLog.doneChan
 }

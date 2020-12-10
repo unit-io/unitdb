@@ -32,8 +32,20 @@ type Batch struct {
 
 	tinyLogGroup map[_TimeID]*_TinyLog
 
-	// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
+	// commitComplete is used to signal if batch commit is complete and batch is fully written to WAL.
 	commitComplete chan struct{}
+}
+
+func (b *Batch) newTinyLog() *_TinyLog {
+	tinyLog := &_TinyLog{managed: true, doneChan: make(chan struct{})}
+	ID := b.db.internal.timeMark.timeNow()
+	tinyLog.setID(ID)
+
+	b.tinyLog = tinyLog
+	b.commitComplete = make(chan struct{})
+	b.tinyLog = tinyLog
+
+	return tinyLog
 }
 
 // TimeID returns time ID for the batch.
@@ -53,12 +65,14 @@ func (b *Batch) Put(key uint64, data []byte) error {
 	}()
 
 	timeID := b.db.internal.timeMark.timeID(b.tinyLog.ID())
-	b.db.mu.RLock()
+	b.db.mu.Lock()
 	block, ok := b.db.timeBlocks[timeID]
-	b.db.mu.RUnlock()
 	if !ok {
-		return errForbidden
+		block = &_Block{data: b.db.internal.bufPool.Get(), records: make(map[_Key]int64)}
+		b.db.timeBlocks[timeID] = block
 	}
+	b.db.mu.Unlock()
+
 	block.Lock()
 	defer block.Unlock()
 	ikey := iKey(false, key)
@@ -78,7 +92,7 @@ func (b *Batch) Write() error {
 	b.writeLockC <- struct{}{}
 	b.tinyLogGroup[b.tinyLog.ID()] = b.tinyLog
 	b.db.internal.workerPool.write(b.tinyLog)
-	b.tinyLog = b.db.newTinyLog()
+	b.newTinyLog()
 	<-b.writeLockC
 
 	return nil
@@ -102,6 +116,7 @@ func (b *Batch) Commit() error {
 
 	for ID, tinyLog := range b.tinyLogGroup {
 		<-tinyLog.doneChan
+		b.db.internal.timeMark.add(ID)
 		b.db.internal.timeMark.release(ID)
 	}
 
