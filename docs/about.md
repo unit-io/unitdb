@@ -14,7 +14,7 @@
 The unitdb engine includes the following components:
 
 - Buffer Pool
-- Block Cache
+- Memdb
 - Write Ahead Log (WAL)
 - Lookup Trie
 - Writing to timeWindow file
@@ -22,34 +22,34 @@ The unitdb engine includes the following components:
 - Writing to Data file
 
 ### Writing data to disk 
-The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to block cache and become immediately queryable. The block cache is periodically written to disk in the form of blocks.
+The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to disk in the form of blocks.
 
 ### Write Ahead Log (WAL)
 The Write Ahead Log (WAL) retains unitdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.
 
 When the unitdb engine receives a put request, the following steps occur:
 
-- The put request is parsed, packed and appended to a tinyBatch buffer.
+- The put request is parsed, packed and appended to a memdb tinyLog buffer.
 - Topic is parsed into parts and added to the lookup Trie. Contract is added to the first part of the parts in the lookup Trie.
-- The data is added to the block cache.
-- The tinyBatch is appended to the WAL in cyclic order.
-- The last offset of topic from timeWindow block is added to the Trie.
+- The data is added to the memdb.
+- The tinyLog is appended to the WAL.
+- The topic offset from timeWindow block is added to the Trie.
 - Data is written to disk using block sync.
-- The block cache is updated with free offset. The block cache shrinks if it reaches target size.
+- The time block is free from memdb and log is released after DB sync is complete.
 - When data is successfully written to WAL, a response confirms the write request was successful.
 
-Blocks sync writes the timeWindow blocks, index blocks, and data blocks to disk.
+Blocks sync writes the timeWindow blocks, index blocks, and data blocks to the disk.
 
-When the unitdb restarts, last offset of all topics is loaded into Trie, the WAL file is read back and pending writes are applied to the unitdb.
+When the unitdb restarts, topic offsets are loaded into Trie, the WAL file is read back and pending writes are applied to the unitdb.
 
-### Block Cache
-The block cache is an in-memory copy of entries that currently stored in the WAL. The block cache:
+### Memdb
+The memdb is an in-memory copy of entries that are currently stored into the WAL. The memdb:
 
-- Organizes entries as per topic hash into shards.
-- Stores keys and offsets into map
-- Stores compressed data into data blocks.
+- Organizes entries into tinyLog.
+- Stores keys and offsets into time blocks.
+- Writes compressed data into the WAL.
 
-Queries to the unitdb merge data from the block cache with data from the files. Query first lookup topic offset in lookup Trie then uses Topic offset to traverse to timeWindow blocks and read window entries. The sequence from window entry is used to find block offset of index block file. The index block is read from the index file, that has entry information and using these information it read data from data block in data file and un-compresses the data. As encryption flag is set on first bit of sequence so if data is encrypted then it get un-encrypted while data is read.
+Queries to the unitdb merge data from the memdb with data from the files. Query first lookup topic offset in lookup Trie then uses Topic offset to traverse to timeWindow blocks and read window entries. The sequence from window entry is used to find block offset of index file. The index block is read from the index file, that has entry information and using these information it reads data from data file and un-compresses the data. If encryption flag was set and data was encrypted then it un-encrypts data on read.
 
 ### Block Sync
 
@@ -62,4 +62,4 @@ Block index stores entry sequence, offset of data block, message size and expiry
 #### Data Block
 The unitdb compress data and store it into data blocks. If an entry expires or deleted then the offset and size of data is marked as free and added to the leasing blocks that get allocated by new request.
 
-After data is stored safely in files, the WAL is truncated and block cache is shrink.
+After data is stored safely in files, the blocks are free from memdb and releases the blocks from the WAL.

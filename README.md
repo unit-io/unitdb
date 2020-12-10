@@ -2,13 +2,17 @@
 
 Unitdb is blazing fast specialized time-series database for microservices, IoT, and realtime internet connected devices. The unitdb satisfy the requirements for low latency and binary messaging, it is a perfect time-series database for applications such as internet of things and internet connected devices.
 
+```
+Don't forget to ⭐ this repo if you like unitdb!
+```
+
 # About unitdb 
 
 ## Key characteristics
 - 100% Go
 - Can store larger-than-memory data sets
 - Optimized for fast lookups and writes
-- Supports writing billions of messages (or metrics) per hour with very low memory usages
+- Supports writing billions of messages (or metrics) per hour
 - Supports opening database with immutable flag
 - Supports database encryption
 - Supports time-to-live on message entries
@@ -38,12 +42,10 @@ Samples are available in the cmd directory for reference.
 ## Projects Using Unitdb
 Below is a list of projects that use unitdb.
 
-- [Unite](https://github.com/unit-io/unite) Lightweight, high performance messaging system for microservices, and internet connected devices.
-- [Unite-Go](https://github.com/unit-io/unite-go) Lightweight and high performance publish-subscribe messaging system - Go client library.
-- [Unite-Dart](https://github.com/unit-io/unite-dart) Lightweight and high performance publish-subscribe messaging system - Flutter and Dart client.
+- [unite](https://github.com/unit-io/unite) Lightweight, high performance messaging system for microservices, and internet connected devices.
 
 ## Contributing
-If you'd like to contribute, please fork the repository and use a feature branch. Pull requests are welcome.
+The unitdb is under active development and at this time unitdb is not seeking major changes or new features from new contributors. However, small bugfixes are encouraged.
 
 ## Licensing
 This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).
