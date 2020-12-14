@@ -54,85 +54,23 @@ func (wal *WAL) NewReader() (*Reader, error) {
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator.
 func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
-	// release log before read.
-	l := len(r.wal.recoveredLogs)
-	for i := 0; i < l; i++ {
-		if r.wal.recoveredLogs[i].status == logStatusReleased {
-			// Remove log from wal.
-			r.wal.recoveredLogs = r.wal.recoveredLogs[:i+copy(r.wal.recoveredLogs[i:], r.wal.recoveredLogs[i+1:])]
-			l -= 1
-			i--
-		}
-	}
-
 	r.wal.mu.RLock()
 	defer func() {
-		r.wal.recoveredLogs = r.wal.recoveredLogs[:0]
+		r.wal.recoveredTimeIDs = r.wal.recoveredTimeIDs[:0]
 		r.wal.bufPool.Put(r.buffer)
 		r.wal.mu.RUnlock()
 	}()
-	idx := 0
-	l = len(r.wal.recoveredLogs)
-	if l == 0 {
-		return nil
-	}
-	fileOff := r.wal.recoveredLogs[0].offset
-	size := r.wal.logFile.Size() - fileOff
-	if size > r.wal.opts.BufferSize {
-		size = r.wal.opts.BufferSize
-	}
-	for {
-		r.buffer.Reset()
-		offset := int64(0)
 
-		if _, err := r.buffer.Extend(int64(size)); err != nil {
+	for _, timeID := range r.wal.recoveredTimeIDs {
+		info, data := r.wal.logStore.get(timeID)
+		r.entryCount = info.entryCount
+		r.logData = data
+		r.offset = 0
+		if stop, err := f(timeID); stop || err != nil {
 			return err
 		}
-		if _, err := r.wal.logFile.readAt(r.buffer.Internal(), fileOff); err != nil {
-			return err
-		}
-		for i := idx; i < l; i++ {
-			ul := r.wal.recoveredLogs[i]
-			if ul.entryCount == 0 || ul.status != logStatusWritten {
-				offset += int64(ul.size)
-				offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
-				idx++
-				continue
-			}
-			if size < int64(ul.size) {
-				size = int64(ul.size)
-				break
-			}
-			if size-offset < int64(ul.size) {
-				fileOff = ul.offset
-				size = r.wal.logFile.Size() - ul.offset
-				break
-			}
-			data, err := r.buffer.Slice(offset+int64(logHeaderSize), offset+int64(ul.size))
-			if err != nil {
-				return err
-			}
-			r.entryCount = ul.entryCount
-			r.logData = data
-			r.offset = 0
-			if stop, err := f(ul.timeID); stop || err != nil {
-				return err
-			}
-			r.wal.recoveredLogs[i].status = logStatusReleased
-			if err := r.wal.logFile.writeMarshalableAt(r.wal.recoveredLogs[i], r.wal.recoveredLogs[i].offset); err != nil {
-				return err
-			}
-			offset += int64(ul.size)
-			offset += int64(r.wal.logFile.segments.freeSize(ul.offset + int64(ul.size)))
-			idx++
-		}
-		if idx == l {
-			break
-		}
 	}
-	if err := r.wal.writeHeader(); err != nil {
-		return err
-	}
+
 	return nil
 }
 

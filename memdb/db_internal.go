@@ -33,7 +33,7 @@ import (
 const (
 	dbVersion = 1.0
 
-	logFileName = "data.log"
+	logDir = "logs"
 
 	nBlocks = 27
 
@@ -411,14 +411,14 @@ func (db *DB) startRecovery() error {
 		return false, nil
 	})
 
-	if err := db.internal.wal.Reset(); err != nil {
-		return err
-	}
+	db.internal.wal.Reset()
+
 	for k, val := range log {
 		if _, err := db.Put(k, val); err != nil {
 			return err
 		}
 	}
+
 	db.internal.meter.Recovers.Inc(int64(len(log)))
 
 	return nil
@@ -440,6 +440,7 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	db.releaseCount += block.count
 	delete(db.timeBlocks, _TimeID(timeID))
 
 	db.internal.bufPool.Put(block.data)
@@ -449,8 +450,6 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 
 // tinyLogLoop handles writing tiny logs to the WAL.
 func (db *DB) tinyLogLoop(interval time.Duration) {
-	db.internal.closeW.Add(1)
-	defer db.internal.closeW.Done()
 	logTicker := time.NewTimer(interval)
 	for {
 		select {

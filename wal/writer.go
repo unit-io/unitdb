@@ -109,32 +109,22 @@ func (w *Writer) writeLog(timeID int64) error {
 	if w.logSize == 0 {
 		return nil
 	}
-	dataLen := w.logSize + uint32(logHeaderSize)
-	off, err := w.wal.logFile.allocate(uint32(dataLen))
-	if off < int64(headerSize) || err != nil {
-		return err
-	}
+	dataLen := w.logSize
 	h := _LogInfo{
 		status:     logStatusWritten,
 		timeID:     timeID,
 		entryCount: w.entryCount,
 		size:       dataLen,
-		offset:     int64(off),
 	}
 	if err := w.wal.put(timeID, h); err != nil {
 		return err
 	}
-	if err := w.wal.logFile.writeMarshalableAt(h, off); err != nil {
-		return err
-	}
-	if _, err := w.wal.logFile.WriteAt(w.buffer.Bytes(), off+int64(logHeaderSize)); err != nil {
+	if err := w.wal.logStore.put(h.timeID, h, w.buffer.Bytes()); err != nil {
 		return err
 	}
 
-	if err := w.wal.Sync(); err != nil {
-		return err
-	}
 	w.writeComplete = true
+
 	return nil
 }
 

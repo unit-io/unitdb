@@ -17,14 +17,9 @@
 package wal
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
-	"io"
-	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/unit-io/bpool"
 )
@@ -44,17 +39,15 @@ const (
 	// and their associated blocks can be reclaimed.
 	logStatusApplied
 
-	// logStatusReleased indicates that the logs has been applied and merged with freeblocks.
-	// Logs with this status are removed from the WAL.
-	logStatusReleased
+	version = 1 // file format version
 
-	defaultLogReleaseInterval = 15 * time.Second
-	defaultBufferSize         = 1 << 27
-	version                   = 1 // file format version
+	logExt     = ".log"
+	tmpExt     = ".tmp"
+	corruptExt = ".CORRUPT"
 )
 
 type (
-	_Logs map[int64][]_LogInfo
+	_Logs map[int64]_LogInfo
 	// WALInfo provides WAL stats.
 	WALInfo struct {
 		logCountWritten int64
@@ -66,162 +59,78 @@ type (
 	WAL struct {
 		// wg is a WaitGroup that allows us to wait for the syncThread to finish to
 		// ensure a clean shutdown.
-		wg           sync.WaitGroup
-		mu           sync.RWMutex
-		releaseLockC chan struct{}
+		wg sync.WaitGroup
+		mu sync.RWMutex
 
 		WALInfo
-		logs          _Logs
-		recoveredLogs []_LogInfo // recoveredLogs is used only for log recovery.
-		releasedLogs  _Logs      // releaseLogs are logs applied but not yet merged.
+		logs             _Logs
+		recoveredTimeIDs []int64
 
-		bufPool *bpool.BufferPool
-		logFile _File
+		bufPool  *bpool.BufferPool
+		logStore *_FileStore
 
 		opts Options
 
 		// close
 		closed uint32
-		closeC chan struct{}
 	}
 
 	// Options wal options to create new WAL. WAL logs uses cyclic rotation to avoid fragmentation.
 	// It allocates free blocks only when log reaches target size.
 	Options struct {
 		Path       string
-		TargetSize int64
 		BufferSize int64
 		Reset      bool
-		Backup     bool
 	}
 )
 
 func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
-	// Create a new WAL.
-	if opts.BufferSize == 0 {
-		opts.BufferSize = defaultBufferSize
-	}
 	wal = &WAL{
-		releaseLockC: make(chan struct{}, 1),
-		logs:         make(map[int64][]_LogInfo),
-		releasedLogs: make(map[int64][]_LogInfo),
-		bufPool:      bpool.NewBufferPool(opts.BufferSize, nil),
-		opts:         opts,
-		// close
-		closeC: make(chan struct{}, 1),
+		logs:    make(map[int64]_LogInfo),
+		bufPool: bpool.NewBufferPool(opts.BufferSize, nil),
+		opts:    opts,
 	}
-	wal.logFile, err = openFile(opts.Path, opts.TargetSize)
+	wal.logStore, err = openFile(opts.Path)
 	if err != nil {
 		return wal, false, err
 	}
-	if opts.Backup && wal.logFile.size != 0 {
-		// copy file.
-		if _, err := wal.logFile.copy(wal.opts.BufferSize); err != nil {
-			return wal, false, err
-		}
-	}
+
 	if opts.Reset {
-		if err := wal.logFile.reset(); err != nil {
-			return wal, false, err
-		}
-	}
-	if wal.logFile.size == 0 {
-		if _, err = wal.logFile.allocate(headerSize); err != nil {
-			return nil, false, err
-		}
-		wal.logFile.segments = newSegments()
-		if err := wal.Sync(); err != nil {
-			return nil, false, err
-		}
-	} else {
-		if err := wal.readHeader(); err != nil {
-			if err := wal.Close(); err != nil {
-				return nil, false, errors.New("newWal error: unable to read wal header")
-			}
-			return nil, false, err
-		}
-		if err := wal.recoverWal(); err != nil {
-			return nil, false, err
-		}
+		wal.logStore.reset()
+		return wal, false, nil
 	}
 
-	wal.releaser(defaultLogReleaseInterval)
+	wal.recoverWal()
 
-	return wal, len(wal.recoveredLogs) != 0, nil
-}
-
-func (wal *WAL) writeHeader() error {
-	h := _Header{
-		signature: signature,
-		version:   version,
-		segments:  wal.logFile.segments,
-	}
-	return wal.logFile.writeMarshalableAt(h, 0)
-}
-
-func (wal *WAL) readHeader() error {
-	h := &_Header{}
-	if err := wal.logFile.readUnmarshalableAt(h, headerSize, 0); err != nil {
-		return err
-	}
-	if !bytes.Equal(h.signature[:], signature[:]) {
-		return errors.New("WAL is corrupted")
-	}
-	wal.logFile.segments = h.segments
-	return nil
-}
-
-func (wal *WAL) recoverLogHeaders() error {
-	offset := int64(headerSize)
-	l := _LogInfo{}
-	for {
-		offset = wal.logFile.segments.recoveryOffset(offset)
-		if err := wal.logFile.readUnmarshalableAt(&l, uint32(logHeaderSize), offset); err != nil {
-			if err == io.EOF {
-				// Expected error.
-				return nil
-			}
-			return err
-		}
-		if l.offset < 0 || l.status > logStatusReleased {
-			return errors.New("WAL is corrupted")
-		}
-		wal.recoveredLogs = append(wal.recoveredLogs, l)
-		offset = l.offset + int64(l.size)
-	}
+	return wal, len(wal.recoveredTimeIDs) != 0, nil
 }
 
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks.
-func (wal *WAL) recoverWal() error {
-	// Truncate log file.
-	if err := wal.logFile.Truncate(wal.logFile.size); err != nil {
-		return err
+func (wal *WAL) recoverWal() {
+	wal.recoveredTimeIDs = wal.logStore.all()
+}
+
+// Close closes the wal, frees used resources and checks for active
+// logs.
+func (wal *WAL) Close() error {
+	if !wal.setClosed() {
+		return errors.New("wal is closed")
 	}
 
-	return wal.recoverLogHeaders()
+	// Make sure sync thread isn't running.
+	wal.wg.Wait()
+
+	// fmt.Println("wal.close: WALInfo ", wal.WALInfo)
+	wal.logStore.close()
+
+	return nil
 }
 
 func (wal *WAL) put(timeID int64, log _LogInfo) error {
 	log.version = version
 	wal.logCountWritten++
 	wal.entriesWritten += int64(log.entryCount)
-	if _, ok := wal.logs[timeID]; ok {
-		wal.logs[timeID] = append(wal.logs[timeID], log)
-	} else {
-		wal.logs[timeID] = []_LogInfo{log}
-	}
-	return nil
-}
-
-func (wal *WAL) logMerge(log _LogInfo) error {
-	if log.status == logStatusWritten {
-		return nil
-	}
-	released := wal.logFile.segments.free(log.offset, log.size)
-	wal.logFile.segments.swap(wal.opts.TargetSize)
-	if released {
-		log.status = logStatusReleased
-	}
+	wal.logs[timeID] = log
 
 	return nil
 }
@@ -236,81 +145,22 @@ func (wal *WAL) SignalLogApplied(timeID int64) error {
 	}()
 
 	var err1 error
-	logs := wal.logs[timeID]
+	log := wal.logs[timeID]
 
-	// sort wal logs by offset so that adjacent free blocks can be merged
-	sort.Slice(logs[:], func(i, j int) bool {
-		return logs[i].offset < logs[j].offset
-	})
-	for i := range logs {
-		if logs[i].status == logStatusWritten {
-			wal.logCountApplied++
-			wal.entriesApplied += int64(logs[i].entryCount)
-		}
-		logs[i].status = logStatusApplied
-		if err := wal.logMerge(logs[i]); err != nil {
-			fmt.Println("wal.LogApplied: merge error ", err)
-			return err
-		}
-		if logs[i].status == logStatusReleased {
-			continue
-		}
-		if _, ok := wal.releasedLogs[timeID]; ok {
-			wal.releasedLogs[timeID] = append(wal.releasedLogs[timeID], logs[i])
-		} else {
-			wal.releasedLogs[timeID] = []_LogInfo{logs[i]}
-		}
-		if err := wal.logFile.writeMarshalableAt(logs[i], logs[i].offset); err != nil {
-			err1 = err
-			continue
-		}
+	if log.status == logStatusWritten {
+		wal.logCountApplied++
+		wal.entriesApplied += int64(log.entryCount)
+		log.status = logStatusApplied
+		wal.logStore.del(timeID)
 	}
 	delete(wal.logs, timeID)
-	if err := wal.writeHeader(); err != nil {
-		return err
-	}
 
 	return err1
 }
 
-// Reset resets log file and log segments.
-func (wal *WAL) Reset() error {
-	wal.logs = make(map[int64][]_LogInfo)
-	if err := wal.logFile.reset(); err != nil {
-		return err
-	}
-	if _, err := wal.logFile.allocate(headerSize); err != nil {
-		return err
-	}
-	wal.logFile.segments = newSegments()
-	if err := wal.Sync(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Sync syncs log entries to disk.
-func (wal *WAL) Sync() error {
-	wal.writeHeader()
-	return wal.logFile.Sync()
-}
-
-// Close closes the wal, frees used resources and checks for active
-// logs.
-func (wal *WAL) Close() error {
-	if !wal.setClosed() {
-		return errors.New("wal is closed")
-	}
-	close(wal.closeC)
-
-	// acquire Lock.
-	wal.releaseLockC <- struct{}{}
-
-	// Make sure sync thread isn't running.
-	wal.wg.Wait()
-
-	// fmt.Println("wal.close: WALInfo ", wal.WALInfo)
-	return wal.logFile.Close()
+// Reset removes all persistested logs from log store.
+func (wal *WAL) Reset() {
+	wal.logStore.reset()
 }
 
 // setClosed flag; return true if not already closed.
@@ -332,64 +182,6 @@ func (wal *WAL) ok() error {
 		return errors.New("wal is closed.")
 	}
 	return nil
-}
-
-func (wal *WAL) releaseLogs() error {
-	wal.wg.Add(1)
-	wal.mu.Lock()
-	wal.releaseLockC <- struct{}{}
-	defer func() {
-		wal.mu.Unlock()
-		<-wal.releaseLockC
-		wal.wg.Done()
-	}()
-
-	var allLogs []_LogInfo
-	for _, logs := range wal.releasedLogs {
-		allLogs = append(allLogs, logs...)
-	}
-
-	// sort wal logs by offset so that adjacent free blocks can be merged
-	sort.Slice(allLogs[:], func(i, j int) bool {
-		return allLogs[i].offset < allLogs[j].offset
-	})
-	l := len(allLogs)
-	for i := 0; i < l; i++ {
-		wal.logMerge(allLogs[i])
-	}
-	for id, logs := range wal.releasedLogs {
-		l := len(logs)
-		for i := 0; i < l; i++ {
-			if logs[i].status == logStatusReleased {
-				// Release log from wal
-				wal.releasedLogs[id] = wal.releasedLogs[id][:i+copy(wal.releasedLogs[id][i:], wal.releasedLogs[id][i+1:])]
-				l -= 1
-				i--
-			}
-		}
-		if len(wal.releasedLogs[id]) == 0 {
-			delete(wal.releasedLogs, id)
-		}
-	}
-
-	return nil
-}
-
-func (wal *WAL) releaser(interval time.Duration) {
-	releaserTicker := time.NewTicker(interval)
-	go func() {
-		defer func() {
-			releaserTicker.Stop()
-		}()
-		for {
-			select {
-			case <-wal.closeC:
-				return
-			case <-releaserTicker.C:
-				wal.releaseLogs()
-			}
-		}
-	}()
 }
 
 // New will open a WAL. If the previous run did not shut down cleanly, a set of

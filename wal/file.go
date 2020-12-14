@@ -18,220 +18,222 @@ package wal
 
 import (
 	"encoding"
+	"errors"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"os"
+	"path"
+	"sort"
+	"strconv"
+	"sync"
 )
 
 type (
-	_Segment struct {
-		offset int64
-		size   uint32
+	_FileStore struct {
+		sync.RWMutex
+		dirName string
+		opened  bool
 	}
-	_File struct {
-		*os.File
-		segments   _Segments
-		size       int64
-		targetSize int64
-	}
+	_FileInfos []os.FileInfo
 )
 
-type _Segments [3]_Segment
+func openFile(dirName string) (*_FileStore, error) {
+	fs := &_FileStore{
+		dirName: dirName,
+		opened:  false,
+	}
 
-func openFile(name string, targetSize int64) (_File, error) {
-	fileFlag := os.O_CREATE | os.O_RDWR
-	fileMode := os.FileMode(0666)
+	// if no store directory was specified, by default use the current working directory.
+	if dirName == "" {
+		fs.dirName, _ = os.Getwd()
+	}
 
-	f := _File{}
-	fi, err := os.OpenFile(name, fileFlag, fileMode)
+	// if store dir does not exists then create it.
+	if !exists(dirName) {
+		perms := os.FileMode(0770)
+		if err := os.MkdirAll(fs.dirName, perms); err != nil {
+			return nil, err
+		}
+	}
+	fs.opened = true
+
+	return fs, nil
+}
+
+func (fs *_FileStore) close() {
+	fs.Lock()
+	defer fs.Unlock()
+	fs.opened = false
+}
+
+func (fs *_FileStore) free(size uint32) {
+}
+
+func (fs *_FileStore) put(timeID int64, m encoding.BinaryMarshaler, data []byte) error {
+	fs.Lock()
+	defer fs.Unlock()
+	if !fs.opened {
+		return errors.New("Trying to use file store, but not open")
+	}
+	tmp := tmpPath(fs.dirName, timeID)
+	f, err := os.Create(tmp)
 	if err != nil {
-		return f, err
-	}
-	f.File = fi
-
-	stat, err := fi.Stat()
-	if err != nil {
-		return f, err
-	}
-	f.size = stat.Size()
-	f.targetSize = targetSize
-
-	return f, err
-}
-
-func newSegments() _Segments {
-	segments := _Segments{}
-	segments[0] = _Segment{offset: int64(headerSize), size: 0}
-	segments[1] = _Segment{offset: int64(headerSize), size: 0}
-	return segments
-}
-
-func (sg *_Segments) currSize() uint32 {
-	return sg[1].size
-}
-
-func (sg *_Segments) recoveryOffset(offset int64) int64 {
-	if offset == sg[0].offset {
-		offset += int64(sg[0].size)
-	}
-	if offset == sg[1].offset {
-		offset += int64(sg[1].size)
-	}
-	if offset == sg[2].offset {
-		offset += int64(sg[2].size)
-	}
-	return offset
-}
-
-func (sg *_Segments) freeSize(offset int64) uint32 {
-	if offset == sg[0].offset {
-		return sg[0].size
-	}
-	if offset == sg[1].offset {
-		return sg[1].size
-	}
-	if offset == sg[2].offset {
-		return sg[2].size
-	}
-	return 0
-}
-
-func (sg *_Segments) allocate(size uint32) int64 {
-	off := sg[1].offset
-	sg[1].size -= size
-	sg[1].offset += int64(size)
-	return off
-}
-
-func (sg *_Segments) free(offset int64, size uint32) (ok bool) {
-	if sg[0].offset+int64(sg[0].size) == offset {
-		sg[0].size += size
-		return true
-	}
-	if sg[1].offset+int64(sg[1].size) == offset {
-		sg[1].size += size
-		return true
-	}
-	return false
-}
-
-func (sg *_Segments) swap(targetSize int64) error {
-	if sg[1].size != 0 && sg[1].offset+int64(sg[1].size) == sg[2].offset {
-		sg[1].size += sg[2].size
-		sg[2].size = 0
-	}
-	if targetSize < int64(sg[0].size) {
-		sg[2].offset = sg[1].offset
-		sg[2].size = sg[1].size
-		sg[1].offset = sg[0].offset
-		sg[1].size = sg[0].size
-		sg[0].size = 0
-		fmt.Println("wal.Swap: segments ", sg)
-	}
-	return nil
-}
-
-func (f *_File) truncate(size int64) error {
-	if err := f.Truncate(size); err != nil {
 		return err
 	}
-	f.size = size
-	return nil
-}
-
-// copy copies the file to a new file.
-func (f *_File) copy(bufferSize int64) (int64, error) {
-	if err := f.File.Sync(); err != nil {
-		return 0, err
-	}
-	stat, err := f.File.Stat()
-	if err != nil || stat.Size() == int64(0) {
-		return 0, err
-	}
-	newName := fmt.Sprintf("%s.%d", f.File.Name(), f.File.Fd())
-	newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR, os.FileMode(0666))
-	if err != nil {
-		return 0, err
-	}
-
-	bufSize := stat.Size()
-	if bufSize > bufferSize {
-		bufSize = bufferSize
-	}
-
-	buf := make([]byte, bufSize)
-	size := int64(0)
-	for {
-		n, err := f.File.Read(buf)
-		if err != nil && err != io.EOF {
-			return 0, err
-		}
-		if n == 0 {
-			break
-		}
-
-		if _, err := newFile.Write(buf[:n]); err != nil {
-			return 0, err
-		}
-		size += int64(n)
-		if bufSize <= stat.Size()-size {
-			bufSize = stat.Size() - size
-			buf = make([]byte, bufSize)
-		}
-	}
-	return size, err
-}
-
-func (f *_File) reset() error {
-	f.size = 0
-	if err := f.truncate(0); err != nil {
-		return err
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (f *_File) allocate(size uint32) (int64, error) {
-	if size == 0 {
-		panic("unable to allocate zero bytes")
-	}
-	// Allocation to free segment happens when log reaches its target size to avoid fragmentation.
-	if f.targetSize > (f.size+int64(size)) || f.segments.currSize() < size {
-		off := f.size
-		if err := f.Truncate(off + int64(size)); err != nil {
-			return 0, err
-		}
-		f.size += int64(size)
-		return off, nil
-	}
-	off := f.segments.allocate(size)
-
-	return off, nil
-}
-
-func (f *_File) readAt(buf []byte, off int64) (int, error) {
-	return f.ReadAt(buf, off)
-}
-
-func (f *_File) writeMarshalableAt(m encoding.BinaryMarshaler, off int64) error {
 	buf, err := m.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteAt(buf, off)
-	return err
-}
-
-func (f *_File) readUnmarshalableAt(m encoding.BinaryUnmarshaler, size uint32, off int64) error {
-	buf := make([]byte, size)
-	if _, err := f.ReadAt(buf, off); err != nil {
+	if _, err := f.WriteAt(buf, 0); err != nil {
 		return err
 	}
-	return m.UnmarshalBinary(buf)
+	if _, err := f.WriteAt(data, int64(logHeaderSize)); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	log := logPath(fs.dirName, timeID)
+
+	if err := os.Rename(tmp, log); err != nil {
+		return err
+	}
+
+	if !exists(log) {
+		return errors.New(fmt.Sprintf("file not created, %s", log))
+	}
+
+	return nil
 }
 
-func (f *_File) Size() int64 {
-	return f.size
+func (fs *_FileStore) get(timeID int64) (_LogInfo, []byte) {
+	fs.RLock()
+	defer fs.RUnlock()
+
+	info := _LogInfo{}
+
+	if !fs.opened {
+		// trying to use file store, but not open.
+		return info, nil
+	}
+
+	log := logPath(fs.dirName, timeID)
+	if !exists(log) {
+		return info, nil
+	}
+
+	f, err := os.Open(log)
+	if err != nil {
+		return info, nil
+	}
+
+	buf := make([]byte, uint32(logHeaderSize))
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		f.Close()
+		os.Rename(log, corruptPath(fs.dirName, timeID))
+
+		// log was unreadable, return nil
+		return info, nil
+	}
+
+	if err := info.UnmarshalBinary(buf); err != nil {
+		f.Close()
+		os.Rename(log, corruptPath(fs.dirName, timeID))
+
+		// log was unreadable, return nil
+		return info, nil
+	}
+
+	data := make([]byte, info.size)
+	if _, err := f.ReadAt(data, int64(logHeaderSize)); err != nil {
+		f.Close()
+		os.Rename(log, corruptPath(fs.dirName, timeID))
+
+		// log was unreadable, return nil
+		return info, nil
+	}
+	f.Close()
+
+	return info, data
+}
+
+// all provides a list of all time IDs currently stored in the file store.
+func (fs *_FileStore) all() []int64 {
+	var timeIDs []int64
+	var files _FileInfos
+
+	if !fs.opened {
+		// trying to use file store, but not open.
+		return nil
+	}
+
+	files, err := ioutil.ReadDir(fs.dirName)
+	if err != nil {
+		return nil
+	}
+	sort.Slice(files[:], func(i, j int) bool {
+		return files[i].ModTime().Before(files[j].ModTime())
+	})
+
+	for _, f := range files {
+		name := f.Name()
+		if name[len(name)-4:] != logExt {
+			// skipping file, doesn't have right extension.
+			continue
+		}
+
+		timeID, _ := strconv.ParseInt(name[:len(name)-4], 10, 64) // remove file extension
+		timeIDs = append(timeIDs, timeID)
+	}
+
+	return timeIDs
+}
+
+func (fs *_FileStore) del(timeID int64) {
+	fs.Lock()
+	defer fs.Unlock()
+
+	if !fs.opened {
+		// trying to use file store, but not open.
+		return
+	}
+
+	log := logPath(fs.dirName, timeID)
+	if !exists(log) {
+		return
+	}
+
+	os.Remove(log)
+}
+
+// reset removes all persisted logs from file store.
+func (fs *_FileStore) reset() {
+	for _, timeID := range fs.all() {
+		fs.del(timeID)
+	}
+}
+
+func logPath(dirName string, timeID int64) string {
+	suffix := strconv.FormatInt(timeID, 10) + logExt
+	return path.Join(dirName, suffix)
+}
+
+func tmpPath(dirName string, timeID int64) string {
+	suffix := strconv.FormatInt(timeID, 10) + tmpExt
+	return path.Join(dirName, suffix)
+}
+
+func corruptPath(dirName string, timeID int64) string {
+	suffix := strconv.FormatInt(timeID, 10) + corruptExt
+	return path.Join(dirName, suffix)
+}
+
+func exists(file string) bool {
+	if _, err := os.Stat(file); err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		panic(err)
+	}
+	return true
 }

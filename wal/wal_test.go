@@ -24,12 +24,12 @@ import (
 )
 
 var (
-	dbPath      = "test"
-	logFileName = "test.log"
+	dbPath = "test"
+	logDir = "logs"
 )
 
 func newTestWal(del bool) (*WAL, bool, error) {
-	logOpts := Options{Path: dbPath + "/" + logFileName, TargetSize: 1 << 8, BufferSize: 1 << 8}
+	logOpts := Options{Path: dbPath + "/" + logDir, BufferSize: 1 << 8}
 	if del {
 		os.RemoveAll(dbPath)
 	}

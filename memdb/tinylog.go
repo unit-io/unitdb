@@ -17,6 +17,7 @@
 package memdb
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,7 +179,7 @@ Loop:
 		p.runQueuedJobs()
 	}
 
-	// Stop all remaining tiny job as it become ready.
+	// Stop all remaining jobs as it become ready.
 	for logCount > 0 {
 		p.logQueue <- nil
 		logCount--
@@ -189,6 +190,7 @@ Loop:
 // commit run initial tiny log commit, then start tiny log waiting for more.
 func (p *_WorkerPool) commit(tinyLog *_TinyLog, queue chan *_TinyLog) {
 	if err := p.db.tinyCommit(tinyLog); err != nil {
+		fmt.Println("workerPool.tinyCommit: error ", err)
 	}
 
 	go p.tinyCommit(queue)
@@ -202,6 +204,7 @@ func (p *_WorkerPool) tinyCommit(queue chan *_TinyLog) {
 		}
 
 		if err := p.db.tinyCommit(tinyLog); err != nil {
+			fmt.Println("workerPool.tinyCommit: error ", err)
 		}
 	}
 }
@@ -210,13 +213,13 @@ func (p *_WorkerPool) tinyCommit(queue chan *_TinyLog) {
 // removes jobs from the waiting queue. Returns false if workerPool is stopped.
 func (p *_WorkerPool) processWaitingQueue() bool {
 	select {
-	case b, ok := <-p.writeQueue:
+	case l, ok := <-p.writeQueue:
 		if !ok {
 			return false
 		}
-		p.waitingQueue.push(b)
-	case p.logQueue <- p.waitingQueue.front():
-		p.waitingQueue.pop()
+		p.waitingQueue.push(l)
+	case p.logQueue <- p.waitingQueue.pop():
+		// p.waitingQueue.pop()
 	}
 	atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
 	return true
@@ -273,16 +276,8 @@ func (q *_Queue) pop() *_TinyLog {
 	q.head = (q.head + 1) & (len(q.buf) - 1) // bitwise modulus
 	q.count--
 	q.shrink()
-	return elem
-}
 
-// front returns element at the front of the queue. This is the element
-// that would be returned by pop().
-func (q *_Queue) front() *_TinyLog {
-	if q.count <= 0 {
-		panic("Queue: pop called on empty queue")
-	}
-	return q.buf[q.head]
+	return elem
 }
 
 // at returns element at index i in the queue without removing element from the queue.

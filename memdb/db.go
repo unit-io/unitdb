@@ -38,10 +38,11 @@ type DB struct {
 	opts    *_Options
 
 	// block cache
-	internal    *_DB
-	consistent  *hash.Consistent
-	timeBlocks  _TimeBlocks
-	timeFilters map[_BlockKey]*_TimeFilter
+	internal     *_DB
+	consistent   *hash.Consistent
+	timeBlocks   _TimeBlocks
+	timeFilters  map[_BlockKey]*_TimeFilter
+	releaseCount int64
 }
 
 // Open initializes database.
@@ -72,7 +73,7 @@ func Open(opts ...Options) (*DB, error) {
 		// Close
 		closeC: make(chan struct{}),
 	}
-	logOpts := wal.Options{Path: options.logFilePath + "/" + logFileName, TargetSize: options.logSize, BufferSize: options.bufferSize, Reset: options.logResetFlag}
+	logOpts := wal.Options{Path: options.logFilePath + "/" + logDir, BufferSize: options.bufferSize, Reset: options.logResetFlag}
 	wal, needLogRecovery, err := wal.New(logOpts)
 	if err != nil {
 		wal.Close()
@@ -465,11 +466,7 @@ func (db *DB) Size() int64 {
 
 	for _, block := range db.timeBlocks {
 		block.RLock()
-		for ik := range block.records {
-			if ik.delFlag == 0 {
-				size++
-			}
-		}
+		size += block.count
 		block.RUnlock()
 	}
 
