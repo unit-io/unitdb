@@ -18,6 +18,7 @@ package unitdb
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -271,10 +272,12 @@ func (db *_SyncHandle) Sync() error {
 			}
 		}
 		if err1 != nil {
+			fmt.Println("db.sync: error ", err1)
 			return true, err1
 		}
 
 		if err := db.sync(false); err != nil {
+			fmt.Println("db.sync: sync error ", err)
 			return true, err
 		}
 		if db.syncInfo.syncComplete {

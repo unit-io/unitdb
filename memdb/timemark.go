@@ -78,8 +78,8 @@ func (tm *_TimeMark) release(ID _TimeID) {
 	}
 }
 
-func (tm *_TimeMark) timeRefs() (timeRef _TimeID, timeIDs []_TimeID) {
-	timeRef = tm.timeID(_TimeID(time.Now().UTC().UnixNano()))
+func (tm *_TimeMark) timeRefs() (timeIDs []_TimeID) {
+	timeRef := tm.timeID(tm.timeNow())
 	tm.RLock()
 	defer tm.RUnlock()
 	for timeID, r := range tm.releasedRecords {
@@ -91,16 +91,25 @@ func (tm *_TimeMark) timeRefs() (timeRef _TimeID, timeIDs []_TimeID) {
 		return timeIDs[i] < timeIDs[j]
 	})
 
-	return timeRef, timeIDs
+	return timeIDs
 }
 
-func (tm *_TimeMark) timeUnref(timeRef _TimeID) {
+func (tm *_TimeMark) allRefs() (timeIDs []_TimeID) {
+	tm.RLock()
+	defer tm.RUnlock()
+	for timeID, _ := range tm.releasedRecords {
+		timeIDs = append(timeIDs, timeID)
+	}
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] < timeIDs[j]
+	})
+
+	return timeIDs
+}
+
+func (tm *_TimeMark) timeUnref(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 
-	for timeID, r := range tm.releasedRecords {
-		if r.lastUnref > 0 && r.lastUnref < timeRef {
-			delete(tm.releasedRecords, timeID)
-		}
-	}
+	delete(tm.releasedRecords, timeID)
 }

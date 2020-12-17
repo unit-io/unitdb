@@ -60,7 +60,7 @@ func (db *_SyncHandle) startRecovery() error {
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
 
-	err := db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
+	err := db.internal.mem.All(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
 		sort.Slice(seqs[:], func(i, j int) bool {
 			return seqs[i] < seqs[j]

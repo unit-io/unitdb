@@ -71,8 +71,6 @@ type _WorkerPool struct {
 	stopped      int32
 	waiting      int32
 	wait         bool
-	// close
-	closeW sync.WaitGroup
 }
 
 // size returns maximum number of concurrent jobs.
@@ -82,8 +80,6 @@ func (p *_WorkerPool) size() int {
 
 // stop tells dispatcher to exit, and wether or not complete queued jobs.
 func (p *_WorkerPool) stop(wait bool) {
-	// Wait for all goroutines to exit.
-	p.closeW.Wait()
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
@@ -110,8 +106,6 @@ func (p *_WorkerPool) waitQueueSize() int {
 
 // write enqueues a log to write.
 func (p *_WorkerPool) write(tinyLog *_TinyLog) {
-	p.closeW.Add(1)
-	defer p.closeW.Done()
 	if tinyLog != nil {
 		p.writeQueue <- tinyLog
 	}
@@ -122,8 +116,6 @@ func (p *_WorkerPool) writeWait(tinyLog *_TinyLog) {
 	if tinyLog == nil {
 		return
 	}
-	p.closeW.Add(1)
-	defer p.closeW.Done()
 	p.writeQueue <- tinyLog
 	<-tinyLog.doneChan
 }
@@ -213,13 +205,8 @@ func (p *_WorkerPool) tinyCommit(queue chan *_TinyLog) {
 // removes jobs from the waiting queue. Returns false if workerPool is stopped.
 func (p *_WorkerPool) processWaitingQueue() bool {
 	select {
-	case l, ok := <-p.writeQueue:
-		if !ok {
-			return false
-		}
-		p.waitingQueue.push(l)
-	case p.logQueue <- p.waitingQueue.pop():
-		// p.waitingQueue.pop()
+	case p.logQueue <- p.waitingQueue.front():
+		p.waitingQueue.pop()
 	}
 	atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))
 	return true
@@ -278,6 +265,14 @@ func (q *_Queue) pop() *_TinyLog {
 	q.shrink()
 
 	return elem
+}
+
+// front returns an element from front of the queue.
+func (q *_Queue) front() *_TinyLog {
+	if q.count <= 0 {
+		panic("Queue: pop called on empty queue")
+	}
+	return q.buf[q.head]
 }
 
 // at returns element at index i in the queue without removing element from the queue.

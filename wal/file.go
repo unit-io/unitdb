@@ -17,7 +17,6 @@
 package wal
 
 import (
-	"encoding"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -26,6 +25,8 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+
+	"github.com/unit-io/bpool"
 )
 
 type (
@@ -33,14 +34,18 @@ type (
 		sync.RWMutex
 		dirName string
 		opened  bool
+
+		bufPool *bpool.BufferPool
 	}
 	_FileInfos []os.FileInfo
 )
 
-func openFile(dirName string) (*_FileStore, error) {
+func openFile(dirName string, bufferSize int64) (*_FileStore, error) {
 	fs := &_FileStore{
 		dirName: dirName,
 		opened:  false,
+
+		bufPool: bpool.NewBufferPool(bufferSize, nil),
 	}
 
 	// if no store directory was specified, by default use the current working directory.
@@ -66,34 +71,35 @@ func (fs *_FileStore) close() {
 	fs.opened = false
 }
 
-func (fs *_FileStore) free(size uint32) {
+func (fs *_FileStore) free(data *bpool.Buffer) {
+	fs.bufPool.Put(data)
 }
 
-func (fs *_FileStore) put(timeID int64, m encoding.BinaryMarshaler, data []byte) error {
+func (fs *_FileStore) put(info _LogInfo, data *bpool.Buffer) error {
 	fs.Lock()
 	defer fs.Unlock()
 	if !fs.opened {
 		return errors.New("Trying to use file store, but not open")
 	}
-	tmp := tmpPath(fs.dirName, timeID)
+	tmp := tmpPath(fs.dirName, info.timeID)
 	f, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	buf, err := m.MarshalBinary()
+	buf, err := info.MarshalBinary()
 	if err != nil {
 		return err
 	}
 	if _, err := f.WriteAt(buf, 0); err != nil {
 		return err
 	}
-	if _, err := f.WriteAt(data, int64(logHeaderSize)); err != nil {
+	if _, err := f.WriteAt(data.Bytes(), int64(logHeaderSize)); err != nil {
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	log := logPath(fs.dirName, timeID)
+	log := logPath(fs.dirName, info.timeID)
 
 	if err := os.Rename(tmp, log); err != nil {
 		return err
@@ -106,7 +112,7 @@ func (fs *_FileStore) put(timeID int64, m encoding.BinaryMarshaler, data []byte)
 	return nil
 }
 
-func (fs *_FileStore) get(timeID int64) (_LogInfo, []byte) {
+func (fs *_FileStore) get(timeID int64) (_LogInfo, *bpool.Buffer) {
 	fs.RLock()
 	defer fs.RUnlock()
 
@@ -144,8 +150,11 @@ func (fs *_FileStore) get(timeID int64) (_LogInfo, []byte) {
 		return info, nil
 	}
 
-	data := make([]byte, info.size)
-	if _, err := f.ReadAt(data, int64(logHeaderSize)); err != nil {
+	data := fs.bufPool.Get()
+	if _, err := data.Extend(int64(info.size)); err != nil {
+		return info, nil
+	}
+	if _, err := f.ReadAt(data.Internal(), int64(logHeaderSize)); err != nil {
 		f.Close()
 		os.Rename(log, corruptPath(fs.dirName, timeID))
 

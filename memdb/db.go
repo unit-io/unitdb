@@ -38,11 +38,10 @@ type DB struct {
 	opts    *_Options
 
 	// block cache
-	internal     *_DB
-	consistent   *hash.Consistent
-	timeBlocks   _TimeBlocks
-	timeFilters  map[_BlockKey]*_TimeFilter
-	releaseCount int64
+	internal    *_DB
+	consistent  *hash.Consistent
+	timeBlocks  _TimeBlocks
+	timeFilters map[_BlockKey]*_TimeFilter
 }
 
 // Open initializes database.
@@ -60,6 +59,7 @@ func Open(opts ...Options) (*DB, error) {
 		return nil, errors.New("DB.Open, Unable to create db dir")
 	}
 
+	bufPool := bpool.NewBufferPool(options.memdbSize, &bpool.Options{MaxElapsedTime: 1 * time.Second})
 	internal := &_DB{
 		start:      time.Now(),
 		meter:      NewMeter(),
@@ -68,7 +68,7 @@ func Open(opts ...Options) (*DB, error) {
 		writeLockC: make(chan struct{}, 1),
 
 		// buffer pool
-		bufPool: bpool.NewBufferPool(options.memdbSize, nil),
+		bufPool: bufPool,
 
 		// Close
 		closeC: make(chan struct{}),
@@ -266,7 +266,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 // ForEachBlock gets all keys from DB committed to WAL.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	// Get timeIDs of timeBlock successfully committed to WAL.
-	timeRef, timeIDs := db.internal.timeMark.timeRefs()
+	timeIDs := db.internal.timeMark.timeRefs()
 	for _, timeID := range timeIDs {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
@@ -288,9 +288,8 @@ func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (e
 		if stop, err := f(int64(timeID), keys); stop || err != nil {
 			return err
 		}
+		db.internal.timeMark.timeUnref(timeID)
 	}
-
-	db.internal.timeMark.timeUnref(timeRef)
 
 	return nil
 }

@@ -52,6 +52,8 @@ const (
 	defaultLogSize = 1 << 32 // maximum size of log to grow before allocating from free segments (4GB).
 )
 
+var timerPool sync.Pool
+
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
 	_TimeID     int64
@@ -352,7 +354,7 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	if err := <-logWriter.SignalInitWrite(int64(tinyLog.ID())); err != nil {
 		return err
 	}
-	// Add timeID to the block later it is used for releasing logs.
+	// add timeID to the block, later used for releasing logs.
 	block.timeRefs = append(block.timeRefs, tinyLog.ID())
 	db.internal.meter.Syncs.Inc(int64(len(block.records)))
 
@@ -378,52 +380,6 @@ func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 	return nil
 }
 
-// startRecovery recovers pending entries from the WAL.
-func (db *DB) startRecovery() error {
-	// start log recovery
-	r, err := db.internal.wal.NewReader()
-	if err != nil {
-		return err
-	}
-
-	log := make(map[uint64][]byte)
-	err = r.Read(func(ID int64) (ok bool, err error) {
-		l := r.Count()
-		for i := uint32(0); i < l; i++ {
-			logData, ok, err := r.Next()
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				break
-			}
-			dBit := logData[0]
-			key := binary.LittleEndian.Uint64(logData[1:9])
-			val := logData[9:]
-			if dBit == 1 {
-				if _, exists := log[key]; exists {
-					delete(log, key)
-				}
-				continue
-			}
-			log[key] = val
-		}
-		return false, nil
-	})
-
-	db.internal.wal.Reset()
-
-	for k, val := range log {
-		if _, err := db.Put(k, val); err != nil {
-			return err
-		}
-	}
-
-	db.internal.meter.Recovers.Inc(int64(len(log)))
-
-	return nil
-}
-
 func (db *DB) releaseLog(timeID _TimeID) error {
 	db.mu.RLock()
 	block, ok := db.timeBlocks[timeID]
@@ -440,7 +396,6 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.releaseCount += block.count
 	delete(db.timeBlocks, _TimeID(timeID))
 
 	db.internal.bufPool.Put(block.data)
@@ -458,7 +413,14 @@ func (db *DB) tinyLogLoop(interval time.Duration) {
 			return
 		case <-logTicker.C:
 			db.internal.writeLockC <- struct{}{}
-			if db.internal.tinyLog.len() != 0 {
+			// check buffer pool backoff and capacity for excess memory usage
+			// before writing tiny log to the WAL and creating new tiny log.
+			switch db.internal.tinyLog.len() != 0 {
+			case len(db.timeBlocks) > nBlocks && db.internal.tinyLog.len() < 100000:
+				break
+			case float64(len(db.timeBlocks)) > 0.5*nBlocks && db.internal.tinyLog.len() < 1000:
+				break
+			default:
 				db.internal.workerPool.write(db.internal.tinyLog)
 				db.newTinyLog()
 			}

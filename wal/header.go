@@ -21,15 +21,14 @@ import (
 )
 
 var (
-	logHeaderSize = 20
+	logHeaderSize = 18
 )
 
 type _LogInfo struct {
-	version    uint16
-	status     LogStatus
-	timeID     int64
-	entryCount uint32
-	size       uint32
+	version uint16
+	timeID  int64
+	count   uint32
+	size    uint32
 
 	_ [28]byte
 }
@@ -38,10 +37,9 @@ type _LogInfo struct {
 func (l _LogInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, logHeaderSize)
 	binary.LittleEndian.PutUint16(buf[:2], l.version)
-	binary.LittleEndian.PutUint16(buf[2:4], uint16(l.status))
-	binary.LittleEndian.PutUint64(buf[4:12], uint64(l.timeID))
-	binary.LittleEndian.PutUint32(buf[12:16], l.entryCount)
-	binary.LittleEndian.PutUint32(buf[16:20], l.size)
+	binary.LittleEndian.PutUint64(buf[2:10], uint64(l.timeID))
+	binary.LittleEndian.PutUint32(buf[10:14], l.count)
+	binary.LittleEndian.PutUint32(buf[14:18], l.size)
 
 	return buf, nil
 }
@@ -49,10 +47,9 @@ func (l _LogInfo) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary deserialized logInfo from binary data.
 func (l *_LogInfo) UnmarshalBinary(data []byte) error {
 	l.version = binary.LittleEndian.Uint16(data[:2])
-	l.status = LogStatus(binary.LittleEndian.Uint16(data[2:4]))
-	l.timeID = int64(binary.LittleEndian.Uint64(data[4:12]))
-	l.entryCount = binary.LittleEndian.Uint32(data[12:16])
-	l.size = binary.LittleEndian.Uint32(data[16:20])
+	l.timeID = int64(binary.LittleEndian.Uint64(data[2:10]))
+	l.count = binary.LittleEndian.Uint32(data[10:14])
+	l.size = binary.LittleEndian.Uint32(data[14:18])
 
 	return nil
 }

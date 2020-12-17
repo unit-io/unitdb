@@ -24,21 +24,7 @@ import (
 	"github.com/unit-io/bpool"
 )
 
-// LogStatus represents the state of log, written to applied.
-type LogStatus uint16
-
 const (
-	logStatusNone LogStatus = iota
-	// logStatusWritten indicates that the log has been written,
-	// but not completed. During recovery, logs with this status
-	// should be loaded and their updates should be provided to the user.
-	logStatusWritten
-
-	// logStatusApplied indicates that the logs has been written and
-	// applied. Logs with this status can be ignored during recovery,
-	// and their associated blocks can be reclaimed.
-	logStatusApplied
-
 	version = 1 // file format version
 
 	logExt     = ".log"
@@ -47,7 +33,6 @@ const (
 )
 
 type (
-	_Logs map[int64]_LogInfo
 	// WALInfo provides WAL stats.
 	WALInfo struct {
 		logCountWritten int64
@@ -63,7 +48,6 @@ type (
 		mu sync.RWMutex
 
 		WALInfo
-		logs             _Logs
 		recoveredTimeIDs []int64
 
 		bufPool  *bpool.BufferPool
@@ -86,11 +70,10 @@ type (
 
 func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
 	wal = &WAL{
-		logs:    make(map[int64]_LogInfo),
 		bufPool: bpool.NewBufferPool(opts.BufferSize, nil),
 		opts:    opts,
 	}
-	wal.logStore, err = openFile(opts.Path)
+	wal.logStore, err = openFile(opts.Path, opts.BufferSize)
 	if err != nil {
 		return wal, false, err
 	}
@@ -126,36 +109,27 @@ func (wal *WAL) Close() error {
 	return nil
 }
 
-func (wal *WAL) put(timeID int64, log _LogInfo) error {
+func (wal *WAL) put(log _LogInfo, data *bpool.Buffer) error {
 	log.version = version
 	wal.logCountWritten++
-	wal.entriesWritten += int64(log.entryCount)
-	wal.logs[timeID] = log
+	wal.entriesWritten += int64(log.count)
 
-	return nil
+	return wal.logStore.put(log, data)
 }
 
 // SignalLogApplied informs the WAL that it is safe to reuse blocks.
 func (wal *WAL) SignalLogApplied(timeID int64) error {
-	wal.mu.Lock()
+	wal.mu.RLock()
 	wal.wg.Add(1)
 	defer func() {
 		wal.wg.Done()
-		wal.mu.Unlock()
+		wal.mu.RUnlock()
 	}()
 
-	var err1 error
-	log := wal.logs[timeID]
+	wal.logCountApplied++
+	wal.logStore.del(timeID)
 
-	if log.status == logStatusWritten {
-		wal.logCountApplied++
-		wal.entriesApplied += int64(log.entryCount)
-		log.status = logStatusApplied
-		wal.logStore.del(timeID)
-	}
-	delete(wal.logs, timeID)
-
-	return err1
+	return nil
 }
 
 // Reset removes all persistested logs from log store.

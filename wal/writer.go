@@ -31,7 +31,7 @@ type Writer struct {
 	writeComplete   bool
 	releaseComplete bool
 
-	entryCount uint32
+	count uint32
 
 	buffer  *bpool.Buffer
 	logSize uint32
@@ -62,7 +62,7 @@ func (w *Writer) append(data []byte) error {
 		return nil
 	}
 
-	w.entryCount++
+	w.count++
 
 	var scratch [4]byte
 	dataLen := uint32(len(data) + 4)
@@ -110,16 +110,12 @@ func (w *Writer) writeLog(timeID int64) error {
 		return nil
 	}
 	dataLen := w.logSize
-	h := _LogInfo{
-		status:     logStatusWritten,
-		timeID:     timeID,
-		entryCount: w.entryCount,
-		size:       dataLen,
+	info := _LogInfo{
+		timeID: timeID,
+		count:  w.count,
+		size:   dataLen,
 	}
-	if err := w.wal.put(timeID, h); err != nil {
-		return err
-	}
-	if err := w.wal.logStore.put(h.timeID, h, w.buffer.Bytes()); err != nil {
+	if err := w.wal.put(info, w.buffer); err != nil {
 		return err
 	}
 
