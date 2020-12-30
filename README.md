@@ -45,7 +45,7 @@ Entries are written to memdb and becomes immediately queryable. The memdb entrie
 To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the time block. Data is read from data block using index entry information and the it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
 
 <p align="left">
-  <img src="blob/master/docs/assets/img/about.png" />
+  <img src="docs/assets/img/about.png" />
 </p>
 
 ## Projects Using Unitdb
