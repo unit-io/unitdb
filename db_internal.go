@@ -126,7 +126,6 @@ func (db *DB) close() error {
 	}
 
 	// Signal all goroutines.
-	time.Sleep(db.opts.tinyBatchWriteInterval)
 	close(db.internal.closeC)
 
 	// Acquire lock.

@@ -166,7 +166,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 
 	// Create a blockcache.
-	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize), memdb.WithLogSize(options.logSize), memdb.WithBufferSize(options.bufferSize))
+	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize), memdb.WithBufferSize(options.bufferSize))
 	if err != nil {
 		return nil, err
 	}
@@ -457,9 +457,7 @@ func (db *DB) Sync() error {
 
 	// Sync happens synchronously.
 	db.internal.syncLockC <- struct{}{}
-	db.internal.closeW.Add(1)
 	defer func() {
-		db.internal.closeW.Done()
 		<-db.internal.syncLockC
 	}()
 

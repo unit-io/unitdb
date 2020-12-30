@@ -17,12 +17,12 @@ The unitdb engine includes the following components:
 - Memdb
 - Write Ahead Log (WAL)
 - Lookup Trie
-- Writing to timeWindow file
-- Writing to Block Index file
-- Writing to Data file
+- Writing to time window file
+- Writing to block index file
+- Writing to data file
 
 ### Writing data to disk 
-The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to disk in the form of blocks.
+The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is written to unitdb using low latency binary messaging entry. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to log files in the form of blocks.
 
 ### Write Ahead Log (WAL)
 The Write Ahead Log (WAL) retains unitdb data when the db restarts. The WAL ensures data is durable in case of an unexpected failure.

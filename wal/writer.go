@@ -98,7 +98,6 @@ func (w *Writer) Append(data []byte) <-chan error {
 func (w *Writer) writeLog(timeID int64) error {
 	w.writeCompleted <- struct{}{}
 	w.wal.mu.Lock()
-	w.wal.wg.Add(1)
 	defer func() {
 		w.wal.bufPool.Put(w.buffer)
 		w.wal.wg.Done()
@@ -135,6 +134,7 @@ func (w *Writer) SignalInitWrite(timeID int64) <-chan error {
 	}
 
 	// Write the log non-blocking.
+	w.wal.wg.Add(1)
 	go func() {
 		done <- w.writeLog(timeID)
 	}()

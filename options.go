@@ -68,18 +68,11 @@ type _Options struct {
 	// encryptionKey is used for message encryption.
 	encryptionKey []byte
 
-	// tinyBatchWriteInterval interval to group tiny batches and write into db on tiny batch interval.
-	// Setting the value to 0 immediately writes entries into db.
-	tinyBatchWriteInterval time.Duration
-
 	// bufferSize sets Size of buffer to use for pooling.
 	bufferSize int64
 
 	// memdbSize sets Size of blockcache.
 	memdbSize int64
-
-	// logSize sets Size of write ahead log.
-	logSize int64
 
 	// freeBlockSize minimum freeblocks size before free blocks are allocated and reused.
 	freeBlockSize int64
@@ -179,9 +172,6 @@ func WithDefaultOptions() Options {
 		if o.syncDurationType == 0 {
 			o.syncDurationType = time.Second
 		}
-		if o.tinyBatchWriteInterval == 0 {
-			o.tinyBatchWriteInterval = 15 * time.Millisecond
-		}
 		if o.queryOptions.defaultQueryLimit == 0 {
 			o.queryOptions.defaultQueryLimit = 1000
 		}
@@ -189,13 +179,10 @@ func WithDefaultOptions() Options {
 			o.queryOptions.maxQueryLimit = 100000
 		}
 		if o.bufferSize == 0 {
-			o.bufferSize = 1 << 30 // maximum size of a buffer to use in bufferpool (1GB).
+			o.bufferSize = 1 << 32 // maximum size of a buffer to use in bufferpool (4GB).
 		}
 		if o.memdbSize == 0 {
-			o.memdbSize = 1 << 32 // maximum size of blockcache (4GB).
-		}
-		if o.logSize == 0 {
-			o.logSize = 1 << 31 // maximum size of log to grow before allocating free segments (2GB).
+			o.memdbSize = 1 << 33 // maximum size of blockcache (8GB).
 		}
 		if o.freeBlockSize == 0 {
 			o.freeBlockSize = 1 << 27 // minimum size of (128MB).
@@ -211,13 +198,6 @@ func WithMaxSyncDuration(dur time.Duration, interval int) Options {
 	return newFuncOption(func(o *_Options) {
 		o.maxSyncDurations = interval
 		o.syncDurationType = dur
-	})
-}
-
-// WithTinyBatchWriteInterval sets interval to group tiny batches and write into db on tiny batch interval.
-func TinyBatchWriteInterval(dur time.Duration) Options {
-	return newFuncOption(func(o *_Options) {
-		o.tinyBatchWriteInterval = dur
 	})
 }
 
@@ -249,13 +229,6 @@ func WithBufferSize(size int64) Options {
 func WithMemdbSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.memdbSize = size
-	})
-}
-
-// WithLogSize sets Size of write ahead log.
-func WithLogSize(size int64) Options {
-	return newFuncOption(func(o *_Options) {
-		o.logSize = size
 	})
 }
 

@@ -124,6 +124,8 @@ func (db *_SyncHandle) abort() error {
 }
 
 func (db *DB) startSyncer(interval time.Duration) {
+	db.internal.closeW.Add(1)
+	defer db.internal.closeW.Done()
 	syncTicker := time.NewTicker(interval)
 	go func() {
 		defer func() {

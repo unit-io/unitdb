@@ -48,13 +48,13 @@ func (wal *WAL) NewReader() (*Reader, error) {
 		wal: wal,
 	}
 
-	r.buffer = wal.bufPool.Get()
 	return r, nil
 }
 
 // Read reads log written to the WAL but fully applied. It returns Reader iterator.
 func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 	r.wal.mu.RLock()
+	r.buffer = r.wal.bufPool.Get()
 	defer func() {
 		r.wal.recoveredTimeIDs = r.wal.recoveredTimeIDs[:0]
 		r.wal.bufPool.Put(r.buffer)

@@ -39,16 +39,22 @@ func (db *DB) startRecovery() error {
 			if !ok {
 				break
 			}
-			dBit := logData[0]
-			key := binary.LittleEndian.Uint64(logData[1:9])
-			val := logData[9:]
-			if dBit == 1 {
-				if _, exists := log[key]; exists {
-					delete(log, key)
+			var off int
+			for off < len(logData) {
+				dataLen := int(binary.LittleEndian.Uint32(logData[off : off+4]))
+				data := logData[off+4 : off+dataLen]
+				dBit := data[0]
+				key := binary.LittleEndian.Uint64(data[1:9])
+				val := data[9:]
+				off += dataLen
+				if dBit == 1 {
+					if _, exists := log[key]; exists {
+						delete(log, key)
+					}
+					continue
 				}
-				continue
+				log[key] = val
 			}
-			log[key] = val
 		}
 		return false, nil
 	})

@@ -29,9 +29,6 @@ type _Options struct {
 	// bufferSize sets size of buffer to use for buffer pooling.
 	bufferSize int64
 
-	// logSize sets size of write ahead log before reallocating free blocks from released segments.
-	logSize int64
-
 	// logResetFlag flag to skips log recovery on DB open and reset WAL.
 	logResetFlag bool
 
@@ -73,9 +70,6 @@ func WithDefaultOptions() Options {
 		if o.bufferSize == 0 {
 			o.bufferSize = defaultBufferSize
 		}
-		if o.logSize == 0 {
-			o.logSize = defaultLogSize
-		}
 		if o.logInterval == 0 {
 			o.logInterval = 15 * time.Millisecond
 		}
@@ -103,13 +97,6 @@ func WithMemdbSize(size int64) Options {
 func WithBufferSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {
 		o.bufferSize = size
-	})
-}
-
-// WithLogSize sets size of write ahead log.
-func WithLogSize(size int64) Options {
-	return newFuncOption(func(o *_Options) {
-		o.logSize = size
 	})
 }
 

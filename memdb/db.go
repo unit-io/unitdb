@@ -37,7 +37,7 @@ type DB struct {
 	version int
 	opts    *_Options
 
-	// block cache
+	// timeBlock
 	internal    *_DB
 	consistent  *hash.Consistent
 	timeBlocks  _TimeBlocks
@@ -61,17 +61,12 @@ func Open(opts ...Options) (*DB, error) {
 
 	bufPool := bpool.NewBufferPool(options.memdbSize, &bpool.Options{MaxElapsedTime: 1 * time.Second})
 	internal := &_DB{
-		start:      time.Now(),
-		meter:      NewMeter(),
-		timeMark:   newTimeMark(options.timeBlockDuration),
-		timeLock:   newTimeLock(),
-		writeLockC: make(chan struct{}, 1),
+		start:    time.Now(),
+		meter:    NewMeter(),
+		timeMark: newTimeMark(),
 
 		// buffer pool
-		bufPool: bufPool,
-
-		// Close
-		closeC: make(chan struct{}),
+		buffer: bufPool,
 	}
 	logOpts := wal.Options{Path: options.logFilePath + "/" + logDir, BufferSize: options.bufferSize, Reset: options.logResetFlag}
 	wal, needLogRecovery, err := wal.New(logOpts)
@@ -96,11 +91,10 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	// Query plan
-	db.internal.queryPlan = db.newQueryPlan()
-	db.internal.workerPool = db.newWorkerPool(nPoolSize)
+	db.newQueryPlan()
 
-	db.newTinyLog()
-	go db.tinyLogLoop(db.opts.logInterval)
+	// Log pool
+	db.newLogPool(&_LogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
 
 	if needLogRecovery || !options.logResetFlag {
 		if err := db.startRecovery(); err != nil {
@@ -113,9 +107,6 @@ func Open(opts ...Options) (*DB, error) {
 
 // Close closes the underlying database.
 func (db *DB) Close() error {
-	db.mu.Lock()
-	db.mu.Unlock()
-
 	if err := db.close(); err != nil {
 		return err
 	}
@@ -265,8 +256,8 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 // ForEachBlock gets all keys from DB committed to WAL.
 func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
-	// Get timeIDs of timeBlock successfully committed to WAL.
-	timeIDs := db.internal.timeMark.timeRefs()
+	// Get timeBlocks successfully committed to WAL.
+	timeIDs := db.internal.timeMark.timeRefs(db.timeID())
 	for _, timeID := range timeIDs {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
@@ -342,7 +333,6 @@ func (db *DB) Delete(key uint64) error {
 			delete(block.records, ikey)
 			block.count--
 			db.internal.meter.Dels.Inc(1)
-			// count := block.count
 			if block.count == 0 {
 				db.mu.RLock()
 				for ikey, timeID := range block.records {
@@ -356,31 +346,18 @@ func (db *DB) Delete(key uint64) error {
 					return db.releaseLog(timeID)
 				}
 			}
-			// acquire write lock
-			db.internal.writeLockC <- struct{}{}
-			defer func() {
-				<-db.internal.writeLockC
-			}()
 
-			newTimeID := db.internal.timeMark.timeID(db.internal.tinyLog.ID())
+			newTimeID := db.timeID()
 			// add deleted key to new time block to persist deleted entry into WAL.
 			ikey = iKey(true, key)
 			block.records[ikey] = int64(newTimeID)
 			block.Unlock()
 
-			db.mu.RLock()
-			newBlock, ok := db.timeBlocks[newTimeID]
-			db.mu.RUnlock()
-			if !ok {
-				newBlock = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
-				db.timeBlocks[newTimeID] = newBlock
-				db.internal.timeMark.add(newTimeID)
-			}
+			newBlock := db.getOrCreateTimeBlock(newTimeID)
 
 			newBlock.Lock()
 			defer newBlock.Unlock()
 			newBlock.put(ikey, nil)
-			db.internal.tinyLog.incount()
 
 			return nil
 		}
@@ -395,20 +372,8 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		return 0, err
 	}
 
-	db.internal.writeLockC <- struct{}{}
-	defer func() {
-		<-db.internal.writeLockC
-	}()
-
-	timeID := db.internal.timeMark.timeID(db.internal.tinyLog.ID())
-	db.mu.Lock()
-	block, ok := db.timeBlocks[timeID]
-	if !ok {
-		block = &_Block{data: db.internal.bufPool.Get(), records: make(map[_Key]int64)}
-		db.timeBlocks[timeID] = block
-		db.internal.timeMark.add(timeID)
-	}
-	db.mu.Unlock()
+	timeID := db.timeID()
+	block := db.getOrCreateTimeBlock(timeID)
 
 	block.Lock()
 	defer block.Unlock()
@@ -416,10 +381,8 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	if err := block.put(ikey, data); err != nil {
 		return int64(timeID), err
 	}
-
 	db.addTimeFilter(timeID, key)
 
-	db.internal.tinyLog.incount()
 	db.internal.meter.Puts.Inc(1)
 
 	return int64(timeID), nil

@@ -34,7 +34,7 @@ func cleanup() {
 
 func TestSimple(t *testing.T) {
 	cleanup()
-	db, err := Open(dbPath, WithBufferSize(1<<4), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<16))
+	db, err := Open(dbPath, WithBufferSize(1<<4), WithMemdbSize(1<<16), WithFreeBlockSize(1<<16))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestSimple(t *testing.T) {
 
 func TestBatch(t *testing.T) {
 	cleanup()
-	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestExpiry(t *testing.T) {
 
 func TestLeasing(t *testing.T) {
 	cleanup()
-	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithFreeBlockSize(1<<4), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestLeasing(t *testing.T) {
 
 func TestWildcardTopics(t *testing.T) {
 	cleanup()
-	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithLogSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
+	db, err := Open(dbPath, WithBufferSize(1<<16), WithMemdbSize(1<<16), WithFreeBlockSize(1<<16), WithMutable(), WithBackgroundKeyExpiry())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,96 +23,179 @@ import (
 	"time"
 )
 
+// Default settings
+const (
+	defaultBlockDuration = 1 * time.Second
+	defaultWriteInterval = 100 * time.Millisecond
+	defaultTimeout       = 2 * time.Second
+	defaultPoolCapacity  = 27
+	defaultLogCount      = 1
+)
+
 type _TinyLog struct {
-	sync.RWMutex
-	id      int64
-	managed bool
+	mu sync.RWMutex
+	id _TimeID
+	_TimeID
 
-	entryCount uint32
-
+	managed  bool
 	doneChan chan struct{}
 }
 
-func (b *_TinyLog) ID() _TimeID {
-	return _TimeID(atomic.LoadInt64(&b.id))
+func (l *_TinyLog) ID() _TimeID {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.id
 }
 
-func (b *_TinyLog) setID(ID _TimeID) {
-	atomic.StoreInt64(&b.id, int64(ID))
-}
-
-func (b *_TinyLog) len() uint32 {
-	return atomic.LoadUint32(&b.entryCount)
-}
-
-func (b *_TinyLog) incount() uint32 {
-	return atomic.AddUint32(&b.entryCount, 1)
-}
-
-func (b *_TinyLog) reset() {
-	b.Lock()
-	defer b.Unlock()
-	atomic.StoreUint32(&b.entryCount, 0)
+func (l *_TinyLog) timeID() _TimeID {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l._TimeID
 }
 
 func (b *_TinyLog) abort() {
-	b.reset()
+	// atomic.StoreUint32(&b.entryCount, 0)
 	close(b.doneChan)
 }
 
-type _WorkerPool struct {
-	db           *DB
-	maxSize      int
-	writeQueue   chan *_TinyLog
-	logQueue     chan *_TinyLog
-	waitingQueue _Queue
-	stoppedChan  chan struct{}
-	stopOnce     sync.Once
-	stopped      int32
-	waiting      int32
-	wait         bool
+type (
+	_LogOptions struct {
+		// writeInterval default value is 100ms, setting writeInterval to zero disables writing the log to the WAL.
+		writeInterval time.Duration
+
+		// timeout controls how often log pool kill idle jobs.
+		//
+		// Default value is 2 seconds
+		timeout time.Duration
+
+		// blockDuration is used to create new timeID.
+		//
+		// Default value is defaultBlockDuration.
+		blockDuration time.Duration
+
+		// poolCapacity controls size of pre-allocated log queue.
+		//
+		// Default value is defaultPoolCapacity.
+		poolCapacity int
+
+		// logCount controls number of goroutines commiting the log to the WAL.
+		//
+		// Default value is 1, so logs are sent from single goroutine, this
+		// value might need to be bumped under high load.
+		logCount int
+	}
+	_LogPool struct {
+		db           *DB
+		opts         *_LogOptions
+		tinyLog      *_TinyLog
+		writeQueue   chan *_TinyLog
+		logQueue     chan *_TinyLog
+		waitingQueue _Queue
+		stop         chan struct{}
+		stopOnce     sync.Once
+		stopped      int32
+		waiting      int32
+		wait         bool
+		stopWg       sync.WaitGroup
+	}
+)
+
+func (src *_LogOptions) withDefaultOptions() *_LogOptions {
+	opts := _LogOptions{}
+	if src != nil {
+		opts = *src
+	}
+	if opts.poolCapacity < 1 {
+		opts.poolCapacity = 1
+	}
+	if opts.writeInterval == 0 {
+		opts.writeInterval = defaultWriteInterval
+	}
+	if opts.timeout == 0 {
+		opts.timeout = defaultTimeout
+	}
+	if opts.blockDuration == 0 {
+		opts.blockDuration = defaultBlockDuration
+	}
+	if opts.logCount < 1 {
+		opts.logCount = defaultLogCount
+	}
+
+	return &opts
+}
+
+func (p *_LogPool) newTinyLog() {
+	timeNow := time.Now().UTC()
+	timeID := _TimeID(timeNow.Truncate(p.opts.blockDuration).UnixNano())
+	p.db.getOrCreateTimeBlock(timeID)
+	p.db.internal.timeMark.add(timeID)
+	p.tinyLog = &_TinyLog{id: _TimeID(timeNow.UnixNano()), _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
+}
+
+func (db *DB) newLogPool(opts *_LogOptions) {
+	opts = opts.withDefaultOptions()
+	pool := &_LogPool{
+		db:         db,
+		opts:       opts,
+		writeQueue: make(chan *_TinyLog, 1),
+		logQueue:   make(chan *_TinyLog),
+		stop:       make(chan struct{}),
+	}
+
+	pool.newTinyLog()
+
+	// start the write loop
+	go pool.writeLoop(opts.writeInterval)
+
+	// start the dispacther
+	for i := 0; i < opts.logCount; i++ {
+		pool.stopWg.Add(1)
+		go pool.dispatch(opts.poolCapacity, opts.timeout)
+	}
+
+	db.internal.logPool = pool
 }
 
 // size returns maximum number of concurrent jobs.
-func (p *_WorkerPool) size() int {
-	return p.maxSize
+func (p *_LogPool) size() int {
+	return p.opts.poolCapacity
 }
 
 // stop tells dispatcher to exit, and wether or not complete queued jobs.
-func (p *_WorkerPool) stop(wait bool) {
+func (p *_LogPool) close(wait bool) {
 	p.stopOnce.Do(func() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.wait = wait
-		// Close write queue and wait for currently running jobs to finish
-		close(p.writeQueue)
+		// Close write queue and wait for currently running jobs to finish.
+		close(p.stop)
 	})
-	<-p.stoppedChan
+	p.stopWg.Wait()
 }
 
 // stopWait stops worker pool and wait for all queued jobs to complete.
-func (p *_WorkerPool) stopWait() {
-	p.stop(true)
+func (p *_LogPool) closeWait() {
+	p.close(true)
 }
 
 // stopped returns true if worker pool has been stopped.
-func (p *_WorkerPool) isStopped() bool {
+func (p *_LogPool) isClosed() bool {
 	return atomic.LoadInt32(&p.stopped) != 0
 }
 
 // waitQueueSize returns count of jobs in waitingQueue.
-func (p *_WorkerPool) waitQueueSize() int {
+func (p *_LogPool) waitQueueSize() int {
 	return int(atomic.LoadInt32(&p.waiting))
 }
 
 // write enqueues a log to write.
-func (p *_WorkerPool) write(tinyLog *_TinyLog) {
+func (p *_LogPool) write(tinyLog *_TinyLog) {
 	if tinyLog != nil {
 		p.writeQueue <- tinyLog
 	}
 }
 
 // writeWait enqueues the log and waits for it to be executed.
-func (p *_WorkerPool) writeWait(tinyLog *_TinyLog) {
+func (p *_LogPool) writeWait(tinyLog *_TinyLog) {
 	if tinyLog == nil {
 		return
 	}
@@ -120,10 +203,48 @@ func (p *_WorkerPool) writeWait(tinyLog *_TinyLog) {
 	<-tinyLog.doneChan
 }
 
+// writeLoop enqueue the tiny log to the log pool.
+func (p *_LogPool) writeLoop(interval time.Duration) {
+	var writeC <-chan time.Time
+
+	if interval > 0 {
+		writeTicker := time.NewTicker(interval)
+		defer writeTicker.Stop()
+		writeC = writeTicker.C
+	}
+
+	for {
+		select {
+		case <-p.stop:
+			p.write(p.tinyLog)
+			close(p.writeQueue)
+
+			return
+		case <-writeC:
+			// check buffer pool backoff and capacity for excess memory usage
+			// before writing tiny log to the WAL.
+			switch {
+			case p.db.cap() > 0.7:
+				block := p.db.getOrCreateTimeBlock(p.db.timeID())
+				block.RLock()
+				size := block.data.Size()
+				block.RUnlock()
+				if size < 1<<20 {
+					break
+				}
+				fallthrough
+			default:
+				p.write(p.tinyLog)
+				p.newTinyLog()
+			}
+		}
+	}
+}
+
 // dispatch handles tiny log commit for the jobs in queue.
-func (p *_WorkerPool) dispatch() {
-	defer close(p.stoppedChan)
-	timeout := time.NewTimer(2 * time.Second)
+func (p *_LogPool) dispatch(cap int, timeOutInterval time.Duration) {
+	defer p.stopWg.Done()
+	timeout := time.NewTimer(timeOutInterval)
 	var logCount int
 	var idle bool
 Loop:
@@ -145,7 +266,7 @@ Loop:
 			select {
 			case p.logQueue <- tinyLog:
 			default:
-				if logCount < nPoolSize {
+				if logCount < cap {
 					go p.commit(tinyLog, p.logQueue)
 					logCount++
 				} else {
@@ -162,7 +283,7 @@ Loop:
 				}
 			}
 			idle = true
-			timeout.Reset(2 * time.Second)
+			timeout.Reset(timeOutInterval)
 		}
 	}
 
@@ -180,7 +301,7 @@ Loop:
 }
 
 // commit run initial tiny log commit, then start tiny log waiting for more.
-func (p *_WorkerPool) commit(tinyLog *_TinyLog, queue chan *_TinyLog) {
+func (p *_LogPool) commit(tinyLog *_TinyLog, queue chan *_TinyLog) {
 	if err := p.db.tinyCommit(tinyLog); err != nil {
 		fmt.Println("workerPool.tinyCommit: error ", err)
 	}
@@ -189,7 +310,7 @@ func (p *_WorkerPool) commit(tinyLog *_TinyLog, queue chan *_TinyLog) {
 }
 
 // tinyCommit commits log and stops when it receive a nil log.
-func (p *_WorkerPool) tinyCommit(queue chan *_TinyLog) {
+func (p *_LogPool) tinyCommit(queue chan *_TinyLog) {
 	for tinyLog := range queue {
 		if tinyLog == nil {
 			return
@@ -203,7 +324,7 @@ func (p *_WorkerPool) tinyCommit(queue chan *_TinyLog) {
 
 // processWaiting queue puts new jobs onto the waiting queue,
 // removes jobs from the waiting queue. Returns false if workerPool is stopped.
-func (p *_WorkerPool) processWaitingQueue() bool {
+func (p *_LogPool) processWaitingQueue() bool {
 	select {
 	case p.logQueue <- p.waitingQueue.front():
 		p.waitingQueue.pop()
@@ -212,7 +333,7 @@ func (p *_WorkerPool) processWaitingQueue() bool {
 	return true
 }
 
-func (p *_WorkerPool) killIdleJob() bool {
+func (p *_LogPool) killIdleJob() bool {
 	select {
 	case p.logQueue <- nil:
 		return true
@@ -223,7 +344,7 @@ func (p *_WorkerPool) killIdleJob() bool {
 
 // runQueuedJobs removes each job from the waiting queue and
 // process it until queue is empty.
-func (p *_WorkerPool) runQueuedJobs() {
+func (p *_LogPool) runQueuedJobs() {
 	for p.waitingQueue.len() != 0 {
 		p.logQueue <- p.waitingQueue.pop()
 		atomic.StoreInt32(&p.waiting, int32(p.waitingQueue.len()))

@@ -19,7 +19,6 @@ package memdb
 import (
 	"sort"
 	"sync"
-	"time"
 )
 
 type (
@@ -30,24 +29,13 @@ type (
 
 	_TimeMark struct {
 		sync.RWMutex
-		maxDuration     time.Duration
 		records         map[_TimeID]_TimeRecord
 		releasedRecords map[_TimeID]_TimeRecord
 	}
 )
 
-func newTimeMark(maxDuration time.Duration) *_TimeMark {
-	return &_TimeMark{maxDuration: maxDuration, records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
-}
-
-func (tm *_TimeMark) timeNow() _TimeID {
-	ID := _TimeID(time.Now().UTC().UnixNano())
-
-	return ID
-}
-
-func (tm *_TimeMark) timeID(ID _TimeID) _TimeID {
-	return _TimeID(time.Unix(int64(ID), 0).UTC().Truncate(tm.maxDuration).Unix())
+func newTimeMark() *_TimeMark {
+	return &_TimeMark{records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
 func (tm *_TimeMark) add(timeID _TimeID) {
@@ -59,11 +47,10 @@ func (tm *_TimeMark) add(timeID _TimeID) {
 	tm.records[timeID] = _TimeRecord{refs: 1}
 }
 
-func (tm *_TimeMark) release(ID _TimeID) {
+func (tm *_TimeMark) release(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
 
-	timeID := tm.timeID(ID)
 	timeMark, ok := tm.records[timeID]
 	if !ok {
 		return
@@ -78,8 +65,7 @@ func (tm *_TimeMark) release(ID _TimeID) {
 	}
 }
 
-func (tm *_TimeMark) timeRefs() (timeIDs []_TimeID) {
-	timeRef := tm.timeID(tm.timeNow())
+func (tm *_TimeMark) timeRefs(timeRef _TimeID) (timeIDs []_TimeID) {
 	tm.RLock()
 	defer tm.RUnlock()
 	for timeID, r := range tm.releasedRecords {

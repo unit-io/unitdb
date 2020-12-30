@@ -180,8 +180,12 @@ func (fs *_FileStore) all() []int64 {
 	if err != nil {
 		return nil
 	}
+	// sort.Slice(files[:], func(i, j int) bool {
+	// 	return files[i].ModTime().Before(files[j].ModTime())
+	// })
+
 	sort.Slice(files[:], func(i, j int) bool {
-		return files[i].ModTime().Before(files[j].ModTime())
+		return files[i].Name() < files[j].Name()
 	})
 
 	for _, f := range files {
