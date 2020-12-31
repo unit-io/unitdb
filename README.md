@@ -44,9 +44,40 @@ Entries are written to memdb and becomes immediately queryable. The memdb entrie
 
 To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the time block. Data is read from data block using index entry information and the it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
 
-<p align="left">
-  <img src="docs/assets/img/about.png" />
-</p>
+```
+  Time-block                                                      Write-ahead log
+	+---------+---------+-----------+-...-+---------------+         +--------------+--------------+--------------+-...-+-----------------+
+	| TinyLog | TinyLog |  TinyLog  |     |   TinyLog     | ------->| TimeID|block | TimeID|block | TimeID|block |     |   TimeID|block  |
+	+---------+---------+-----------+-...-+---------------+         +--------------+--------------+--------------+-...-+-----------------+
+      |
+      |
+      |
+      v
+    Topic trie                                                                       Window block
+    +----------+        +------+         +------+      +--------+    Window-offset   +-----------------------------+-----------------------------+-...-+-----------------------------+
+    | Contract | -----> | Hash | ----->  | Hash | ---> | Offset |      ----->        | Topic hash|sequence...|next | Topic hash|sequence...|next |     | Topic hash|sequence...|next |
+    +----------+        +------+   |     +------+      +--------+                    +-----------------------------+-----------------------------+-...-+-----------------------------+
+    | Contract |  ---              |     +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
+    +----------+                   --->  | Hash | ---> | Hash | ---> | Offset | ---> | Topic hash|sequence...|next | Topic hash|sequence...|next |     | Topic hash|sequence...|next |
+    | Contract | --                |     +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
+    +----------+  |                |     +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
+                  |                --->  | Hash | ---> | Hash | ---> | Offset | ---> | Topic hash|sequence...|next | Topic hash|sequence...|next |     | Topic hash|sequence...|next |
+                  |                      +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
+                  |    +------+      +--------+                                                           |
+                  ---> | Hash | ---> | Offset |                                                           | Index block-offset = (sequence-1)/(block-size)
+                    +------+      +--------+                                                              |
+                                            Index block                                                   v
+                                            +-------------------+-------------------+-------------------+-...-+-------------------+
+                                            | Offset|value size | Offset|value size | Offset|value size |     | Offset|value size |
+                                            +-------------------+-------------------+-------------------+-...-+-------------------+
+                                                              |
+                                                              | Data block-offset
+                                            Data block        v
+                                            +------------+------------+------------+------------+-...-+------------+
+                                            | Topic|data | Topic|data | Topic|data | Topic|data |     | Topic|data |
+                                            +------------+------------+------------+------------+-...-+------------+ 
+
+```
 
 ## Projects Using Unitdb
 Below is a list of projects that use unitdb.

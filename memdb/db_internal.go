@@ -33,7 +33,7 @@ const (
 
 	logDir = "logs"
 
-	nPoolSize = 10
+	nPoolSize = 27
 
 	nBlocks = 27
 
