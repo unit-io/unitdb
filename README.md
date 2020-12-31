@@ -40,21 +40,20 @@ The unitdb supports Get, Put, Delete operations. It also supports encryption, ba
 Samples are available in the cmd directory for reference.
 
 ## About
-Entries are written to memdb and becomes immediately queryable. The memdb entries are periodically written to log files in the form of blocks. Time mark keeps record of tiny logs written to the memdb and releases the time IDs when time blocks are committed to the WAL. The released time blocks records are then sync to the unitdb.
+The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to log files in the form of blocks.
 
-To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the time block. Data is read from data block using index entry information and the it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
+To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the time block. Data is read from data block using index entry information and then it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
 
 ```
+
   Time-block                                                      Write-ahead log
-	+---------+---------+-----------+-...-+---------------+         +--------------+--------------+--------------+-...-+-----------------+
-	| TinyLog | TinyLog |  TinyLog  |     |   TinyLog     | ------->| TimeID|block | TimeID|block | TimeID|block |     |   TimeID|block  |
-	+---------+---------+-----------+-...-+---------------+         +--------------+--------------+--------------+-...-+-----------------+
-      |
-      |
-      |
-      v
+	+---------+---------+-----------+-...-+---------------+         +-------------------+-------------------+-------------------+-...-+----------------------+
+	| TinyLog | TinyLog |  TinyLog  |     |   TinyLog     | ------->| TimeID|block data | TimeID|block data | TimeID|block data |     |   TimeID|block data  |
+	+---------+---------+-----------+-...-+---------------+         +-------------------+-------------------+-------------------+-...-+----------------------+
+
+
     Topic trie                                                                       Window block
-    +----------+        +------+         +------+      +--------+    Window-offset   +-----------------------------+-----------------------------+-...-+-----------------------------+
+    +----------+        +------+         +------+      +--------+    Window offset   +-----------------------------+-----------------------------+-...-+-----------------------------+
     | Contract | -----> | Hash | ----->  | Hash | ---> | Offset |      ----->        | Topic hash|sequence...|next | Topic hash|sequence...|next |     | Topic hash|sequence...|next |
     +----------+        +------+   |     +------+      +--------+                    +-----------------------------+-----------------------------+-...-+-----------------------------+
     | Contract |  ---              |     +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
@@ -63,19 +62,19 @@ To efficiently compact and store data, the unitdb engine groups entries sequence
     +----------+  |                |     +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
                   |                --->  | Hash | ---> | Hash | ---> | Offset | ---> | Topic hash|sequence...|next | Topic hash|sequence...|next |     | Topic hash|sequence...|next |
                   |                      +------+      +------+      +--------+      +-----------------------------+-----------------------------+-...-+-----------------------------+
-                  |    +------+      +--------+                                                           |
-                  ---> | Hash | ---> | Offset |                                                           | Index block-offset = (sequence-1)/(block-size)
-                    +------+      +--------+                                                              |
-                                            Index block                                                   v
-                                            +-------------------+-------------------+-------------------+-...-+-------------------+
-                                            | Offset|value size | Offset|value size | Offset|value size |     | Offset|value size |
-                                            +-------------------+-------------------+-------------------+-...-+-------------------+
-                                                              |
-                                                              | Data block-offset
-                                            Data block        v
-                                            +------------+------------+------------+------------+-...-+------------+
-                                            | Topic|data | Topic|data | Topic|data | Topic|data |     | Topic|data |
-                                            +------------+------------+------------+------------+-...-+------------+ 
+                  |    +------+      +--------+                                                                                    |
+                  ---> | Hash | ---> | Offset |                                                                                    | Index block offset = (sequence-1)/(block size)
+                       +------+      +--------+                                                                                    |
+                                                                                     Index block                                   v
+                                                                                     +-------------------+-------------------+-------------------+-...-+-------------------+
+                                                                                     | Offset|value size | Offset|value size | Offset|value size |     | Offset|value size |
+                                                                                     +-------------------+-------------------+-------------------+-...-+-------------------+
+                                                                                                                   |
+                                                                                                                   | Data block offset
+                                                                                     Data block                    v
+                                                                                     +------------+------------+------------+------------+-...-+------------+
+                                                                                     | Topic|data | Topic|data | Topic|data | Topic|data |     | Topic|data |
+                                                                                     +------------+------------+------------+------------+-...-+------------+ 
 
 ```
 
