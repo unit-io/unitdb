@@ -34,8 +34,6 @@ type (
 		sync.RWMutex
 		dirName string
 		opened  bool
-
-		bufPool *bpool.BufferPool
 	}
 	_FileInfos []os.FileInfo
 )
@@ -44,8 +42,6 @@ func openFile(dirName string, bufferSize int64) (*_FileStore, error) {
 	fs := &_FileStore{
 		dirName: dirName,
 		opened:  false,
-
-		bufPool: bpool.NewBufferPool(bufferSize, nil),
 	}
 
 	// if no store directory was specified, by default use the current working directory.
@@ -69,10 +65,6 @@ func (fs *_FileStore) close() {
 	fs.Lock()
 	defer fs.Unlock()
 	fs.opened = false
-}
-
-func (fs *_FileStore) free(data *bpool.Buffer) {
-	fs.bufPool.Put(data)
 }
 
 func (fs *_FileStore) put(info _LogInfo, data *bpool.Buffer) error {
@@ -112,7 +104,7 @@ func (fs *_FileStore) put(info _LogInfo, data *bpool.Buffer) error {
 	return nil
 }
 
-func (fs *_FileStore) get(timeID int64) (_LogInfo, *bpool.Buffer) {
+func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) _LogInfo {
 	fs.RLock()
 	defer fs.RUnlock()
 
@@ -120,17 +112,17 @@ func (fs *_FileStore) get(timeID int64) (_LogInfo, *bpool.Buffer) {
 
 	if !fs.opened {
 		// trying to use file store, but not open.
-		return info, nil
+		return info
 	}
 
 	log := logPath(fs.dirName, timeID)
 	if !exists(log) {
-		return info, nil
+		return info
 	}
 
 	f, err := os.Open(log)
 	if err != nil {
-		return info, nil
+		return info
 	}
 
 	buf := make([]byte, uint32(logHeaderSize))
@@ -139,7 +131,7 @@ func (fs *_FileStore) get(timeID int64) (_LogInfo, *bpool.Buffer) {
 		os.Rename(log, corruptPath(fs.dirName, timeID))
 
 		// log was unreadable, return nil
-		return info, nil
+		return info
 	}
 
 	if err := info.UnmarshalBinary(buf); err != nil {
@@ -147,23 +139,23 @@ func (fs *_FileStore) get(timeID int64) (_LogInfo, *bpool.Buffer) {
 		os.Rename(log, corruptPath(fs.dirName, timeID))
 
 		// log was unreadable, return nil
-		return info, nil
+		return info
 	}
 
-	data := fs.bufPool.Get()
 	if _, err := data.Extend(int64(info.size)); err != nil {
-		return info, nil
+		return info
 	}
+
 	if _, err := f.ReadAt(data.Internal(), int64(logHeaderSize)); err != nil {
 		f.Close()
 		os.Rename(log, corruptPath(fs.dirName, timeID))
 
 		// log was unreadable, return nil
-		return info, nil
+		return info
 	}
 	f.Close()
 
-	return info, data
+	return info
 }
 
 // all provides a list of all time IDs currently stored in the file store.
@@ -180,9 +172,6 @@ func (fs *_FileStore) all() []int64 {
 	if err != nil {
 		return nil
 	}
-	// sort.Slice(files[:], func(i, j int) bool {
-	// 	return files[i].ModTime().Before(files[j].ModTime())
-	// })
 
 	sort.Slice(files[:], func(i, j int) bool {
 		return files[i].Name() < files[j].Name()

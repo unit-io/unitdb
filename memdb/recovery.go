@@ -18,19 +18,79 @@ package memdb
 
 import (
 	"encoding/binary"
+	"sort"
+
+	"github.com/unit-io/unitdb/filter"
 )
+
+// delete deletes entry from the DB.
+//
+// This method is not thread safe.
+func (db *DB) delete(key uint64) error {
+	// Get time block
+	blockKey := db.blockKey(key)
+	r, ok := db.timeFilters[blockKey]
+	if !ok {
+		return errEntryDoesNotExist
+	}
+
+	var timeIDs []_TimeID
+	r.RLock()
+	for timeID := range r.timeRecords {
+		timeIDs = append(timeIDs, timeID)
+	}
+	r.RUnlock()
+	sort.Slice(timeIDs[:], func(i, j int) bool {
+		return timeIDs[i] > timeIDs[j]
+	})
+	for _, timeID := range timeIDs {
+		block, ok := db.timeBlocks[timeID]
+		if ok {
+			block.RLock()
+			_, ok := block.records[iKey(false, key)]
+			block.RUnlock()
+			if !ok {
+				r.RLock()
+				fltr := r.timeRecords[timeID]
+				r.RUnlock()
+				if !fltr.Test(key) {
+					return errEntryDoesNotExist
+				}
+				continue
+			}
+			block.Lock()
+			ikey := iKey(false, key)
+			delete(block.records, ikey)
+			block.count--
+			db.internal.meter.Dels.Inc(1)
+			if len(block.records) == 0 {
+				delete(db.timeBlocks, _TimeID(timeID))
+				db.internal.buffer.Put(block.data)
+			}
+			block.Unlock()
+
+			return nil
+		}
+	}
+
+	return errEntryDoesNotExist
+}
 
 // startRecovery recovers pending entries from the WAL.
 func (db *DB) startRecovery() error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	// start log recovery
 	r, err := db.internal.wal.NewReader()
 	if err != nil {
 		return err
 	}
 
-	log := make(map[uint64][]byte)
 	err = r.Read(func(ID int64) (ok bool, err error) {
+		log := make(map[uint64][]byte)
 		l := r.Count()
+		timeID := _TimeID(ID)
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {
@@ -39,6 +99,7 @@ func (db *DB) startRecovery() error {
 			if !ok {
 				break
 			}
+
 			var off int
 			for off < len(logData) {
 				dataLen := int(binary.LittleEndian.Uint32(logData[off : off+4]))
@@ -50,24 +111,44 @@ func (db *DB) startRecovery() error {
 				if dBit == 1 {
 					if _, exists := log[key]; exists {
 						delete(log, key)
+						continue
 					}
+					db.delete(key)
 					continue
 				}
 				log[key] = val
 			}
+			db.internal.timeMark.add(timeID)
+			block, ok := db.timeBlocks[timeID]
+			if !ok {
+				block = &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
+				db.timeBlocks[timeID] = block
+			}
+			block.Lock()
+			for key, val := range log {
+				ikey := iKey(false, key)
+				if err := block.put(ikey, val); err != nil {
+					return false, err
+				}
+				blockKey := db.blockKey(key)
+				r, ok := db.timeFilters[blockKey]
+				if ok {
+					if _, ok := r.timeRecords[timeID]; !ok {
+						r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
+					}
+
+					// Append key to bloom filter
+					r.filter.Append(key)
+				}
+
+				db.internal.meter.Puts.Inc(1)
+			}
+			block.Unlock()
+			db.internal.meter.Recovers.Inc(int64(len(log)))
+			db.internal.timeMark.release(timeID)
 		}
 		return false, nil
 	})
-
-	db.internal.wal.Reset()
-
-	for k, val := range log {
-		if _, err := db.Put(k, val); err != nil {
-			return err
-		}
-	}
-
-	db.internal.meter.Recovers.Inc(int64(len(log)))
 
 	return nil
 }

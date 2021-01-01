@@ -42,15 +42,17 @@ Samples are available in the cmd directory for reference.
 ## About
 The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to log files in the form of blocks.
 
-To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the time block. Data is read from data block using index entry information and then it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
+To efficiently compact and store data, the unitdb engine groups entries sequence by topic key, and then orders those sequences by time and each block keep offset of previous block in reverse time order. Index block offset is calculated from entry sequence in the window block. Data is read from data block using index entry information and then it un-compresses the data on read (if encryption flag was set then it un-encrypts the data on read).
 
 ```
+Memdb:
 
-  Time-block                                                      Write-ahead log
-	+---------+---------+-----------+-...-+---------------+         +-------------------+-------------------+-------------------+-...-+----------------------+
-	| TinyLog | TinyLog |  TinyLog  |     |   TinyLog     | ------->| TimeID|block data | TimeID|block data | TimeID|block data |     |   TimeID|block data  |
-	+---------+---------+-----------+-...-+---------------+         +-------------------+-------------------+-------------------+-...-+----------------------+
+    Tiny-log                    Time-block                                                  Write-ahead log
+    +-----------+-----------+   +---------+---------+-----------+-...-+---------------+     +-------------------+-------------------+-------------------+-...-+----------------------+
+    | Key|value | Key|value |   | TinyLog | TinyLog |  TinyLog  |     |    TinyLog    | --> | TimeID|block data | TimeID|block data | TimeID|block data |     |   TimeID|block data  |
+    +-----------+-----------+   +---------+---------+-----------+-...-+---------------+     +-------------------+-------------------+-------------------+-...-+----------------------+
 
+Unitdb:
 
     Topic trie                                                                       Window block
     +----------+        +------+         +------+      +--------+    Window offset   +-----------------------------+-----------------------------+-...-+-----------------------------+

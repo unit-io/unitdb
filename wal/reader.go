@@ -27,13 +27,10 @@ import (
 // Reader reads logs from WAL.
 // Reader reader is a simple iterator over log data.
 type Reader struct {
-	Id      uid.LID
-	logData *bpool.Buffer
-	offset  int64
-
+	Id         uid.LID
+	offset     int64
 	entryCount uint32
-
-	buffer *bpool.Buffer
+	buffer     *bpool.Buffer
 
 	wal *WAL
 }
@@ -62,10 +59,10 @@ func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 	}()
 
 	for _, timeID := range r.wal.recoveredTimeIDs {
-		info, data := r.wal.logStore.get(timeID)
-		r.entryCount = info.count
-		r.logData = data
 		r.offset = 0
+		r.buffer.Reset()
+		info := r.wal.logStore.read(timeID, r.buffer)
+		r.entryCount = info.count
 		if stop, err := f(timeID); stop || err != nil {
 			return err
 		}
@@ -82,13 +79,12 @@ func (r *Reader) Count() uint32 {
 // Next returns next record from the log data iterator or false if iteration is done.
 func (r *Reader) Next() ([]byte, bool, error) {
 	if r.entryCount == 0 {
-		r.wal.logStore.free(r.logData)
 		return nil, false, nil
 	}
 	r.entryCount--
-	scratch, _ := r.logData.Slice(r.offset, r.offset+4)
+	scratch, _ := r.buffer.Slice(r.offset, r.offset+4)
 	dataLen := binary.LittleEndian.Uint32(scratch)
-	data, err := r.logData.Slice(r.offset+4, r.offset+int64(dataLen))
+	data, err := r.buffer.Slice(r.offset+4, r.offset+int64(dataLen))
 	if err != nil {
 		return nil, false, errors.New("error reading log")
 	}

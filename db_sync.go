@@ -138,6 +138,7 @@ func (db *DB) startSyncer(interval time.Duration) {
 			case <-syncTicker.C:
 				if err := db.Sync(); err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
+					panic(err)
 				}
 			}
 		}

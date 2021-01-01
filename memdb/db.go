@@ -90,17 +90,17 @@ func Open(opts ...Options) (*DB, error) {
 		db.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
-	// Query plan
-	db.newQueryPlan()
-
-	// Log pool
-	db.newLogPool(&_LogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
-
 	if needLogRecovery || !options.logResetFlag {
 		if err := db.startRecovery(); err != nil {
 			return nil, err
 		}
 	}
+
+	// Query plan
+	db.newQueryPlan()
+
+	// Log pool
+	db.newLogPool(&_LogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
 
 	return db, nil
 }
