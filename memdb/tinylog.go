@@ -83,6 +83,7 @@ type (
 		logCount int
 	}
 	_LogPool struct {
+		mu         sync.RWMutex
 		db         *DB
 		opts       *_LogOptions
 		tinyLog    *_TinyLog
@@ -121,7 +122,7 @@ func (src *_LogOptions) withDefaultOptions() *_LogOptions {
 func (p *_LogPool) newTinyLog() {
 	timeNow := time.Now().UTC()
 	timeID := _TimeID(timeNow.Truncate(p.opts.blockDuration).UnixNano())
-	p.db.getOrCreateTimeBlock(timeID)
+	p.db.addTimeBlock(timeID)
 	p.db.internal.timeMark.add(timeID)
 	p.tinyLog = &_TinyLog{id: _TimeID(timeNow.UnixNano()), _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
 }
@@ -155,6 +156,13 @@ func (db *DB) newLogPool(opts *_LogOptions) {
 	db.internal.logPool = pool
 }
 
+// timeID returns tinyLog timeID.
+func (p *_LogPool) timeID() _TimeID {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tinyLog.timeID()
+}
+
 // size returns maximum number of concurrent jobs.
 func (p *_LogPool) size() int {
 	return p.opts.poolCapacity
@@ -175,9 +183,9 @@ func (p *_LogPool) closeWait() {
 }
 
 // write enqueues a log to write.
-func (p *_LogPool) write(tinyLog *_TinyLog) {
-	if tinyLog != nil {
-		p.writeQueue <- tinyLog
+func (p *_LogPool) write() {
+	if p.tinyLog != nil {
+		p.writeQueue <- p.tinyLog
 	}
 }
 
@@ -203,7 +211,7 @@ func (p *_LogPool) writeLoop(interval time.Duration) {
 	for {
 		select {
 		case <-p.stop:
-			p.write(p.tinyLog)
+			p.write()
 			close(p.writeQueue)
 
 			return
@@ -212,7 +220,10 @@ func (p *_LogPool) writeLoop(interval time.Duration) {
 			// before writing tiny log to the WAL.
 			switch {
 			case p.db.cap() > 0.7:
-				block := p.db.getOrCreateTimeBlock(p.db.timeID())
+				block, ok := p.db.timeBlock(p.db.timeID())
+				if !ok {
+					break
+				}
 				block.RLock()
 				size := block.data.Size()
 				block.RUnlock()
@@ -221,8 +232,10 @@ func (p *_LogPool) writeLoop(interval time.Duration) {
 				}
 				fallthrough
 			default:
-				p.write(p.tinyLog)
+				p.mu.Lock()
+				p.write()
 				p.newTinyLog()
+				p.mu.Unlock()
 			}
 		}
 	}

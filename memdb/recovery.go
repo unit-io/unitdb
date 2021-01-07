@@ -19,6 +19,7 @@ package memdb
 import (
 	"encoding/binary"
 	"sort"
+	"time"
 
 	"github.com/unit-io/unitdb/filter"
 )
@@ -87,10 +88,11 @@ func (db *DB) startRecovery() error {
 		return err
 	}
 
+	delKeys := make(map[_TimeID][]uint64)
 	err = r.Read(func(ID int64) (ok bool, err error) {
 		log := make(map[uint64][]byte)
 		l := r.Count()
-		timeID := _TimeID(ID)
+		timeID := _TimeID(time.Unix(0, ID).UTC().Truncate(db.opts.logInterval).UnixNano())
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {
@@ -109,14 +111,15 @@ func (db *DB) startRecovery() error {
 				val := data[9:]
 				off += dataLen
 				if dBit == 1 {
-					if _, exists := log[key]; exists {
-						delete(log, key)
-						continue
+					timeRefID := _TimeID(binary.LittleEndian.Uint64(val[:8]))
+					if _, ok := delKeys[timeRefID]; ok {
+						delKeys[timeRefID] = append(delKeys[timeRefID], key)
+					} else {
+						delKeys[timeRefID] = []uint64{key}
 					}
-					db.delete(key)
-					continue
+				} else {
+					log[key] = val
 				}
-				log[key] = val
 			}
 			db.internal.timeMark.add(timeID)
 			block, ok := db.timeBlocks[timeID]
@@ -140,15 +143,43 @@ func (db *DB) startRecovery() error {
 					// Append key to bloom filter
 					r.filter.Append(key)
 				}
-
 				db.internal.meter.Puts.Inc(1)
 			}
+			block.timeRefs = append(block.timeRefs, _TimeID(ID))
 			block.Unlock()
-			db.internal.meter.Recovers.Inc(int64(len(log)))
 			db.internal.timeMark.release(timeID)
+			db.internal.meter.Recovers.Inc(int64(len(log)))
 		}
 		return false, nil
 	})
+
+	for timeID, keys := range delKeys {
+		if block, exists := db.timeBlocks[timeID]; exists {
+			for _, key := range keys {
+				ikey := iKey(false, key)
+				block.RLock()
+				_, ok := block.records[ikey]
+				block.RUnlock()
+				if !ok {
+					// errEntryDoesNotExist
+					continue
+				}
+				block.Lock()
+				delete(block.records, ikey)
+				block.count--
+				db.internal.meter.Dels.Inc(1)
+				if len(block.records) == 0 {
+					delete(db.timeBlocks, _TimeID(timeID))
+					db.internal.buffer.Put(block.data)
+				}
+				block.Unlock()
+			}
+		} else {
+			for _, key := range keys {
+				db.delete(key)
+			}
+		}
+	}
 
 	return nil
 }
@@ -178,7 +209,6 @@ func (db *DB) All(f func(timeID int64, keys []uint64) (bool, error)) (err error)
 		if stop, err := f(int64(timeID), keys); stop || err != nil {
 			return err
 		}
-		db.internal.timeMark.timeUnref(timeID)
 	}
 
 	return nil

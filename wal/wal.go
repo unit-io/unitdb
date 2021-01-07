@@ -68,24 +68,24 @@ type (
 	}
 )
 
-func newWal(opts Options) (wal *WAL, needsRecovery bool, err error) {
+func newWal(opts Options) (wal *WAL, err error) {
 	wal = &WAL{
 		bufPool: bpool.NewBufferPool(opts.BufferSize, nil),
 		opts:    opts,
 	}
 	wal.logStore, err = openFile(opts.Path, opts.BufferSize)
 	if err != nil {
-		return wal, false, err
+		return wal, err
 	}
 
 	if opts.Reset {
 		wal.logStore.reset()
-		return wal, false, nil
+		return wal, nil
 	}
 
 	wal.recoverWal()
 
-	return wal, len(wal.recoveredTimeIDs) != 0, nil
+	return wal, nil
 }
 
 // recoverWal recovers a WAL for the log written but not released. It also updates free blocks.
@@ -164,7 +164,7 @@ func (wal *WAL) ok() error {
 //
 // If no WAL exists, a new one will be created.
 //
-func New(opts Options) (*WAL, bool, error) {
+func New(opts Options) (*WAL, error) {
 	// Create a wal
 	return newWal(opts)
 }

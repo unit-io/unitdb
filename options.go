@@ -167,7 +167,7 @@ func WithBatchWriteInterval(dur time.Duration) Options {
 func WithDefaultOptions() Options {
 	return newFuncOption(func(o *_Options) {
 		if o.maxSyncDurations == 0 {
-			o.maxSyncDurations = 15
+			o.maxSyncDurations = 1
 		}
 		if o.syncDurationType == 0 {
 			o.syncDurationType = time.Second

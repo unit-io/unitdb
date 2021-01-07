@@ -158,7 +158,7 @@ func TestBatch(t *testing.T) {
 			}
 		}
 		var v, vals [][]byte
-		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract))
+		v, err = db.Get(NewQuery(append(topic, []byte("?last=1h")...)).WithContract(contract).WithLimit(int(n)))
 		if err != nil {
 			t.Fatal(err)
 		}

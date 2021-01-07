@@ -17,6 +17,7 @@
 package memdb
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"sort"
@@ -60,10 +61,10 @@ type _DB struct {
 
 	// time mark to manage time records written to WAL.
 	timeMark *_TimeMark
+	timeLock _TimeLock
 
 	// tiny Log
-	timeID _TimeID
-	// writeLockC chan struct{}
+	timeRef _TimeID
 	logPool *_LogPool
 
 	// buffer pool
@@ -100,10 +101,23 @@ func (db *DB) close() error {
 	return err
 }
 
-func (db *DB) timeID() _TimeID {
+// newTimeLock set timeRef and returns timeLock.
+func (db *DB) newTimeLock(timeRef _TimeID) _Internal {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.internal.timeRef = timeRef
+	return db.internal.timeLock.getTimeLock(timeRef)
+}
+
+// timeLock returns timeLock for the current timeRef.
+func (db *DB) timeLock() _Internal {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	return db.internal.timeID
+	return db.internal.timeLock.getTimeLock(db.internal.timeRef)
+}
+
+func (db *DB) timeID() _TimeID {
+	return db.internal.logPool.timeID()
 }
 
 // blockKey gets blockKey for the Key using consistent hashing.
@@ -115,17 +129,25 @@ func (db *DB) cap() float64 {
 	return db.internal.buffer.Capacity()
 }
 
-func (db *DB) getOrCreateTimeBlock(timeID _TimeID) *_Block {
+func (db *DB) addTimeBlock(timeID _TimeID) (ok bool) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	newBlock, ok := db.timeBlocks[timeID]
-	if !ok {
-		newBlock = &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
-		db.internal.timeID = timeID
-		db.timeBlocks[timeID] = newBlock
+	if _, ok := db.timeBlocks[timeID]; !ok {
+		db.timeBlocks[timeID] = &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
+		return true
 	}
 
-	return newBlock
+	return false
+}
+
+func (db *DB) timeBlock(timeID _TimeID) (*_Block, bool) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if b, ok := db.timeBlocks[timeID]; ok {
+		return b, true
+	}
+
+	return nil, false
 }
 
 // addTimeFilter adds unique time block to the set.
@@ -214,9 +236,35 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 	return errEntryDoesNotExist
 }
 
+// move moves the entry to the new block
+func (db *DB) move(timeID _TimeID, key uint64) error {
+	newTimeID := db.timeID()
+	// add deleted key to new time block to persist deleted entry to the WAL.
+	dkey := iKey(true, key)
+	newBlock, ok := db.timeBlock(newTimeID)
+	if !ok {
+		return errForbidden
+	}
+	newBlock.Lock()
+	defer newBlock.Unlock()
+
+	rawTimeID := make([]byte, 8)
+	binary.LittleEndian.PutUint64(rawTimeID[:8], uint64(timeID))
+
+	newBlock.records[dkey] = int64(newTimeID)
+	return newBlock.put(dkey, rawTimeID)
+}
+
 // tinyWrite writes tiny log to the WAL.
 func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
-	block := db.getOrCreateTimeBlock(tinyLog.timeID())
+	timeLock := db.newTimeLock(tinyLog.ID())
+	timeLock.Lock()
+	defer timeLock.Unlock()
+	block, ok := db.timeBlock(tinyLog.timeID())
+	if !ok {
+		// all records has already deleted and nothing to write.
+		return nil
+	}
 	block.RLock()
 	blockSize := block.data.Size()
 	log, err := block.data.Slice(block.offset, blockSize)
@@ -241,9 +289,9 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	}
 
 	block.Lock()
+	defer block.Unlock()
 	block.offset = blockSize
-	block.logs = append(block.logs, tinyLog)
-	block.Unlock()
+	block.timeRefs = append(block.timeRefs, tinyLog.ID())
 
 	return nil
 }
@@ -271,8 +319,10 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 		return errEntryDoesNotExist
 	}
 
-	for _, tinyLog := range block.logs {
-		if err := db.internal.wal.SignalLogApplied(int64(tinyLog.ID())); err != nil {
+	block.RLock()
+	defer block.RUnlock()
+	for _, timeRef := range block.timeRefs {
+		if err := db.internal.wal.SignalLogApplied(int64(timeRef)); err != nil {
 			return err
 		}
 	}
@@ -280,6 +330,7 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	delete(db.timeBlocks, _TimeID(timeID))
+	db.internal.timeMark.timeUnref(timeID)
 
 	db.internal.buffer.Put(block.data)
 

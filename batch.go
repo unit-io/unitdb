@@ -42,10 +42,11 @@ type (
 	}
 
 	Batch struct {
-		db      *DB
-		mem     *memdb.Batch
-		opts    *_Options
-		managed bool
+		db         *DB
+		mem        *memdb.Batch
+		opts       *_Options
+		managed    bool
+		writeLockC chan struct{}
 
 		index  []_BatchIndex
 		buffer *bpool.Buffer
@@ -192,13 +193,17 @@ func (b *Batch) writeInternal(fn func(i int, e _Entry, data []byte) error) error
 
 // Write starts writing entries into DB. It returns an error if batch write fails.
 func (b *Batch) Write() error {
+	// write happens synchronously
+	b.writeLockC <- struct{}{}
+	defer func() {
+		<-b.writeLockC
+	}()
 	if b.len() == 0 {
 		return nil
 	}
-
 	topics := make(map[uint64]*message.Topic)
 	timeID := b.mem.TimeID()
-
+	var seqs []uint64
 	b.writeInternal(func(i int, e _Entry, data []byte) error {
 		if e.topicSize != 0 {
 			t, ok := topics[e.topicHash]
@@ -216,6 +221,7 @@ func (b *Batch) Write() error {
 		if ok := b.db.internal.timeWindow.add(timeID, e.topicHash, newWinEntry(e.seq, e.expiresAt)); !ok {
 			return errForbidden
 		}
+		seqs = append(seqs, e.seq)
 		return nil
 	})
 

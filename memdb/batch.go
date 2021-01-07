@@ -38,7 +38,7 @@ type Batch struct {
 
 func (b *Batch) newTinyLog() {
 	timeID := _TimeID(time.Now().UTC().UnixNano())
-	b.db.getOrCreateTimeBlock(timeID)
+	b.db.addTimeBlock(timeID)
 	b.tinyLog = &_TinyLog{id: timeID, _TimeID: timeID, managed: true, doneChan: make(chan struct{})}
 }
 
@@ -61,7 +61,10 @@ func (b *Batch) Put(key uint64, data []byte) error {
 		return err
 	}
 
-	block := b.db.getOrCreateTimeBlock(b.tinyLog.timeID())
+	block, ok := b.db.timeBlock(b.tinyLog.timeID())
+	if !ok {
+		return errForbidden
+	}
 
 	block.Lock()
 	defer block.Unlock()
@@ -83,7 +86,7 @@ func (b *Batch) Write() error {
 		<-b.writeLockC
 	}()
 	b.batchGroup = append(b.batchGroup, b.tinyLog.timeID())
-	b.db.internal.logPool.write(b.tinyLog)
+	b.db.internal.logPool.writeWait(b.tinyLog)
 	b.newTinyLog()
 
 	return nil

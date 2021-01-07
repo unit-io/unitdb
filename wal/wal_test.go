@@ -28,34 +28,34 @@ var (
 	logDir = "logs"
 )
 
-func newTestWal(del bool) (*WAL, bool, error) {
+func newTestWal(del bool) (*WAL, error) {
 	logOpts := Options{Path: dbPath + "/" + logDir, BufferSize: 1 << 8}
 	if del {
 		os.RemoveAll(dbPath)
 	}
 	// Make sure we have a directory.
 	if err := os.MkdirAll(dbPath, 0777); err != nil {
-		return nil, false, errors.New("newTestWal, Unable to create dir")
+		return nil, errors.New("newTestWal, Unable to create dir")
 	}
 	return New(logOpts)
 }
 
 func TestEmptyLog(t *testing.T) {
-	wal, needRecover, err := newTestWal(true)
-	if needRecover || err != nil {
+	wal, err := newTestWal(true)
+	if len(wal.recoveredTimeIDs) != 0 || err != nil {
 		t.Fatal(err)
 	}
 	defer wal.Close()
 }
 
 func TestRecovery(t *testing.T) {
-	wal, needRecovery, err := newTestWal(true)
+	wal, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer wal.Close()
 
-	if needRecovery {
+	if len(wal.recoveredTimeIDs) != 0 {
 		t.Fatalf("Write ahead log non-empty")
 	}
 
@@ -82,14 +82,14 @@ func TestRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wal, needRecovery, err = newTestWal(false)
-	if !needRecovery || err != nil {
+	wal, err = newTestWal(false)
+	if len(wal.recoveredTimeIDs) == 0 || err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLogApplied(t *testing.T) {
-	wal, _, err := newTestWal(true)
+	wal, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,8 @@ func TestLogApplied(t *testing.T) {
 	if err := wal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	wal, needRecovery, err := newTestWal(false)
-	if !needRecovery || err != nil {
+	wal, err = newTestWal(false)
+	if len(wal.recoveredTimeIDs) == 0 || err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,7 +144,7 @@ func TestLogApplied(t *testing.T) {
 }
 
 func TestSimple(t *testing.T) {
-	wal, _, err := newTestWal(true)
+	wal, err := newTestWal(true)
 	if err != nil {
 		t.Fatal(err)
 	}

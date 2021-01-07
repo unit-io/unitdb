@@ -51,8 +51,8 @@ type (
 		data         *bpool.Buffer
 		records      map[_Key]int64 // map[key]offset
 
-		logs   []*_TinyLog
-		offset int64 // offset of block data written to log
+		timeRefs []_TimeID
+		offset   int64 // offset of block data written to log
 	}
 )
 
@@ -98,13 +98,30 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 	if _, err := b.data.WriteAt(k[:], off+4); err != nil {
 		return err
 	}
+	if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
+		return err
+	}
 	if ikey.delFlag == 0 {
-		if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
-			return err
-		}
 		b.count++
 	}
 	b.records[ikey] = off
+
+	return nil
+}
+
+func (b *_Block) delete(key uint64) error {
+	ikey := iKey(false, key)
+	off := b.records[ikey]
+	// k with flag bit
+	var k [9]byte
+	k[0] = 1
+	binary.LittleEndian.PutUint64(k[1:], key)
+	if _, err := b.data.WriteAt(k[:], off+4); err != nil {
+		return err
+	}
+
+	delete(b.records, ikey)
+	b.count--
 
 	return nil
 }

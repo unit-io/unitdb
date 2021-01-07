@@ -134,7 +134,6 @@ func (db *DB) close() error {
 	// Wait for all goroutines to exit.
 	db.internal.closeW.Wait()
 
-	// fmt.Println("db.close: pending timeIDs ", db.internal.timeWindow.timeIDs)
 	// close memdb.
 	db.internal.mem.Close()
 
@@ -169,13 +168,11 @@ func (db *DB) close() error {
 func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
 	err := r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
-		// fmt.Println("db.loadTrie: topicHash, seq ", topicHash, startSeq)
 		e, err := db.internal.reader.readEntry(startSeq)
 		if err != nil {
 			return true, err
 		}
 		if e.topicSize == 0 {
-			// fmt.Println("db.loadTrie: topic not found topicHash, seq ", topicHash, startSeq)
 			return false, nil
 		}
 		rawtopic, err := db.internal.reader.readTopic(e)
@@ -231,7 +228,6 @@ func (db *DB) lookup(q *Query) error {
 		for _, we := range wEntries {
 			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}
-		// fmt.Println("db.lookup: topicHash, count ", topic.hash, len(wEntries))
 	}
 
 	return nil
@@ -311,7 +307,6 @@ func (db *DB) setEntry(e *Entry) error {
 	// topic data is added on first entry for the topic.
 	if e.entry.topicSize != 0 {
 		copy(e.entry.cache[entrySize+idSize:], rawTopic)
-		// fmt.Println("db.setEntry: topicHash, seq ", e.entry.topicHash, e.entry.seq)
 	}
 	copy(e.entry.cache[entrySize+idSize+uint32(e.entry.topicSize):], val)
 	return nil
@@ -352,7 +347,7 @@ func (db *DB) batch() *Batch {
 	opts := &_Options{}
 	WithDefaultBatchOptions().set(opts)
 	opts.batchOptions.encryption = db.internal.dbInfo.encryption == 1
-	b := &Batch{opts: opts, db: db, buffer: db.internal.bufPool.Get()}
+	b := &Batch{db: db, opts: opts, writeLockC: make(chan struct{}, 1), buffer: db.internal.bufPool.Get()}
 	b.mem = db.internal.mem.NewBatch()
 	b.commitComplete = make(chan struct{})
 
