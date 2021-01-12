@@ -9,7 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/cmd/memdb",
+            "program": "${workspaceFolder}/examples/memdb",
             "env": {},
             "args": []
         }

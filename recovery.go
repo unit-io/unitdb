@@ -29,7 +29,7 @@ func (db *_SyncHandle) recoverWindowBlocks(windowEntries map[uint64]_WindowEntri
 	for h, wEntries := range windowEntries {
 		topicOff, ok := db.internal.trie.getOffset(h)
 		if !ok {
-			return errors.New(fmt.Sprintf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h))
+			return fmt.Errorf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h)
 		}
 		wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 		if err != nil {

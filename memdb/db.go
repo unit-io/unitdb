@@ -97,11 +97,11 @@ func Open(opts ...Options) (*DB, error) {
 		}
 	}
 
-	// Query plan
-	db.newQueryPlan()
+	// Query manager
+	db.newQueryManager()
 
-	// Log pool
-	db.newLogPool(&_LogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
+	// Log Manager
+	db.newLogManager(&_TinyLogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
 
 	return db, nil
 }
@@ -187,14 +187,14 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	db.mu.RUnlock()
 
 	// first execute query plan
-	if len(db.internal.queryPlan.timeFilters[blockKey].timeRecords) == 0 {
+	if len(db.internal.queryManager.timeFilters[blockKey].timeRecords) == 0 {
 		if err := db.seek(key, 0); err != nil {
 			return nil, err
 		}
 	}
 
 	// Lookup key first for the current timeRecord.
-	block, ok := db.internal.queryPlan.timeBlocks[db.internal.queryPlan.timeRcord]
+	block, ok := db.internal.queryManager.timeBlocks[db.internal.queryManager.timeRcord]
 	if ok {
 		block.RLock()
 		off, ok := block.records[iKey(false, key)]
@@ -211,7 +211,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 	db.mu.RLock()
 	// Get time block
-	r, ok := db.internal.queryPlan.timeFilters[blockKey]
+	r, ok := db.internal.queryManager.timeFilters[blockKey]
 	db.mu.RUnlock()
 	if !ok {
 		return nil, errEntryDoesNotExist
@@ -227,7 +227,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return timeIDs[i] > timeIDs[j]
 	})
 	for _, timeID := range timeIDs {
-		block, ok := db.internal.queryPlan.timeBlocks[timeID]
+		block, ok := db.internal.queryManager.timeBlocks[timeID]
 		if ok {
 			block.RLock()
 			off, ok := block.records[iKey(false, key)]
@@ -236,7 +236,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 				block.RLock()
 				defer block.RUnlock()
 				db.internal.meter.Gets.Inc(1)
-				db.internal.queryPlan.timeRcord = timeID
+				db.internal.queryManager.timeRcord = timeID
 
 				return block.get(off)
 			}
@@ -250,7 +250,7 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	}
 
 	// reset timeBlock and start over
-	db.internal.queryPlan.timeFilters[blockKey] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+	db.internal.queryManager.timeFilters[blockKey] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 
 	return db.Get(key)
 }

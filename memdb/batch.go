@@ -86,7 +86,7 @@ func (b *Batch) Write() error {
 		<-b.writeLockC
 	}()
 	b.batchGroup = append(b.batchGroup, b.tinyLog.timeID())
-	b.db.internal.logPool.writeWait(b.tinyLog)
+	b.db.internal.logManager.writeWait(b.tinyLog)
 	b.newTinyLog()
 
 	return nil

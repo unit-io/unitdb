@@ -193,7 +193,7 @@ func WithDefaultOptions() Options {
 	})
 }
 
-// WithBackgroundSyncInterval sets the amount of time between background fsync() calls.
+// WithMaxSyncDuration sets the amount of time between background fsync() calls.
 func WithMaxSyncDuration(dur time.Duration, interval int) Options {
 	return newFuncOption(func(o *_Options) {
 		o.maxSyncDurations = interval
@@ -232,7 +232,7 @@ func WithMemdbSize(size int64) Options {
 	})
 }
 
-// WithMinimumFreeBlocksSize sets minimum freeblocks size
+// WithFreeBlockSize sets minimum freeblocks size
 // before free blocks are allocated and reused.
 func WithFreeBlockSize(size int64) Options {
 	return newFuncOption(func(o *_Options) {

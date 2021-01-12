@@ -232,7 +232,7 @@ func (b *Batch) Write() error {
 }
 
 // Commit commits changes to the DB. In batch operation commit is managed and client is not allowed to call Commit.
-// On Commit complete batch operation signal to the caller if the batch is fully commited to DB.
+// On Commit complete batch operation signal to the caller if the batch is fully committed to DB.
 func (b *Batch) Commit() error {
 	_assert(!b.managed, "managed batch commit not allowed")
 

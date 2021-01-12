@@ -64,8 +64,8 @@ type _DB struct {
 	timeLock _TimeLock
 
 	// tiny Log
-	timeRef _TimeID
-	logPool *_LogPool
+	timeRef    _TimeID
+	logManager *_TinyLogManager
 
 	// buffer pool
 	buffer *bpool.BufferPool
@@ -74,7 +74,7 @@ type _DB struct {
 	wal *wal.WAL
 
 	// query
-	queryPlan *_LogicalPlan
+	queryManager *_QueryManager
 
 	// close
 	closed uint32
@@ -86,7 +86,7 @@ func (db *DB) close() error {
 		return errClosed
 	}
 
-	db.internal.logPool.closeWait()
+	db.internal.logManager.closeWait()
 
 	var err error
 	if db.internal.closer != nil {
@@ -117,7 +117,7 @@ func (db *DB) timeLock() _Internal {
 }
 
 func (db *DB) timeID() _TimeID {
-	return db.internal.logPool.timeID()
+	return db.internal.logManager.timeID()
 }
 
 // blockKey gets blockKey for the Key using consistent hashing.
@@ -172,13 +172,13 @@ func (db *DB) addTimeFilter(timeID _TimeID, key uint64) error {
 	return nil
 }
 
-func (db *DB) newQueryPlan() {
-	queryPlan := &_LogicalPlan{timeBlocks: make(map[_TimeID]*_Block), timeFilters: make(map[_BlockKey]*_TimeFilter)}
+func (db *DB) newQueryManager() {
+	queryManager := &_QueryManager{timeBlocks: make(map[_TimeID]*_Block), timeFilters: make(map[_BlockKey]*_TimeFilter)}
 	for i := 0; i < nBlocks; i++ {
-		queryPlan.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+		queryManager.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 	}
 
-	db.internal.queryPlan = queryPlan
+	db.internal.queryManager = queryManager
 }
 
 // seek finds timeRecords and timeBlock for the provided key and cutoff duration and caches those for query.
@@ -214,13 +214,13 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 			_, ok := block.records[iKey(false, key)]
 			block.RUnlock()
 			if ok {
-				b, ok := db.internal.queryPlan.timeFilters[blockKey]
+				b, ok := db.internal.queryManager.timeFilters[blockKey]
 				if ok {
 					b.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
 				}
-				db.internal.queryPlan.timeBlocks[timeID] = block
+				db.internal.queryManager.timeBlocks[timeID] = block
 				if cutoff != 0 {
-					db.internal.queryPlan.cutoff = _TimeID(cutoff)
+					db.internal.queryManager.cutoff = _TimeID(cutoff)
 				}
 				return nil
 			}
@@ -267,7 +267,7 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	}
 	block.RLock()
 	blockSize := block.data.Size()
-	log, err := block.data.Slice(block.offset, blockSize)
+	log, err := block.data.Slice(block.lastOffset, blockSize)
 	block.RUnlock()
 	if err != nil {
 		return err
@@ -290,7 +290,7 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 
 	block.Lock()
 	defer block.Unlock()
-	block.offset = blockSize
+	block.lastOffset = blockSize
 	block.timeRefs = append(block.timeRefs, tinyLog.ID())
 
 	return nil

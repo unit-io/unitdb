@@ -89,7 +89,7 @@ func (db *DB) startRecovery() error {
 	}
 
 	delKeys := make(map[_TimeID][]uint64)
-	err = r.Read(func(ID int64) (ok bool, err error) {
+	err = r.Iterator(func(ID int64) (ok bool, err error) {
 		log := make(map[uint64][]byte)
 		l := r.Count()
 		timeID := _TimeID(time.Unix(0, ID).UTC().Truncate(db.opts.logInterval).UnixNano())

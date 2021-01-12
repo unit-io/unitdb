@@ -57,7 +57,7 @@ func (b *_TinyLog) abort() {
 }
 
 type (
-	_LogOptions struct {
+	_TinyLogOptions struct {
 		// writeInterval default value is 100ms, setting writeInterval to zero disables writing the log to the WAL.
 		writeInterval time.Duration
 
@@ -82,10 +82,10 @@ type (
 		// value might need to be bumped under high load.
 		logCount int
 	}
-	_LogPool struct {
+	_TinyLogManager struct {
 		mu         sync.RWMutex
 		db         *DB
-		opts       *_LogOptions
+		opts       *_TinyLogOptions
 		tinyLog    *_TinyLog
 		writeQueue chan *_TinyLog
 		logQueue   chan *_TinyLog
@@ -95,8 +95,8 @@ type (
 	}
 )
 
-func (src *_LogOptions) withDefaultOptions() *_LogOptions {
-	opts := _LogOptions{}
+func (src *_TinyLogOptions) withDefaultOptions() *_TinyLogOptions {
+	opts := _TinyLogOptions{}
 	if src != nil {
 		opts = *src
 	}
@@ -119,7 +119,7 @@ func (src *_LogOptions) withDefaultOptions() *_LogOptions {
 	return &opts
 }
 
-func (p *_LogPool) newTinyLog() {
+func (p *_TinyLogManager) newTinyLog() {
 	timeNow := time.Now().UTC()
 	timeID := _TimeID(timeNow.Truncate(p.opts.blockDuration).UnixNano())
 	p.db.addTimeBlock(timeID)
@@ -127,9 +127,9 @@ func (p *_LogPool) newTinyLog() {
 	p.tinyLog = &_TinyLog{id: _TimeID(timeNow.UnixNano()), _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
 }
 
-func (db *DB) newLogPool(opts *_LogOptions) {
+func (db *DB) newLogManager(opts *_TinyLogOptions) {
 	opts = opts.withDefaultOptions()
-	pool := &_LogPool{
+	logManager := &_TinyLogManager{
 		db:         db,
 		opts:       opts,
 		tinyLog:    &_TinyLog{},
@@ -138,38 +138,38 @@ func (db *DB) newLogPool(opts *_LogOptions) {
 		stop:       make(chan struct{}),
 	}
 
-	pool.newTinyLog()
+	logManager.newTinyLog()
 
 	// start the write loop
-	go pool.writeLoop(opts.writeInterval)
+	go logManager.writeLoop(opts.writeInterval)
 
 	// start the commit loop
-	pool.stopWg.Add(1)
-	go pool.commitLoop()
+	logManager.stopWg.Add(1)
+	go logManager.commitLoop()
 
 	// start the dispacther
 	for i := 0; i < opts.logCount; i++ {
-		pool.stopWg.Add(1)
-		go pool.dispatch(opts.timeout)
+		logManager.stopWg.Add(1)
+		go logManager.dispatch(opts.timeout)
 	}
 
-	db.internal.logPool = pool
+	db.internal.logManager = logManager
 }
 
 // timeID returns tinyLog timeID.
-func (p *_LogPool) timeID() _TimeID {
+func (p *_TinyLogManager) timeID() _TimeID {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.tinyLog.timeID()
 }
 
 // size returns maximum number of concurrent jobs.
-func (p *_LogPool) size() int {
+func (p *_TinyLogManager) size() int {
 	return p.opts.poolCapacity
 }
 
-// stop tells dispatcher to exit, and wether or not complete queued jobs.
-func (p *_LogPool) close(wait bool) {
+// close tells dispatcher to exit, and wether or not complete queued jobs.
+func (p *_TinyLogManager) close(wait bool) {
 	p.stopOnce.Do(func() {
 		// Close write queue and wait for currently running jobs to finish.
 		close(p.stop)
@@ -177,20 +177,20 @@ func (p *_LogPool) close(wait bool) {
 	p.stopWg.Wait()
 }
 
-// stopWait stops worker pool and wait for all queued jobs to complete.
-func (p *_LogPool) closeWait() {
+// closeWait stops worker pool and wait for all queued jobs to complete.
+func (p *_TinyLogManager) closeWait() {
 	p.close(true)
 }
 
 // write enqueues a log to write.
-func (p *_LogPool) write() {
+func (p *_TinyLogManager) write() {
 	if p.tinyLog != nil {
 		p.writeQueue <- p.tinyLog
 	}
 }
 
 // writeWait enqueues the log and waits for it to be executed.
-func (p *_LogPool) writeWait(tinyLog *_TinyLog) {
+func (p *_TinyLogManager) writeWait(tinyLog *_TinyLog) {
 	if tinyLog == nil {
 		return
 	}
@@ -199,7 +199,7 @@ func (p *_LogPool) writeWait(tinyLog *_TinyLog) {
 }
 
 // writeLoop enqueue the tiny log to the log pool.
-func (p *_LogPool) writeLoop(interval time.Duration) {
+func (p *_TinyLogManager) writeLoop(interval time.Duration) {
 	var writeC <-chan time.Time
 
 	if interval > 0 {
@@ -242,7 +242,7 @@ func (p *_LogPool) writeLoop(interval time.Duration) {
 }
 
 // dispatch handles tiny log commit for the jobs in queue.
-func (p *_LogPool) dispatch(timeout time.Duration) {
+func (p *_TinyLogManager) dispatch(timeout time.Duration) {
 LOOP:
 	for {
 		select {
@@ -271,7 +271,7 @@ WAIT:
 }
 
 // commitLoop commits the tiny log to the WAL.
-func (p *_LogPool) commitLoop() {
+func (p *_TinyLogManager) commitLoop() {
 	for {
 		select {
 		case <-p.stop:

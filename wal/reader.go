@@ -35,7 +35,7 @@ type Reader struct {
 	wal *WAL
 }
 
-// NewReader returns new log reader to read logs from WAL.
+// NewReader returns new log reader to read the logs from the WAL.
 func (wal *WAL) NewReader() (*Reader, error) {
 	if err := wal.ok(); err != nil {
 		return &Reader{wal: wal}, err
@@ -48,8 +48,8 @@ func (wal *WAL) NewReader() (*Reader, error) {
 	return r, nil
 }
 
-// Read reads log written to the WAL but fully applied. It returns Reader iterator.
-func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
+// Iterator iterates the pending logs from the WAL.
+func (r *Reader) Iterator(f func(timeID int64) (bool, error)) (err error) {
 	r.wal.mu.RLock()
 	r.buffer = r.wal.bufPool.Get()
 	defer func() {
@@ -71,12 +71,12 @@ func (r *Reader) Read(f func(timeID int64) (bool, error)) (err error) {
 	return nil
 }
 
-// Count returns entry count in the current reader.
+// Count returns entry count for the current interation.
 func (r *Reader) Count() uint32 {
 	return r.entryCount
 }
 
-// Next returns next record from the log data iterator or false if iteration is done.
+// Next returns next record from the iterator or false if iteration is done.
 func (r *Reader) Next() ([]byte, bool, error) {
 	if r.entryCount == 0 {
 		return nil, false, nil

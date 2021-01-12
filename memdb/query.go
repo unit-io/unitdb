@@ -16,7 +16,7 @@
 
 package memdb
 
-type _LogicalPlan struct {
+type _QueryManager struct {
 	timeRcord   _TimeID
 	timeFilters map[_BlockKey]*_TimeFilter
 	timeBlocks  _TimeBlocks

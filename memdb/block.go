@@ -51,8 +51,8 @@ type (
 		data         *bpool.Buffer
 		records      map[_Key]int64 // map[key]offset
 
-		timeRefs []_TimeID
-		offset   int64 // offset of block data written to log
+		timeRefs   []_TimeID
+		lastOffset int64 // last offset of block data written to the log
 	}
 )
 

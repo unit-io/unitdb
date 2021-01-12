@@ -74,15 +74,15 @@ func newLease(fs _FileSet, minimumSize int64) *_Lease {
 }
 
 // MarshalBinary serialized leased blocks into binary data.
-func (s *_FreeBlocks) MarshalBinary() []byte {
-	size := 4 + (12 * len(s.fb))
+func (b *_FreeBlocks) MarshalBinary() []byte {
+	size := 4 + (12 * len(b.fb))
 	buf := make([]byte, size)
 	data := buf
-	binary.LittleEndian.PutUint32(buf[:4], uint32(len(s.fb)))
+	binary.LittleEndian.PutUint32(buf[:4], uint32(len(b.fb)))
 	buf = buf[4:]
-	for i := 0; i < len(s.fb); i++ {
-		binary.LittleEndian.PutUint64(buf[:8], uint64(s.fb[i].offset))
-		binary.LittleEndian.PutUint32(buf[8:12], s.fb[i].size)
+	for i := 0; i < len(b.fb); i++ {
+		binary.LittleEndian.PutUint64(buf[:8], uint64(b.fb[i].offset))
+		binary.LittleEndian.PutUint32(buf[8:12], b.fb[i].size)
 		buf = buf[12:]
 	}
 	return data
@@ -112,9 +112,9 @@ func (l *_Lease) freeBlocks(blockID uint64) *_FreeBlocks {
 	return l.blocks[l.consistent.FindBlock(blockID)]
 }
 
-func (s *_FreeBlocks) search(size uint32) int {
-	return sort.Search(len(s.fb), func(i int) bool {
-		return s.fb[i].size >= size
+func (b *_FreeBlocks) search(size uint32) int {
+	return sort.Search(len(b.fb), func(i int) bool {
+		return b.fb[i].size >= size
 	})
 }
 
