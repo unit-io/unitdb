@@ -255,8 +255,8 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 	return db.Get(key)
 }
 
-// ForEachBlock gets all keys from DB committed to WAL.
-func (db *DB) ForEachBlock(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
+// BlockIterator iterates all time blocks from DB committed to the WAL.
+func (db *DB) BlockIterator(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
 	// Get timeBlocks successfully committed to WAL.
 	timeIDs := db.internal.timeMark.timeRefs(db.timeID())
 	for _, timeID := range timeIDs {

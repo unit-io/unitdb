@@ -214,7 +214,7 @@ func (db *_SyncHandle) Sync() error {
 	// defer profile.Start().Stop()
 	var err1 error
 	timeRelease := db.internal.timeWindow.release()
-	err := db.internal.mem.ForEachBlock(func(timeID int64, seqs []uint64) (bool, error) {
+	err := db.internal.mem.BlockIterator(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
 		sort.Slice(seqs[:], func(i, j int) bool {
 			return seqs[i] < seqs[j]

@@ -164,10 +164,10 @@ func (db *DB) close() error {
 	return err
 }
 
-// loadTopicHash loads topic and offset from window file.
+// loadTopicHash loads topic and offset from window blocks on stored on disk.
 func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
-	err := r.foreachWindowBlock(func(startSeq, topicHash uint64, off int64) (bool, error) {
+	err := r.blockIterator(func(startSeq, topicHash uint64, off int64) (bool, error) {
 		e, err := db.internal.reader.readEntry(startSeq)
 		if err != nil {
 			return true, err

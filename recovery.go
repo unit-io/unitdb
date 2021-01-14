@@ -132,14 +132,14 @@ func (db *_SyncHandle) startRecovery() error {
 			logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
 			return true, err
 		}
-		timeRelease := db.internal.timeWindow.release()
+		// timeRelease := db.internal.timeWindow.release()
 		if err := db.sync(true); err != nil {
 			return true, err
 		}
 		if db.syncInfo.syncComplete {
-			if err := timeRelease(timeID); err != nil {
-				return false, err
-			}
+			// if err := timeRelease(timeID); err != nil {
+			// 	return false, err
+			// }
 			if err := db.internal.mem.Free(timeID); err != nil {
 				return true, err
 			}

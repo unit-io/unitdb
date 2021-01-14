@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package unitdb;
+
+option go_package='.;unitdb';
+
+// Ingestion interface
+service Ingestion {
+rpc Start (ConnInfo) returns (ConnInfo){}
+
+rpc Stream (stream Packet) returns (stream Packet);
+
+rpc Stop (Empty) returns (Empty){}
+}
+
+message Empty {
+}
+
+message Packet {
+bytes data=1;
+}
+
+message ConnInfo {
+string client_id=1;
+string network=2;
+string address=3;
+}
+
+message InMsg {
+	oneof Message {
+		PutRequest put = 1;
+		DeleteRequest del = 2;
+	}
+}
+
+message OutMsg {
+	oneof Message {
+		PutResponse putresp = 1;
+		DeleteResponse delresp = 2;
+	}
+}
+
+enum MessageType {
+	RESERVED=0;
+	CONNECT=1;
+	CONNACK=2;
+    PUT=3;
+    PUTRESP=4;
+    DEL=5;
+    DELRESP=6;
+	PINGREQ=7;
+	PINGRESP=8;
+	DISCONNECT=9;
+}
+
+message FixedHeader {
+	MessageType messageType = 1;
+	int32 remainingLength=5;
+}
+
+// Connect represents a connect packet.
+message Conn {
+	string protoName=1;
+	int32 version=2;
+	bool insecureFlag=3;
+	bool usernameFlag=4;
+	bool passwordFlag=5;
+	int32 keepAlive=6;
+	string clientID=7;
+	string username=8;
+	string password=9;
+}
+
+// Connack represents a connack packet.
+// 0x00 connection accepted
+// 0x01 refused: unacceptable proto version
+// 0x02 refused: identifier rejected
+// 0x03 refused server unavailiable
+// 0x04 bad user or password
+// 0x05 not authorized
+message Connack {
+	int32 returnCode=1;
+	int32 connID=2;
+}
+
+//Pingreq is a keepalive
+message Pingreq {
+}
+
+//Pingresp is for saying "hey, the server is alive"
+message Pingresp {
+}
+
+//Disconnect is to signal you want to cease communications with the server
+message Disconnect {
+	int32 messageID=1;
+}
+
+// PutRequest represents a put packet.
+message PutRequest {
+	int32 messageID=1;
+	string topic=2;
+	string payload=3;
+    string ttl=4;
+}
+
+// PutResponse is sent to verify the receipt of a put
+message PutResponse {
+	int32 messageID=1;
+    string error=2;
+}
+
+// DeleteRequest represents a delete packet.
+message DeleteRequest {
+	int32 messageID=1;
+	string topic=2;
+}
+
+// DeleteResponse is sent to verify the receipt of a delete
+message DeleteResponse {
+	int32 messageID=1;
+    string error=2;
+}

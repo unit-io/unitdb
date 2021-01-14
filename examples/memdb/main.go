@@ -10,7 +10,7 @@ import (
 
 func main() {
 	// Opening a database.
-	db, err := memdb.Open(memdb.WithLogFilePath("unitdb"))
+	db, err := memdb.Open(memdb.WithLogFilePath("example"))
 	if err != nil {
 		log.Fatal(err)
 		return

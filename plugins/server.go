@@ -1,4 +1,4 @@
-package pubsub
+package plugins
 
 import (
 	"crypto/tls"
@@ -19,6 +19,8 @@ type Proto int
 
 const (
 	NONE Proto = iota
+	TCP
+	HTTP
 	GRPC
 	GRPC_WEB
 )

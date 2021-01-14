@@ -1,4 +1,4 @@
-package pubsub
+package plugins
 
 import (
 	"context"
@@ -7,15 +7,10 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	plugins "github.com/unit-io/unite/plugins/grpc"
-	pbx "github.com/unit-io/unite/proto"
+	pbx "github.com/unit-io/unitdb/plugins/pubsub"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
-)
-
-const (
-	MaxMessageSize = 1 << 19
 )
 
 type GrpcServer server
@@ -31,10 +26,10 @@ func NewGrpcServer(opts ...Options) *GrpcServer {
 	return srv
 }
 
-// Start implements unite.Connect
+// Start implements Connect
 func (s *GrpcServer) Start(ctx context.Context, info *pbx.ConnInfo) (*pbx.ConnInfo, error) {
 	if info != nil {
-		// Will panic if msg is not of *pbx.Conn type. This is an intentional panic.
+		// Will panic if msg is not of *Conn type. This is an intentional panic.
 		return &pbx.ConnInfo{}, nil
 	}
 	return nil, nil
@@ -42,21 +37,21 @@ func (s *GrpcServer) Start(ctx context.Context, info *pbx.ConnInfo) (*pbx.ConnIn
 
 func StreamConn(
 	stream grpc.Stream,
-) *plugins.Conn {
+) *Conn {
 	packetFunc := func(msg proto.Message) *[]byte {
 		return &msg.(*pbx.Packet).Data
 	}
-	return &plugins.Conn{
+	return &Conn{
 		Stream: stream,
 		InMsg:  &pbx.Packet{},
 		OutMsg: &pbx.Packet{},
-		Encode: plugins.Encode(packetFunc),
-		Decode: plugins.Decode(packetFunc),
+		Encode: Encode(packetFunc),
+		Decode: Decode(packetFunc),
 	}
 }
 
 // Stream implements duplex unite.Stream
-func (s *GrpcServer) Stream(stream pbx.Unite_StreamServer) error {
+func (s *GrpcServer) Stream(stream pbx.Pubsub_StreamServer) error {
 	conn := StreamConn(stream)
 	defer conn.Close()
 
@@ -94,7 +89,7 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 	}
 
 	srv := grpc.NewServer(opts...)
-	pbx.RegisterUniteServer(srv, s)
+	pbx.RegisterPubsubServer(srv, s)
 	log.Printf("gRPC/%s%s server is registered", grpc.Version, secure)
 	go func() {
 		if err := srv.Serve(list); err != nil {
@@ -104,4 +99,4 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 	return nil
 }
 
-var _ pbx.UniteServer = (*GrpcServer)(nil)
+var _ pbx.PubsubServer = (*GrpcServer)(nil)

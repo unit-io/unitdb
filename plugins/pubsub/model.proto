@@ -4,8 +4,8 @@ package unitdb;
 
 option go_package='.;unitdb';
 
-// PLugin interface
-service Plugin {
+// Pubsub interface
+service Pubsub {
 rpc Start (ConnInfo) returns (ConnInfo){}
 
 rpc Stream (stream Packet) returns (stream Packet);
@@ -51,32 +51,32 @@ enum MessageType {
 	CONNACK=2;
 	PUBLISH=3;
 	PUBACK=4;
-	SUBSCRIBE=8;
-	SUBACK=9;
-	UNSUBSCRIBE=10;
-	UNSUBACK=11;
-	PINGREQ=12;
-	PINGRESP=13;
-	DISCONNECT=14;
+	SUBSCRIBE=5;
+	SUBACK=6;
+	UNSUBSCRIBE=7;
+	UNSUBACK=8;
+	PINGREQ=9;
+	PINGRESP=10;
+	DISCONNECT=11;
 }
 
 message FixedHeader {
-	MessageType MessageType = 1;
-	int32 RemainingLength=5;
+	MessageType messageType = 1;
+	int32 remainingLength=2;
 }
 
 // Connect represents a connect packet.
 message Conn {
-	string ProtoName=1;
-	int32 Version=2;
-	bool InsecureFlag=3;
-	bool UsernameFlag=4;
-	bool PasswordFlag=5;
-	bool CleanSessFlag=9;
-	int32 KeepAlive=10;
-	string ClientID=11;
-	string Username=14;
-	string Password=15;
+	string protoName=1;
+	int32 version=2;
+	bool insecureFlag=3;
+	bool usernameFlag=4;
+	bool passwordFlag=5;
+	bool cleanSessFlag=6;
+	int32 keepAlive=7;
+	string clientID=8;
+	string username=9;
+	string password=10;
 }
 
 // Connack represents a connack packet.
@@ -87,8 +87,8 @@ message Conn {
 // 0x04 bad user or password
 // 0x05 not authorized
 message Connack {
-	int32 ReturnCode=1;
-	int32 ConnID=2;
+	int32 returnCode=1;
+	int32 connID=2;
 }
 
 //Pingreq is a keepalive
@@ -101,45 +101,45 @@ message Pingresp {
 
 //Disconnect is to signal you want to cease communications with the server
 message Disconnect {
-	int32 MessageID=1;
+	int32 messageID=1;
 }
 
 // Publish represents a publish packet.
 message Publish {
-	int32 MessageID=1;
-	string Topic=2;
-	string Payload=3;
+	int32 messageID=1;
+	string topic=2;
+	string payload=3;
 }
 
 //Puback is sent to verify the receipt of a publish
 message Puback {
-	int32 MessageID=1;
+	int32 messageID=1;
 }
 
 //Subscriber is pairing the Qos and topic together
 //for the QOS' pairs in unsubscribe and subscribe
 message Subscriber {
-	string Topic=1;
+	string topic=1;
 }
 
 //Subscribe tells the server which topics the client would like to subscribe to
 message Subscribe {
-	int32 MessageID=1;
-	repeated Subscriber Subscribers=2;
+	int32 messageID=1;
+	repeated Subscriber subscribers=2;
 }
 
 //Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
 message Suback {
-	int32 MessageID=1;
+	int32 messageID=1;
 }
 
 //Unsubscribe is the Packet to send if you don't want to subscribe to a topic anymore
 message Unsubscribe {
-	int32 MessageID=1;
-	repeated Subscriber Subscribers=2;
+	int32 messageID=1;
+	repeated Subscriber subscribers=2;
 }
 
 //Unsuback is to unsubscribe as suback is to subscribe
 message Unsuback {
-	int32 MessageID=1;
+	int32 messageID=1;
 }

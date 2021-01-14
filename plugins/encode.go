@@ -1,7 +1,11 @@
-package common
+package plugins
 
 import (
 	"github.com/golang/protobuf/proto"
+)
+
+const (
+	MaxMessageSize = 1 << 19
 )
 
 // Encoder encodes a byte slice to write into the destination proto.Message.

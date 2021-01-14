@@ -16,7 +16,9 @@
 
 package unitdb
 
-import "io"
+import (
+	"io"
+)
 
 type _WindowReader struct {
 	winBlock  _WinBlock
@@ -52,8 +54,8 @@ func (r *_WindowReader) readWindowBlock() (_WinBlock, error) {
 	return r.winBlock, nil
 }
 
-// foreachWindowBlock iterates winBlocks on DB init to store topic hash and last offset of topic into trie.
-func (r *_WindowReader) foreachWindowBlock(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
+// blockIterator iterates all window blocks from disk.
+func (r *_WindowReader) blockIterator(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
 	windowIdx := int32(0)
 	nBlocks := r.windowIdx
 	for windowIdx <= nBlocks {
@@ -69,7 +71,7 @@ func (r *_WindowReader) foreachWindowBlock(f func(startSeq, topicHash uint64, of
 		if b.entryIdx == 0 || b.next != 0 {
 			continue
 		}
-		// fmt.Println("timeWindow.foreachTimeBlock: topicHash, seq ", b.topicHash, b.entries[0].sequence)
+		// fmt.Println("timeWindow.blockIterator: topicHash, seq ", b.topicHash, b.entries[0].sequence)
 		if stop, err := f(b.entries[0].sequence, b.topicHash, r.offset); stop || err != nil {
 			return err
 		}
