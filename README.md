@@ -35,11 +35,6 @@ Unitdb supports Get, Put, Delete operations. It also supports encryption, batch 
 
 Samples are available in the examples directory for reference.
 
-## Projects Using Unitdb
-Below is a list of projects that use Unitdb.
-
-- [unite](https://github.com/unit-io/unite) Lightweight, high performance messaging system for micro-services, and internet connected devices.
-
 ## Architecture Overview
 The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to log files in the form of blocks.
 
