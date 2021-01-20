@@ -10,8 +10,9 @@ import (
 
 	jcr "github.com/DisposaBoy/JsonConfigReader"
 	"github.com/rs/zerolog"
-	"github.com/unit-io/unitdb/server/config"
-	"github.com/unit-io/unitdb/server/pkg/log"
+	"github.com/unit-io/unitdb/server/internal"
+	"github.com/unit-io/unitdb/server/internal/config"
+	"github.com/unit-io/unitdb/server/internal/pkg/log"
 )
 
 func main() {
@@ -56,21 +57,21 @@ func main() {
 
 	// Initialize cluster and receive calculated workerId.
 	// Cluster won't be started here yet.
-	ClusterInit(cfg.Cluster, clusterSelf)
+	internal.ClusterInit(cfg.Cluster, clusterSelf)
 
-	Globals.ConnCache = NewConnCache()
+	internal.Globals.ConnCache = internal.NewConnCache()
 
-	svc, err := NewService(context.Background(), cfg)
+	svc, err := internal.NewService(context.Background(), cfg)
 	if err != nil {
 		panic(err.Error())
 	}
 
 	// Start accepting cluster traffic.
-	if Globals.Cluster != nil {
-		Globals.Cluster.Start()
+	if internal.Globals.Cluster != nil {
+		internal.Globals.Cluster.Start()
 	}
 
-	Globals.Service = svc
+	internal.Globals.Service = svc
 
 	//Listen and serve
 	svc.Listen()
