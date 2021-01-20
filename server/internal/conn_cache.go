@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -6,27 +22,27 @@ import (
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 )
 
-type ConnCache struct {
+type _ConnCache struct {
 	sync.RWMutex
-	m map[uid.LID]*Conn
+	m map[uid.LID]*_Conn
 }
 
-func NewConnCache() *ConnCache {
-	cache := &ConnCache{
-		m: make(map[uid.LID]*Conn),
+func NewConnCache() *_ConnCache {
+	cache := &_ConnCache{
+		m: make(map[uid.LID]*_Conn),
 	}
 
 	return cache
 }
 
-func (cc *ConnCache) Add(conn *Conn) {
+func (cc *_ConnCache) add(conn *_Conn) {
 	cc.Lock()
 	defer cc.Unlock()
 	cc.m[conn.connid] = conn
 }
 
 // Get fetches a connection from cache by connection ID.
-func (cc *ConnCache) Get(connid uid.LID) *Conn {
+func (cc *_ConnCache) get(connid uid.LID) *_Conn {
 	cc.Lock()
 	defer cc.Unlock()
 	if conn := cc.m[connid]; conn != nil {
@@ -36,7 +52,7 @@ func (cc *ConnCache) Get(connid uid.LID) *Conn {
 	return nil
 }
 
-func (cc *ConnCache) Delete(connid uid.LID) {
+func (cc *_ConnCache) delete(connid uid.LID) {
 	cc.Lock()
 	defer cc.Unlock()
 	delete(cc.m, connid)

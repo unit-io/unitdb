@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -23,10 +39,10 @@ import (
 	"github.com/unit-io/unitdb/server/internal/store"
 )
 
-//Service is a main struct
-type Service struct {
-	PID     uint32             // The processid is unique Id for the application
-	MAC     *crypto.MAC        // The MAC to use for decoding and encoding keys.
+// _Service is a main struct
+type _Service struct {
+	pid     uint32             // The processid is unique Id for the application
+	mac     *crypto.MAC        // The MAC to use for decoding and encoding keys.
 	cache   *sync.Map          // The cache for the contracts.
 	context context.Context    // context for the service
 	config  *config.Config     // The configuration for the service.
@@ -39,10 +55,10 @@ type Service struct {
 	stats   *stats.Stats
 }
 
-func NewService(ctx context.Context, cfg *config.Config) (s *Service, err error) {
+func NewService(ctx context.Context, cfg *config.Config) (s *_Service, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s = &Service{
-		PID:     uid.NewUnique(),
+	s = &_Service{
+		pid:     uid.NewUnique(),
 		cache:   new(sync.Map),
 		context: ctx,
 		config:  cfg,
@@ -56,6 +72,8 @@ func NewService(ctx context.Context, cfg *config.Config) (s *Service, err error)
 		stats: stats.New(&stats.Config{Addr: "localhost:8094", Size: 50}, stats.MaxPacketSize(1400), stats.MetricPrefix("trace")),
 	}
 
+	Globals.connCache = NewConnCache()
+
 	// // Varz
 	// if cfg.VarzPath != "" {
 	// 	s.http.HandleFunc(cfg.VarzPath, s.HandleVarz)
@@ -68,7 +86,7 @@ func NewService(ctx context.Context, cfg *config.Config) (s *Service, err error)
 	s.tcp.Handler = s.onAcceptConn
 
 	// Create a new MAC from the key.
-	if s.MAC, err = crypto.New([]byte(s.config.Encryption(s.config.EncryptionConfig).Key)); err != nil {
+	if s.mac, err = crypto.New([]byte(s.config.Encryption(s.config.EncryptionConfig).Key)); err != nil {
 		return nil, err
 	}
 
@@ -92,7 +110,7 @@ func netListener(addr string) (net.Listener, error) {
 }
 
 //Listen starts the service
-func (s *Service) Listen() (err error) {
+func (s *_Service) Listen() (err error) {
 	defer s.Close()
 	s.hookSignals()
 
@@ -103,7 +121,7 @@ func (s *Service) Listen() (err error) {
 }
 
 //listen configures main listerner on specefied address
-func (s *Service) listen(addr string) {
+func (s *_Service) listen(addr string) {
 	//Create a new listener
 	log.Info("service.listen", "starting the listner at "+addr)
 
@@ -129,13 +147,13 @@ func (s *Service) listen(addr string) {
 }
 
 // Handle a new connection request
-func (s *Service) onAcceptConn(t net.Conn, proto lp.Proto) {
+func (s *_Service) onAcceptConn(t net.Conn, proto lp.Proto) {
 	conn := s.newConn(t, proto)
 	go conn.readLoop()
 	go conn.writeLoop(s.context)
 }
 
-func (s *Service) onSignal(sig os.Signal) {
+func (s *_Service) onSignal(sig os.Signal) {
 	switch sig {
 	case syscall.SIGTERM:
 		fallthrough
@@ -146,7 +164,7 @@ func (s *Service) onSignal(sig os.Signal) {
 	}
 }
 
-func (s *Service) hookSignals() {
+func (s *_Service) hookSignals() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
@@ -157,7 +175,7 @@ func (s *Service) hookSignals() {
 	}()
 }
 
-func (s *Service) Close() {
+func (s *_Service) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}

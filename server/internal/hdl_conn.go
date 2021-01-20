@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -23,7 +39,7 @@ const (
 	requestKeygen   = 812942072  // hash("keygen")
 )
 
-func (c *Conn) readLoop() error {
+func (c *_Conn) readLoop() error {
 	defer func() {
 		log.Info("conn.Handler", "closing...")
 		c.close()
@@ -43,14 +59,14 @@ func (c *Conn) readLoop() error {
 		}
 
 		// Message handler
-		if err := c.handler(pkt); err != nil {
+		if err := c.handle(pkt); err != nil {
 			return err
 		}
 	}
 }
 
 // handle handles inbound packets.
-func (c *Conn) handler(pkt lp.Packet) error {
+func (c *_Conn) handle(pkt lp.Packet) error {
 	start := time.Now()
 	var status int = 200
 	defer func() {
@@ -80,7 +96,7 @@ func (c *Conn) handler(pkt lp.Packet) error {
 		c.send <- connack
 
 		if err == types.ErrInvalidClientId {
-			c.sendClientID(clientid.Encode(c.service.MAC))
+			c.sendClientID(clientid.Encode(c.service.mac))
 			return err
 		}
 
@@ -173,7 +189,7 @@ func (c *Conn) handler(pkt lp.Packet) error {
 }
 
 // writeLook handles outbound packets
-func (c *Conn) writeLoop(ctx context.Context) {
+func (c *_Conn) writeLoop(ctx context.Context) {
 	c.closeW.Add(1)
 	defer c.closeW.Done()
 
@@ -210,11 +226,11 @@ func (c *Conn) writeLoop(ctx context.Context) {
 }
 
 // onConnect is a handler for Connect events.
-func (c *Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
+func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onConnect").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 	var clientid = uid.ID{}
-	if clientID != nil && len(clientID) > c.service.MAC.Overhead() {
+	if clientID != nil && len(clientID) > c.service.mac.Overhead() {
 		if contract, ok := c.service.cache.Load(crypto.SignatureToUint32(clientID[crypto.EpochSize:crypto.MessageOffset])); ok {
 			clientid, err := uid.CachedClientID(contract.(uint32))
 			if err != nil {
@@ -224,7 +240,7 @@ func (c *Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 		}
 	}
 
-	clientid, err := uid.Decode(clientID, c.service.MAC)
+	clientid, err := uid.Decode(clientID, c.service.mac)
 
 	if err != nil {
 		clientid, err = uid.NewClientID(1)
@@ -237,7 +253,7 @@ func (c *Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 
 	//do not cache primary client Id
 	if !clientid.IsPrimary() {
-		cid := []byte(clientid.Encode(c.service.MAC))
+		cid := []byte(clientid.Encode(c.service.mac))
 		c.service.cache.LoadOrStore(crypto.SignatureToUint32(cid[crypto.EpochSize:crypto.MessageOffset]), clientid.Contract())
 	}
 
@@ -245,7 +261,7 @@ func (c *Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 }
 
 // onSubscribe is a handler for Subscribe events.
-func (c *Conn) onSubscribe(pkt lp.Subscribe, msgTopic []byte) *types.Error {
+func (c *_Conn) onSubscribe(pkt lp.Subscribe, msgTopic []byte) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
@@ -285,7 +301,7 @@ func (c *Conn) onSubscribe(pkt lp.Subscribe, msgTopic []byte) *types.Error {
 // ------------------------------------------------------------------------------------
 
 // onUnsubscribe is a handler for Unsubscribe events.
-func (c *Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error {
+func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
@@ -310,7 +326,7 @@ func (c *Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error {
 }
 
 // OnPublish is a handler for Publish events.
-func (c *Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, payload []byte) *types.Error {
+func (c *_Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, payload []byte) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
@@ -353,7 +369,7 @@ func (c *Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, payl
 }
 
 // ack acknowledges a packet
-func (c *Conn) ack(pkt lp.Publish) *types.Error {
+func (c *_Conn) ack(pkt lp.Publish) *types.Error {
 	switch pkt.FixedHeader.Qos {
 	case 2:
 		pubrec := &lp.Pubrec{
@@ -375,7 +391,7 @@ func (c *Conn) ack(pkt lp.Publish) *types.Error {
 }
 
 // Load all stored messages and resend them to ensure QOS > 1,2 even after an application crash.
-func (c *Conn) resume() {
+func (c *_Conn) resume() {
 	// contract is used as blockId and key prefix
 	keys := store.Log.Keys()
 	for _, k := range keys {
@@ -404,7 +420,7 @@ func (c *Conn) resume() {
 	}
 }
 
-func (c *Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
+func (c *_Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
 	// Attempt to decode the key
 	key, err := security.DecodeKey(topic.Key)
 	if err != nil {
@@ -425,7 +441,7 @@ func (c *Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
 }
 
 // onSpecialRequest processes an special request.
-func (c *Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool) {
+func (c *_Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool) {
 	var resp interface{}
 	defer func() {
 		if b, err := json.Marshal(resp); err == nil {
@@ -444,7 +460,7 @@ func (c *Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool)
 
 	switch topic.Target() {
 	case requestClientId:
-		resp, ok = c.onClientIdRequest()
+		resp, ok = c.onClientIDRequest()
 		return
 	case requestKeygen:
 		resp, ok = c.onKeyGen(payload)
@@ -455,7 +471,7 @@ func (c *Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool)
 }
 
 // onClientIdRequest is a handler that returns new client id for the request.
-func (c *Conn) onClientIdRequest() (interface{}, bool) {
+func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 	if !c.clientid.IsPrimary() {
 		return types.ErrClientIdForbidden, false
 	}
@@ -464,7 +480,7 @@ func (c *Conn) onClientIdRequest() (interface{}, bool) {
 	if err != nil {
 		return types.ErrBadRequest, false
 	}
-	cid := clientid.Encode(c.service.MAC)
+	cid := clientid.Encode(c.service.mac)
 	return &types.ClientIdResponse{
 		Status:   200,
 		ClientId: cid,
@@ -473,7 +489,7 @@ func (c *Conn) onClientIdRequest() (interface{}, bool) {
 }
 
 // onKeyGen processes a keygen request.
-func (c *Conn) onKeyGen(payload []byte) (interface{}, bool) {
+func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	// Deserialize the payload.
 	msg := types.KeyGenRequest{}
 	if err := json.Unmarshal(payload, &msg); err != nil {

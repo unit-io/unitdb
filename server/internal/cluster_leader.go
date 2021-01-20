@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -14,7 +30,7 @@ import (
 // rehashing using the new list. When the dead node is revived, rehashing happens again.
 
 // Failover config
-type clusterFailover struct {
+type _ClusterFailover struct {
 	// Current leader
 	leader string
 	// Current election term
@@ -30,60 +46,60 @@ type clusterFailover struct {
 	nodeFailCountLimit int
 
 	// Channel for processing leader pings
-	leaderPing chan *ClusterPing
+	leaderPing chan *_ClusterPing
 	// Channel for processing election votes
-	electionVote chan *ClusterVote
+	electionVote chan *_ClusterVote
 	// Channel for stopping the failover runner
 	done chan bool
 }
 
-type clusterFailoverConfig struct {
+type _ClusterFailoverConfig struct {
 	// Failover is enabled
-	Enabled bool `json:"enabled"`
+	enabled bool `json:"enabled"`
 	// Time in milliseconds between heartbeats
-	Heartbeat int `json:"heartbeat"`
+	heartbeat int `json:"heartbeat"`
 	// Number of failed heartbeats before a leader election is initiated.
-	VoteAfter int `json:"vote_after"`
+	voteAfter int `json:"vote_after"`
 	// Number of failures before a node is considered dead
-	NodeFailAfter int `json:"node_fail_after"`
+	nodeFailAfter int `json:"node_fail_after"`
 }
 
-// ClusterPing is content of a leader node ping to a follower node.
-type ClusterPing struct {
+// _ClusterPing is content of a leader node ping to a follower node.
+type _ClusterPing struct {
 	// Name of the leader node
-	Leader string
+	leader string
 	// Election term
-	Term int
+	term int
 	// Ring hash signature that represents the cluster
-	Signature string
+	signature string
 	// Names of nodes currently active in the cluster
-	Nodes []string
+	nodes []string
 }
 
-// ClusterVoteRequest is a request from a leader candidate to a node to vote for the candidate.
-type ClusterVoteRequest struct {
+// _ClusterVoteRequest is a request from a leader candidate to a node to vote for the candidate.
+type _ClusterVoteRequest struct {
 	// Candidate node which issued this request
-	Node string
+	node string
 	// Election term
-	Term int
+	term int
 }
 
-// ClusterVoteResponse is a vote from a node.
-type ClusterVoteResponse struct {
+// _ClusterVoteResponse is a vote from a node.
+type _ClusterVoteResponse struct {
 	// Actual vote
-	Result bool
+	result bool
 	// Node's term after the vote
-	Term int
+	term int
 }
 
-// ClusterVote is a vote request and a response in leader election.
-type ClusterVote struct {
-	req  *ClusterVoteRequest
-	resp chan ClusterVoteResponse
+// _ClusterVote is a vote request and a response in leader election.
+type _ClusterVote struct {
+	req  *_ClusterVoteRequest
+	resp chan _ClusterVoteResponse
 }
 
-func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
-	if config == nil || !config.Enabled {
+func (c *_Cluster) failoverInit(config *_ClusterFailoverConfig) bool {
+	if config == nil || !config.enabled {
 		return false
 	}
 	if len(c.nodes) < 2 {
@@ -102,16 +118,16 @@ func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
 
 	// Random heartbeat ticker: 0.75 * config.HeartBeat + random(0, 0.5 * config.HeartBeat)
 	rand.Seed(time.Now().UnixNano())
-	hb := time.Duration(config.Heartbeat) * time.Millisecond
+	hb := time.Duration(config.heartbeat) * time.Millisecond
 	hb = (hb >> 1) + (hb >> 2) + time.Duration(rand.Intn(int(hb>>1)))
 
-	c.fo = &clusterFailover{
+	c.fo = &_ClusterFailover{
 		activeNodes:        activeNodes,
 		heartBeat:          hb,
-		voteTimeout:        config.VoteAfter,
-		nodeFailCountLimit: config.NodeFailAfter,
-		leaderPing:         make(chan *ClusterPing, config.VoteAfter),
-		electionVote:       make(chan *ClusterVote, len(c.nodes)),
+		voteTimeout:        config.voteAfter,
+		nodeFailCountLimit: config.nodeFailAfter,
+		leaderPing:         make(chan *_ClusterPing, config.voteAfter),
+		electionVote:       make(chan *_ClusterVote, len(c.nodes)),
 		done:               make(chan bool, 1)}
 
 	log.Println("cluster: failover mode enabled")
@@ -119,9 +135,9 @@ func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
 	return true
 }
 
-// Ping is called by the leader node to assert leadership and check status
+// ping is called by the leader node to assert leadership and check status
 // of the followers.
-func (c *Cluster) Ping(ping *ClusterPing, unused *bool) error {
+func (c *_Cluster) ping(ping *_ClusterPing, unused *bool) error {
 	select {
 	case c.fo.leaderPing <- ping:
 	default:
@@ -129,11 +145,11 @@ func (c *Cluster) Ping(ping *ClusterPing, unused *bool) error {
 	return nil
 }
 
-// Vote processes request for a vote from a candidate.
-func (c *Cluster) Vote(vreq *ClusterVoteRequest, response *ClusterVoteResponse) error {
-	respChan := make(chan ClusterVoteResponse, 1)
+// vote processes request for a vote from a candidate.
+func (c *_Cluster) vote(vreq *_ClusterVoteRequest, response *_ClusterVoteResponse) error {
+	respChan := make(chan _ClusterVoteResponse, 1)
 
-	c.fo.electionVote <- &ClusterVote{
+	c.fo.electionVote <- &_ClusterVote{
 		req:  vreq,
 		resp: respChan}
 
@@ -142,16 +158,16 @@ func (c *Cluster) Vote(vreq *ClusterVoteRequest, response *ClusterVoteResponse) 
 	return nil
 }
 
-func (c *Cluster) sendPings() {
+func (c *_Cluster) sendPings() {
 	rehash := false
 
 	for _, node := range c.nodes {
 		unused := false
-		err := node.call("Cluster.Ping", &ClusterPing{
-			Leader:    c.thisNodeName,
-			Term:      c.fo.term,
-			Signature: c.ring.Signature(),
-			Nodes:     c.fo.activeNodes}, &unused)
+		err := node.call("Cluster.Ping", &_ClusterPing{
+			leader:    c.thisNodeName,
+			term:      c.fo.term,
+			signature: c.ring.Signature(),
+			nodes:     c.fo.activeNodes}, &unused)
 
 		if err != nil {
 			node.failCount++
@@ -185,7 +201,7 @@ func (c *Cluster) sendPings() {
 	}
 }
 
-func (c *Cluster) electLeader() {
+func (c *_Cluster) electLeader() {
 	// Increment the term (voting for myself in this term) and clear the leader
 	c.fo.term++
 	c.fo.leader = ""
@@ -199,10 +215,10 @@ func (c *Cluster) electLeader() {
 
 	// Send async requests for votes to other nodes
 	for _, node := range c.nodes {
-		response := ClusterVoteResponse{}
-		node.callAsync("Cluster.Vote", &ClusterVoteRequest{
-			Node: c.thisNodeName,
-			Term: c.fo.term}, &response, done)
+		response := _ClusterVoteResponse{}
+		node.callAsync("Cluster.Vote", &_ClusterVoteRequest{
+			node: c.thisNodeName,
+			term: c.fo.term}, &response, done)
 	}
 
 	// Number of votes received (1 vote for self)
@@ -216,10 +232,10 @@ func (c *Cluster) electLeader() {
 		select {
 		case call := <-done:
 			if call.Error == nil {
-				if call.Reply.(*ClusterVoteResponse).Result {
+				if call.Reply.(*_ClusterVoteResponse).result {
 					// Vote in my favor
 					voteCount++
-				} else if c.fo.term < call.Reply.(*ClusterVoteResponse).Term {
+				} else if c.fo.term < call.Reply.(*_ClusterVoteResponse).term {
 					// Vote against me. Abandon vote: this node's term is behind the cluster
 					i = nodeCount
 					voteCount = 0
@@ -241,7 +257,7 @@ func (c *Cluster) electLeader() {
 }
 
 // Go routine that processes calls related to leader election and maintenance.
-func (c *Cluster) run() {
+func (c *_Cluster) run() {
 
 	ticker := time.NewTicker(c.fo.heartBeat)
 
@@ -267,33 +283,33 @@ func (c *Cluster) run() {
 		case ping := <-c.fo.leaderPing:
 			// Ping from a leader.
 
-			if ping.Term < c.fo.term {
+			if ping.term < c.fo.term {
 				// This is a ping from a stale leader. Ignore.
-				log.Println("cluster: ping from a stale leader", ping.Term, c.fo.term, ping.Leader, c.fo.leader)
+				log.Println("cluster: ping from a stale leader", ping.term, c.fo.term, ping.leader, c.fo.leader)
 				continue
 			}
 
-			if ping.Term > c.fo.term {
-				c.fo.term = ping.Term
-				c.fo.leader = ping.Leader
+			if ping.term > c.fo.term {
+				c.fo.term = ping.term
+				c.fo.leader = ping.leader
 				log.Printf("cluster: leader '%s' elected", c.fo.leader)
-			} else if ping.Leader != c.fo.leader {
+			} else if ping.leader != c.fo.leader {
 				if c.fo.leader != "" {
 					// Wrong leader. It's a bug, should never happen!
 					log.Printf("cluster: wrong leader '%s' while expecting '%s'; term %d",
-						ping.Leader, c.fo.leader, ping.Term)
+						ping.leader, c.fo.leader, ping.term)
 				} else {
-					log.Printf("cluster: leader set to '%s'", ping.Leader)
+					log.Printf("cluster: leader set to '%s'", ping.leader)
 				}
-				c.fo.leader = ping.Leader
+				c.fo.leader = ping.leader
 			}
 
 			missed = 0
-			if ping.Signature != c.ring.Signature() {
+			if ping.signature != c.ring.Signature() {
 				if rehashSkipped {
 					log.Println("cluster: rehashing at a request of",
-						ping.Leader, ping.Nodes, ping.Signature, c.ring.Signature())
-					c.rehash(ping.Nodes)
+						ping.leader, ping.nodes, ping.signature, c.ring.Signature())
+					c.rehash(ping.nodes)
 					rehashSkipped = false
 
 					//globals.hub.rehash <- true
@@ -303,17 +319,17 @@ func (c *Cluster) run() {
 			}
 
 		case vreq := <-c.fo.electionVote:
-			if c.fo.term < vreq.req.Term {
+			if c.fo.term < vreq.req.term {
 				// This is a new election. This node has not voted yet. Vote for the requestor and
 				// clear the current leader.
-				log.Printf("Voting YES for %s, my term %d, vote term %d", vreq.req.Node, c.fo.term, vreq.req.Term)
-				c.fo.term = vreq.req.Term
+				log.Printf("Voting YES for %s, my term %d, vote term %d", vreq.req.node, c.fo.term, vreq.req.term)
+				c.fo.term = vreq.req.term
 				c.fo.leader = ""
-				vreq.resp <- ClusterVoteResponse{Result: true, Term: c.fo.term}
+				vreq.resp <- _ClusterVoteResponse{result: true, term: c.fo.term}
 			} else {
 				// This node has voted already or stale election, reject.
-				log.Printf("Voting NO for %s, my term %d, vote term %d", vreq.req.Node, c.fo.term, vreq.req.Term)
-				vreq.resp <- ClusterVoteResponse{Result: false, Term: c.fo.term}
+				log.Printf("Voting NO for %s, my term %d, vote term %d", vreq.req.node, c.fo.term, vreq.req.term)
+				vreq.resp <- _ClusterVoteResponse{result: false, term: c.fo.term}
 			}
 		case <-c.fo.done:
 			return

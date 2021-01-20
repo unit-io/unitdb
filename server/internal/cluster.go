@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -26,22 +42,22 @@ const (
 	clusterHashReplicas = 20
 )
 
-type clusterNodeConfig struct {
-	Name string `json:"name"`
-	Addr string `json:"addr"`
+type _ClusterNodeConfig struct {
+	name string `json:"name"`
+	addr string `json:"addr"`
 }
 
-type clusterConfig struct {
+type _ClusterConfig struct {
 	// List of all members of the cluster, including this member
-	Nodes []clusterNodeConfig `json:"nodes"`
+	nodes []_ClusterNodeConfig `json:"nodes"`
 	// Name of this cluster node
-	ThisName string `json:"self"`
+	thisName string `json:"self"`
 	// Failover configuration
-	Failover *clusterFailoverConfig
+	failover *_ClusterFailoverConfig
 }
 
-// ClusterNode is a client's connection to another node.
-type ClusterNode struct {
+// _ClusterNode is a client's connection to another node.
+type _ClusterNode struct {
 	lock sync.Mutex
 
 	// RPC endpoint
@@ -62,58 +78,58 @@ type ClusterNode struct {
 	done chan bool
 }
 
-// ClusterSess is a basic info on a remote session where the message was created.
-type ClusterSess struct {
+// _ClusterSess is a basic info on a remote session where the message was created.
+type _ClusterSess struct {
 	// IP address of the client. For long polling this is the IP of the last poll
-	RemoteAddr string
+	remoteAddr string
 
 	// Connection ID
-	ConnID uid.LID
+	connID uid.LID
 
 	// Client ID
-	ClientID uid.ID
+	clientID uid.ID
 }
 
-// ClusterReq is a Proxy to Master request message.
-type ClusterReq struct {
+// _ClusterReq is a Proxy to Master request message.
+type _ClusterReq struct {
 	// Name of the node sending this request
-	Node string
+	node string
 
 	// Ring hash signature of the node sending this request
 	// Signature must match the signature of the receiver, otherwise the
 	// Cluster is desynchronized.
-	Signature string
+	signature string
 
-	MsgSub   *lp.Subscribe
-	MsgPub   *lp.Publish
-	MsgUnsub *lp.Unsubscribe
-	Topic    *security.Topic
-	Type     uint8
-	Message  *message.Message
+	msgSub   *lp.Subscribe
+	msgPub   *lp.Publish
+	msgUnsub *lp.Unsubscribe
+	topic    *security.Topic
+	reqType  uint8
+	message  *message.Message
 
 	// Originating session
-	Conn *ClusterSess
+	conn *_ClusterSess
 	// True if the original session has disconnected
-	ConnGone bool
+	connGone bool
 }
 
-// ClusterResp is a Master to Proxy response message.
-type ClusterResp struct {
-	Type     uint8
-	MsgSub   *lp.Subscribe
-	MsgPub   *lp.Publish
-	MsgUnsub *lp.Unsubscribe
-	Msg      []byte
-	Topic    *security.Topic
-	Message  *message.Message
+// _ClusterResp is a Master to Proxy response message.
+type _ClusterResp struct {
+	respType uint8
+	msgSub   *lp.Subscribe
+	msgPub   *lp.Publish
+	msgUnsub *lp.Unsubscribe
+	msg      []byte
+	topic    *security.Topic
+	message  *message.Message
 	// Connection ID to forward message to, if any.
-	FromConnID uid.LID
+	fromConnID uid.LID
 }
 
 // Handle outbound node communication: read messages from the channel, forward to remote nodes.
 // FIXME(gene): this will drain the outbound queue in case of a failure: all unprocessed messages will be dropped.
 // Maybe it's a good thing, maybe not.
-func (n *ClusterNode) reconnect() {
+func (n *_ClusterNode) reconnect() {
 	var reconnTicker *time.Ticker
 
 	// Avoid parallel reconnection threads
@@ -165,7 +181,7 @@ func (n *ClusterNode) reconnect() {
 	}
 }
 
-func (n *ClusterNode) call(proc string, msg, resp interface{}) error {
+func (n *_ClusterNode) call(proc string, msg, resp interface{}) error {
 	if !n.connected {
 		return errors.New("cluster.call: node '" + n.name + "' not connected")
 	}
@@ -186,7 +202,7 @@ func (n *ClusterNode) call(proc string, msg, resp interface{}) error {
 	return nil
 }
 
-func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *rpc.Call) *rpc.Call {
+func (n *_ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *rpc.Call) *rpc.Call {
 	if done != nil && cap(done) == 0 {
 		log.Fatal("cluster.callAsync", "RPC done channel is unbuffered", nil)
 	}
@@ -232,9 +248,9 @@ func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *r
 }
 
 // Proxy forwards message to master
-func (n *ClusterNode) forward(msg *ClusterReq) error {
+func (n *_ClusterNode) forward(msg *_ClusterReq) error {
 	log.Info("cluster.forward", "forwarding request to node "+n.name)
-	msg.Node = Globals.Cluster.thisNodeName
+	msg.node = Globals.Cluster.thisNodeName
 	rejected := false
 	err := n.call("Cluster.Master", msg, &rejected)
 	if err == nil && rejected {
@@ -243,10 +259,10 @@ func (n *ClusterNode) forward(msg *ClusterReq) error {
 	return err
 }
 
-// Cluster is the representation of the cluster.
-type Cluster struct {
+// _Cluster is the representation of the cluster.
+type _Cluster struct {
 	// Cluster nodes with RPC endpoints
-	nodes map[string]*ClusterNode
+	nodes map[string]*_ClusterNode
 	// Name of the local node
 	thisNodeName string
 
@@ -259,49 +275,49 @@ type Cluster struct {
 	ring *rh.Ring
 
 	// Failover parameters. Could be nil if failover is not enabled
-	fo *clusterFailover
+	fo *_ClusterFailover
 }
 
-// Master at topic's master node receives C2S messages from topic's proxy nodes.
+// master at topic's master node receives C2S messages from topic's proxy nodes.
 // The message is treated like it came from a session: find or create a session locally,
 // dispatch the message to it like it came from a normal ws/lp connection.
 // Called by a remote node.
-func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
-	log.Info("cluster.Master", "master request received from node "+msg.Node)
+func (c *_Cluster) master(msg *_ClusterReq, rejected *bool) error {
+	log.Info("cluster.Master", "master request received from node "+msg.node)
 
 	// Find the local connection associated with the given remote connection.
-	conn := Globals.ConnCache.Get(msg.Conn.ConnID)
+	conn := Globals.connCache.get(msg.conn.connID)
 
-	if msg.ConnGone {
+	if msg.connGone {
 		// Original session has disconnected. Tear down the local proxied session.
 		if conn != nil {
 			conn.stop <- nil
 		}
-	} else if msg.Signature == c.ring.Signature() {
+	} else if msg.signature == c.ring.Signature() {
 		// This cluster member received a request for a topic it owns.
 
 		if conn == nil {
 			// If the session is not found, create it.
-			node := Globals.Cluster.nodes[msg.Node]
+			node := Globals.Cluster.nodes[msg.node]
 			if node == nil {
-				log.Error("cluster.Master", "request from an unknown node "+msg.Node)
+				log.Error("cluster.Master", "request from an unknown node "+msg.node)
 				return nil
 			}
 
-			log.Info("cluster.Master", "new connection request"+string(msg.Conn.ConnID))
-			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.ClientID)
+			log.Info("cluster.Master", "new connection request"+string(msg.conn.connID))
+			conn = Globals.Service.newRpcConn(node, msg.conn.connID, msg.conn.clientID)
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
-		conn.connid = msg.Conn.ConnID
+		conn.connid = msg.conn.connID
 
-		switch msg.Type {
+		switch msg.reqType {
 		case message.SUBSCRIBE:
-			conn.handler(msg.MsgSub)
+			conn.handle(msg.msgSub)
 		case message.UNSUBSCRIBE:
-			conn.handler(msg.MsgUnsub)
+			conn.handle(msg.msgUnsub)
 		case message.PUBLISH:
-			conn.handler(msg.MsgPub)
+			conn.handle(msg.msgPub)
 		}
 	} else {
 		// Reject the request: wrong signature, cluster is out of sync.
@@ -312,25 +328,25 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 }
 
 // Dispatch receives messages from the master node addressed to a specific local connection.
-func (Cluster) Proxy(resp *ClusterResp, unused *bool) error {
-	log.Info("cluster.Proxy", "response from Master for connection "+string(resp.FromConnID))
+func (_Cluster) proxy(resp *_ClusterResp, unused *bool) error {
+	log.Info("cluster.Proxy", "response from Master for connection "+string(resp.fromConnID))
 
 	// This cluster member received a response from topic owner to be forwarded to a connection
 	// Find appropriate connection, send the message to it
 
-	if conn := Globals.ConnCache.Get(resp.FromConnID); conn != nil {
-		if !conn.SendRawBytes(resp.Msg) {
+	if conn := Globals.connCache.get(resp.fromConnID); conn != nil {
+		if !conn.SendRawBytes(resp.msg) {
 			log.Error("cluster.Proxy", "Proxy: timeout")
 		}
 	} else {
-		log.ErrLogger.Error().Str("context", "cluster.Proxy").Uint64("connid", uint64(resp.FromConnID)).Msg("master response for unknown session")
+		log.ErrLogger.Error().Str("context", "cluster.Proxy").Uint64("connid", uint64(resp.fromConnID)).Msg("master response for unknown session")
 	}
 
 	return nil
 }
 
 // Given contract name, find appropriate cluster node to route message to
-func (c *Cluster) nodeForContract(contract string) *ClusterNode {
+func (c *_Cluster) nodeForContract(contract string) *_ClusterNode {
 	key := c.ring.Get(contract)
 	if key == c.thisNodeName {
 		log.Error("cluster", "request to route to self")
@@ -345,7 +361,7 @@ func (c *Cluster) nodeForContract(contract string) *ClusterNode {
 	return node
 }
 
-func (c *Cluster) isRemoteContract(contract string) bool {
+func (c *_Cluster) isRemoteContract(contract string) bool {
 	if c == nil {
 		// Cluster not initialized, all contracts are local
 		return false
@@ -354,7 +370,7 @@ func (c *Cluster) isRemoteContract(contract string) bool {
 }
 
 // Forward client message to the Master (cluster node which owns the topic)
-func (c *Cluster) routeToContract(msg lp.Packet, topic *security.Topic, msgType uint8, m *message.Message, conn *Conn) error {
+func (c *_Cluster) routeToContract(msg lp.Packet, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
 	// Find the cluster node which owns the topic, then forward to it.
 	n := c.nodeForContract(string(conn.clientid.Contract()))
 	if n == nil {
@@ -383,23 +399,23 @@ func (c *Cluster) routeToContract(msg lp.Packet, topic *security.Topic, msgType 
 		msgPub.IsForwarded = true
 	}
 	return n.forward(
-		&ClusterReq{
-			Node:      c.thisNodeName,
-			Signature: c.ring.Signature(),
-			MsgSub:    msgSub,
-			MsgUnsub:  msgUnsub,
-			MsgPub:    msgPub,
-			Topic:     topic,
-			Type:      msgType,
-			Message:   m,
-			Conn: &ClusterSess{
+		&_ClusterReq{
+			node:      c.thisNodeName,
+			signature: c.ring.Signature(),
+			msgSub:    msgSub,
+			msgUnsub:  msgUnsub,
+			msgPub:    msgPub,
+			topic:     topic,
+			reqType:   msgType,
+			message:   m,
+			conn: &_ClusterSess{
 				//RemoteAddr: conn.(),
-				ConnID:   conn.connid,
-				ClientID: conn.clientid}})
+				connID:   conn.connid,
+				clientID: conn.clientid}})
 }
 
 // Session terminated at origin. Inform remote Master nodes that the session is gone.
-func (c *Cluster) connGone(conn *Conn) error {
+func (c *_Cluster) connGone(conn *_Conn) error {
 	if c == nil {
 		return nil
 	}
@@ -409,18 +425,18 @@ func (c *Cluster) connGone(conn *Conn) error {
 		n := c.nodes[name]
 		if n != nil {
 			return n.forward(
-				&ClusterReq{
-					Node:     c.thisNodeName,
-					ConnGone: true,
-					Conn: &ClusterSess{
+				&_ClusterReq{
+					node:     c.thisNodeName,
+					connGone: true,
+					conn: &_ClusterSess{
 						//RemoteAddr: sess.remoteAddr,
-						ConnID: conn.connid}})
+						connID: conn.connid}})
 		}
 	}
 	return nil
 }
 
-// Returns worker id
+// ClusterInit returns worker id
 func ClusterInit(configString json.RawMessage, self *string) int {
 	if Globals.Cluster != nil {
 		log.Fatal("cluster.ClusterInit", "Cluster already initialized.", nil)
@@ -432,14 +448,14 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		return 1
 	}
 
-	var config clusterConfig
+	var config _ClusterConfig
 	if err := json.Unmarshal(configString, &config); err != nil {
 		log.Fatal("cluster.ClusterInit", "error parsing cluster config", err)
 	}
 
 	thisName := *self
 	if thisName == "" {
-		thisName = config.ThisName
+		thisName = config.thisName
 	}
 
 	// Name of the current node is not specified - disable clustering
@@ -454,26 +470,26 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 	gob.Register(lp.Subscribe{})
 	gob.Register(lp.Unsubscribe{})
 
-	Globals.Cluster = &Cluster{
+	Globals.Cluster = &_Cluster{
 		thisNodeName: thisName,
-		nodes:        make(map[string]*ClusterNode)}
+		nodes:        make(map[string]*_ClusterNode)}
 
 	var nodeNames []string
-	for _, host := range config.Nodes {
-		nodeNames = append(nodeNames, host.Name)
+	for _, host := range config.nodes {
+		nodeNames = append(nodeNames, host.name)
 
-		if host.Name == thisName {
-			Globals.Cluster.listenOn = host.Addr
+		if host.name == thisName {
+			Globals.Cluster.listenOn = host.addr
 			// Don't create a cluster member for this local instance
 			continue
 		}
 
-		n := ClusterNode{
-			address: host.Addr,
-			name:    host.Name,
+		n := _ClusterNode{
+			address: host.addr,
+			name:    host.name,
 			done:    make(chan bool, 1)}
 
-		Globals.Cluster.nodes[host.Name] = &n
+		Globals.Cluster.nodes[host.name] = &n
 	}
 
 	if len(Globals.Cluster.nodes) == 0 {
@@ -481,7 +497,7 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		log.Info("cluster.ClusterInit", "Invalid cluster size: 1")
 	}
 
-	if !Globals.Cluster.failoverInit(config.Failover) {
+	if !Globals.Cluster.failoverInit(config.failover) {
 		Globals.Cluster.rehash(nil)
 	}
 
@@ -492,11 +508,11 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 }
 
 // This is a session handler at a master node: forward messages from the master to the session origin.
-func (c *Conn) rpcWriteLoop() {
+func (c *_Conn) rpcWriteLoop() {
 	// There is no readLoop for RPC, delete the session here
 	defer func() {
 		c.closeRPC()
-		Globals.ConnCache.Delete(c.connid)
+		Globals.connCache.delete(c.connid)
 		c.unsubAll()
 	}()
 
@@ -516,14 +532,14 @@ func (c *Conn) rpcWriteLoop() {
 			}
 			// The error is returned if the remote node is down. Which means the remote
 			// session is also disconnected.
-			if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: m.Bytes(), FromConnID: c.connid}, &unused); err != nil {
+			if err := c.clnode.call("Cluster.Proxy", &_ClusterResp{msg: m.Bytes(), fromConnID: c.connid}, &unused); err != nil {
 				log.Error("conn.writeRPC", err.Error())
 				return
 			}
 		case msg := <-c.stop:
 			// Shutdown is requested, don't care if the message is delivered
 			if msg != nil {
-				c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: msg.([]byte), FromConnID: c.connid}, &unused)
+				c.clnode.call("Cluster.Proxy", &_ClusterResp{msg: msg.([]byte), fromConnID: c.connid}, &unused)
 			}
 			return
 		}
@@ -531,12 +547,12 @@ func (c *Conn) rpcWriteLoop() {
 }
 
 // Proxied session is being closed at the Master node
-func (c *Conn) closeRPC() {
+func (c *_Conn) closeRPC() {
 	log.Info("cluster.closeRPC", "session closed at master")
 }
 
 // Start accepting connections.
-func (c *Cluster) Start() {
+func (c *_Cluster) Start() {
 	l, err := listener.New(c.listenOn)
 	if err != nil {
 		panic(err)
@@ -564,7 +580,7 @@ func (c *Cluster) Start() {
 		Globals.Cluster.thisNodeName, c.listenOn)
 }
 
-func (c *Cluster) shutdown() {
+func (c *_Cluster) shutdown() {
 	if Globals.Cluster == nil {
 		return
 	}
@@ -584,7 +600,7 @@ func (c *Cluster) shutdown() {
 
 // Recalculate the ring hash using provided list of nodes or only nodes in a non-failed state.
 // Returns the list of nodes used for ring hash.
-func (c *Cluster) rehash(nodes []string) []string {
+func (c *_Cluster) rehash(nodes []string) []string {
 	ring := rh.NewRing(clusterHashReplicas, nil)
 
 	var ringKeys []string

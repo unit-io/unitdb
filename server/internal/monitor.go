@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Saffat Technologies, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package internal
 
 import (
@@ -100,7 +116,7 @@ func uptime(d time.Duration) string {
 }
 
 // Varz returns a Varz struct containing the server information.
-func (s *Service) Varz() (*Varz, error) {
+func (s *_Service) Varz() (*Varz, error) {
 	// Snapshot server options.
 
 	v := &Varz{Start: s.start}
@@ -129,7 +145,7 @@ func (s *Service) Varz() (*Varz, error) {
 }
 
 // HandleVarz will process HTTP requests for conn stats information.
-func (m *Service) HandleVarz(w http.ResponseWriter, r *http.Request) {
+func (m *_Service) HandleVarz(w http.ResponseWriter, r *http.Request) {
 	// As of now, no error is ever returned
 	v, _ := m.Varz()
 	b, err := json.MarshalIndent(v, "", "  ")
