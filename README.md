@@ -38,8 +38,10 @@ Samples are available in the examples directory for reference.
 ## Clustering
 To bring up the Unitdb cluster start 2 or more nodes, 3 nodes or more nodes are recommended for fault tolerance.
 
-$ ./bin/unitdb -listen=:6060 -grpc_listen=:6080 -cluster_self=one -db_path=/tmp/unitdb/node1
-$ ./bin/unitdb -listen=:6061 -grpc_listen=:6081 -cluster_self=two -db_path=/tmp/unitdb/node2
+```
+> ./bin/unitdb -listen=:6060 -grpc_listen=:6080 -cluster_self=one -db_path=/tmp/unitdb/node1
+> ./bin/unitdb -listen=:6061 -grpc_listen=:6081 -cluster_self=two -db_path=/tmp/unitdb/node2
+```
 
 Above example shows each Unitdb node running on the same host, so each node must listen on different ports. This would not be necessary if each node ran on a different host.
 
