@@ -17,7 +17,7 @@ var f unitdb.MessageHandler = func(client unitdb.Client, msg unitdb.Message) {
 
 func main() {
 	client, err := unitdb.NewClient(
-		"grpc://localhost:6061",
+		"grpc://localhost:6080",
 		"UCBFDONCNJLaKMCAIeJBaOVfbAXUZHNPLDKKLDKLHZHKYIZLCDPQ",
 		unitdb.WithInsecure(),
 		unitdb.WithKeepAlive(2*time.Second),

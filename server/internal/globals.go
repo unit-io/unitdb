@@ -17,7 +17,7 @@
 package internal
 
 var Globals struct {
-	Cluster   *_Cluster
+	Cluster   *Cluster
 	connCache *_ConnCache
 	Service   *_Service
 }

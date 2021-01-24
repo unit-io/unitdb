@@ -40,7 +40,7 @@ type configType struct {
 	Adapters map[string]json.RawMessage `json:"adapters"`
 }
 
-func openAdapter(jsonconf string, reset bool) error {
+func openAdapter(path, jsonconf string, reset bool) error {
 	var config configType
 	if err := json.Unmarshal([]byte(jsonconf), &config); err != nil {
 		return errors.New("store: failed to parse config: " + err.Error() + "(" + jsonconf + ")")
@@ -59,14 +59,14 @@ func openAdapter(jsonconf string, reset bool) error {
 		adapterConfig = string(config.Adapters[adp.GetName()])
 	}
 
-	return adp.Open(adapterConfig, reset)
+	return adp.Open(path, adapterConfig, reset)
 }
 
 // Open initializes the persistence system. Adapter holds a connection pool for a database instance.
 // 	 name - name of the adapter rquested in the config file
 //   jsonconf - configuration string
-func Open(jsonconf string, reset bool) error {
-	if err := openAdapter(jsonconf, reset); err != nil {
+func Open(path, jsonconf string, reset bool) error {
+	if err := openAdapter(path, jsonconf, reset); err != nil {
 		return err
 	}
 
@@ -102,9 +102,9 @@ func GetAdapterName() string {
 
 // InitDb open the db connection. If jsconf is nil it will assume that the connection is already open.
 // If it's non-nil, it will use the config string to open the DB connection first.
-func InitDb(jsonconf string, reset bool) error {
+func InitDb(path, jsonconf string, reset bool) error {
 	if !IsOpen() {
-		if err := openAdapter(jsonconf, reset); err != nil {
+		if err := openAdapter(path, jsonconf, reset); err != nil {
 			return err
 		}
 	}

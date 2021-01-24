@@ -30,3 +30,10 @@ hash/consistent.go
 hash/consistent_test.go
 hash/modulo.go
 hash/rand.go
+
+-------------------------------------------------
+Unitdb includes derived work from tinode/chat under the GNU GPL v3.0. (https://github.com/tinode/chat/blob/master/LICENSE)
+
+The derived work can be found in the files:
+server/internal/cluster.go
+server/internal/cluste_leaderr.go

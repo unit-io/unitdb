@@ -55,7 +55,7 @@ type _Conn struct {
 	service            *_Service      // The service for this connection.
 	subs               *message.Stats // The subscriptions for this connection.
 	// Reference to the cluster node where the connection has originated. Set only for cluster RPC sessions
-	clnode *_ClusterNode
+	clnode *ClusterNode
 	// Cluster nodes to inform when disconnected
 	nodes map[string]bool
 
@@ -107,7 +107,7 @@ func (s *_Service) newRpcConn(conn interface{}, connid uid.LID, clientid uid.ID)
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		service:    s,
 		subs:       message.NewStats(),
-		clnode:     conn.(*_ClusterNode),
+		clnode:     conn.(*ClusterNode),
 		nodes:      make(map[string]bool, 3),
 	}
 

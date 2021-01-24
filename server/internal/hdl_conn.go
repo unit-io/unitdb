@@ -163,6 +163,7 @@ func (c *_Conn) handle(pkt lp.Packet) error {
 			status = err.Status
 			c.notifyError(err, packet.MessageID)
 		}
+	case lp.PUBACK:
 
 	case lp.PUBREC:
 		packet := *pkt.(*lp.Pubrec)

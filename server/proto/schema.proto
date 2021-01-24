@@ -1,5 +1,9 @@
 syntax = "proto3";
 
+package unitdb.schema;
+
+option go_package='.;schema';
+
 // Unitdb interface
 service Unitdb {
 rpc Start (ConnInfo) returns (ConnInfo){}
@@ -28,9 +32,13 @@ message InMsg {
 		Subscribe sub = 2;
 		Unsubscribe unsub = 3;
 		Publish pub=4;
-		QueryRequest query = 5;
-		PutRequest put = 6;
-		DeleteRequest del = 7;
+		Puback puback = 5;
+		Pubrec pubrec = 6;
+		Pubrel pubrel = 7;
+		Pubcomp pubcomp = 8;
+		QueryRequest query = 9;
+		PutRequest put = 10;
+		DeleteRequest del = 11;
 	}
 }
 
@@ -41,9 +49,12 @@ message OutMsg {
 		Unsuback unsuback = 3;
 		Publish pub = 4;
 		Puback puback = 5;
-		QueryResponse resp = 6;
-		PutResponse putresp = 7;
-		DeleteResponse delresp = 8;
+		Pubrec pubrec = 6;
+		Pubrel pubrel = 7;
+		Pubcomp pubcomp = 8;
+		QueryResponse resp = 9;
+		PutResponse putresp = 10;
+		DeleteResponse delresp = 11;
 	}
 }
 

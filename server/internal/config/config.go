@@ -55,6 +55,7 @@ type Config struct {
 	Cluster json.RawMessage `json:"cluster_config"`
 
 	// Config for database store
+	DBPath      string          `json:"db_path"`
 	StoreConfig json.RawMessage `json:"store_config"`
 
 	// Config to expose runtime stats

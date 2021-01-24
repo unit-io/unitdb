@@ -40,10 +40,7 @@ const (
 )
 
 type configType struct {
-	Dir  string `json:"dir,omitempty"`
-	Size int64  `json:"mem_size"`
-	// LogReleaseDur string `json:"log_release_duration,omitempty"`
-	// dur time.Duration
+	Size int64 `json:"mem_size"`
 }
 
 const (
@@ -65,7 +62,7 @@ type adapter struct {
 }
 
 // Open initializes database connection
-func (a *adapter) Open(jsonconfig string, reset bool) error {
+func (a *adapter) Open(path, jsonconfig string, reset bool) error {
 	if a.db != nil {
 		return errors.New("unitdb adapter is already connected")
 	}
@@ -78,12 +75,12 @@ func (a *adapter) Open(jsonconfig string, reset bool) error {
 	}
 
 	// Make sure we have a directory
-	if err := os.MkdirAll(config.Dir, 0777); err != nil {
+	if err := os.MkdirAll(path, 0777); err != nil {
 		log.Error("adapter.Open", "Unable to create db dir")
 	}
 
 	// Attempt to open the database
-	a.db, err = unitdb.Open(config.Dir+"/"+defaultDatabase, nil, unitdb.WithMutable())
+	a.db, err = unitdb.Open(path+"/"+defaultDatabase, nil, unitdb.WithMutable())
 	if err != nil {
 		log.Error("adapter.Open", "Unable to open db")
 		return err
@@ -93,7 +90,7 @@ func (a *adapter) Open(jsonconfig string, reset bool) error {
 	if reset {
 		opts = memdb.WithLogReset()
 	}
-	a.mem, err = memdb.Open(opts, memdb.WithLogFilePath(config.Dir), memdb.WithBufferSize(config.Size))
+	a.mem, err = memdb.Open(opts, memdb.WithLogFilePath(path), memdb.WithBufferSize(config.Size))
 	if err != nil {
 		return err
 	}

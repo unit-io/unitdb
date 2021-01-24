@@ -91,7 +91,7 @@ func NewService(ctx context.Context, cfg *config.Config) (s *_Service, err error
 	}
 
 	// Open database connection
-	err = store.Open(string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).CleanSession)
+	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).CleanSession)
 	if err != nil {
 		log.Fatal("service", "Failed to connect to DB:", err)
 	}

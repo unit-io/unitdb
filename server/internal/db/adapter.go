@@ -30,7 +30,7 @@ type Adapter interface {
 	// General
 
 	// Open and configure the adapter
-	Open(config string, reset bool) error
+	Open(path, config string, reset bool) error
 	// Close the adapter
 	Close() error
 	// IsOpen checks if the adapter is ready for use
