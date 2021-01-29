@@ -83,6 +83,8 @@ type ClusterSess struct {
 	// IP address of the client. For long polling this is the IP of the last poll
 	RemoteAddr string
 
+	// protocol - NONE (unset), RPC, GRPC, GRPC_WEB, WEBSOCK
+	Proto lp.Proto
 	// Connection ID
 	ConnID uid.LID
 
@@ -305,11 +307,13 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 			}
 
 			log.Info("cluster.Master", "new connection request"+string(msg.Conn.ConnID))
-			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.ClientID)
+			conn = Globals.Service.newRpcConn(node, msg.Conn.Proto, msg.Conn.ConnID, msg.Conn.ClientID)
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
+		conn.proto = msg.Conn.Proto
 		conn.connid = msg.Conn.ConnID
+		conn.clientid = msg.Conn.ClientID
 
 		switch msg.Type {
 		case message.SUBSCRIBE:
@@ -410,6 +414,7 @@ func (c *Cluster) routeToContract(msg lp.Packet, topic *security.Topic, msgType 
 			Message:   m,
 			Conn: &ClusterSess{
 				//RemoteAddr: conn.(),
+				Proto:    conn.proto,
 				ConnID:   conn.connid,
 				ClientID: conn.clientid}})
 }
@@ -525,7 +530,10 @@ func (c *_Conn) rpcWriteLoop() {
 				// channel closed
 				return
 			}
-			m, err := lp.Encode(c.proto, msg)
+			if c.adp == nil {
+				return
+			}
+			m, err := lp.Encode(c.adp, msg)
 			if err != nil {
 				log.Error("conn.writeRpc", err.Error())
 				return

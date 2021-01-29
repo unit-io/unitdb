@@ -36,7 +36,7 @@ Unitdb supports Get, Put, Delete operations. It also supports encryption, batch 
 Samples are available in the examples directory for reference.
 
 ## Clustering
-To bring up the Unitdb cluster start 2 or more nodes, 3 nodes or more nodes are recommended for fault tolerance.
+To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended.
 
 ```
 > ./bin/unitdb -listen=:6060 -grpc_listen=:6080 -cluster_self=one -db_path=/tmp/unitdb/node1

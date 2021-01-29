@@ -52,7 +52,7 @@ func (c *_Conn) readLoop() error {
 		c.socket.SetDeadline(time.Now().Add(time.Second * 120))
 
 		// Decode an incoming packet
-		pkt, err := lp.ReadPacket(c.proto, reader)
+		pkt, err := lp.ReadPacket(c.adp, reader)
 		if err != nil {
 			fmt.Println("readPacket: err", err)
 			return err
@@ -205,7 +205,7 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(c.proto, msg)
+			m, err := lp.Encode(c.adp, msg)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
@@ -216,7 +216,7 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(c.proto, msg)
+			m, err := lp.Encode(c.adp, msg)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
@@ -396,7 +396,7 @@ func (c *_Conn) resume() {
 	// contract is used as blockId and key prefix
 	keys := store.Log.Keys()
 	for _, k := range keys {
-		msg := store.Log.Get(c.proto, k)
+		msg := store.Log.Get(c.adp, k)
 		if msg == nil {
 			continue
 		}

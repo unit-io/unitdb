@@ -39,8 +39,9 @@ import (
 type _Conn struct {
 	sync.Mutex
 	tracked uint32 // Whether the connection was already tracked or not.
-	// protocol - NONE (unset), RPC, GRPC, WEBSOCK, CLUSTER
-	proto  lp.ProtoAdapter
+	// protocol - NONE (unset), RPC, GRPC, GRPC_WEB, WEBSOCK, CLUSTER
+	proto  lp.Proto
+	adp    lp.ProtoAdapter
 	socket net.Conn
 	// send     chan []byte
 	send               chan lp.Packet
@@ -65,16 +66,16 @@ type _Conn struct {
 }
 
 func (s *_Service) newConn(t net.Conn, proto lp.Proto) *_Conn {
-	var lineProto lp.ProtoAdapter
+	var adp lp.ProtoAdapter
 	switch proto {
 	case lp.GRPC:
-		lineProto = &grpc.LineProto{}
+		adp = &grpc.LineProto{}
 	case lp.GRPC_WEB:
-		lineProto = &grpc.LineProto{}
+		adp = &grpc.LineProto{}
 	}
 
 	c := &_Conn{
-		proto:      lineProto,
+		adp:        adp,
 		socket:     t,
 		MessageIds: message.NewMessageIds(),
 		send:       make(chan lp.Packet, 1), // buffered
@@ -96,8 +97,16 @@ func (s *_Service) newConn(t net.Conn, proto lp.Proto) *_Conn {
 }
 
 // newRpcConn a new connection in cluster
-func (s *_Service) newRpcConn(conn interface{}, connid uid.LID, clientid uid.ID) *_Conn {
+func (s *_Service) newRpcConn(conn interface{}, proto lp.Proto, connid uid.LID, clientid uid.ID) *_Conn {
+	var adp lp.ProtoAdapter
+	switch proto {
+	case lp.GRPC:
+		adp = &grpc.LineProto{}
+	case lp.GRPC_WEB:
+		adp = &grpc.LineProto{}
+	}
 	c := &_Conn{
+		adp:        adp,
 		connid:     connid,
 		clientid:   clientid,
 		MessageIds: message.NewMessageIds(),
@@ -307,7 +316,7 @@ func (c *_Conn) storeInbound(m lp.Packet) {
 		blockId := uint64(c.clientid.Contract())
 		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
 		fmt.Println("inbound: type, key, qos", m.Type(), k, m.Info().Qos)
-		store.Log.PersistInbound(c.proto, k, m)
+		store.Log.PersistInbound(c.adp, k, m)
 	}
 }
 
@@ -316,7 +325,7 @@ func (c *_Conn) storeOutbound(m lp.Packet) {
 		blockId := uint64(c.clientid.Contract())
 		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
 		fmt.Println("inbound: type, key, qos", m.Type(), k, m.Info().Qos)
-		store.Log.PersistOutbound(c.proto, k, m)
+		store.Log.PersistOutbound(c.adp, k, m)
 	}
 }
 

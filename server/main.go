@@ -42,7 +42,7 @@ func main() {
 	var listenOn = flag.String("listen", "", "Override address and port to listen on for HTTP(S) clients.")
 	var listenGrpcOn = flag.String("grpc_listen", "", "Override address and port to listen on for GRPC clients.")
 	var clusterSelf = flag.String("cluster_self", "", "Override the name of the current cluster node")
-	var dbPath = flag.String("db_path", "tmp/unitdb", "Override the db path.")
+	var dbPath = flag.String("db_path", "/tmp/unitdb", "Override the db path.")
 	var varzPath = flag.String("varz", "/varz", "Expose runtime stats at the given endpoint, e.g. /varz. Disabled if not set")
 	flag.Parse()
 
@@ -70,7 +70,7 @@ func main() {
 	}
 
 	// Set up gRPC server, if one is configured
-	if *listenGrpcOn == "" {
+	if *listenGrpcOn != "" {
 		cfg.GrpcListen = *listenGrpcOn
 	}
 
