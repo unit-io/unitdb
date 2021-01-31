@@ -72,7 +72,7 @@ func (s *GrpcServer) Stream(stream pbx.Unitdb_StreamServer) error {
 	conn := StreamConn(stream)
 	defer conn.Close()
 
-	go s.Handler(conn, GRPC)
+	go s.Handler(conn)
 	<-stream.Context().Done()
 	return nil
 }

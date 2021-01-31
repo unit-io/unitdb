@@ -21,8 +21,8 @@ import (
 	"io"
 )
 
-//Packet is the interface all our packets in the line protocol will be implementing
-type Packet interface {
+// LineProtocol is the interface all our packets in the line protocol will be implementing
+type LineProtocol interface {
 	Type() uint8
 	Info() Info
 }
@@ -41,6 +41,12 @@ const (
 	UNSUBACK
 	PINGREQ
 	PINGRESP
+	QUERYREQ
+	QUERYRESP
+	PUTREQ
+	PUTRESP
+	DELREQ
+	DELRESP
 	DISCONNECT
 )
 
@@ -61,23 +67,18 @@ type FixedHeader struct {
 
 // Connect represents a connect packet.
 type Connect struct {
-	ProtoName      []byte
-	Version        uint8
-	InsecureFlag   bool
-	UsernameFlag   bool
-	PasswordFlag   bool
-	WillRetainFlag bool
-	WillQOS        uint8
-	WillFlag       bool
-	CleanSessFlag  bool
-	KeepAlive      uint16
-	ClientID       []byte
-	WillTopic      []byte
-	WillMessage    []byte
-	Username       []byte
-	Password       []byte
+	ProtoName     string
+	Version       uint8
+	InsecureFlag  bool
+	UsernameFlag  bool
+	PasswordFlag  bool
+	CleanSessFlag bool
+	KeepAlive     uint16
+	ClientID      string
+	Username      string
+	Password      string
 
-	Packet
+	LineProtocol
 }
 
 // Connack represents an connack packet.
@@ -90,22 +91,22 @@ type Connect struct {
 type Connack struct {
 	ReturnCode uint8
 	ConnID     uint32
-	Packet
+	LineProtocol
 }
 
-//Pingreq is a keepalive
+// Pingreq is a keepalive
 type Pingreq struct {
-	Packet
+	LineProtocol
 }
 
-//Pingresp is for saying "hey, the server is alive"
+// Pingresp is for saying "hey, the server is alive"
 type Pingresp struct {
-	Packet
+	LineProtocol
 }
 
 //Disconnect is to signal you want to cease communications with the server
 type Disconnect struct {
-	Packet
+	LineProtocol
 }
 
 // Publish represents a publish packet.
@@ -116,94 +117,151 @@ type Publish struct {
 	IsForwarded bool
 	Payload     []byte
 
-	Packet
+	LineProtocol
 }
 
-//Puback is sent for QOS level one to verify the receipt of a publish
-//Qoth the spec: "A PUBACK Packet is sent by a server in response to a PUBLISH Packet from a publishing client, and by a subscriber in response to a PUBLISH Packet from the server."
+// Puback is sent for QOS level one to verify the receipt of a publish
+// Qoth the spec: "A PUBACK Packet is sent by a server in response to a PUBLISH Packet from a publishing client, and by a subscriber in response to a PUBLISH Packet from the server."
 type Puback struct {
 	MessageID uint16
 
-	Packet
+	LineProtocol
 }
 
-//Pubrec is for verifying the receipt of a publish
-//Qoth the spec:"It is the second Packet of the QoS level 2 protocol flow. A PUBREC Packet is sent by the server in response to a PUBLISH Packet from a publishing client, or by a subscriber in response to a PUBLISH Packet from the server."
+// Pubrec is for verifying the receipt of a publish
+// Qoth the spec:"It is the second Packet of the QoS level 2 protocol flow. A PUBREC Packet is sent by the server in response to a PUBLISH Packet from a publishing client, or by a subscriber in response to a PUBLISH Packet from the server."
 type Pubrec struct {
 	FixedHeader
 	MessageID uint16
 
-	Packet
+	LineProtocol
 }
 
-//Pubrel is a response to pubrec from either the client or server.
+// Pubrel is a response to pubrec from either the client or server.
 type Pubrel struct {
 	FixedHeader
 	MessageID uint16
 
-	Packet
+	LineProtocol
 }
 
-//Pubcomp is for saying is in response to a pubrel sent by the publisher
-//the final member of the QOS2 flow. both sides have said "hey, we did it!"
+// Pubcomp is for saying is in response to a pubrel sent by the publisher
+// the final member of the QOS2 flow. both sides have said "hey, we did it!"
 type Pubcomp struct {
 	MessageID uint16
 
-	Packet
+	LineProtocol
 }
 
-//TopicQOSTuple is a struct for pairing the Qos and topic together
-//for the QOS' pairs in unsubscribe and subscribe
+// TopicQOSTuple is a struct for pairing the Qos and topic together
+// for the QOS' pairs in unsubscribe and subscribe
 type TopicQOSTuple struct {
 	Qos   uint8
 	Topic []byte
 }
 
-//Subscribe tells the server which topics the client would like to subscribe to
+// Subscribe tells the server which topics the client would like to subscribe to
 type Subscribe struct {
 	FixedHeader
 	MessageID     uint16
 	IsForwarded   bool
 	Subscriptions []TopicQOSTuple
 
-	Packet
+	LineProtocol
 }
 
-//Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
+// Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
 type Suback struct {
 	MessageID uint16
 	Qos       []uint8
 
-	Packet
+	LineProtocol
 }
 
-//Unsubscribe is the Packet to send if you don't want to subscribe to a topic anymore
+// Unsubscribe is the Packet to send if you don't want to subscribe to a topic anymore
 type Unsubscribe struct {
 	FixedHeader
 	MessageID     uint16
 	IsForwarded   bool
 	Subscriptions []TopicQOSTuple
 
-	Packet
+	LineProtocol
 }
 
-//Unsuback is to unsubscribe as suback is to subscribe
+// Unsuback is to unsubscribe as suback is to subscribe
 type Unsuback struct {
 	MessageID uint16
 
-	Packet
+	LineProtocol
+}
+
+// QueryRequest is a request to get records for a specific topic
+type QueryRequest struct {
+	MessageID uint16
+	Topic     string
+
+	LineProtocol
+}
+
+// Result is a struct for pairing topic and results
+type Result struct {
+	Topic string
+	Res   []string
+}
+
+// QueryResponse is return the records for topics matching to the query request
+type QueryResponse struct {
+	MessageID uint16
+	Results   []Result
+	Error     string
+
+	LineProtocol
+}
+
+// PutRequest is a request to insert record int database
+type PutRequest struct {
+	MessageID uint16
+	Topic     string
+	Payload   string
+	TTL       string
+
+	LineProtocol
+}
+
+// PutResponse is a response that returns if any error while inserting record into database
+type PutResponse struct {
+	MessageID uint16
+	Error     string
+
+	LineProtocol
+}
+
+// DeleteRequest is a request to insert record int database
+type DeleteRequest struct {
+	MessageID uint16
+	Topic     string
+
+	LineProtocol
+}
+
+// DeleteResponse is a response that returns if any error while inserting record into database
+type DeleteResponse struct {
+	MessageID uint16
+	Error     string
+
+	LineProtocol
 }
 
 type ProtoAdapter interface {
-	ReadPacket(r io.Reader) (Packet, error)
-	Encode(pkt Packet) (bytes.Buffer, error)
+	Read(r io.Reader) (LineProtocol, error)
+	Encode(pkt LineProtocol) (bytes.Buffer, error)
 }
 
-func ReadPacket(adp ProtoAdapter, r io.Reader) (Packet, error) {
-	return adp.ReadPacket(r)
+func ReadPacket(adp ProtoAdapter, r io.Reader) (LineProtocol, error) {
+	return adp.Read(r)
 }
 
-func Encode(adp ProtoAdapter, pkt Packet) (bytes.Buffer, error) {
+func Encode(adp ProtoAdapter, pkt LineProtocol) (bytes.Buffer, error) {
 	return adp.Encode(pkt)
 }
 

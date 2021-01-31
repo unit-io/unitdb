@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package grpc
+package pubsub
 
 import (
 	"bytes"
@@ -104,7 +104,7 @@ func encodePubcomp(p lp.Pubcomp) (bytes.Buffer, error) {
 	return msg, err
 }
 
-func unpackPublish(data []byte) lp.Packet {
+func unpackPublish(data []byte) lp.LineProtocol {
 	var pkt pbx.Publish
 	proto.Unmarshal(data, &pkt)
 
@@ -120,7 +120,7 @@ func unpackPublish(data []byte) lp.Packet {
 	}
 }
 
-func unpackPuback(data []byte) lp.Packet {
+func unpackPuback(data []byte) lp.LineProtocol {
 	var pkt pbx.Puback
 	proto.Unmarshal(data, &pkt)
 	return &lp.Puback{
@@ -128,7 +128,7 @@ func unpackPuback(data []byte) lp.Packet {
 	}
 }
 
-func unpackPubrec(data []byte) lp.Packet {
+func unpackPubrec(data []byte) lp.LineProtocol {
 	var pkt pbx.Pubrec
 	proto.Unmarshal(data, &pkt)
 
@@ -141,7 +141,7 @@ func unpackPubrec(data []byte) lp.Packet {
 	}
 }
 
-func unpackPubrel(data []byte) lp.Packet {
+func unpackPubrel(data []byte) lp.LineProtocol {
 	var pkt pbx.Pubrel
 	proto.Unmarshal(data, &pkt)
 
@@ -155,7 +155,7 @@ func unpackPubrel(data []byte) lp.Packet {
 	}
 }
 
-func unpackPubcomp(data []byte) lp.Packet {
+func unpackPubcomp(data []byte) lp.LineProtocol {
 	var pkt pbx.Pubcomp
 	proto.Unmarshal(data, &pkt)
 	return &lp.Pubcomp{

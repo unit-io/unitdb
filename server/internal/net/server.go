@@ -38,15 +38,13 @@ var ErrServerClosed = errors.New("Server closed")
 type Proto int
 
 const (
-	NONE Proto = iota
-	TCP
-	HTTP
-	GRPC
-	GRPC_WEB
+	TELEMETRY Proto = iota
+	INGESTION
+	QUERY
 )
 
 //Handler is a callback which get called when a tcp, websocket connection is established or a grpc stream is established
-type Handler func(c net.Conn, proto Proto)
+type Handler func(c net.Conn)
 
 type options struct {
 	TLSConfig *tls.Config

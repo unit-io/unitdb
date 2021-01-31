@@ -187,7 +187,7 @@ type MessageLog struct{}
 var Log MessageLog
 
 // PersistOutbound handles which outgoing messages are stored
-func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, key uint64, msg net.Packet) {
+func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, key uint64, msg net.LineProtocol) {
 	switch msg.Info().Qos {
 	case 0:
 		switch msg.(type) {
@@ -226,7 +226,7 @@ func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, key uint64, msg net
 }
 
 // PersistInbound handles which incoming messages are stored
-func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, key uint64, msg net.Packet) {
+func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, key uint64, msg net.LineProtocol) {
 	switch msg.Info().Qos {
 	case 0:
 		switch msg.(type) {
@@ -267,7 +267,7 @@ func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, key uint64, msg net.
 }
 
 // Get performs a query and attempts to fetch message for the given blockId and key
-func (l *MessageLog) Get(proto net.ProtoAdapter, key uint64) net.Packet {
+func (l *MessageLog) Get(proto net.ProtoAdapter, key uint64) net.LineProtocol {
 	if raw, err := adp.GetMessage(key); raw != nil && err == nil {
 		r := bytes.NewReader(raw)
 		if msg, err := net.ReadPacket(proto, r); err == nil {

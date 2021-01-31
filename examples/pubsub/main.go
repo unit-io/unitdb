@@ -16,7 +16,10 @@ var f unitdb.MessageHandler = func(client unitdb.Client, msg unitdb.Message) {
 }
 
 func main() {
+	// Create a new client to open a network connection using the protocol indicated in the URL.
 	client, err := unitdb.NewClient(
+		//"tcp://localhost:6060",
+		// "ws://localhost:6080",
 		"grpc://localhost:6080",
 		"UCBFDONCNJLaKMCAIeJBaOVfbAXUZHNPLDKKLDKLHZHKYIZLCDPQ",
 		unitdb.WithInsecure(),

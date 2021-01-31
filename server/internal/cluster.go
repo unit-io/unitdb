@@ -307,7 +307,7 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 			}
 
 			log.Info("cluster.Master", "new connection request"+string(msg.Conn.ConnID))
-			conn = Globals.Service.newRpcConn(node, msg.Conn.Proto, msg.Conn.ConnID, msg.Conn.ClientID)
+			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.ClientID)
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
@@ -374,7 +374,7 @@ func (c *Cluster) isRemoteContract(contract string) bool {
 }
 
 // Forward client message to the Master (cluster node which owns the topic)
-func (c *Cluster) routeToContract(msg lp.Packet, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
+func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
 	// Find the cluster node which owns the topic, then forward to it.
 	n := c.nodeForContract(string(conn.clientid.Contract()))
 	if n == nil {

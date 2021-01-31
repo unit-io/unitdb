@@ -147,8 +147,8 @@ func (s *_Service) listen(addr string) {
 }
 
 // Handle a new connection request
-func (s *_Service) onAcceptConn(t net.Conn, proto lp.Proto) {
-	conn := s.newConn(t, proto)
+func (s *_Service) onAcceptConn(t net.Conn) {
+	conn := s.newConn(t)
 	go conn.readLoop()
 	go conn.writeLoop(s.context)
 }

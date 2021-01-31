@@ -26,6 +26,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
+	"github.com/unit-io/unitdb/server/internal/net/pubsub"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/stats"
@@ -66,7 +67,7 @@ func (c *_Conn) readLoop() error {
 }
 
 // handle handles inbound packets.
-func (c *_Conn) handle(pkt lp.Packet) error {
+func (c *_Conn) handle(pkt lp.LineProtocol) error {
 	start := time.Now()
 	var status int = 200
 	defer func() {
@@ -83,9 +84,16 @@ func (c *_Conn) handle(pkt lp.Packet) error {
 		var returnCode uint8
 		packet := *pkt.(*lp.Connect)
 
+		// switch the proto adapter based on protoname in the connect packet.
+		switch packet.ProtoName {
+		case "TELEMETRY":
+			c.adp = &pubsub.Packet{}
+		case "INGESTION":
+		case "QUERY":
+		}
 		c.insecure = packet.InsecureFlag
 		c.username = string(packet.Username)
-		clientid, err := c.onConnect(packet.ClientID)
+		clientid, err := c.onConnect([]byte(packet.ClientID))
 		if err != nil {
 			status = err.Status
 			returnCode = 0x05 // Unauthorized

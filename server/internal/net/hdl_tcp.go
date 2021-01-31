@@ -67,6 +67,6 @@ func (s *TcpServer) Serve(list net.Listener) error {
 		}
 
 		tempDelay = 0
-		go s.Handler(conn, GRPC)
+		go s.Handler(conn)
 	}
 }

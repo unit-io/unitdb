@@ -93,7 +93,7 @@ func (s *HttpServer) HandleFunc(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	go s.Handler(newConn(ws), GRPC_WEB)
+	go s.Handler(newConn(ws))
 }
 
 func (s *HttpServer) Serve(list net.Listener) error {

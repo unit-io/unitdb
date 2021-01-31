@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package grpc
+package pubsub
 
 import (
 	"bytes"
@@ -103,15 +103,15 @@ func encodeDisconnect(d lp.Disconnect) (bytes.Buffer, error) {
 	return msg, err
 }
 
-func unpackConnect(data []byte) lp.Packet {
+func unpackConnect(data []byte) lp.LineProtocol {
 	var pkt pbx.Conn
 	proto.Unmarshal(data, &pkt)
 
 	connect := &lp.Connect{
-		ProtoName:     []byte(pkt.ProtoName),
+		ProtoName:     pkt.ProtoName,
 		Version:       uint8(pkt.Version),
 		KeepAlive:     uint16(pkt.KeepAlive),
-		ClientID:      []byte(pkt.ClientID),
+		ClientID:      pkt.ClientID,
 		InsecureFlag:  pkt.InsecureFlag,
 		UsernameFlag:  pkt.UsernameFlag,
 		PasswordFlag:  pkt.PasswordFlag,
@@ -119,16 +119,16 @@ func unpackConnect(data []byte) lp.Packet {
 	}
 
 	if connect.UsernameFlag {
-		connect.Username = []byte(pkt.Username)
+		connect.Username = pkt.Username
 	}
 
 	if connect.PasswordFlag {
-		connect.Password = []byte(pkt.Password)
+		connect.Password = pkt.Password
 	}
 	return connect
 }
 
-func unpackConnack(data []byte) lp.Packet {
+func unpackConnack(data []byte) lp.LineProtocol {
 	var pkt pbx.Connack
 	proto.Unmarshal(data, &pkt)
 
@@ -137,14 +137,14 @@ func unpackConnack(data []byte) lp.Packet {
 	}
 }
 
-func unpackPingreq(data []byte) lp.Packet {
+func unpackPingreq(data []byte) lp.LineProtocol {
 	return &lp.Pingreq{}
 }
 
-func unpackPingresp(data []byte) lp.Packet {
+func unpackPingresp(data []byte) lp.LineProtocol {
 	return &lp.Pingresp{}
 }
 
-func unpackDisconnect(data []byte) lp.Packet {
+func unpackDisconnect(data []byte) lp.LineProtocol {
 	return &lp.Disconnect{}
 }

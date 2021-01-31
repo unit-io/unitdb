@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package grpc
+package pubsub
 
 import (
 	"bytes"
@@ -28,11 +28,11 @@ import (
 
 type FixedHeader pbx.FixedHeader
 
-type LineProto struct {
+type Packet struct {
 }
 
-// ReadPacket unpacks the packet from the provided reader.
-func (p *LineProto) ReadPacket(r io.Reader) (lp.Packet, error) {
+// Read unpacks the packet from the provided reader.
+func (p *Packet) Read(r io.Reader) (lp.LineProtocol, error) {
 	var fh FixedHeader
 	fh.unpack(r)
 
@@ -53,7 +53,7 @@ func (p *LineProto) ReadPacket(r io.Reader) (lp.Packet, error) {
 	}
 
 	// unpack the body
-	var pkt lp.Packet
+	var pkt lp.LineProtocol
 	switch uint8(fh.MessageType) {
 	case lp.CONNECT:
 		pkt = unpackConnect(msg)
@@ -85,7 +85,7 @@ func (p *LineProto) ReadPacket(r io.Reader) (lp.Packet, error) {
 }
 
 // Encode encodes the message into binary data
-func (p *LineProto) Encode(pkt lp.Packet) (bytes.Buffer, error) {
+func (p *Packet) Encode(pkt lp.LineProtocol) (bytes.Buffer, error) {
 	switch pkt.Type() {
 	case lp.PINGREQ:
 		return encodePingreq(*pkt.(*lp.Pingreq))

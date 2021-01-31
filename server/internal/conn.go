@@ -29,7 +29,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/net/grpc"
+	"github.com/unit-io/unitdb/server/internal/net/pubsub"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/store"
@@ -44,8 +44,8 @@ type _Conn struct {
 	adp    lp.ProtoAdapter
 	socket net.Conn
 	// send     chan []byte
-	send               chan lp.Packet
-	recv               chan lp.Packet
+	send               chan lp.LineProtocol
+	recv               chan lp.LineProtocol
 	pub                chan *lp.Publish
 	stop               chan interface{}
 	insecure           bool           // The insecure flag provided by client will not perform key validation and permissions check on the topic.
@@ -65,21 +65,13 @@ type _Conn struct {
 	closeC chan struct{}
 }
 
-func (s *_Service) newConn(t net.Conn, proto lp.Proto) *_Conn {
-	var adp lp.ProtoAdapter
-	switch proto {
-	case lp.GRPC:
-		adp = &grpc.LineProto{}
-	case lp.GRPC_WEB:
-		adp = &grpc.LineProto{}
-	}
-
+func (s *_Service) newConn(t net.Conn) *_Conn {
 	c := &_Conn{
-		adp:        adp,
+		adp:        &pubsub.Packet{},
 		socket:     t,
 		MessageIds: message.NewMessageIds(),
-		send:       make(chan lp.Packet, 1), // buffered
-		recv:       make(chan lp.Packet),
+		send:       make(chan lp.LineProtocol, 1), // buffered
+		recv:       make(chan lp.LineProtocol),
 		pub:        make(chan *lp.Publish),
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		connid:     uid.NewLID(),
@@ -97,21 +89,14 @@ func (s *_Service) newConn(t net.Conn, proto lp.Proto) *_Conn {
 }
 
 // newRpcConn a new connection in cluster
-func (s *_Service) newRpcConn(conn interface{}, proto lp.Proto, connid uid.LID, clientid uid.ID) *_Conn {
-	var adp lp.ProtoAdapter
-	switch proto {
-	case lp.GRPC:
-		adp = &grpc.LineProto{}
-	case lp.GRPC_WEB:
-		adp = &grpc.LineProto{}
-	}
+func (s *_Service) newRpcConn(conn interface{}, connid uid.LID, clientid uid.ID) *_Conn {
 	c := &_Conn{
-		adp:        adp,
+		adp:        &pubsub.Packet{},
 		connid:     connid,
 		clientid:   clientid,
 		MessageIds: message.NewMessageIds(),
-		send:       make(chan lp.Packet, 1), // buffered
-		recv:       make(chan lp.Packet),
+		send:       make(chan lp.LineProtocol, 1), // buffered
+		recv:       make(chan lp.LineProtocol),
 		pub:        make(chan *lp.Publish),
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		service:    s,
@@ -311,7 +296,7 @@ func (c *_Conn) outboundID(mid message.MID) (id uint16) {
 	return uint16(uint32(c.connid) - (uint32(mid)))
 }
 
-func (c *_Conn) storeInbound(m lp.Packet) {
+func (c *_Conn) storeInbound(m lp.LineProtocol) {
 	if c.clientid != nil {
 		blockId := uint64(c.clientid.Contract())
 		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
@@ -320,7 +305,7 @@ func (c *_Conn) storeInbound(m lp.Packet) {
 	}
 }
 
-func (c *_Conn) storeOutbound(m lp.Packet) {
+func (c *_Conn) storeOutbound(m lp.LineProtocol) {
 	if c.clientid != nil {
 		blockId := uint64(c.clientid.Contract())
 		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
