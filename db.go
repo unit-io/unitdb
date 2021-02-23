@@ -51,6 +51,7 @@ func Open(path string, opts ...Options) (*DB, error) {
 	options := &_Options{}
 	WithDefaultOptions().set(options)
 	WithDefaultFlags().set(options)
+	WithDefaultQueryOptions().set(options)
 	for _, opt := range opts {
 		if opt != nil {
 			opt.set(options)

@@ -17,6 +17,8 @@
 package unitdb
 
 import (
+	"time"
+
 	"github.com/unit-io/unitdb/message"
 )
 
@@ -46,8 +48,11 @@ type (
 
 // NewQuery creates a new query structure from the topic.
 func NewQuery(topic []byte) *Query {
+	opts := &_Options{}
+	WithDefaultQueryOptions().set(opts)
 	return &Query{
-		Topic: topic,
+		internal: _InternalQuery{opts: &opts.queryOptions},
+		Topic:    topic,
 	}
 }
 
@@ -60,6 +65,25 @@ func (q *Query) WithContract(contract uint32) *Query {
 // WithLimit sets query limit.
 func (q *Query) WithLimit(limit int) *Query {
 	q.Limit = limit
+	return q
+}
+
+// WithLast sets query duration to fetch stored messages.
+func (q *Query) WithLast(dur string) *Query {
+	base := time.Now()
+	duration, err := time.ParseDuration(dur)
+	if err != nil {
+		return q
+	}
+	// In case of last, include it to the query.
+	q.internal.cutoff = base.Add(-duration).Unix()
+	switch {
+	case (q.Limit == 0):
+		q.Limit = q.internal.opts.defaultQueryLimit
+	case q.Limit > q.internal.opts.maxQueryLimit:
+		q.Limit = q.internal.opts.maxQueryLimit
+	}
+
 	return q
 }
 

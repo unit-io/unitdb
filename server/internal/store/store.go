@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	adapter "github.com/unit-io/unitdb/server/internal/db"
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -133,11 +134,11 @@ type SubscriptionStore struct{}
 var Subscription SubscriptionStore
 
 func (s *SubscriptionStore) Put(contract uint32, messageId, topic, payload []byte) error {
-	return adp.PutWithID(contract^connStoreId, messageId, topic, payload)
+	return adp.PutWithID(contract^connStoreId, messageId, topic, payload, "")
 }
 
 func (s *SubscriptionStore) Get(contract uint32, topic []byte) (matches [][]byte, err error) {
-	resp, err := adp.Get(contract^connStoreId, topic)
+	resp, err := adp.Get(contract^connStoreId, topic, "")
 	for _, payload := range resp {
 		if payload == nil {
 			continue
@@ -162,17 +163,16 @@ type MessageStore struct{}
 // Message is the anchor for storing/retrieving Message objects
 var Message MessageStore
 
-func (m *MessageStore) Put(contract uint32, topic, payload []byte) error {
-	return adp.Put(contract, topic, payload)
+func (m *MessageStore) Put(contract uint32, topic, payload []byte, ttl string) error {
+	return adp.Put(contract, topic, payload, ttl)
 }
 
-func (m *MessageStore) Get(contract uint32, topic []byte) (matches []message.Message, err error) {
-	resp, err := adp.Get(contract, topic)
+func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches []message.Message, err error) {
+	resp, err := adp.Get(contract, topic, last)
 	for _, payload := range resp {
 		msg := message.Message{
 			Topic:   topic,
 			Payload: payload,
-			Qos:     0, // TODO implement logic to set and get Qos from store.
 		}
 		matches = append(matches, msg)
 	}
@@ -187,81 +187,78 @@ type MessageLog struct{}
 var Log MessageLog
 
 // PersistOutbound handles which outgoing messages are stored
-func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, key uint64, msg net.LineProtocol) {
-	switch msg.Info().Qos {
+func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, blockID uint32, msg net.LineProtocol) {
+	switch msg.Info().DeliveryMode {
 	case 0:
 		switch msg.(type) {
-		case *net.Puback, *net.Pubcomp:
-			// Sending puback. delete matching publish
-			// from ibound
-			adp.DeleteMessage(key)
+		case *net.Pubcomplete:
+			// Sending pubcomp. delete matching publish for EXPRESS delivery mode
+			// or pubrecv for RELIABLE delivery mode from ibound
+			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
+			adp.DeleteMessage(ikey)
 		}
-	case 1:
+	case 1, 2:
 		switch msg.(type) {
-		case *net.Publish, *net.Pubrel, *net.Subscribe, *net.Unsubscribe:
+		case *net.Pubreceipt, *net.Publish:
 			// Sending publish. store in obound
 			// until puback received
+			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
 			m, err := net.Encode(proto, msg)
 			if err != nil {
 				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
 				return
 			}
-			adp.PutMessage(key, m.Bytes())
+			adp.PutMessage(okey, m.Bytes())
 		default:
-		}
-	case 2:
-		switch msg.(type) {
-		case *net.Publish:
-			// Sending publish. store in obound
-			// until pubrel received
-			m, err := net.Encode(proto, msg)
-			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
-				return
-			}
-			adp.PutMessage(key, m.Bytes())
-		default:
+			fmt.Println("Store::PersistOutbound: Invalid message type")
 		}
 	}
 }
 
 // PersistInbound handles which incoming messages are stored
-func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, key uint64, msg net.LineProtocol) {
-	switch msg.Info().Qos {
+func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, blockID uint32, msg net.LineProtocol) {
+	switch msg.Info().DeliveryMode {
 	case 0:
 		switch msg.(type) {
-		case *net.Puback, *net.Suback, *net.Unsuback, *net.Pubcomp:
-			// Received a puback. delete matching publish
-			// from obound
-			adp.DeleteMessage(key)
-		case *net.Publish, *net.Pubrec, *net.Connack:
-		default:
-		}
-	case 1:
-		switch msg.(type) {
-		case *net.Publish, *net.Pubrel:
-			// Received a publish. store it in ibound
-			// until puback sent
-			m, err := net.Encode(proto, msg)
-			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
-				return
-			}
-			adp.PutMessage(key, m.Bytes())
-		default:
-		}
-	case 2:
-		switch msg.(type) {
+		case *net.Pubcomplete:
+			// Received a pubcomp. delete matching publish for EXPRESS delivery mode
+			// or pubrec for RELIABLE delivert mode from obound
+			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
+			adp.DeleteMessage(okey)
 		case *net.Publish:
 			// Received a publish. store it in ibound
-			// until pubrel received
+			// until pubcomp sent
+			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
 			m, err := net.Encode(proto, msg)
 			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
+				log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
 				return
 			}
-			adp.PutMessage(key, m.Bytes())
+			adp.PutMessage(ikey, m.Bytes())
+		case *net.Pingreq, *net.Connect, *net.Disconnect:
 		default:
+			fmt.Println("Store::PersistInbound: Invalid message type")
+		}
+	case 1, 2:
+		switch msg.(type) {
+		case *net.Pubreceipt:
+			// Received a pubrec. delete matching publish
+			// from obound
+			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
+			adp.DeleteMessage(okey)
+		case *net.Pubreceive, *net.Subscribe, *net.Unsubscribe:
+			// Received a pubrecv. store it in ibound
+			// until pubcomp sent
+			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
+			m, err := net.Encode(proto, msg)
+			if err != nil {
+				log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
+				return
+			}
+			adp.PutMessage(ikey, m.Bytes())
+		case *net.Publish:
+		default:
+			fmt.Println("Store::PersistInbound: Invalid message type")
 		}
 	}
 }
@@ -270,7 +267,7 @@ func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, key uint64, msg net.
 func (l *MessageLog) Get(proto net.ProtoAdapter, key uint64) net.LineProtocol {
 	if raw, err := adp.GetMessage(key); raw != nil && err == nil {
 		r := bytes.NewReader(raw)
-		if msg, err := net.ReadPacket(proto, r); err == nil {
+		if msg, err := net.Read(proto, r); err == nil {
 			return msg
 		}
 

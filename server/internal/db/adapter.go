@@ -44,18 +44,17 @@ type Adapter interface {
 	// SSID, where first element should be a contract ID. The time resolution
 	// for TTL will be in seconds. The function is executed synchronously and
 	// it returns an error if some error was encountered during storage.
-	Put(contract uint32, topic, payload []byte) error
+	Put(contract uint32, topic, payload []byte, ttl string) error
 
 	// PutWithID is used to store a message using a pre generated ID, the SSID provided must be a full SSID
 	// SSID, where first element should be a contract ID. The time resolution
 	// for TTL will be in seconds. The function is executed synchronously and
 	// it returns an error if some error was encountered during storage.
-	PutWithID(contract uint32, messageId, topic, payload []byte) error
+	PutWithID(contract uint32, messageId, topic, payload []byte, ttl string) error
 
-	// Get performs a query and attempts to fetch last n messages where
-	// n is specified by limit argument. From and until times can also be specified
-	// for time-series retrieval.
-	Get(contract uint32, topic []byte) ([][]byte, error)
+	// Get performs a query and attempts to fetch last messages where
+	// last is specified by last duration argument.
+	Get(contract uint32, topic []byte, last string) ([][]byte, error)
 
 	// NewID generate messageId that can later used to store and delete message from message store
 	NewID() ([]byte, error)

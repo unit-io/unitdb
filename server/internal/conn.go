@@ -19,7 +19,6 @@ package internal
 import (
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"net"
 	"runtime/debug"
 	"strconv"
@@ -29,7 +28,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/net/pubsub"
+	"github.com/unit-io/unitdb/server/internal/net/utp"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/store"
@@ -38,12 +37,10 @@ import (
 
 type _Conn struct {
 	sync.Mutex
-	tracked uint32 // Whether the connection was already tracked or not.
-	// protocol - NONE (unset), RPC, GRPC, GRPC_WEB, WEBSOCK, CLUSTER
-	proto  lp.Proto
-	adp    lp.ProtoAdapter
-	socket net.Conn
-	// send     chan []byte
+	tracked            uint32 // Whether the connection was already tracked or not.
+	proto              lp.Proto
+	adp                lp.ProtoAdapter
+	socket             net.Conn
 	send               chan lp.LineProtocol
 	recv               chan lp.LineProtocol
 	pub                chan *lp.Publish
@@ -67,7 +64,7 @@ type _Conn struct {
 
 func (s *_Service) newConn(t net.Conn) *_Conn {
 	c := &_Conn{
-		adp:        &pubsub.Packet{},
+		adp:        &utp.Packet{},
 		socket:     t,
 		MessageIds: message.NewMessageIds(),
 		send:       make(chan lp.LineProtocol, 1), // buffered
@@ -91,7 +88,7 @@ func (s *_Service) newConn(t net.Conn) *_Conn {
 // newRpcConn a new connection in cluster
 func (s *_Service) newRpcConn(conn interface{}, connid uid.LID, clientid uid.ID) *_Conn {
 	c := &_Conn{
-		adp:        &pubsub.Packet{},
+		adp:        &utp.Packet{},
 		connid:     connid,
 		clientid:   clientid,
 		MessageIds: message.NewMessageIds(),
@@ -122,12 +119,10 @@ func (c *_Conn) Type() message.SubscriberType {
 // Send forwards the message to the underlying client.
 func (c *_Conn) SendMessage(msg *message.Message) bool {
 	m := lp.Publish{
-		FixedHeader: lp.FixedHeader{
-			Qos: msg.Qos,
-		},
-		MessageID: msg.MessageID, // The ID of the message
-		Topic:     msg.Topic,     // The topic for this message.
-		Payload:   msg.Payload,   // The payload for this message.
+		MessageID:    msg.MessageID,    // The ID of the message
+		DeliveryMode: msg.DeliveryMode, // The delivery mode of the message
+		Topic:        msg.Topic,        // The topic for this message.
+		Payload:      msg.Payload,      // The payload for this message.
 	}
 
 	// Acknowledge the publication
@@ -161,7 +156,7 @@ func (c *_Conn) SendRawBytes(buf []byte) bool {
 }
 
 // subscribe subscribes to a particular topic.
-func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic) (err error) {
+func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, deliveryMode uint8) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -181,7 +176,7 @@ func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic) (err error) {
 		if first := c.subs.Increment(topic.Topic[:topic.Size], key, messageId); first {
 			// Subscribe the subscriber
 			payload := make([]byte, 5)
-			payload[0] = msg.Qos
+			payload[0] = deliveryMode
 			binary.LittleEndian.PutUint32(payload[1:5], uint32(c.connid))
 			if err = store.Subscription.Put(c.clientid.Contract(), messageId, topic.Topic, payload); err != nil {
 				log.ErrLogger.Err(err).Str("context", "conn.subscribe").Str("topic", string(topic.Topic[:topic.Size])).Int64("connid", int64(c.connid)).Msg("unable to subscribe to topic") // Unable to subscribe
@@ -221,42 +216,63 @@ func (c *_Conn) unsubscribe(msg lp.Unsubscribe, topic *security.Topic) (err erro
 }
 
 // publish publishes a message to everyone and returns the number of outgoing bytes written.
-func (c *_Conn) publish(msg lp.Publish, messageID uint16, topic *security.Topic, payload []byte) (err error) {
+func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic) (err error) {
 	c.service.meter.InMsgs.Inc(1)
-	c.service.meter.InBytes.Inc(int64(len(payload)))
+	c.service.meter.InBytes.Inc(int64(len(pkt.Payload)))
 	// subscription count
 	msgCount := 0
 
-	conns, err := store.Subscription.Get(c.clientid.Contract(), topic.Topic)
+	subs, err := store.Subscription.Get(c.clientid.Contract(), topic.Topic)
 	if err != nil {
 		log.ErrLogger.Err(err).Str("context", "conn.publish")
 	}
 	m := &message.Message{
-		MessageID: messageID,
+		MessageID: pkt.MessageID,
 		Topic:     topic.Topic[:topic.Size],
-		Payload:   payload,
+		Payload:   pkt.Payload,
 	}
-	for _, connid := range conns {
-		qos := connid[0]
-		lid := uid.LID(binary.LittleEndian.Uint32(connid[1:5]))
+	for _, sub := range subs {
+		m.DeliveryMode = sub[0]
+		lid := uid.LID(binary.LittleEndian.Uint32(sub[1:5]))
 		sub := Globals.connCache.get(lid)
 		if sub != nil {
-			if qos != 0 && m.MessageID == 0 {
+			if m.MessageID == 0 {
 				mID := c.MessageIds.NextID(lp.PUBLISH)
 				m.MessageID = c.outboundID(mID)
-				m.Qos = qos
 			}
-			if !sub.SendMessage(m) {
-				log.ErrLogger.Err(err).Str("context", "conn.publish")
+			// persist outbound
+			store.Log.PersistOutbound(sub.adp, uint32(sub.connid), &pkt)
+			switch pkt.DeliveryMode {
+			// Publisher's DeliveryMode RELIABLE or BATCH
+			case 1, 2:
+				switch m.DeliveryMode {
+				// Subscriber's DeliveryMode RELIABLE or BATCH
+				case 1, 2:
+					pubnew := &lp.Pubnew{
+						MessageID: m.MessageID,
+					}
+					sub.send <- pubnew
+				// Subscriber's DeliveryMode EXPRESS
+				case 0:
+					if !sub.SendMessage(m) {
+						log.ErrLogger.Err(err).Str("context", "conn.publish")
+					}
+					msgCount++
+				}
+			// Publisher's DeliveryMode Express
+			case 0:
+				if !sub.SendMessage(m) {
+					log.ErrLogger.Err(err).Str("context", "conn.publish")
+				}
+				msgCount++
 			}
-			msgCount++
 		}
 	}
 	c.service.meter.OutMsgs.Inc(int64(msgCount))
 	c.service.meter.OutBytes.Inc(m.Size() * int64(msgCount))
 
-	if !msg.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientid.Contract())) {
-		if err = Globals.Cluster.routeToContract(&msg, topic, message.PUBLISH, m, c); err != nil {
+	if !pkt.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientid.Contract())) {
+		if err = Globals.Cluster.routeToContract(&pkt, topic, message.PUBLISH, m, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connid)).Msg("unable to publish to remote topic")
 		}
 	}
@@ -288,29 +304,19 @@ func (c *_Conn) unsubAll() {
 	}
 }
 
-func (c *_Conn) inboundID(id uint16) message.MID {
-	return message.MID(uint32(c.connid) - uint32(id))
-}
-
 func (c *_Conn) outboundID(mid message.MID) (id uint16) {
 	return uint16(uint32(c.connid) - (uint32(mid)))
 }
 
 func (c *_Conn) storeInbound(m lp.LineProtocol) {
 	if c.clientid != nil {
-		blockId := uint64(c.clientid.Contract())
-		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
-		fmt.Println("inbound: type, key, qos", m.Type(), k, m.Info().Qos)
-		store.Log.PersistInbound(c.adp, k, m)
+		store.Log.PersistInbound(c.adp, uint32(c.connid), m)
 	}
 }
 
 func (c *_Conn) storeOutbound(m lp.LineProtocol) {
 	if c.clientid != nil {
-		blockId := uint64(c.clientid.Contract())
-		k := uint64(c.inboundID(m.Info().MessageID))<<32 + blockId
-		fmt.Println("inbound: type, key, qos", m.Type(), k, m.Info().Qos)
-		store.Log.PersistOutbound(c.adp, k, m)
+		store.Log.PersistOutbound(c.adp, uint32(c.connid), m)
 	}
 }
 

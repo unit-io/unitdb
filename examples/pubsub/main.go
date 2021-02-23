@@ -16,7 +16,6 @@ var f unitdb.MessageHandler = func(client unitdb.Client, msg unitdb.Message) {
 }
 
 func main() {
-	// Create a new client to open a network connection using the protocol indicated in the URL.
 	client, err := unitdb.NewClient(
 		//"tcp://localhost:6060",
 		// "ws://localhost:6080",
@@ -36,7 +35,7 @@ func main() {
 		log.Fatalf("err: %s", err)
 	}
 
-	r := client.Subscribe("teams.alpha.user1")
+	r := client.Subscribe([]byte("teams.alpha.user1"), unitdb.WithLast("1h"))
 	if _, err := r.Get(ctx, 1*time.Second); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -44,7 +43,7 @@ func main() {
 
 	for i := 0; i < 5; i++ {
 		msg := fmt.Sprintf("Hi #%d time!", i)
-		r := client.Publish("teams.alpha.user1", msg)
+		r := client.Publish([]byte("teams.alpha.user1"), []byte(msg), unitdb.WithTTL("1m"))
 		if _, err := r.Get(ctx, 1*time.Second); err != nil {
 			log.Fatalf("err: %s", err)
 		}
@@ -52,7 +51,7 @@ func main() {
 
 	wait := time.NewTicker(1 * time.Second)
 	<-wait.C
-	r = client.Unsubscribe("teams.alpha.user1")
+	r = client.Unsubscribe([]byte("teams.alpha.user1"))
 	if _, err := r.Get(ctx, 1*time.Second); err != nil {
 		fmt.Println(err)
 		os.Exit(1)

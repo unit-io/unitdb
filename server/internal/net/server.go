@@ -38,9 +38,8 @@ var ErrServerClosed = errors.New("Server closed")
 type Proto int
 
 const (
-	TELEMETRY Proto = iota
-	INGESTION
-	QUERY
+	UTP    Proto = iota // Unit Transport Protocol
+	UNITQL              // Unit Query Language
 )
 
 //Handler is a callback which get called when a tcp, websocket connection is established or a grpc stream is established

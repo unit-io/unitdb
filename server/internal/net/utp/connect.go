@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package pubsub
+package utp
 
 import (
 	"bytes"
@@ -23,30 +23,6 @@ import (
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	pbx "github.com/unit-io/unitdb/server/proto"
 )
-
-func encodeConnect(c lp.Connect) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	conn := pbx.Conn{
-		ProtoName:     string(c.ProtoName),
-		Version:       int32(c.Version),
-		UsernameFlag:  c.UsernameFlag,
-		PasswordFlag:  c.PasswordFlag,
-		CleanSessFlag: c.CleanSessFlag,
-		KeepAlive:     int32(c.KeepAlive),
-		ClientID:      string(c.ClientID),
-		Username:      string(c.Username),
-		Password:      string(c.Password),
-	}
-
-	pkt, err := proto.Marshal(&conn)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_CONNECT, RemainingLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
 
 func encodeConnack(c lp.Connack) (bytes.Buffer, error) {
 	var msg bytes.Buffer
@@ -58,20 +34,7 @@ func encodeConnack(c lp.Connack) (bytes.Buffer, error) {
 	if err != nil {
 		return msg, err
 	}
-	fh := FixedHeader{MessageType: pbx.MessageType_CONNACK, RemainingLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodePingreq(p lp.Pingreq) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	pingreq := pbx.Pingreq{}
-	pkt, err := proto.Marshal(&pingreq)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PINGREQ, RemainingLength: int32(len(pkt))}
+	fh := FixedHeader{MessageType: pbx.MessageType_CONNACK, MessageLength: int32(len(pkt))}
 	msg = fh.pack()
 	_, err = msg.Write(pkt)
 	return msg, err
@@ -84,7 +47,7 @@ func encodePingresp(p lp.Pingresp) (bytes.Buffer, error) {
 	if err != nil {
 		return msg, err
 	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PINGRESP, RemainingLength: int32(len(pkt))}
+	fh := FixedHeader{MessageType: pbx.MessageType_PINGRESP, MessageLength: int32(len(pkt))}
 	msg = fh.pack()
 	_, err = msg.Write(pkt)
 	return msg, err
@@ -97,7 +60,7 @@ func encodeDisconnect(d lp.Disconnect) (bytes.Buffer, error) {
 	if err != nil {
 		return msg, err
 	}
-	fh := FixedHeader{MessageType: pbx.MessageType_DISCONNECT, RemainingLength: int32(len(pkt))}
+	fh := FixedHeader{MessageType: pbx.MessageType_DISCONNECT, MessageLength: int32(len(pkt))}
 	msg = fh.pack()
 	_, err = msg.Write(pkt)
 	return msg, err
@@ -113,18 +76,11 @@ func unpackConnect(data []byte) lp.LineProtocol {
 		KeepAlive:     uint16(pkt.KeepAlive),
 		ClientID:      pkt.ClientID,
 		InsecureFlag:  pkt.InsecureFlag,
-		UsernameFlag:  pkt.UsernameFlag,
-		PasswordFlag:  pkt.PasswordFlag,
 		CleanSessFlag: pkt.CleanSessFlag,
+		Username:      pkt.Username,
+		Password:      pkt.Password,
 	}
 
-	if connect.UsernameFlag {
-		connect.Username = pkt.Username
-	}
-
-	if connect.PasswordFlag {
-		connect.Password = pkt.Password
-	}
 	return connect
 }
 
@@ -135,16 +91,4 @@ func unpackConnack(data []byte) lp.LineProtocol {
 	return &lp.Connack{
 		ReturnCode: uint8(pkt.ReturnCode),
 	}
-}
-
-func unpackPingreq(data []byte) lp.LineProtocol {
-	return &lp.Pingreq{}
-}
-
-func unpackPingresp(data []byte) lp.LineProtocol {
-	return &lp.Pingresp{}
-}
-
-func unpackDisconnect(data []byte) lp.LineProtocol {
-	return &lp.Disconnect{}
 }

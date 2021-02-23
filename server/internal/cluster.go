@@ -317,11 +317,11 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 
 		switch msg.Type {
 		case message.SUBSCRIBE:
-			conn.handle(msg.MsgSub)
+			conn.handler(msg.MsgSub)
 		case message.UNSUBSCRIBE:
-			conn.handle(msg.MsgUnsub)
+			conn.handler(msg.MsgUnsub)
 		case message.PUBLISH:
-			conn.handle(msg.MsgPub)
+			conn.handler(msg.MsgPub)
 		}
 	} else {
 		// Reject the request: wrong signature, cluster is out of sync.

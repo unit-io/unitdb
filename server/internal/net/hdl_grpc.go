@@ -17,7 +17,6 @@
 package net
 
 import (
-	"context"
 	"log"
 	"net"
 	"time"
@@ -43,15 +42,6 @@ func NewGrpcServer(opts ...Options) *GrpcServer {
 	return srv
 }
 
-// Start implements Connect
-func (s *GrpcServer) Start(ctx context.Context, info *pbx.ConnInfo) (*pbx.ConnInfo, error) {
-	if info != nil {
-		// Will panic if msg is not of *Conn type. This is an intentional panic.
-		return &pbx.ConnInfo{}, nil
-	}
-	return nil, nil
-}
-
 func StreamConn(
 	stream grpc.Stream,
 ) *common.Conn {
@@ -75,11 +65,6 @@ func (s *GrpcServer) Stream(stream pbx.Unitdb_StreamServer) error {
 	go s.Handler(conn)
 	<-stream.Context().Done()
 	return nil
-}
-
-// Disconnect implements unitdb.Disconnect
-func (s *GrpcServer) Stop(context.Context, *pbx.Empty) (*pbx.Empty, error) {
-	return nil, nil
 }
 
 func (s *GrpcServer) Serve(list net.Listener) error {

@@ -92,7 +92,7 @@ func TestSimple(t *testing.T) {
 	var ids [][]byte
 
 	entry := NewEntry(topic, nil)
-	entry.WithContract(contract).WithTTL([]byte("1m"))
+	entry.WithContract(contract).WithTTL("1m")
 	for i = 0; i < n; i++ {
 		messageID := db.NewID()
 		entry.WithID(messageID)

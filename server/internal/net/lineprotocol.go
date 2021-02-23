@@ -21,73 +21,70 @@ import (
 	"io"
 )
 
-// LineProtocol is the interface all our packets in the line protocol will be implementing
-type LineProtocol interface {
-	Type() uint8
-	Info() Info
-}
+// DeliverMode represents a delivery mode of a Message.
+type DeliveryMode uint8
 
 const (
 	CONNECT = uint8(iota + 1)
 	CONNACK
 	PUBLISH
-	PUBACK
-	PUBREC
-	PUBREL
-	PUBCOMP
+	PUBNEW
+	PUBRECEIVE
+	PUBRECEIPT
+	PUBCOMPLETE
 	SUBSCRIBE
 	SUBACK
 	UNSUBSCRIBE
 	UNSUBACK
 	PINGREQ
 	PINGRESP
-	QUERYREQ
-	QUERYRESP
-	PUTREQ
-	PUTRESP
-	DELREQ
-	DELRESP
 	DISCONNECT
+
+	DELIVERYMODE DeliveryMode = iota
+	EXPRESS
+	RELIABLE
+	BATCH
 )
 
-// Info returns Qos and MessageID by the Info() function called on the Packet
+// LineProtocol is the interface all our Messages in the line protocol will be implementing
+type LineProtocol interface {
+	Type() uint8
+	Info() Info
+}
+
+// Info returns DeliveryMode and MessageID by the Info() function called on the Message
 type Info struct {
-	Qos       uint8
-	MessageID uint16
+	DeliveryMode uint8
+	MessageID    uint16
 }
 
 // FixedHeader
 type FixedHeader struct {
-	MessageType     byte
-	Dup             bool
-	Retain          bool
-	Qos             uint8
-	RemainingLength int
+	MessageType    uint8
+	MesssageLength int
 }
 
-// Connect represents a connect packet.
+// Connect represents a connect Message.
 type Connect struct {
-	ProtoName     string
+	ProtoName     []byte
 	Version       uint8
 	InsecureFlag  bool
-	UsernameFlag  bool
-	PasswordFlag  bool
 	CleanSessFlag bool
 	KeepAlive     uint16
-	ClientID      string
-	Username      string
-	Password      string
+	ClientID      []byte
+	Username      []byte
+	Password      []byte
 
 	LineProtocol
 }
 
-// Connack represents an connack packet.
+// Connack represents an connack Message.
 // 0x00 connection accepted
 // 0x01 refused: unacceptable proto version
-// 0x02 refused: identifier rejected
+// 0x02 refused: client identifier rejected
 // 0x03 refused server unavailiable
 // 0x04 bad user or password
-// 0x05 not authorized
+// 0x05 unauthorized
 type Connack struct {
 	ReturnCode uint8
 	ConnID     uint32
@@ -109,63 +106,58 @@ type Disconnect struct {
 	LineProtocol
 }
 
-// Publish represents a publish packet.
+// Publish represents a publish Message.
 type Publish struct {
-	FixedHeader
-	Topic       []byte
-	MessageID   uint16
-	IsForwarded bool
-	Payload     []byte
+	MessageID    uint16
+	DeliveryMode uint8
+	IsForwarded  bool
+	Topic        []byte
+	Payload      []byte
+	Ttl          string
 
 	LineProtocol
 }
 
-// Puback is sent for QOS level one to verify the receipt of a publish
-// Qoth the spec: "A PUBACK Packet is sent by a server in response to a PUBLISH Packet from a publishing client, and by a subscriber in response to a PUBLISH Packet from the server."
-type Puback struct {
+type Pubnew struct {
 	MessageID uint16
 
 	LineProtocol
 }
 
-// Pubrec is for verifying the receipt of a publish
-// Qoth the spec:"It is the second Packet of the QoS level 2 protocol flow. A PUBREC Packet is sent by the server in response to a PUBLISH Packet from a publishing client, or by a subscriber in response to a PUBLISH Packet from the server."
-type Pubrec struct {
-	FixedHeader
+type Pubreceive struct {
 	MessageID uint16
 
 	LineProtocol
 }
 
-// Pubrel is a response to pubrec from either the client or server.
-type Pubrel struct {
-	FixedHeader
+// Pubreceipt is for verifying the receipt of a publish
+// DeliveryMode the spec:"It is the second Message of the DeliveryMode Reliable protocol flow. A PUBRECEIPT Mesage is sent by the server in response to a PUBLISH Message from a publishing client, or by a subscriber in response to a PUBLISH Message from the server."
+type Pubreceipt struct {
 	MessageID uint16
 
 	LineProtocol
 }
 
-// Pubcomp is for saying is in response to a pubrel sent by the publisher
-// the final member of the QOS2 flow. both sides have said "hey, we did it!"
-type Pubcomp struct {
+// Pubcomplete is a final Message in the delivery of publish flow.
+type Pubcomplete struct {
 	MessageID uint16
 
 	LineProtocol
 }
 
-// TopicQOSTuple is a struct for pairing the Qos and topic together
-// for the QOS' pairs in unsubscribe and subscribe
-type TopicQOSTuple struct {
-	Qos   uint8
-	Topic []byte
+// Subscription is a struct for pairing the delivery mode and topic together
+// for the delivery mode's pairs in unsubscribe and subscribe
+type Subscription struct {
+	Topic        []byte
+	Last         string
+	DeliveryMode uint8
 }
 
 // Subscribe tells the server which topics the client would like to subscribe to
 type Subscribe struct {
-	FixedHeader
 	MessageID     uint16
 	IsForwarded   bool
-	Subscriptions []TopicQOSTuple
+	Subscriptions []Subscription
 
 	LineProtocol
 }
@@ -173,17 +165,15 @@ type Subscribe struct {
 // Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
 type Suback struct {
 	MessageID uint16
-	Qos       []uint8
 
 	LineProtocol
 }
 
-// Unsubscribe is the Packet to send if you don't want to subscribe to a topic anymore
+// Unsubscribe is the Message to send if you don't want to subscribe to a topic anymore
 type Unsubscribe struct {
-	FixedHeader
 	MessageID     uint16
 	IsForwarded   bool
-	Subscriptions []TopicQOSTuple
+	Subscriptions []Subscription
 
 	LineProtocol
 }
@@ -195,69 +185,12 @@ type Unsuback struct {
 	LineProtocol
 }
 
-// QueryRequest is a request to get records for a specific topic
-type QueryRequest struct {
-	MessageID uint16
-	Topic     string
-
-	LineProtocol
-}
-
-// Result is a struct for pairing topic and results
-type Result struct {
-	Topic string
-	Res   []string
-}
-
-// QueryResponse is return the records for topics matching to the query request
-type QueryResponse struct {
-	MessageID uint16
-	Results   []Result
-	Error     string
-
-	LineProtocol
-}
-
-// PutRequest is a request to insert record int database
-type PutRequest struct {
-	MessageID uint16
-	Topic     string
-	Payload   string
-	TTL       string
-
-	LineProtocol
-}
-
-// PutResponse is a response that returns if any error while inserting record into database
-type PutResponse struct {
-	MessageID uint16
-	Error     string
-
-	LineProtocol
-}
-
-// DeleteRequest is a request to insert record int database
-type DeleteRequest struct {
-	MessageID uint16
-	Topic     string
-
-	LineProtocol
-}
-
-// DeleteResponse is a response that returns if any error while inserting record into database
-type DeleteResponse struct {
-	MessageID uint16
-	Error     string
-
-	LineProtocol
-}
-
 type ProtoAdapter interface {
 	Read(r io.Reader) (LineProtocol, error)
 	Encode(pkt LineProtocol) (bytes.Buffer, error)
 }
 
-func ReadPacket(adp ProtoAdapter, r io.Reader) (LineProtocol, error) {
+func Read(adp ProtoAdapter, r io.Reader) (LineProtocol, error) {
 	return adp.Read(r)
 }
 
@@ -265,142 +198,142 @@ func Encode(adp ProtoAdapter, pkt LineProtocol) (bytes.Buffer, error) {
 	return adp.Encode(pkt)
 }
 
-// Type returns the Connect packet type.
+// Type returns the Connect Message type.
 func (c *Connect) Type() uint8 {
 	return CONNECT
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (c *Connect) Info() Info {
-	return Info{Qos: 0, MessageID: 0}
+	return Info{DeliveryMode: 0, MessageID: 0}
 }
 
-// Type returns the Connack packet type.
+// Type returns the Connack Message type.
 func (c *Connack) Type() uint8 {
 	return CONNACK
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (c *Connack) Info() Info {
-	return Info{Qos: 0, MessageID: 0}
+	return Info{DeliveryMode: 0, MessageID: 0}
 }
 
-// Type returns the Pingreq packet type.
+// Type returns the Pingreq Message type.
 func (p *Pingreq) Type() uint8 {
 	return PINGREQ
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (p *Pingreq) Info() Info {
-	return Info{Qos: 0, MessageID: 0}
+	return Info{DeliveryMode: 0, MessageID: 0}
 }
 
-// Type returns the Pingresp packet type.
+// Type returns the Pingresp Message type.
 func (p *Pingresp) Type() uint8 {
 	return PINGRESP
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (p *Pingresp) Info() Info {
-	return Info{Qos: 0, MessageID: 0}
+	return Info{DeliveryMode: 0, MessageID: 0}
 }
 
-// Type returns the Disconnect packet type.
+// Type returns the Disconnect Message type.
 func (d *Disconnect) Type() uint8 {
 	return DISCONNECT
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (d *Disconnect) Info() Info {
-	return Info{Qos: 0, MessageID: 0}
+	return Info{DeliveryMode: 0, MessageID: 0}
 }
 
-// Type returns the Publish Packet type.
+// Type returns the Publish Message type.
 func (p *Publish) Type() uint8 {
 	return PUBLISH
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (p *Publish) Info() Info {
-	return Info{Qos: p.Qos, MessageID: p.MessageID}
+	return Info{DeliveryMode: p.DeliveryMode, MessageID: p.MessageID}
 }
 
-// Type returns the Puback Packet type.
-func (p *Puback) Type() uint8 {
-	return PUBACK
+// Type returns the Pubnew Message type.
+func (p *Pubnew) Type() uint8 {
+	return PUBNEW
 }
 
-// Info returns Qos and MessageID of this packet.
-func (p *Puback) Info() Info {
-	return Info{Qos: 0, MessageID: p.MessageID}
+// Info returns MessageID of this Message.
+func (p *Pubnew) Info() Info {
+	return Info{DeliveryMode: 1, MessageID: p.MessageID}
 }
 
-// Type returns the Pubrec Packet type.
-func (p *Pubrec) Type() uint8 {
-	return PUBREC
+// Type returns the Pubreceive Message type.
+func (p *Pubreceive) Type() uint8 {
+	return PUBRECEIVE
 }
 
-// Info returns Qos and MessageID of this packet.
-func (p *Pubrec) Info() Info {
-	return Info{Qos: p.Qos, MessageID: p.MessageID}
+// Info returns MessageID of this Message.
+func (p *Pubreceive) Info() Info {
+	return Info{DeliveryMode: 1, MessageID: p.MessageID}
 }
 
-// Type returns the Pubrel Packet type.
-func (p *Pubrel) Type() uint8 {
-	return PUBREL
+// Type returns the Pubreceipt Message type.
+func (p *Pubreceipt) Type() uint8 {
+	return PUBRECEIPT
 }
 
-// Info returns Qos and MessageID of this packet.
-func (p *Pubrel) Info() Info {
-	return Info{Qos: p.Qos, MessageID: p.MessageID}
+// Info returns DeliveryMode and MessageID of this Message.
+func (p *Pubreceipt) Info() Info {
+	return Info{DeliveryMode: 1, MessageID: p.MessageID}
 }
 
-// Type returns the Pubcomp Packet type.
-func (p *Pubcomp) Type() uint8 {
-	return PUBCOMP
+// Type returns the Pubcomplete Message type.
+func (p *Pubcomplete) Type() uint8 {
+	return PUBCOMPLETE
 }
 
-// Info returns Qos and MessageID of this packet.
-func (p *Pubcomp) Info() Info {
-	return Info{Qos: 0, MessageID: p.MessageID}
+// Info returns DeliveryMode and MessageID of this Message.
+func (p *Pubcomplete) Info() Info {
+	return Info{DeliveryMode: 0, MessageID: p.MessageID}
 }
 
-// Type returns the Subscribe Packet type.
+// Type returns the Subscribe Message type.
 func (s *Subscribe) Type() uint8 {
 	return SUBSCRIBE
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (s *Subscribe) Info() Info {
-	return Info{Qos: 1, MessageID: s.MessageID}
+	return Info{DeliveryMode: 1, MessageID: s.MessageID}
 }
 
-// Type returns the Suback Packet type.
+// Type returns the Suback Message type.
 func (s *Suback) Type() uint8 {
 	return SUBACK
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (s *Suback) Info() Info {
-	return Info{Qos: 0, MessageID: s.MessageID}
+	return Info{DeliveryMode: 0, MessageID: s.MessageID}
 }
 
-// Type returns the Unsubscribe Packet type.
+// Type returns the Unsubscribe Message type.
 func (u *Unsubscribe) Type() uint8 {
 	return UNSUBSCRIBE
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (u *Unsubscribe) Info() Info {
-	return Info{Qos: 1, MessageID: u.MessageID}
+	return Info{DeliveryMode: 1, MessageID: u.MessageID}
 }
 
-// Type returns the Unsuback Packet type.
+// Type returns the Unsuback Message type.
 func (u *Unsuback) Type() uint8 {
 	return UNSUBACK
 }
 
-// Info returns Qos and MessageID of this packet.
+// Info returns DeliveryMode and MessageID of this Message.
 func (u *Unsuback) Info() Info {
-	return Info{Qos: 0, MessageID: u.MessageID}
+	return Info{DeliveryMode: 0, MessageID: u.MessageID}
 }

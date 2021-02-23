@@ -77,13 +77,13 @@ func (e *Entry) WithContract(contract uint32) *Entry {
 }
 
 // WithTTL sets TTL for message expiry for the entry.
-func (e *Entry) WithTTL(ttl []byte) *Entry {
-	val, err := strconv.ParseInt(unsafeToString(ttl), 10, 64)
+func (e *Entry) WithTTL(ttl string) *Entry {
+	val, err := strconv.ParseInt(ttl, 10, 64)
 	if err == nil {
 		e.ExpiresAt = uint32(time.Now().Add(time.Duration(int(val)) * time.Second).Unix())
 	}
 	var duration time.Duration
-	duration, _ = time.ParseDuration(unsafeToString(ttl))
+	duration, _ = time.ParseDuration(ttl)
 	e.ExpiresAt = uint32(time.Now().Add(duration).Unix())
 	return e
 }

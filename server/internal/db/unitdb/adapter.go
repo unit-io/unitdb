@@ -127,26 +127,32 @@ func (a *adapter) GetName() string {
 }
 
 // Put appends the messages to the store.
-func (a *adapter) Put(contract uint32, topic, payload []byte) error {
-	entry := unitdb.NewEntry(topic, payload)
-	entry.WithContract(contract)
+func (a *adapter) Put(contract uint32, topic, payload []byte, ttl string) error {
+	entry := unitdb.NewEntry(topic, payload).WithContract(contract)
+	if ttl != "" {
+		entry.WithTTL(ttl)
+	}
 	return a.db.PutEntry(entry)
 }
 
 // PutWithID appends the messages to the store using a pre generated messageId.
-func (a *adapter) PutWithID(contract uint32, messageId, topic, payload []byte) error {
-	entry := unitdb.NewEntry(topic, payload)
-	entry.WithContract(contract)
-	return a.db.PutEntry(entry.WithID(messageId))
+func (a *adapter) PutWithID(contract uint32, messageId, topic, payload []byte, ttl string) error {
+	entry := unitdb.NewEntry(topic, payload).WithContract(contract).WithID(messageId)
+	if ttl != "" {
+		entry.WithTTL(ttl)
+	}
+	return a.db.PutEntry(entry)
 }
 
-// Get performs a query and attempts to fetch last n messages where
-// n is specified by limit argument. From and until times can also be specified
-// for time-series retrieval.
-func (a *adapter) Get(contract uint32, topic []byte) (matches [][]byte, err error) {
+// Get performs a query and attempts to fetch last messages where
+// last is specified by last duration argument.
+func (a *adapter) Get(contract uint32, topic []byte, last string) (matches [][]byte, err error) {
 	// Iterating over key/value pairs.
-	query := unitdb.NewQuery(topic)
-	query.WithContract(contract)
+	query := unitdb.NewQuery(topic).WithContract(contract)
+	if last != "" {
+		query.WithLast(last)
+	}
+
 	return a.db.Get(query)
 }
 

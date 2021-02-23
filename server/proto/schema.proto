@@ -4,107 +4,54 @@ package unitdb.schema;
 
 option go_package='.;schema';
 
-// Unitdb interface
+// Unitdb server interface
 service Unitdb {
-rpc Start (ConnInfo) returns (ConnInfo){}
-
-rpc Stream (stream Packet) returns (stream Packet);
-
-rpc Stop (Empty) returns (Empty){}
+	rpc Stream (stream Packet) returns (stream Packet);
 }
 
 message Empty {
 }
 
 message Packet {
-bytes data=1;
-}
-
-message ConnInfo {
-string client_id=1;
-string network=2;
-string address=3;
-}
-
-message InMsg {
-	oneof Message {
-		Pingreq pingreq = 1;
-		Subscribe sub = 2;
-		Unsubscribe unsub = 3;
-		Publish pub=4;
-		Puback puback = 5;
-		Pubrec pubrec = 6;
-		Pubrel pubrel = 7;
-		Pubcomp pubcomp = 8;
-		QueryRequest query = 9;
-		PutRequest put = 10;
-		DeleteRequest del = 11;
-	}
-}
-
-message OutMsg {
-	oneof Message {
-		Pingresp pingresp = 1;
-		Suback suback = 2;
-		Unsuback unsuback = 3;
-		Publish pub = 4;
-		Puback puback = 5;
-		Pubrec pubrec = 6;
-		Pubrel pubrel = 7;
-		Pubcomp pubcomp = 8;
-		QueryResponse resp = 9;
-		PutResponse putresp = 10;
-		DeleteResponse delresp = 11;
-	}
+	bytes data=1;
 }
 
 enum MessageType {
-	RESERVED  = 0;
+	RERSERVED=0;
 	CONNECT=1;
 	CONNACK=2;
 	PUBLISH=3;
-	PUBACK=4;
-	PUBREC=5;
-	PUBREL=6;
-	PUBCOMP=7;
+	PUBNEW=4;
+	PUBRECEIVE=5;
+	PUBRECEIPT=6;
+	PUBCOMPLETE=7;
 	SUBSCRIBE=8;
 	SUBACK=9;
 	UNSUBSCRIBE=10;
 	UNSUBACK=11;
 	PINGREQ=12;
 	PINGRESP=13;
-	QUERY=14;
-	RESULT=15;
-	PUT=16;
-    PUTRESP=17;
-    DEL=18;
-	DELRESP=19;
-	DISCONNECT=20;
+	DISCONNECT=14;
 }
 
 message FixedHeader {
-	MessageType messageType = 1;
-	bool dup=2;
-	int32 qos=3;
-	bool retain=4;
-	int32 remainingLength=5;
+	MessageType MessageType=1;
+	int32 MessageLength=2;
 }
 
-// Connect represents a connect packet.
+// Connect represents a connect Message.
 message Conn {
-	string protoName=1;
-	int32 version=2;
-	bool insecureFlag=3;
-	bool usernameFlag=4;
-	bool passwordFlag=5;
-	bool cleanSessFlag=6;
-	int32 keepAlive=7;
-	string clientID=8;
-	string username=9;
-	string password=10;
+	bytes ProtoName=1;
+	int32 Version=2;
+	bool InsecureFlag=3;
+	bool CleanSessFlag=9;
+	int32 KeepAlive=10;
+	bytes ClientID=11;
+	bytes Username=14;
+	bytes Password=15;
 }
 
-// Connack represents a connack packet.
+// Connack represents a connack Message.
 // 0x00 connection accepted
 // 0x01 refused: unacceptable proto version
 // 0x02 refused: identifier rejected
@@ -112,127 +59,85 @@ message Conn {
 // 0x04 bad user or password
 // 0x05 not authorized
 message Connack {
-	int32 returnCode=1;
-	int32 connID=2;
+	int32 ReturnCode=1;
+	int32 ConnID=2;
 }
 
-//Pingreq is a keepalive
+// Pingreq is a keepalive
 message Pingreq {
 }
 
-//Pingresp is for saying "hey, the server is alive"
+// Pingresp is for saying "hey, the server is alive"
 message Pingresp {
 }
 
-//Disconnect is to signal you want to cease communications with the server
+// Disconnect is to signal you want to cease communications with the server
 message Disconnect {
-	int32 messageID=1;
+	int32 MessageID=1;
 }
 
-// QueryRequest represents a query packet.
-message QueryRequest {
-	int32 messageID=1;
-	string topic=2;
-}
-
-// Result is pairing the topic and the results together.
-message Result {
-	string topic=1;
-	repeated string res=2;
-}
-
-// QueryResponse is sent to return the result of query
-message QueryResponse {
-	int32 messageID=1;
-	repeated Result results=2;
-    string error=3;
-}
-
-// PutRequest represents a put packet.
-message PutRequest {
-	int32 messageID=1;
-	string topic=2;
-	string payload=3;
-    string ttl=4;
-}
-
-// PutResponse is sent to verify the receipt of a put
-message PutResponse {
-	int32 messageID=1;
-    string error=2;
-}
-
-// DeleteRequest represents a delete packet.
-message DeleteRequest {
-	int32 messageID=1;
-	string topic=2;
-}
-
-// DeleteResponse is sent to verify the receipt of a delete
-message DeleteResponse {
-	int32 messageID=1;
-    string error=2;
-}
-
-// Publish represents a publish packet.
+// Publish represents a publish Message. It supports following delivery mode.
+// 0 EXPRESS
+// 1 RELIEABLE
+// 2 BATCH
 message Publish {
-	int32 messageID=1;
-	string topic=2;
-	string payload=3;
-	int32 qos=4;
+	int32 MessageID=1;
+	int32 DeliveryMode=2;
+	bytes Topic=3;
+	bytes Payload=4;
+	string Ttl=5;
 }
 
-//Puback is sent for QOS level one to verify the receipt of a publish
-//Qot the spec: "A PUBACK Packet is sent by a server in response to a PUBLISH Packet from a publishing client, and by a subscriber in response to a PUBLISH Packet from the server."
-message Puback {
-	int32 messageID=1;
+// Pubnew is tells subscriber a PUBLISH Message is available.
+message Pubnew {
+	int32 MessageID=1;
 }
 
-//Pubrec is for verifying the receipt of a publish
-//Qoth the spec:"It is the second Packet of the QoS level 2 protocol flow. A PUBREC Packet is sent by the server in response to a PUBLISH Packet from a publishing client, or by a subscriber in response to a PUBLISH Packet from the server."
-message Pubrec {
-	int32 messageID=1;
-	int32 qos=2;
+// Pubreceive is a publish receive request to the server in response to PUBNEW Message to start receiving the published message.
+message Pubreceive {
+	int32 MessageID=1;
 }
 
-//Pubrel is a response to pubrec from either the client or server.
-message Pubrel {
-	int32 messageID=1;
-	int32 qos=2;
+// Pubreceipt is for verifying the receipt of a publish
+// A PUBRECEIPT Message is sent by the server in response to a PUBLISH Message from a publishing client, or by a subscriber in response to a PUBLISH Message from the server."
+message Pubreceipt {
+	int32 MessageID=1;
 }
 
-//Pubcomp is for saying is in response to a pubrel sent by the publisher
-//the final member of the QOS2 flow. both sides have said "hey, we did it!"
-message Pubcomp {
-	int32 messageID=1;
+// Pubcomplete is for saying is in response to a Pubreceipt sent by the publisher
+message Pubcomplete {
+	int32 MessageID=1;
 }
 
-//Subscriber is pairing the Qos and topic together
-//for the QOS' pairs in unsubscribe and subscribe
-message Subscriber {
-	string topic=2;
-	int32 qos=3;
+// Subscription is pairing the delivery mode and topic together
+// for the delivery mode's pairs in unsubscribe and subscribe
+// 0 EXPRESS
+// 1 RELIEABLE
+// 2 BATCH
+message Subscription {
+	int32 DeliveryMode=1;
+	bytes Topic=2;
+	string Last=3;
 }
 
-//Subscribe tells the server which topics the client would like to subscribe to
+// Subscribe tells the server which topics the client would like to subscribe to and choose a delivery mode.
 message Subscribe {
-	int32 messageID=1;
-	repeated Subscriber subscribers=2;
+	int32 MessageID=1;
+	repeated Subscription Subscriptions=2;
 }
 
-//Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
+// Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
 message Suback {
-	int32 messageID=1;
-	repeated int32 qos=2;
+	int32 MessageID=1;
 }
 
-//Unsubscribe is the Packet to send if you don't want to subscribe to a topic anymore
+// Unsubscribe is the Message to send if you don't want to subscribe to a topic anymore
 message Unsubscribe {
-	int32 messageID=1;
-	repeated Subscriber subscribers=2;
+	int32 MessageID=1;
+	repeated  Subscription Subscriptions=2;
 }
 
-//Unsuback is to unsubscribe as suback is to subscribe
+// Unsuback is to unsubscribe as suback is to subscribe
 message Unsuback {
-	int32 messageID=1;
+	int32 MessageID=1;
 }

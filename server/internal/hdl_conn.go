@@ -26,7 +26,6 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/net/pubsub"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/stats"
@@ -53,21 +52,21 @@ func (c *_Conn) readLoop() error {
 		c.socket.SetDeadline(time.Now().Add(time.Second * 120))
 
 		// Decode an incoming packet
-		pkt, err := lp.ReadPacket(c.adp, reader)
+		pkt, err := lp.Read(c.adp, reader)
 		if err != nil {
 			fmt.Println("readPacket: err", err)
 			return err
 		}
 
 		// Message handler
-		if err := c.handle(pkt); err != nil {
+		if err := c.handler(pkt); err != nil {
 			return err
 		}
 	}
 }
 
-// handle handles inbound packets.
-func (c *_Conn) handle(pkt lp.LineProtocol) error {
+// handler handles inbound packets.
+func (c *_Conn) handler(pkt lp.LineProtocol) error {
 	start := time.Now()
 	var status int = 200
 	defer func() {
@@ -84,13 +83,6 @@ func (c *_Conn) handle(pkt lp.LineProtocol) error {
 		var returnCode uint8
 		packet := *pkt.(*lp.Connect)
 
-		// switch the proto adapter based on protoname in the connect packet.
-		switch packet.ProtoName {
-		case "TELEMETRY":
-			c.adp = &pubsub.Packet{}
-		case "INGESTION":
-		case "QUERY":
-		}
 		c.insecure = packet.InsecureFlag
 		c.username = string(packet.Username)
 		clientid, err := c.onConnect([]byte(packet.ClientID))
@@ -122,20 +114,16 @@ func (c *_Conn) handle(pkt lp.LineProtocol) error {
 		packet := *pkt.(*lp.Subscribe)
 		ack := &lp.Suback{
 			MessageID: packet.MessageID,
-			Qos:       make([]uint8, 0, len(packet.Subscriptions)),
 		}
 
 		// Subscribe for each subscription
 		for _, sub := range packet.Subscriptions {
-			if err := c.onSubscribe(packet, sub.Topic); err != nil {
+			if err := c.onSubscribe(packet, sub); err != nil {
 				status = err.Status
-				ack.Qos = append(ack.Qos, 0x80) // 0x80 indicate subscription failure
 				c.notifyError(err, packet.MessageID)
 				continue
 			}
 
-			// Append the QoS
-			ack.Qos = append(ack.Qos, sub.Qos)
 		}
 
 		if packet.IsForwarded {
@@ -150,7 +138,7 @@ func (c *_Conn) handle(pkt lp.LineProtocol) error {
 
 		// Unsubscribe from each subscription
 		for _, sub := range packet.Subscriptions {
-			if err := c.onUnsubscribe(packet, sub.Topic); err != nil {
+			if err := c.onUnsubscribe(packet, sub); err != nil {
 				status = err.Status
 				c.notifyError(err, packet.MessageID)
 			}
@@ -167,31 +155,33 @@ func (c *_Conn) handle(pkt lp.LineProtocol) error {
 
 	case lp.PUBLISH:
 		packet := *pkt.(*lp.Publish)
-		if err := c.onPublish(packet, packet.MessageID, packet.Topic, packet.Payload); err != nil {
+		if err := c.onPublish(packet); err != nil {
 			status = err.Status
 			c.notifyError(err, packet.MessageID)
 		}
-	case lp.PUBACK:
 
-	case lp.PUBREC:
-		packet := *pkt.(*lp.Pubrec)
-		pubrel := &lp.Pubrel{
-			FixedHeader: lp.FixedHeader{
-				Qos: packet.Qos,
-			},
+	case lp.PUBRECEIVE:
+		packet := *pkt.(*lp.Pubreceive)
+		okey := uint64(packet.Info().MessageID)<<32 + uint64(c.connid)
+		// Get message from Log store
+		msg := store.Log.Get(c.adp, okey)
+		if msg == nil {
+			return types.ErrServerError
+		}
+		switch msg.(type) {
+		case *lp.Publish:
+			c.send <- msg
+		}
+
+	case lp.PUBRECEIPT:
+		packet := *pkt.(*lp.Pubreceipt)
+		pubcomp := &lp.Pubcomplete{
 			MessageID: packet.MessageID,
 		}
-		c.send <- pubrel
-
-	case lp.PUBREL:
-		// persist outbound
-		c.storeOutbound(pkt)
-
-		packet := *pkt.(*lp.Pubrel)
-		pubcomp := &lp.Pubcomp{MessageID: packet.MessageID}
 		c.send <- pubcomp
+		c.storeOutbound(pubcomp)
 
-	case lp.PUBCOMP:
+	case lp.PUBCOMPLETE:
 	}
 
 	return nil
@@ -270,12 +260,12 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 }
 
 // onSubscribe is a handler for Subscribe events.
-func (c *_Conn) onSubscribe(pkt lp.Subscribe, msgTopic []byte) *types.Error {
+func (c *_Conn) onSubscribe(pkt lp.Subscribe, sub lp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(msgTopic)
+	topic := security.ParseKey(sub.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -286,36 +276,33 @@ func (c *_Conn) onSubscribe(pkt lp.Subscribe, msgTopic []byte) *types.Error {
 		}
 	}
 
-	// persist outbound
-	c.storeOutbound(&pkt)
+	c.subscribe(pkt, topic, sub.DeliveryMode)
 
-	c.subscribe(pkt, topic)
+	if sub.Last != "" {
+		msgs, err := store.Message.Get(c.clientid.Contract(), topic.Topic, sub.Last)
+		if err != nil {
+			log.Error("conn.OnSubscribe", "query last messages"+err.Error())
+			return types.ErrServerError
+		}
 
-	// if t0, t1, limit, ok := topic.Last(); ok {
-	msgs, err := store.Message.Get(c.clientid.Contract(), topic.Topic)
-	if err != nil {
-		log.Error("conn.OnSubscribe", "query last messages"+err.Error())
-		return types.ErrServerError
+		// Range over the messages in the channel and forward them
+		for _, m := range msgs {
+			msg := m // Copy message
+			c.SendMessage(&msg)
+		}
 	}
-
-	// Range over the messages in the channel and forward them
-	for _, m := range msgs {
-		msg := m // Copy message
-		c.SendMessage(&msg)
-	}
-
 	return nil
 }
 
 // ------------------------------------------------------------------------------------
 
 // onUnsubscribe is a handler for Unsubscribe events.
-func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error {
+func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, sub lp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(msgTopic)
+	topic := security.ParseKey(sub.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -325,9 +312,6 @@ func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error 
 			return err
 		}
 	}
-
-	// persist outbound
-	c.storeOutbound(&pkt)
 
 	c.unsubscribe(pkt, topic)
 
@@ -335,19 +319,19 @@ func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, msgTopic []byte) *types.Error 
 }
 
 // OnPublish is a handler for Publish events.
-func (c *_Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, payload []byte) *types.Error {
+func (c *_Conn) onPublish(pkt lp.Publish) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(msgTopic)
+	topic := security.ParseKey(pkt.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
 
 	// Check whether the key is 'unitdb' which means it's an API request
 	if len(topic.Key) == 5 && string(topic.Key) == "unitdb" {
-		c.onSpecialRequest(topic, payload)
+		c.onSpecialRequest(topic, pkt.Payload)
 		return nil
 	}
 
@@ -361,17 +345,14 @@ func (c *_Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, pay
 		}
 	}
 
-	err := store.Message.Put(c.clientid.Contract(), topic.Topic, payload)
+	err := store.Message.Put(c.clientid.Contract(), topic.Topic, pkt.Payload, pkt.Ttl)
 	if err != nil {
 		log.Error("conn.onPublish", "store message "+err.Error())
 		return types.ErrServerError
 	}
 
-	// persist outbound
-	c.storeOutbound(&pkt)
-
 	// Iterate through all subscribers and send them the message
-	c.publish(pkt, messageID, topic, payload)
+	c.publish(pkt, topic)
 
 	// acknowledge a packet
 	return c.ack(pkt)
@@ -379,27 +360,28 @@ func (c *_Conn) onPublish(pkt lp.Publish, messageID uint16, msgTopic []byte, pay
 
 // ack acknowledges a packet
 func (c *_Conn) ack(pkt lp.Publish) *types.Error {
-	switch pkt.FixedHeader.Qos {
-	case 2:
-		pubrec := &lp.Pubrec{
-			FixedHeader: lp.FixedHeader{
-				Qos: pkt.Qos,
-			},
+	switch pkt.Info().DeliveryMode {
+	// DeliveryMode RELIABLE or BATCH
+	case 1, 2:
+		pubrec := &lp.Pubreceipt{
 			MessageID: pkt.MessageID,
 		}
-		c.send <- pubrec
-	case 1:
-		puback := &lp.Puback{MessageID: pkt.MessageID}
 		// persist outbound
-		c.storeOutbound(puback)
-		c.send <- puback
+		c.storeOutbound(pubrec)
+		c.send <- pubrec
+	// DeliveryMode Express
 	case 0:
-		// do nothing, since there is no need to send an ack packet back
+		pubcomp := &lp.Pubcomplete{
+			MessageID: pkt.MessageID,
+		}
+		// persist outbound
+		c.storeOutbound(pubcomp)
+		c.send <- pubcomp
 	}
 	return nil
 }
 
-// Load all stored messages and resend them to ensure QOS > 1,2 even after an application crash.
+// Load all stored messages and resend them to ensure DeliveryMode > 1,2 even after an application crash.
 func (c *_Conn) resume() {
 	// contract is used as blockId and key prefix
 	keys := store.Log.Keys()
@@ -411,16 +393,14 @@ func (c *_Conn) resume() {
 		// isKeyOutbound
 		if (k & (1 << 4)) == 0 {
 			switch msg.(type) {
-			case *lp.Pubrel:
-				c.send <- msg
-			case *lp.Publish:
+			case *lp.Publish, *lp.Pubnew:
 				c.send <- msg
 			default:
 				store.Log.Delete(k)
 			}
 		} else {
 			switch msg.(type) {
-			case *lp.Pubrel:
+			case *lp.Pubreceive, *lp.Pubreceipt:
 				c.recv <- msg
 			default:
 				store.Log.Delete(k)

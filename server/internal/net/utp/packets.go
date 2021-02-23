@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package pubsub
+package utp
 
 import (
 	"bytes"
@@ -46,7 +46,7 @@ func (p *Packet) Read(r io.Reader) (lp.LineProtocol, error) {
 		return &lp.Disconnect{}, nil
 	}
 
-	msg := make([]byte, fh.RemainingLength)
+	msg := make([]byte, fh.MessageLength)
 	_, err := io.ReadFull(r, msg)
 	if err != nil {
 		return nil, err
@@ -61,22 +61,16 @@ func (p *Packet) Read(r io.Reader) (lp.LineProtocol, error) {
 		pkt = unpackConnack(msg)
 	case lp.PUBLISH:
 		pkt = unpackPublish(msg)
-	case lp.PUBACK:
-		pkt = unpackPuback(msg)
-	case lp.PUBREC:
-		pkt = unpackPubrec(msg)
-	case lp.PUBREL:
-		pkt = unpackPubrel(msg)
-	case lp.PUBCOMP:
-		pkt = unpackPubcomp(msg)
+	case lp.PUBRECEIVE:
+		pkt = unpackPubreceive(msg)
+	case lp.PUBRECEIPT:
+		pkt = unpackPubreceipt(msg)
+	case lp.PUBCOMPLETE:
+		pkt = unpackPubcomplete(msg)
 	case lp.SUBSCRIBE:
 		pkt = unpackSubscribe(msg)
-	case lp.SUBACK:
-		pkt = unpackSuback(msg)
 	case lp.UNSUBSCRIBE:
 		pkt = unpackUnsubscribe(msg)
-	case lp.UNSUBACK:
-		pkt = unpackUnsuback(msg)
 	default:
 		return nil, fmt.Errorf("Invalid zero-length packet with type %d", fh.MessageType)
 	}
@@ -87,34 +81,24 @@ func (p *Packet) Read(r io.Reader) (lp.LineProtocol, error) {
 // Encode encodes the message into binary data
 func (p *Packet) Encode(pkt lp.LineProtocol) (bytes.Buffer, error) {
 	switch pkt.Type() {
-	case lp.PINGREQ:
-		return encodePingreq(*pkt.(*lp.Pingreq))
 	case lp.PINGRESP:
 		return encodePingresp(*pkt.(*lp.Pingresp))
-	case lp.CONNECT:
-		return encodeConnect(*pkt.(*lp.Connect))
 	case lp.CONNACK:
 		return encodeConnack(*pkt.(*lp.Connack))
 	case lp.DISCONNECT:
 		return encodeDisconnect(*pkt.(*lp.Disconnect))
-	case lp.SUBSCRIBE:
-		return encodeSubscribe(*pkt.(*lp.Subscribe))
 	case lp.SUBACK:
 		return encodeSuback(*pkt.(*lp.Suback))
-	case lp.UNSUBSCRIBE:
-		return encodeUnsubscribe(*pkt.(*lp.Unsubscribe))
 	case lp.UNSUBACK:
 		return encodeUnsuback(*pkt.(*lp.Unsuback))
 	case lp.PUBLISH:
 		return encodePublish(*pkt.(*lp.Publish))
-	case lp.PUBACK:
-		return encodePuback(*pkt.(*lp.Puback))
-	case lp.PUBREC:
-		return encodePubrec(*pkt.(*lp.Pubrec))
-	case lp.PUBREL:
-		return encodePubrel(*pkt.(*lp.Pubrel))
-	case lp.PUBCOMP:
-		return encodePubcomp(*pkt.(*lp.Pubcomp))
+	case lp.PUBNEW:
+		return encodePubnew(*pkt.(*lp.Pubnew))
+	case lp.PUBRECEIPT:
+		return encodePubreceipt(*pkt.(*lp.Pubreceipt))
+	case lp.PUBCOMPLETE:
+		return encodePubcomplete(*pkt.(*lp.Pubcomplete))
 	}
 	return bytes.Buffer{}, nil
 }

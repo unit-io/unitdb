@@ -163,6 +163,16 @@ func WithBatchWriteInterval(dur time.Duration) Options {
 	})
 }
 
+// WithDefaultQueryOptions will set some default values for Query operation.
+//   defaultQueryLimit: 1000
+//   maxQueryLimit: 100000
+func WithDefaultQueryOptions() Options {
+	return newFuncOption(func(o *_Options) {
+		o.queryOptions.defaultQueryLimit = 1000
+		o.queryOptions.maxQueryLimit = 100000
+	})
+}
+
 // WithDefaultOptions will open DB with some default values.
 func WithDefaultOptions() Options {
 	return newFuncOption(func(o *_Options) {
@@ -171,12 +181,6 @@ func WithDefaultOptions() Options {
 		}
 		if o.syncDurationType == 0 {
 			o.syncDurationType = time.Second
-		}
-		if o.queryOptions.defaultQueryLimit == 0 {
-			o.queryOptions.defaultQueryLimit = 1000
-		}
-		if o.queryOptions.maxQueryLimit == 0 {
-			o.queryOptions.maxQueryLimit = 100000
 		}
 		if o.bufferSize == 0 {
 			o.bufferSize = 1 << 32 // maximum size of a buffer to use in bufferpool (4GB).
