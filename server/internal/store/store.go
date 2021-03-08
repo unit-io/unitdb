@@ -20,11 +20,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	adapter "github.com/unit-io/unitdb/server/internal/db"
 	"github.com/unit-io/unitdb/server/internal/message"
-	"github.com/unit-io/unitdb/server/internal/net"
+	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 )
 
@@ -180,6 +179,20 @@ func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches 
 	return matches, err
 }
 
+// SessionStore is a Session struct to hold methods for persistence mapping for the Session object.
+type SessionStore struct{}
+
+// Session is the anchor for storing/retrieving Session objects
+var Session SessionStore
+
+func (s *SessionStore) Put(key uint64, payload []byte) error {
+	return adp.PutMessage(key, payload)
+}
+
+func (s *SessionStore) Get(key uint64) (raw []byte, err error) {
+	return adp.GetMessage(key)
+}
+
 // MessageLog is a Message struct to hold methods for persistence mapping for the Message object.
 type MessageLog struct{}
 
@@ -187,87 +200,55 @@ type MessageLog struct{}
 var Log MessageLog
 
 // PersistOutbound handles which outgoing messages are stored
-func (l *MessageLog) PersistOutbound(proto net.ProtoAdapter, blockID uint32, msg net.LineProtocol) {
-	switch msg.Info().DeliveryMode {
-	case 0:
-		switch msg.(type) {
-		case *net.Pubcomplete:
-			// Sending pubcomp. delete matching publish for EXPRESS delivery mode
-			// or pubrecv for RELIABLE delivery mode from ibound
-			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
-			adp.DeleteMessage(ikey)
+func (l *MessageLog) PersistOutbound(proto lp.ProtoAdapter, blockID uint32, outMsg lp.LineProtocol) {
+	switch outMsg.(type) {
+	case *lp.Publish:
+		// Received a publish. store it in ibound
+		// until ACKNOWLEDGE or RECEIPT is received.
+		key := uint64(outMsg.Info().MessageID)<<32 + uint64(blockID)
+		m, err := lp.Encode(proto, outMsg)
+		if err != nil {
+			log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
+			return
 		}
-	case 1, 2:
-		switch msg.(type) {
-		case *net.Pubreceipt, *net.Publish:
-			// Sending publish. store in obound
-			// until puback received
-			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
-			m, err := net.Encode(proto, msg)
-			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
-				return
-			}
-			adp.PutMessage(okey, m.Bytes())
-		default:
-			fmt.Println("Store::PersistOutbound: Invalid message type")
+		adp.PutMessage(key, m.Bytes())
+	}
+	if outMsg.Type()==lp.FLOWCONTROL {
+		msg := *outMsg.(*lp.ControlMessage)
+		switch msg.FlowControl {
+		case lp.COMPLETE:
+			// Sending ACKNOWLEDGE, delete matching PUBLISH for EXPRESS delivery mode
+			// or sending COMPLETE, delete matching RECEIVE for RELIABLE delivery mode from ibound
+			key := uint64(outMsg.Info().MessageID)<<32 + uint64(blockID)
+			adp.DeleteMessage(key)
 		}
 	}
 }
 
 // PersistInbound handles which incoming messages are stored
-func (l *MessageLog) PersistInbound(proto net.ProtoAdapter, blockID uint32, msg net.LineProtocol) {
-	switch msg.Info().DeliveryMode {
-	case 0:
-		switch msg.(type) {
-		case *net.Pubcomplete:
-			// Received a pubcomp. delete matching publish for EXPRESS delivery mode
-			// or pubrec for RELIABLE delivert mode from obound
-			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
-			adp.DeleteMessage(okey)
-		case *net.Publish:
-			// Received a publish. store it in ibound
-			// until pubcomp sent
-			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
-			m, err := net.Encode(proto, msg)
+func (l *MessageLog) PersistInbound(proto lp.ProtoAdapter, blockID uint32, inMsg lp.LineProtocol) {
+	if inMsg.Type()==lp.FLOWCONTROL {
+		msg := *inMsg.(*lp.ControlMessage)
+		switch msg.FlowControl {
+		case lp.RECEIPT:
+			// Sending RECEIPT. store in ibound
+			// until COMPLETE is sent.
+			key := uint64(inMsg.Info().MessageID)<<32 + uint64(blockID)
+			m, err := lp.Encode(proto, inMsg)
 			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
+				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
 				return
 			}
-			adp.PutMessage(ikey, m.Bytes())
-		case *net.Pingreq, *net.Connect, *net.Disconnect:
-		default:
-			fmt.Println("Store::PersistInbound: Invalid message type")
-		}
-	case 1, 2:
-		switch msg.(type) {
-		case *net.Pubreceipt:
-			// Received a pubrec. delete matching publish
-			// from obound
-			okey := uint64(msg.Info().MessageID)<<32 + uint64(blockID)
-			adp.DeleteMessage(okey)
-		case *net.Pubreceive, *net.Subscribe, *net.Unsubscribe:
-			// Received a pubrecv. store it in ibound
-			// until pubcomp sent
-			ikey := uint64(blockID)<<32 + uint64(msg.Info().MessageID)
-			m, err := net.Encode(proto, msg)
-			if err != nil {
-				log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
-				return
-			}
-			adp.PutMessage(ikey, m.Bytes())
-		case *net.Publish:
-		default:
-			fmt.Println("Store::PersistInbound: Invalid message type")
-		}
+			adp.PutMessage(key, m.Bytes())
 	}
 }
+	}
 
 // Get performs a query and attempts to fetch message for the given blockId and key
-func (l *MessageLog) Get(proto net.ProtoAdapter, key uint64) net.LineProtocol {
+func (l *MessageLog) Get(proto lp.ProtoAdapter, key uint64) lp.LineProtocol {
 	if raw, err := adp.GetMessage(key); raw != nil && err == nil {
 		r := bytes.NewReader(raw)
-		if msg, err := net.Read(proto, r); err == nil {
+		if msg, err := lp.Read(proto, r); err == nil {
 			return msg
 		}
 
@@ -275,9 +256,16 @@ func (l *MessageLog) Get(proto net.ProtoAdapter, key uint64) net.LineProtocol {
 	return nil
 }
 
-// Keys performs a query and attempts to fetch all keys for given blockId and key prefix.
-func (l *MessageLog) Keys() []uint64 {
-	return adp.Keys()
+// Keys performs a query and attempts to fetch all keys with the prefix.
+func (l *MessageLog) Keys(prefix uint32) []uint64 {
+	matches := make([]uint64, 0)
+	keys := adp.Keys()
+	for _, key := range keys {
+		if evalPrefix(prefix, key) {
+			matches = append(matches, key)
+		}
+	}
+	return matches
 }
 
 // Delete is used to delete message.
@@ -285,10 +273,16 @@ func (l *MessageLog) Delete(key uint64) {
 	adp.DeleteMessage(key)
 }
 
-// Reset removes all keys from store
-func (l *MessageLog) Reset() {
+// Reset removes all keys with the prefix from store
+func (l *MessageLog) Reset(prefix uint32) {
 	keys := adp.Keys()
 	for _, key := range keys {
-		adp.DeleteMessage(key)
+		if evalPrefix(prefix, key) {
+			adp.DeleteMessage(key)
+		}
 	}
+}
+
+func evalPrefix(prefix uint32, key uint64) bool {
+	return uint64(prefix) == key&0xFFFFFFFF
 }

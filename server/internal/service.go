@@ -67,7 +67,7 @@ func NewService(ctx context.Context, cfg *config.Config) (s *_Service, err error
 		// subscriptions: message.NewSubscriptions(),
 		http:  lp.NewHttpServer(),
 		tcp:   lp.NewTcpServer(),
-		grpc:  lp.NewGrpcServer(),
+		grpc:  lp.NewGrpcServer(lp.WithDefaultOptions()),
 		meter: NewMeter(),
 		stats: stats.New(&stats.Config{Addr: "localhost:8094", Size: 50}, stats.MaxPacketSize(1400), stats.MetricPrefix("trace")),
 	}
@@ -91,7 +91,7 @@ func NewService(ctx context.Context, cfg *config.Config) (s *_Service, err error
 	}
 
 	// Open database connection
-	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).CleanSession)
+	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).Reset)
 	if err != nil {
 		log.Fatal("service", "Failed to connect to DB:", err)
 	}
@@ -149,7 +149,7 @@ func (s *_Service) listen(addr string) {
 // Handle a new connection request
 func (s *_Service) onAcceptConn(t net.Conn) {
 	conn := s.newConn(t)
-	go conn.readLoop()
+	go conn.readLoop(s.context)
 	go conn.writeLoop(s.context)
 }
 

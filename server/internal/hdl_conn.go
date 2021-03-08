@@ -19,8 +19,9 @@ package internal
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -39,7 +40,7 @@ const (
 	requestKeygen   = 812942072  // hash("keygen")
 )
 
-func (c *_Conn) readLoop() error {
+func (c *_Conn) readLoop(ctx context.Context) error {
 	defer func() {
 		log.Info("conn.Handler", "closing...")
 		c.close()
@@ -48,25 +49,29 @@ func (c *_Conn) readLoop() error {
 	reader := bufio.NewReaderSize(c.socket, 65536)
 
 	for {
-		// Set read/write deadlines so we can close dangling connections
-		c.socket.SetDeadline(time.Now().Add(time.Second * 120))
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			// Set read/write deadlines so we can close dangling connections
+			c.socket.SetDeadline(time.Now().Add(time.Second * 120))
 
-		// Decode an incoming packet
-		pkt, err := lp.Read(c.adp, reader)
-		if err != nil {
-			fmt.Println("readPacket: err", err)
-			return err
-		}
+			// Decode an incoming Message
+			pkt, err := lp.Read(c.adp, reader)
+			if err != nil {
+				return err
+			}
 
-		// Message handler
-		if err := c.handler(pkt); err != nil {
-			return err
+			// Message handler
+			if err := c.handler(pkt); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-// handler handles inbound packets.
-func (c *_Conn) handler(pkt lp.LineProtocol) error {
+// handler handles inbound Messages.
+func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 	start := time.Now()
 	var status int = 200
 	defer func() {
@@ -74,73 +79,106 @@ func (c *_Conn) handler(pkt lp.LineProtocol) error {
 		c.service.stats.PrecisionTiming("conn_time_ns", time.Since(start), stats.IntTag("status", status))
 	}()
 
-	// Persist incoming
-	c.storeInbound(pkt)
-
-	switch pkt.Type() {
+	switch inMsg.Type() {
 	// An attempt to connect.
 	case lp.CONNECT:
 		var returnCode uint8
-		packet := *pkt.(*lp.Connect)
+		m := *inMsg.(*lp.Connect)
 
-		c.insecure = packet.InsecureFlag
-		c.username = string(packet.Username)
-		clientid, err := c.onConnect([]byte(packet.ClientID))
+		c.insecure = m.InsecureFlag
+		c.username = string(m.Username)
+		clientID, err := c.onConnect([]byte(m.ClientID))
 		if err != nil {
 			status = err.Status
-			returnCode = 0x05 // Unauthorized
+			returnCode = err.ReturnCode // Unauthorized
 		}
 
 		// Write the ack
-		connack := &lp.Connack{ReturnCode: returnCode, ConnID: uint32(c.connid)}
-		c.send <- connack
+		connack := &lp.ConnectAcknowledge{ReturnCode: returnCode, Epoch: uid.ID(m.ClientID).Epoch(), ConnID: uint32(c.connID)}
+		ack := &lp.ControlMessage{
+			MessageType: lp.CONNECT,
+			FlowControl: lp.ACKNOWLEDGE,
+			Message:     connack,
+		}
+		c.send <- ack
 
-		if err == types.ErrInvalidClientId {
-			c.sendClientID(clientid.Encode(c.service.mac))
+		if err == types.ErrInvalidClientID {
+			c.sendClientID(clientID.Encode(c.service.mac))
 			return err
 		}
 
-		c.clientid = clientid
-		c.MessageIds.Reset(message.MID(c.connid))
-		// Take care of any messages in the store
-		if !packet.CleanSessFlag {
-			c.resume()
+		c.clientID = clientID
+		c.MessageIds.Reset()
+
+		// batch manager
+		c.newBatchManager(&batchOptions{
+			batchDuration:       time.Duration(m.BatchDuration) * time.Millisecond,
+			batchByteThreshold:  int(m.BatchByteThreshold),
+			batchCountThreshold: int(m.BatchCountThreshold),
+		})
+
+		var sessKey uint32
+		if m.SessKey != 0 {
+			sessKey = m.SessKey
 		} else {
-			store.Log.Reset()
+			sessKey = c.clientID.Epoch()
 		}
 
+		// Take care of any messages in the store
+		sessID := c.sessID
+		if rawSess, err := store.Session.Get(uint64(sessKey)); err == nil {
+			sessID := binary.LittleEndian.Uint32(rawSess[:4])
+			if !m.CleanSessFlag {
+				c.resume(sessID)
+			} else {
+				store.Log.Reset(sessID)
+			}
+			c.sessID = uid.LID(sessID)
+		}
+		rawSess := make([]byte, 4)
+		binary.LittleEndian.PutUint32(rawSess[0:4], uint32(sessID))
+		store.Session.Put(uint64(sessKey), rawSess)
+		if sessKey != c.clientID.Epoch() {
+			store.Session.Put(uint64(c.clientID.Epoch()), rawSess)
+		}
+	case lp.DISCONNECT:
+		c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
 	// An attempt to subscribe to a topic.
 	case lp.SUBSCRIBE:
-		packet := *pkt.(*lp.Subscribe)
-		ack := &lp.Suback{
-			MessageID: packet.MessageID,
+		m := *inMsg.(*lp.Subscribe)
+		ack := &lp.ControlMessage{
+			MessageType: lp.SUBSCRIBE,
+			FlowControl: lp.ACKNOWLEDGE,
+			MessageID:   m.MessageID,
 		}
-
 		// Subscribe for each subscription
-		for _, sub := range packet.Subscriptions {
-			if err := c.onSubscribe(packet, sub); err != nil {
+		for _, subsc := range m.Subscriptions {
+			if err := c.onSubscribe(m, subsc); err != nil {
 				status = err.Status
-				c.notifyError(err, packet.MessageID)
+				c.notifyError(err, m.MessageID)
 				continue
 			}
 
 		}
 
-		if packet.IsForwarded {
+		if m.IsForwarded {
 			return nil
 		}
 		c.send <- ack
 
 	// An attempt to unsubscribe from a topic.
 	case lp.UNSUBSCRIBE:
-		packet := *pkt.(*lp.Unsubscribe)
-		ack := &lp.Unsuback{MessageID: packet.MessageID}
-
+		m := *inMsg.(*lp.Unsubscribe)
+		ack := &lp.ControlMessage{
+			MessageType: lp.UNSUBSCRIBE,
+			FlowControl: lp.ACKNOWLEDGE,
+			MessageID:   m.MessageID,
+		}
 		// Unsubscribe from each subscription
-		for _, sub := range packet.Subscriptions {
-			if err := c.onUnsubscribe(packet, sub); err != nil {
+		for _, sub := range m.Subscriptions {
+			if err := c.onUnsubscribe(m, sub); err != nil {
 				status = err.Status
-				c.notifyError(err, packet.MessageID)
+				c.notifyError(err, m.MessageID)
 			}
 		}
 
@@ -148,46 +186,50 @@ func (c *_Conn) handler(pkt lp.LineProtocol) error {
 
 	// Ping response, respond appropriately.
 	case lp.PINGREQ:
-		resp := &lp.Pingresp{}
-		c.send <- resp
-
-	case lp.DISCONNECT:
+		ack := &lp.ControlMessage{
+			MessageType: lp.PINGREQ,
+			FlowControl: lp.ACKNOWLEDGE,
+		}
+		c.send <- ack
 
 	case lp.PUBLISH:
-		packet := *pkt.(*lp.Publish)
-		if err := c.onPublish(packet); err != nil {
+		m := *inMsg.(*lp.Publish)
+		if err := c.onPublish(m); err != nil {
 			status = err.Status
-			c.notifyError(err, packet.MessageID)
+			c.notifyError(err, m.MessageID)
 		}
+	case lp.FLOWCONTROL:
+		// Persist incoming
+		c.storeInbound(inMsg)
 
-	case lp.PUBRECEIVE:
-		packet := *pkt.(*lp.Pubreceive)
-		okey := uint64(packet.Info().MessageID)<<32 + uint64(c.connid)
-		// Get message from Log store
-		msg := store.Log.Get(c.adp, okey)
-		if msg == nil {
-			return types.ErrServerError
+		m := *inMsg.(*lp.ControlMessage)
+		switch m.FlowControl {
+		case lp.RECEIVE:
+			key := uint64(m.Info().MessageID)<<32 + uint64(c.sessID)
+			// Get message from Log store
+			msg := store.Log.Get(c.adp, key)
+			if msg == nil {
+				return types.ErrServerError
+			}
+			switch msg.(type) {
+			case *lp.Publish:
+				c.send <- msg
+			}
+		case lp.RECEIPT:
+			comp := &lp.ControlMessage{
+				MessageType: lp.PUBLISH,
+				FlowControl: lp.COMPLETE,
+				MessageID:   m.MessageID,
+			}
+			c.storeOutbound(comp)
+			c.send <- comp
 		}
-		switch msg.(type) {
-		case *lp.Publish:
-			c.send <- msg
-		}
-
-	case lp.PUBRECEIPT:
-		packet := *pkt.(*lp.Pubreceipt)
-		pubcomp := &lp.Pubcomplete{
-			MessageID: packet.MessageID,
-		}
-		c.send <- pubcomp
-		c.storeOutbound(pubcomp)
-
-	case lp.PUBCOMPLETE:
 	}
 
 	return nil
 }
 
-// writeLook handles outbound packets
+// writeLook handles outbound Messages
 func (c *_Conn) writeLoop(ctx context.Context) {
 	c.closeW.Add(1)
 	defer c.closeW.Done()
@@ -247,7 +289,7 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 			return nil, types.ErrUnauthorized
 		}
 
-		return clientid, types.ErrInvalidClientId
+		return clientid, types.ErrInvalidClientID
 	}
 
 	//do not cache primary client Id
@@ -260,12 +302,12 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 }
 
 // onSubscribe is a handler for Subscribe events.
-func (c *_Conn) onSubscribe(pkt lp.Subscribe, sub lp.Subscription) *types.Error {
+func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(sub.Topic)
+	topic := security.ParseKey(subsc.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -276,10 +318,10 @@ func (c *_Conn) onSubscribe(pkt lp.Subscribe, sub lp.Subscription) *types.Error 
 		}
 	}
 
-	c.subscribe(pkt, topic, sub.DeliveryMode)
+	c.subscribe(sub, topic, subsc)
 
-	if sub.Last != "" {
-		msgs, err := store.Message.Get(c.clientid.Contract(), topic.Topic, sub.Last)
+	if subsc.Last != "" {
+		msgs, err := store.Message.Get(c.clientID.Contract(), topic.Topic, subsc.Last)
 		if err != nil {
 			log.Error("conn.OnSubscribe", "query last messages"+err.Error())
 			return types.ErrServerError
@@ -297,12 +339,12 @@ func (c *_Conn) onSubscribe(pkt lp.Subscribe, sub lp.Subscription) *types.Error 
 // ------------------------------------------------------------------------------------
 
 // onUnsubscribe is a handler for Unsubscribe events.
-func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, sub lp.Subscription) *types.Error {
+func (c *_Conn) onUnsubscribe(unsub lp.Unsubscribe, subsc *lp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(sub.Topic)
+	topic := security.ParseKey(subsc.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -313,100 +355,63 @@ func (c *_Conn) onUnsubscribe(pkt lp.Unsubscribe, sub lp.Subscription) *types.Er
 		}
 	}
 
-	c.unsubscribe(pkt, topic)
+	c.unsubscribe(unsub, topic)
 
 	return nil
 }
 
 // OnPublish is a handler for Publish events.
-func (c *_Conn) onPublish(pkt lp.Publish) *types.Error {
+func (c *_Conn) onPublish(pub lp.Publish) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
-	//Parse the key
-	topic := security.ParseKey(pkt.Topic)
-	if topic.TopicType == security.TopicInvalid {
-		return types.ErrBadRequest
-	}
+	for _, m := range pub.Messages {
+		//Parse the key
+		topic := security.ParseKey(m.Topic)
+		if topic.TopicType == security.TopicInvalid {
+			return types.ErrBadRequest
+		}
 
-	// Check whether the key is 'unitdb' which means it's an API request
-	if len(topic.Key) == 5 && string(topic.Key) == "unitdb" {
-		c.onSpecialRequest(topic, pkt.Payload)
-		return nil
-	}
+		// Check whether the key is 'unitdb' which means it's an API request
+		if len(topic.Key) == 6 && string(topic.Key) == "unitdb" {
+			c.onSpecialRequest(topic, m.Payload)
+			return nil
+		}
 
-	if !c.insecure {
-		wildcard, err := c.onSecureRequest(topic)
+		if !c.insecure {
+			wildcard, err := c.onSecureRequest(topic)
+			if err != nil {
+				return err
+			}
+			if wildcard {
+				return types.ErrForbidden
+			}
+		}
+
+		err := store.Message.Put(c.clientID.Contract(), topic.Topic, m.Payload, m.Ttl)
 		if err != nil {
-			return err
+			log.Error("conn.onPublish", "store message "+err.Error())
+			return types.ErrServerError
 		}
-		if wildcard {
-			return types.ErrForbidden
-		}
+		// Iterate through all subscribers and send them the message
+		go c.publish(pub, topic, m)
+		// time.Sleep(100*time.Millisecond)
+		// panic("exit on publish")
 	}
 
-	err := store.Message.Put(c.clientid.Contract(), topic.Topic, pkt.Payload, pkt.Ttl)
-	if err != nil {
-		log.Error("conn.onPublish", "store message "+err.Error())
-		return types.ErrServerError
-	}
-
-	// Iterate through all subscribers and send them the message
-	c.publish(pkt, topic)
-
-	// acknowledge a packet
-	return c.ack(pkt)
+	// acknowledge a Message
+	return c.acknowledge(pub)
 }
 
-// ack acknowledges a packet
-func (c *_Conn) ack(pkt lp.Publish) *types.Error {
-	switch pkt.Info().DeliveryMode {
-	// DeliveryMode RELIABLE or BATCH
-	case 1, 2:
-		pubrec := &lp.Pubreceipt{
-			MessageID: pkt.MessageID,
-		}
-		// persist outbound
-		c.storeOutbound(pubrec)
-		c.send <- pubrec
-	// DeliveryMode Express
-	case 0:
-		pubcomp := &lp.Pubcomplete{
-			MessageID: pkt.MessageID,
-		}
-		// persist outbound
-		c.storeOutbound(pubcomp)
-		c.send <- pubcomp
+// acknowledge acknowledges a Publish Message
+func (c *_Conn) acknowledge(pub lp.Publish) *types.Error {
+	ack := &lp.ControlMessage{
+		MessageType: lp.PUBLISH,
+		FlowControl: lp.ACKNOWLEDGE,
+		MessageID:   pub.MessageID,
 	}
+	c.send <- ack
 	return nil
-}
-
-// Load all stored messages and resend them to ensure DeliveryMode > 1,2 even after an application crash.
-func (c *_Conn) resume() {
-	// contract is used as blockId and key prefix
-	keys := store.Log.Keys()
-	for _, k := range keys {
-		msg := store.Log.Get(c.adp, k)
-		if msg == nil {
-			continue
-		}
-		// isKeyOutbound
-		if (k & (1 << 4)) == 0 {
-			switch msg.(type) {
-			case *lp.Publish, *lp.Pubnew:
-				c.send <- msg
-			default:
-				store.Log.Delete(k)
-			}
-		} else {
-			switch msg.(type) {
-			case *lp.Pubreceive, *lp.Pubreceipt:
-				c.recv <- msg
-			default:
-				store.Log.Delete(k)
-			}
-		}
-	}
 }
 
 func (c *_Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
@@ -422,7 +427,7 @@ func (c *_Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
 	}
 
 	// Check if the key has the permission for the topic
-	ok, wildcard := key.ValidateTopic(c.clientid.Contract(), topic.Topic[:topic.Size])
+	ok, wildcard := key.ValidateTopic(c.clientID.Contract(), topic.Topic[:topic.Size])
 	if !ok {
 		return wildcard, types.ErrUnauthorized
 	}
@@ -461,11 +466,11 @@ func (c *_Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool
 
 // onClientIdRequest is a handler that returns new client id for the request.
 func (c *_Conn) onClientIDRequest() (interface{}, bool) {
-	if !c.clientid.IsPrimary() {
+	if !c.clientID.IsPrimary() {
 		return types.ErrClientIdForbidden, false
 	}
 
-	clientid, err := uid.NewSecondaryClientID(c.clientid)
+	clientid, err := uid.NewSecondaryClientID(c.clientID)
 	if err != nil {
 		return types.ErrBadRequest, false
 	}
@@ -486,7 +491,7 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	}
 
 	// Use the cipher to generate the key
-	key, err := security.GenerateKey(c.clientid.Contract(), []byte(msg.Topic), msg.Access())
+	key, err := security.GenerateKey(c.clientID.Contract(), []byte(msg.Topic), msg.Access())
 	if err != nil {
 		switch err {
 		case security.ErrTargetTooLong:

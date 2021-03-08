@@ -16,128 +16,113 @@ message Packet {
 	bytes data=1;
 }
 
+enum FlowControl {
+	NONE=0;
+	ACKNOWLEDGE=1;
+	NOTIFY=2;
+	RECEIVE=3;
+	RECEIPT=4;
+	COMPLETE=5;
+}
+
 enum MessageType {
 	RERSERVED=0;
 	CONNECT=1;
-	CONNACK=2;
-	PUBLISH=3;
-	PUBNEW=4;
-	PUBRECEIVE=5;
-	PUBRECEIPT=6;
-	PUBCOMPLETE=7;
-	SUBSCRIBE=8;
-	SUBACK=9;
-	UNSUBSCRIBE=10;
-	UNSUBACK=11;
-	PINGREQ=12;
-	PINGRESP=13;
-	DISCONNECT=14;
+	PUBLISH=2;
+	SUBSCRIBE=3;
+	UNSUBSCRIBE=4;
+	PINGREQ=5;
+	DISCONNECT=6;
 }
 
 message FixedHeader {
 	MessageType MessageType=1;
-	int32 MessageLength=2;
+	FlowControl FlowControl=2;
+	int32 MessageLength=3;
 }
 
-// Connect represents a connect Message.
-message Conn {
-	bytes ProtoName=1;
-	int32 Version=2;
-	bool InsecureFlag=3;
-	bool CleanSessFlag=9;
-	int32 KeepAlive=10;
-	bytes ClientID=11;
-	bytes Username=14;
-	bytes Password=15;
+// Connect represents a CONNECT Message type.
+message Connect {
+	int32 Version=1;
+	bool InsecureFlag=2;
+	string ClientID=3;
+	int32 KeepAlive=4;
+	bool CleanSessFlag=5;
+	int32 SessKey=6;
+	string Username=7;
+	bytes Password=8;
+	int32 BatchDuration=9;
+	int32 BatchByteThreshold=10;
+	int32 BatchCountThreshold=11;
 }
 
-// Connack represents a connack Message.
+// ConnectAcknowledge represents a CONNECT Acknowledge Message type.
 // 0x00 connection accepted
 // 0x01 refused: unacceptable proto version
 // 0x02 refused: identifier rejected
-// 0x03 refused server unavailiable
-// 0x04 bad user or password
+// 0x03 refused: unacceptable identifier, access not allowed
+// 0x04 refused server unavailiable
 // 0x05 not authorized
-message Connack {
+// 0x06 bad request
+message ConnectAcknowledge {
 	int32 ReturnCode=1;
-	int32 ConnID=2;
+	int32 Epoch=2;
+	int32 ConnID=3;
 }
 
-// Pingreq is a keepalive
-message Pingreq {
+// PingRequest is a keepalive
+message PingRequest {
 }
 
-// Pingresp is for saying "hey, the server is alive"
-message Pingresp {
-}
-
-// Disconnect is to signal you want to cease communications with the server
+// Disconnect is to signal client want to cease communications with the server.
 message Disconnect {
 	int32 MessageID=1;
 }
 
-// Publish represents a publish Message. It supports following delivery mode.
+message PublishMessage {
+	string Topic=1;
+	bytes Payload=2;
+	string Ttl=3;
+}
+
+// Publish represents a PUBREQ Message type. It supports following delivery mode.
 // 0 EXPRESS
 // 1 RELIEABLE
 // 2 BATCH
 message Publish {
 	int32 MessageID=1;
 	int32 DeliveryMode=2;
-	bytes Topic=3;
-	bytes Payload=4;
-	string Ttl=5;
+	repeated PublishMessage Messages=3;
 }
 
-// Pubnew is tells subscriber a PUBLISH Message is available.
-message Pubnew {
-	int32 MessageID=1;
-}
-
-// Pubreceive is a publish receive request to the server in response to PUBNEW Message to start receiving the published message.
-message Pubreceive {
-	int32 MessageID=1;
-}
-
-// Pubreceipt is for verifying the receipt of a publish
-// A PUBRECEIPT Message is sent by the server in response to a PUBLISH Message from a publishing client, or by a subscriber in response to a PUBLISH Message from the server."
-message Pubreceipt {
-	int32 MessageID=1;
-}
-
-// Pubcomplete is for saying is in response to a Pubreceipt sent by the publisher
-message Pubcomplete {
-	int32 MessageID=1;
-}
-
-// Subscription is pairing the delivery mode and topic together
-// for the delivery mode's pairs in unsubscribe and subscribe
+// Subscription is pairing the Delivery Mode and Topic together
+// for the delivery mode's pairs in unsubscribe and subscribe.
+// Delay in Millisecond to delay the messsage delivery if DeliveryMode is RELIEABLE or BATCH.
 // 0 EXPRESS
 // 1 RELIEABLE
 // 2 BATCH
 message Subscription {
 	int32 DeliveryMode=1;
-	bytes Topic=2;
-	string Last=3;
+	int32 Delay=2;
+	string Topic=3;
+	string Last=4;
 }
 
-// Subscribe tells the server which topics the client would like to subscribe to and choose a delivery mode.
+// Subscribe tells the server which topics the client would like to subscribe to and choose a Delivery Mode.
 message Subscribe {
 	int32 MessageID=1;
 	repeated Subscription Subscriptions=2;
 }
 
-// Suback is to say "hey, you got it buddy. I will send you messages that fit this pattern"
-message Suback {
-	int32 MessageID=1;
-}
-
-// Unsubscribe is the Message to send if you don't want to subscribe to a topic anymore
+// Unsubscribe is the Message to send if you don't want to subscribe to a topic anymore.
 message Unsubscribe {
 	int32 MessageID=1;
 	repeated  Subscription Subscriptions=2;
 }
 
-// Unsuback is to unsubscribe as suback is to subscribe
-message Unsuback {
+// ControlMessage is a Flow Control Message.
+message ControlMessage {
 	int32 MessageID=1;
+	// Optional Control Message bytes
+	bytes Message=2;
 }

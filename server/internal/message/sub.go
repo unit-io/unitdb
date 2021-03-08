@@ -59,9 +59,10 @@ type Subscriber interface {
 // Message represents a message which has to be forwarded or stored.
 type Message struct {
 	MessageID    uint16 `json:"message_id,omitempty"`    // The ID of the message
+	DeliveryMode uint8  `json:"delivery_mode,omitempty"` // The delivery mode of the message
+	Delay        int32  `json:"delay,omitempty"`         // The time in milliseconds to delay the delivery of the message
 	Topic        []byte `json:"topic,omitempty"`         // The topic of the message
 	Payload      []byte `json:"data,omitempty"`          // The payload of the message
-	DeliveryMode uint8  `json:"delivery_mode,omitempty"` // The delivery mode of the message
 	TTL          int64  `json:"ttl,omitempty"`           // The time-to-live of the message
 }
 

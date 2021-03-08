@@ -38,22 +38,22 @@ func NewConnCache() *_ConnCache {
 func (cc *_ConnCache) add(conn *_Conn) {
 	cc.Lock()
 	defer cc.Unlock()
-	cc.m[conn.connid] = conn
+	cc.m[conn.connID] = conn
 }
 
-// Get fetches a connection from cache by connection ID.
-func (cc *_ConnCache) get(connid uid.LID) *_Conn {
+// get fetches a connection from cache by connection ID.
+func (cc *_ConnCache) get(connID uid.LID) *_Conn {
 	cc.Lock()
 	defer cc.Unlock()
-	if conn := cc.m[connid]; conn != nil {
+	if conn := cc.m[connID]; conn != nil {
 		return conn
 	}
 
 	return nil
 }
 
-func (cc *_ConnCache) delete(connid uid.LID) {
+func (cc *_ConnCache) delete(connID uid.LID) {
 	cc.Lock()
 	defer cc.Unlock()
-	delete(cc.m, connid)
+	delete(cc.m, connID)
 }

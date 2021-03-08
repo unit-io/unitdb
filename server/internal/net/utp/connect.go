@@ -24,71 +24,45 @@ import (
 	pbx "github.com/unit-io/unitdb/server/proto"
 )
 
-func encodeConnack(c lp.Connack) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	connack := pbx.Connack{
-		ReturnCode: int32(c.ReturnCode),
-		ConnID:     int32(c.ConnID),
-	}
-	pkt, err := proto.Marshal(&connack)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_CONNACK, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodePingresp(p lp.Pingresp) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	pingresp := pbx.Pingresp{}
-	pkt, err := proto.Marshal(&pingresp)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PINGRESP, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
 func encodeDisconnect(d lp.Disconnect) (bytes.Buffer, error) {
 	var msg bytes.Buffer
 	disc := pbx.Disconnect{}
-	pkt, err := proto.Marshal(&disc)
+	rawMsg, err := proto.Marshal(&disc)
 	if err != nil {
 		return msg, err
 	}
-	fh := FixedHeader{MessageType: pbx.MessageType_DISCONNECT, MessageLength: int32(len(pkt))}
+	fh := FixedHeader{MessageType: pbx.MessageType_DISCONNECT, MessageLength: int32(len(rawMsg))}
 	msg = fh.pack()
-	_, err = msg.Write(pkt)
+	_, err = msg.Write(rawMsg)
 	return msg, err
 }
 
 func unpackConnect(data []byte) lp.LineProtocol {
-	var pkt pbx.Conn
-	proto.Unmarshal(data, &pkt)
+	var conn pbx.Connect
+	proto.Unmarshal(data, &conn)
 
 	connect := &lp.Connect{
-		ProtoName:     pkt.ProtoName,
-		Version:       uint8(pkt.Version),
-		KeepAlive:     uint16(pkt.KeepAlive),
-		ClientID:      pkt.ClientID,
-		InsecureFlag:  pkt.InsecureFlag,
-		CleanSessFlag: pkt.CleanSessFlag,
-		Username:      pkt.Username,
-		Password:      pkt.Password,
+		Version:             uint8(conn.Version),
+		InsecureFlag:        conn.InsecureFlag,
+		ClientID:            []byte(conn.ClientID),
+		KeepAlive:           uint16(conn.KeepAlive),
+		CleanSessFlag:       conn.CleanSessFlag,
+		SessKey:             uint32(conn.SessKey),
+		Username:            conn.Username,
+		Password:            conn.Password,
+		BatchDuration:       conn.BatchDuration,
+		BatchByteThreshold:  conn.BatchByteThreshold,
+		BatchCountThreshold: conn.BatchCountThreshold,
 	}
 
 	return connect
 }
 
-func unpackConnack(data []byte) lp.LineProtocol {
-	var pkt pbx.Connack
-	proto.Unmarshal(data, &pkt)
+func unpackConnectAcknowledge(data []byte) lp.LineProtocol {
+	var connack pbx.ConnectAcknowledge
+	proto.Unmarshal(data, &connack)
 
-	return &lp.Connack{
-		ReturnCode: uint8(pkt.ReturnCode),
+	return &lp.ConnectAcknowledge{
+		ReturnCode: uint8(connack.ReturnCode),
 	}
 }
