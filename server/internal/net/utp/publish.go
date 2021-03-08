@@ -26,103 +26,45 @@ import (
 
 func encodePublish(p lp.Publish) (bytes.Buffer, error) {
 	var msg bytes.Buffer
+	var msgs []*pbx.PublishMessage
+	for _, m := range p.Messages {
+		pubMsg := &pbx.PublishMessage{
+			Topic:   string(m.Topic),
+			Payload: m.Payload,
+			Ttl:     m.Ttl,
+		}
+		msgs = append(msgs, pubMsg)
+	}
 	pub := pbx.Publish{
 		MessageID:    int32(p.MessageID),
 		DeliveryMode: int32(p.DeliveryMode),
-		Topic:        p.Topic,
-		Payload:      p.Payload,
-		Ttl:          p.Ttl,
+		Messages:     msgs,
 	}
-	pkt, err := proto.Marshal(&pub)
+	rawMsg, err := proto.Marshal(&pub)
 	if err != nil {
 		return msg, err
 	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PUBLISH, MessageLength: int32(len(pkt))}
+	fh := FixedHeader{MessageType: pbx.MessageType_PUBLISH, MessageLength: int32(len(rawMsg))}
 	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodePubnew(p lp.Pubnew) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	pubnew := pbx.Pubnew{
-		MessageID: int32(p.MessageID),
-	}
-	pkt, err := proto.Marshal(&pubnew)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PUBNEW, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodePubreceipt(p lp.Pubreceipt) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	pubrec := pbx.Pubreceipt{
-		MessageID: int32(p.MessageID),
-	}
-	pkt, err := proto.Marshal(&pubrec)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PUBRECEIPT, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodePubcomplete(p lp.Pubcomplete) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	pubcomp := pbx.Pubcomplete{
-		MessageID: int32(p.MessageID),
-	}
-	pkt, err := proto.Marshal(&pubcomp)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_PUBCOMPLETE, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
+	_, err = msg.Write(rawMsg)
 	return msg, err
 }
 
 func unpackPublish(data []byte) lp.LineProtocol {
-	var pkt pbx.Publish
-	proto.Unmarshal(data, &pkt)
-
+	var pub pbx.Publish
+	proto.Unmarshal(data, &pub)
+	var msgs []*lp.PublishMessage
+	for _, m := range pub.Messages {
+		pubMsg := &lp.PublishMessage{
+			Topic:   []byte(m.Topic),
+			Payload: m.Payload,
+			Ttl:     m.Ttl,
+		}
+		msgs = append(msgs, pubMsg)
+	}
 	return &lp.Publish{
-		MessageID:    uint16(pkt.MessageID),
-		DeliveryMode: uint8(pkt.DeliveryMode),
-		Topic:        pkt.Topic,
-		Payload:      pkt.Payload,
-		Ttl:          pkt.Ttl,
-	}
-}
-
-func unpackPubreceive(data []byte) lp.LineProtocol {
-	var pkt pbx.Pubreceive
-	proto.Unmarshal(data, &pkt)
-
-	return &lp.Pubreceive{
-		MessageID: uint16(pkt.MessageID),
-	}
-}
-
-func unpackPubreceipt(data []byte) lp.LineProtocol {
-	var pkt pbx.Pubreceipt
-	proto.Unmarshal(data, &pkt)
-
-	return &lp.Pubreceipt{
-		MessageID: uint16(pkt.MessageID),
-	}
-}
-
-func unpackPubcomplete(data []byte) lp.LineProtocol {
-	var pkt pbx.Pubcomplete
-	proto.Unmarshal(data, &pkt)
-	return &lp.Pubcomplete{
-		MessageID: uint16(pkt.MessageID),
+		MessageID:    uint16(pub.MessageID),
+		DeliveryMode: uint8(pub.DeliveryMode),
+		Messages:     msgs,
 	}
 }

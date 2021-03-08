@@ -17,76 +17,47 @@
 package utp
 
 import (
-	"bytes"
+	// "bytes"
 
 	"github.com/golang/protobuf/proto"
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	pbx "github.com/unit-io/unitdb/server/proto"
 )
 
-func encodeSuback(s lp.Suback) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	suback := pbx.Suback{
-		MessageID: int32(s.MessageID),
-	}
-	pkt, err := proto.Marshal(&suback)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_SUBACK, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
-func encodeUnsuback(u lp.Unsuback) (bytes.Buffer, error) {
-	var msg bytes.Buffer
-	unusuback := pbx.Unsuback{
-		MessageID: int32(u.MessageID),
-	}
-	pkt, err := proto.Marshal(&unusuback)
-	if err != nil {
-		return msg, err
-	}
-	fh := FixedHeader{MessageType: pbx.MessageType_UNSUBACK, MessageLength: int32(len(pkt))}
-	msg = fh.pack()
-	_, err = msg.Write(pkt)
-	return msg, err
-}
-
 func unpackSubscribe(data []byte) lp.LineProtocol {
-	var pkt pbx.Subscribe
-	proto.Unmarshal(data, &pkt)
-	proto.Unmarshal(data, &pkt)
-	var subs []lp.Subscription
-	for _, t := range pkt.Subscriptions {
-		sub := lp.Subscription{}
-		sub.Topic = t.Topic
-		sub.Last = t.Last
-		sub.DeliveryMode = uint8(t.DeliveryMode)
-		subs = append(subs, sub)
+	var sub pbx.Subscribe
+	proto.Unmarshal(data, &sub)
+	var subs []*lp.Subscription
+	for _, t := range sub.Subscriptions {
+		s := &lp.Subscription{}
+		s.DeliveryMode = uint8(t.DeliveryMode)
+		s.Delay = t.Delay
+		s.Topic = []byte(t.Topic)
+		s.Last = t.Last
+		subs = append(subs, s)
 	}
 
 	return &lp.Subscribe{
-		MessageID:     uint16(pkt.MessageID),
+		MessageID:     uint16(sub.MessageID),
 		Subscriptions: subs,
 	}
 }
 
 func unpackUnsubscribe(data []byte) lp.LineProtocol {
-	var pkt pbx.Unsubscribe
-	proto.Unmarshal(data, &pkt)
-	var subs []lp.Subscription
-	for _, t := range pkt.Subscriptions {
-		sub := lp.Subscription{}
-		sub.Topic = t.Topic
-		sub.Last = t.Last
-		sub.DeliveryMode = uint8(t.DeliveryMode)
-		subs = append(subs, sub)
+	var unsub pbx.Unsubscribe
+	proto.Unmarshal(data, &unsub)
+	var subs []*lp.Subscription
+	for _, t := range unsub.Subscriptions {
+		s := &lp.Subscription{}
+		s.DeliveryMode = uint8(t.DeliveryMode)
+		s.Delay = t.Delay
+		s.Topic = []byte(t.Topic)
+		s.Last = t.Last
+		subs = append(subs, s)
 	}
 
 	return &lp.Unsubscribe{
-		MessageID:     uint16(pkt.MessageID),
+		MessageID:     uint16(unsub.MessageID),
 		Subscriptions: subs,
 	}
 }

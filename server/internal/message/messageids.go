@@ -26,11 +26,13 @@ type MID uint32
 type MessageIds struct {
 	sync.RWMutex
 	id    MID
+	resume map[MID]struct{}
 	index map[MID]uint8 // map[MID]PacketType
 }
 
 func NewMessageIds() MessageIds {
 	return MessageIds{
+		resume: make(map[MID]struct{}),
 		index: make(map[MID]uint8),
 	}
 }
@@ -39,6 +41,12 @@ func (mids *MessageIds) Reset(id MID) {
 	mids.Lock()
 	defer mids.Unlock()
 	mids.id = id
+}
+
+func (mids *MessageIds) ResumeID(id MID) {
+	mids.Lock()
+	defer mids.Unlock()
+	mids.resume[id]= struct{}{}
 }
 
 func (mids *MessageIds) FreeID(id MID) {
@@ -51,6 +59,9 @@ func (mids *MessageIds) NextID(pktType uint8) MID {
 	mids.Lock()
 	defer mids.Unlock()
 	mids.id--
+	if _,ok:= mids.resume[mids.id];ok{
+		mids.NextID(pktType)
+	}
 	mids.index[mids.id] = pktType
 	return mids.id
 }

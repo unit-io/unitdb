@@ -89,8 +89,8 @@ func (c *Config) Encryption(encrConfig json.RawMessage) EncryptionConfig {
 
 // StoreConfig represents the configuration for the store.
 type StoreConfig struct {
-	// clean cleans logs to start clean and reset message store on service restart
-	CleanSession bool `json:"clean_session"`
+	// Reset resets message store on service restart
+	Reset bool `json:"reset"`
 }
 
 func (c *Config) Store(storeConfig json.RawMessage) StoreConfig {

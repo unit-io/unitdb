@@ -82,12 +82,12 @@ type ClusterNode struct {
 type ClusterSess struct {
 	// IP address of the client. For long polling this is the IP of the last poll
 	RemoteAddr string
-
 	// protocol - NONE (unset), RPC, GRPC, GRPC_WEB, WEBSOCK
 	Proto lp.Proto
 	// Connection ID
 	ConnID uid.LID
-
+	// Session ID
+	SessID uid.LID
 	// Client ID
 	ClientID uid.ID
 }
@@ -307,13 +307,13 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 			}
 
 			log.Info("cluster.Master", "new connection request"+string(msg.Conn.ConnID))
-			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.ClientID)
+			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.SessID, msg.Conn.ClientID)
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
 		conn.proto = msg.Conn.Proto
-		conn.connid = msg.Conn.ConnID
-		conn.clientid = msg.Conn.ClientID
+		conn.connID = msg.Conn.ConnID
+		conn.clientID = msg.Conn.ClientID
 
 		switch msg.Type {
 		case message.SUBSCRIBE:
@@ -376,7 +376,7 @@ func (c *Cluster) isRemoteContract(contract string) bool {
 // Forward client message to the Master (cluster node which owns the topic)
 func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
 	// Find the cluster node which owns the topic, then forward to it.
-	n := c.nodeForContract(string(conn.clientid.Contract()))
+	n := c.nodeForContract(string(conn.clientID.Contract()))
 	if n == nil {
 		return errors.New("cluster.routeToContract: attempt to route to non-existent node")
 	}
@@ -415,8 +415,9 @@ func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, ms
 			Conn: &ClusterSess{
 				//RemoteAddr: conn.(),
 				Proto:    conn.proto,
-				ConnID:   conn.connid,
-				ClientID: conn.clientid}})
+				ConnID:   conn.connID,
+				SessID: conn.sessID,
+				ClientID: conn.clientID}})
 }
 
 // Session terminated at origin. Inform remote Master nodes that the session is gone.
@@ -435,7 +436,7 @@ func (c *Cluster) connGone(conn *_Conn) error {
 					ConnGone: true,
 					Conn: &ClusterSess{
 						//RemoteAddr: sess.remoteAddr,
-						ConnID: conn.connid}})
+						ConnID: conn.connID}})
 		}
 	}
 	return nil
@@ -517,7 +518,7 @@ func (c *_Conn) rpcWriteLoop() {
 	// There is no readLoop for RPC, delete the session here
 	defer func() {
 		c.closeRPC()
-		Globals.connCache.delete(c.connid)
+		Globals.connCache.delete(c.connID)
 		c.unsubAll()
 	}()
 
@@ -540,14 +541,14 @@ func (c *_Conn) rpcWriteLoop() {
 			}
 			// The error is returned if the remote node is down. Which means the remote
 			// session is also disconnected.
-			if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: m.Bytes(), FromConnID: c.connid}, &unused); err != nil {
+			if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: m.Bytes(), FromConnID: c.connID}, &unused); err != nil {
 				log.Error("conn.writeRPC", err.Error())
 				return
 			}
 		case msg := <-c.stop:
 			// Shutdown is requested, don't care if the message is delivered
 			if msg != nil {
-				c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: msg.([]byte), FromConnID: c.connid}, &unused)
+				c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: msg.([]byte), FromConnID: c.connID}, &unused)
 			}
 			return
 		}
