@@ -69,11 +69,9 @@ In the future, we intend to enhance the Unitdb with the following features:
 
 - Distributed design: We are working on building out the distributed design of Unitdb, including replication and sharding management to improve its scalability.
 - Developer support and tooling: We are working on building more intuitive tooling, refactoring code structures, and enriching documentation to improve the onboarding experience, enabling developers to quickly integrate Unitdb to their time-series database stack.
-- Expanding feature set: We also plan to expand our query feature set to include functionality such as window functions and nested loop joins.
-- Query engine optimization: We will also be looking into developing more advanced ways to optimize query performance such as GPU memory caching.
 
 ## Contributing
-As Unitdb is under active development and at this time Unitdb is not seeking major changes or new features from new contributors. However, small bugfixes are encouraged.
+As Unitdb is under active development and at this time Unitdb is not seeking major changes or new features; however, small bugfixes are encouraged. Unitdb is seeking contibution to improve test coverage and documentation.
 
 ## Licensing
 This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).

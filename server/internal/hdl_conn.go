@@ -485,26 +485,32 @@ func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 // onKeyGen processes a keygen request.
 func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	// Deserialize the payload.
-	msg := types.KeyGenRequest{}
-	if err := json.Unmarshal(payload, &msg); err != nil {
+	req := []types.KeyGenRequest{}
+	if err := json.Unmarshal(payload, &req); err != nil {
 		return types.ErrBadRequest, false
 	}
 
+	var resp []*types.KeyGenResponse
 	// Use the cipher to generate the key
-	key, err := security.GenerateKey(c.clientID.Contract(), []byte(msg.Topic), msg.Access())
-	if err != nil {
-		switch err {
-		case security.ErrTargetTooLong:
-			return types.ErrTargetTooLong, false
-		default:
-			return types.ErrServerError, false
+	for _, m := range req {
+		key, err := security.GenerateKey(c.clientID.Contract(), []byte(m.Topic), m.Access())
+		if err != nil {
+			switch err {
+			case security.ErrTargetTooLong:
+				return types.ErrTargetTooLong, false
+			default:
+				return types.ErrServerError, false
+			}
 		}
+		r := &types.KeyGenResponse{
+			Status: 200,
+			Key:    key,
+			Topic:  m.Topic,
+		}
+
+		resp = append(resp, r)
 	}
 
 	// Success, return the response
-	return &types.KeyGenResponse{
-		Status: 200,
-		Key:    key,
-		Topic:  msg.Topic,
-	}, true
+	return resp, true
 }

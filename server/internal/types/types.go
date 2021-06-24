@@ -62,6 +62,10 @@ func (m *KeyGenRequest) Access() uint32 {
 
 	for i := 0; i < len(m.Type); i++ {
 		switch c := m.Type[i]; c {
+		case 'o':
+			required |= security.AllowOwner | security.AllowAdmin | security.AllowReadWrite
+		case 'a':
+			required |= security.AllowAdmin | security.AllowReadWrite
 		case 'r':
 			required |= security.AllowRead
 		case 'w':

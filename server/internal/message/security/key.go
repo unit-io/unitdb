@@ -28,8 +28,10 @@ import (
 // Access types for a security key.
 const (
 	AllowNone      = uint32(0)              // Key has no privileges.
-	AllowRead      = uint32(1 << 1)         // Key should be allowed to subscribe to the topic.
-	AllowWrite     = uint32(1 << 2)         // Key should be allowed to publish to the topic.
+	AllowOwner     = uint32(1 << 1)         // Key should be allowed to generate other keys.
+	AllowAdmin     = uint32(1 << 2)         // Key should be allowed to generate other keys.
+	AllowRead      = uint32(1 << 3)         // Key should be allowed to subscribe to the topic.
+	AllowWrite     = uint32(1 << 4)         // Key should be allowed to publish to the topic.
 	AllowReadWrite = AllowRead | AllowWrite // Key should be allowed to read and write to the topic.
 
 	// Topic types
