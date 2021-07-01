@@ -180,6 +180,13 @@ func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, sub *lp.Subsc
 	defer c.Unlock()
 
 	key := string(topic.Key)
+	if key == "" {
+		key, err = security.GenerateKey(c.clientID.Contract(), []byte(topic.Topic), security.AllowNone)
+		if err != nil {
+			log.ErrLogger.Err(err).Str("context", "conn.subscribe")
+			return err
+		}
+	}
 	if exists := c.subs.Exist(key); exists && !msg.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientID.Contract())) {
 		// The contract is handled by a remote node. Forward message to it.
 		if err := Globals.Cluster.routeToContract(&msg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
@@ -242,7 +249,7 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 	// subscription count
 	msgCount := 0
 
-	subs, err := store.Subscription.Get(c.clientID.Contract(), topic.Topic)
+	subscriptions, err := store.Subscription.Get(c.clientID.Contract(), topic.Topic)
 	if err != nil {
 		log.ErrLogger.Err(err).Str("context", "conn.publish")
 	}
@@ -251,11 +258,11 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 		Topic:     topic.Topic[:topic.Size],
 		Payload:   m.Payload,
 	}
-	for _, sub := range subs {
-		pubMsg.DeliveryMode = sub[0]
-		lid := uid.LID(binary.LittleEndian.Uint32(sub[1:5]))
-		pubMsg.Delay = int32(uid.LID(binary.LittleEndian.Uint32(sub[5:9])))
-		sub := Globals.connCache.get(lid)
+	for _, subscription := range subscriptions {
+		pubMsg.DeliveryMode = subscription[0]
+		connID := uid.LID(binary.LittleEndian.Uint32(subscription[1:5]))
+		pubMsg.Delay = int32(uid.LID(binary.LittleEndian.Uint32(subscription[5:9])))
+		sub := Globals.connCache.get(connID)
 		if sub != nil {
 			if pubMsg.MessageID == 0 {
 				pubMsg.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
