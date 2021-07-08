@@ -17,7 +17,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -86,7 +85,7 @@ func main() {
 	// Cluster won't be started here yet.
 	internal.ClusterInit(cfg.Cluster, clusterSelf)
 
-	svc, err := internal.NewService(context.Background(), cfg)
+	svc, err := internal.NewService(cfg)
 	if err != nil {
 		panic(err.Error())
 	}

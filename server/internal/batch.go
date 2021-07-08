@@ -30,8 +30,6 @@ type (
 		count int
 		size  int
 		msgs  []*lp.PublishMessage
-
-		timeRefs []timeID
 	}
 	batchManager struct {
 		mu           sync.RWMutex
@@ -158,22 +156,18 @@ func (m *batchManager) publishLoop(interval time.Duration) {
 // dispatch handles publishing messages for the batches in queue.
 func (m *batchManager) dispatch(timeout time.Duration) {
 LOOP:
-	for {
-		select {
-		case b, ok := <-m.publishQueue:
-			if !ok {
-				close(m.send)
-				m.stopWg.Done()
-				return
-			}
+	b, ok := <-m.publishQueue
+	if !ok {
+		close(m.send)
+		m.stopWg.Done()
+		return
+	}
 
-			select {
-			case m.send <- b:
-			default:
-				// pool is full, let GC handle the batches
-				goto WAIT
-			}
-		}
+	select {
+	case m.send <- b:
+	default:
+		// pool is full, let GC handle the batches
+		goto WAIT
 	}
 
 WAIT:
@@ -189,26 +183,21 @@ func (m *batchManager) publish(c *_Conn, publishWaitTimeout time.Duration) {
 		case <-m.stop:
 			// run queued messges from the publish queue and
 			// process it until queue is empty.
-			for {
-				select {
-				case b, ok := <-m.send:
-					if !ok {
-						m.stopWg.Done()
-						return
-					}
-					pub := &lp.Publish{Messages: b.msgs}
-					pub.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+			b, ok := <-m.send
+			if !ok {
+				m.stopWg.Done()
+				return
+			}
+			pub := &lp.Publish{Messages: b.msgs}
+			pub.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
 
-					// persist outbound
-					store.Log.PersistOutbound(c.adp, uint32(c.connID), pub)
+			// persist outbound
+			store.Log.PersistOutbound(c.adp, uint32(c.connID), pub)
 
-					select {
-					case c.pub <- pub:
-					case <-time.After(publishWaitTimeout):
-						// b.r.setError(errors.New("publish timeout error occurred"))
-					}
-				default:
-				}
+			select {
+			case c.pub <- pub:
+			case <-time.After(publishWaitTimeout):
+				// b.r.setError(errors.New("publish timeout error occurred"))
 			}
 		case b := <-m.send:
 			if b != nil {

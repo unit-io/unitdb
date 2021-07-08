@@ -19,6 +19,7 @@ package internal
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
 	"runtime/debug"
 	"strconv"
@@ -37,7 +38,6 @@ import (
 
 type _Conn struct {
 	sync.Mutex
-	tracked            uint32 // Whether the connection was already tracked or not.
 	proto              lp.Proto
 	adp                lp.ProtoAdapter
 	socket             net.Conn
@@ -187,17 +187,17 @@ func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, sub *lp.Subsc
 			return err
 		}
 	}
-	if exists := c.subs.Exist(key); exists && !msg.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientID.Contract())) {
+	if exists := c.subs.Exist(key); exists && !msg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		// The contract is handled by a remote node. Forward message to it.
 		if err := Globals.Cluster.routeToContract(&msg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to remote topic")
 			return err
 		}
-		// Add the subscription to Counters
 	} else {
 		messageId, err := store.Subscription.NewID()
 		if err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.subscribe")
+			return err
 		}
 		if first := c.subs.Increment(topic.Topic[:topic.Size], key, messageId); first {
 			// Subscribe the subscriber
@@ -232,7 +232,7 @@ func (c *_Conn) unsubscribe(msg lp.Unsubscribe, topic *security.Topic) (err erro
 		// Decrement the subscription counter
 		c.service.meter.Subscriptions.Dec(1)
 	}
-	if !msg.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientID.Contract())) {
+	if !msg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		// The topic is handled by a remote node. Forward message to it.
 		if err := Globals.Cluster.routeToContract(&msg, topic, message.UNSUBSCRIBE, &message.Message{}, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to remote topic")
@@ -252,6 +252,7 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 	subscriptions, err := store.Subscription.Get(c.clientID.Contract(), topic.Topic)
 	if err != nil {
 		log.ErrLogger.Err(err).Str("context", "conn.publish")
+		return err
 	}
 	pubMsg := &message.Message{
 		MessageID: pkt.MessageID,
@@ -300,12 +301,13 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 	c.service.meter.OutMsgs.Inc(int64(msgCount))
 	c.service.meter.OutBytes.Inc(pubMsg.Size() * int64(msgCount))
 
-	if !pkt.IsForwarded && Globals.Cluster.isRemoteContract(string(c.clientID.Contract())) {
+	if !pkt.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		if err = Globals.Cluster.routeToContract(&pkt, topic, message.PUBLISH, pubMsg, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connID)).Msg("unable to publish to remote topic")
+			return err
 		}
 	}
-	return err
+	return nil
 }
 
 // Load all stored messages and resend them to ensure DeliveryMode > 1,2 even after an application crash.

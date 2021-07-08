@@ -20,6 +20,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/rpc"
 	"sort"
@@ -225,21 +226,19 @@ func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *r
 
 	myDone := make(chan *rpc.Call, 1)
 	go func() {
-		select {
-		case call := <-myDone:
-			if call.Error != nil {
-				n.lock.Lock()
-				if n.connected {
-					n.endpoint.Close()
-					n.connected = false
-					go n.reconnect()
-				}
-				n.lock.Unlock()
+		call := <-myDone
+		if call.Error != nil {
+			n.lock.Lock()
+			if n.connected {
+				n.endpoint.Close()
+				n.connected = false
+				go n.reconnect()
 			}
+			n.lock.Unlock()
+		}
 
-			if done != nil {
-				done <- call
-			}
+		if done != nil {
+			done <- call
 		}
 	}()
 
@@ -306,7 +305,7 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 				return nil
 			}
 
-			log.Info("cluster.Master", "new connection request"+string(msg.Conn.ConnID))
+			log.Info("cluster.Master", "new connection request"+fmt.Sprint(msg.Conn.ConnID))
 			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.SessID, msg.Conn.ClientID)
 			go conn.rpcWriteLoop()
 		}
@@ -333,7 +332,7 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 
 // Dispatch receives messages from the master node addressed to a specific local connection.
 func (Cluster) Proxy(resp *ClusterResp, unused *bool) error {
-	log.Info("cluster.Proxy", "response from Master for connection "+string(resp.FromConnID))
+	log.Info("cluster.Proxy", "response from Master for connection "+fmt.Sprint(resp.FromConnID))
 
 	// This cluster member received a response from topic owner to be forwarded to a connection
 	// Find appropriate connection, send the message to it
@@ -376,7 +375,7 @@ func (c *Cluster) isRemoteContract(contract string) bool {
 // Forward client message to the Master (cluster node which owns the topic)
 func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
 	// Find the cluster node which owns the topic, then forward to it.
-	n := c.nodeForContract(string(conn.clientID.Contract()))
+	n := c.nodeForContract(fmt.Sprint(conn.clientID.Contract()))
 	if n == nil {
 		return errors.New("cluster.routeToContract: attempt to route to non-existent node")
 	}
@@ -416,7 +415,7 @@ func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, ms
 				//RemoteAddr: conn.(),
 				Proto:    conn.proto,
 				ConnID:   conn.connID,
-				SessID: conn.sessID,
+				SessID:   conn.sessID,
 				ClientID: conn.clientID}})
 }
 
@@ -620,9 +619,7 @@ func (c *Cluster) rehash(nodes []string) []string {
 		}
 		ringKeys = append(ringKeys, c.thisNodeName)
 	} else {
-		for _, name := range nodes {
-			ringKeys = append(ringKeys, name)
-		}
+		ringKeys = append(ringKeys, nodes...)
 	}
 	ring.Add(ringKeys...)
 

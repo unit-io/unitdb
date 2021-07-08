@@ -55,7 +55,7 @@ type _Service struct {
 	stats   *stats.Stats
 }
 
-func NewService(ctx context.Context, cfg *config.Config) (s *_Service, err error) {
+func NewService(cfg *config.Config) (s *_Service, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s = &_Service{
 		pid:     uid.NewUnique(),

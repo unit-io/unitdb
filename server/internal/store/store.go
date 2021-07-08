@@ -213,7 +213,7 @@ func (l *MessageLog) PersistOutbound(proto lp.ProtoAdapter, blockID uint32, outM
 		}
 		adp.PutMessage(key, m.Bytes())
 	}
-	if outMsg.Type()==lp.FLOWCONTROL {
+	if outMsg.Type() == lp.FLOWCONTROL {
 		msg := *outMsg.(*lp.ControlMessage)
 		switch msg.FlowControl {
 		case lp.COMPLETE:
@@ -227,7 +227,7 @@ func (l *MessageLog) PersistOutbound(proto lp.ProtoAdapter, blockID uint32, outM
 
 // PersistInbound handles which incoming messages are stored
 func (l *MessageLog) PersistInbound(proto lp.ProtoAdapter, blockID uint32, inMsg lp.LineProtocol) {
-	if inMsg.Type()==lp.FLOWCONTROL {
+	if inMsg.Type() == lp.FLOWCONTROL {
 		msg := *inMsg.(*lp.ControlMessage)
 		switch msg.FlowControl {
 		case lp.RECEIPT:
@@ -240,11 +240,11 @@ func (l *MessageLog) PersistInbound(proto lp.ProtoAdapter, blockID uint32, inMsg
 				return
 			}
 			adp.PutMessage(key, m.Bytes())
+		}
 	}
 }
-	}
 
-// Get performs a query and attempts to fetch message for the given blockId and key
+// Get performs a query and attempts to fetch message for the given key
 func (l *MessageLog) Get(proto lp.ProtoAdapter, key uint64) lp.LineProtocol {
 	if raw, err := adp.GetMessage(key); raw != nil && err == nil {
 		r := bytes.NewReader(raw)

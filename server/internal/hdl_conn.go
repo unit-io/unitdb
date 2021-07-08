@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -40,7 +41,7 @@ const (
 	requestKeygen   = 812942072  // hash("keygen")
 )
 
-func (c *_Conn) readLoop(ctx context.Context) error {
+func (c *_Conn) readLoop(ctx context.Context) (err error) {
 	defer func() {
 		log.Info("conn.Handler", "closing...")
 		c.close()
@@ -63,7 +64,8 @@ func (c *_Conn) readLoop(ctx context.Context) error {
 			}
 
 			// Message handler
-			if err := c.handler(pkt); err != nil {
+			if err = c.handler(pkt); err != nil {
+				fmt.Println("read:: handler error", err)
 				return err
 			}
 		}
@@ -318,7 +320,9 @@ func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Err
 		}
 	}
 
-	c.subscribe(sub, topic, subsc)
+	if err := c.subscribe(sub, topic, subsc); err != nil {
+		return types.ErrServerError
+	}
 
 	if subsc.Last != "" {
 		msgs, err := store.Message.Get(c.clientID.Contract(), topic.Topic, subsc.Last)
@@ -327,7 +331,7 @@ func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Err
 			return types.ErrServerError
 		}
 
-		// Range over the messages in the channel and forward them
+		// Range over the messages from the store and forward them to subscribers
 		for _, m := range msgs {
 			msg := m // Copy message
 			c.SendMessage(&msg)
@@ -355,7 +359,9 @@ func (c *_Conn) onUnsubscribe(unsub lp.Unsubscribe, subsc *lp.Subscription) *typ
 		}
 	}
 
-	c.unsubscribe(unsub, topic)
+	if err := c.unsubscribe(unsub, topic); err != nil {
+		return types.ErrServerError
+	}
 
 	return nil
 }
