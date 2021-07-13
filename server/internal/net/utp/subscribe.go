@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Saffat Technologies, Ltd.
+ * Copyright 2021 Saffat Technologies, Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,6 @@ func unpackSubscribe(data []byte) lp.LineProtocol {
 		s.DeliveryMode = uint8(t.DeliveryMode)
 		s.Delay = t.Delay
 		s.Topic = []byte(t.Topic)
-		s.Last = t.Last
 		subs = append(subs, s)
 	}
 
@@ -52,7 +51,6 @@ func unpackUnsubscribe(data []byte) lp.LineProtocol {
 		s.DeliveryMode = uint8(t.DeliveryMode)
 		s.Delay = t.Delay
 		s.Topic = []byte(t.Topic)
-		s.Last = t.Last
 		subs = append(subs, s)
 	}
 

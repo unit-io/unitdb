@@ -34,6 +34,7 @@ const (
 	// Messages
 	CONNECT MessageType = iota + 1
 	PUBLISH
+	RELAY
 	SUBSCRIBE
 	UNSUBSCRIBE
 	PINGREQ
@@ -142,6 +143,19 @@ type Publish struct {
 	LineProtocol
 }
 
+// RelayRequest is pairing the Topic and Last parameter together
+type RelayRequest struct {
+	Topic []byte
+	Last  string
+}
+
+// Relay tells the server which topics and last durations the client would like get data. The Delivery Mode for relay is EXPRESS.
+type Relay struct {
+	IsForwarded   bool
+	MessageID     uint16
+	RelayRequests []*RelayRequest
+}
+
 // Subscription is a struct for pairing the delivery mode and topic together
 // for the delivery mode's pairs in unsubscribe and subscribe
 type Subscription struct {
@@ -228,6 +242,16 @@ func (p *Publish) Type() MessageType {
 // Info returns DeliveryMode and MessageID of this Message.
 func (p *Publish) Info() Info {
 	return Info{DeliveryMode: p.DeliveryMode, MessageID: p.MessageID}
+}
+
+// Type returns the Relay Message type.
+func (r *Relay) Type() MessageType {
+	return RELAY
+}
+
+// Info returns DeliveryMode and MessageID of this Message.
+func (r *Relay) Info() Info {
+	return Info{DeliveryMode: 1, MessageID: r.MessageID}
 }
 
 // Type returns the Subscribe Message type.

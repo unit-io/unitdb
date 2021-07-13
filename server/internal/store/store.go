@@ -166,14 +166,14 @@ func (m *MessageStore) Put(contract uint32, topic, payload []byte, ttl string) e
 	return adp.Put(contract, topic, payload, ttl)
 }
 
-func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches []message.Message, err error) {
+func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches []*message.Message, err error) {
 	resp, err := adp.Get(contract, topic, last)
 	for _, payload := range resp {
 		msg := message.Message{
 			Topic:   topic,
 			Payload: payload,
 		}
-		matches = append(matches, msg)
+		matches = append(matches, &msg)
 	}
 
 	return matches, err

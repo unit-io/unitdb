@@ -149,6 +149,7 @@ func (s *_Service) listen(addr string) {
 // Handle a new connection request
 func (s *_Service) onAcceptConn(t net.Conn) {
 	conn := s.newConn(t)
+	conn.closeW.Add(2)
 	go conn.readLoop(s.context)
 	go conn.writeLoop(s.context)
 }

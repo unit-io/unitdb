@@ -33,7 +33,11 @@ Make use of the client by importing it in your Go client source code. For exampl
 
 Unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, and writing to wildcard topics. See [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
-Samples are available in the examples directory for reference.
+Samples are available in the examples directory for reference. To build unitdb client from latest source code use "replace" in go.mod to point to your local module.
+
+```golang
+go mod edit -replace github.com/unit-io/unitdb-go=$GOPATH/src/github.com/unit-io/unitdb-go
+```
 
 ## Clustering
 To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended.

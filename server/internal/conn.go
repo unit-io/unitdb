@@ -129,14 +129,17 @@ func (c *_Conn) SendMessage(msg *message.Message) bool {
 		Topic:   msg.Topic,   // The topic for this message.
 		Payload: msg.Payload, // The payload for this message.
 	}
+	if msg.MessageID == 0 {
+		msg.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+	}
 	pub := &lp.Publish{
 		MessageID:    msg.MessageID,    // The ID of the message
 		DeliveryMode: msg.DeliveryMode, // The delivery mode of the message
 		Messages:     []*lp.PublishMessage{pubMsg},
 	}
 
-	// Check batch or delay delivery.
-	if msg.DeliveryMode == 2 || msg.Delay > 0 {
+	// Check batch, relay or delay delivery.
+	if msg.DeliveryMode == 2 || msg.DeliveryMode == 3 || msg.Delay > 0 {
 		c.batchManager.add(msg.Delay, pubMsg)
 		return true
 	}

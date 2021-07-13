@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Saffat Technologies, Ltd.
+ * Copyright 2021 Saffat Technologies, Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,6 +64,8 @@ func (m *Message) Read(r io.Reader) (lp.LineProtocol, error) {
 		msg = unpackConnect(rawMsg)
 	case lp.PUBLISH.Value():
 		msg = unpackPublish(rawMsg)
+	case lp.RELAY.Value():
+		msg = unpackRelay(rawMsg)
 	case lp.SUBSCRIBE.Value():
 		msg = unpackSubscribe(rawMsg)
 	case lp.UNSUBSCRIBE.Value():
@@ -87,7 +89,6 @@ func (m *Message) Encode(msg lp.LineProtocol) (bytes.Buffer, error) {
 	default:
 		return bytes.Buffer{}, fmt.Errorf("message::Encode: Invalid zero-length Message type %d", msg.Type())
 	}
-	return bytes.Buffer{}, nil
 }
 
 func (fh *FixedHeader) pack() bytes.Buffer {

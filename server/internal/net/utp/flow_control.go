@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Saffat Technologies, Ltd.
+ * Copyright 2021 Saffat Technologies, Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,6 +58,8 @@ func encodeControlMessage(c lp.ControlMessage) (bytes.Buffer, error) {
 			fh = FixedHeader{MessageType: pbx.MessageType_CONNECT, FlowControl: pbx.FlowControl_ACKNOWLEDGE, MessageLength: int32(len(rawMsg))}
 		case lp.PUBLISH:
 			fh = FixedHeader{MessageType: pbx.MessageType_PUBLISH, FlowControl: pbx.FlowControl_ACKNOWLEDGE, MessageLength: int32(len(rawMsg))}
+		case lp.RELAY:
+			fh = FixedHeader{MessageType: pbx.MessageType_RELAY, FlowControl: pbx.FlowControl_ACKNOWLEDGE, MessageLength: int32(len(rawMsg))}
 		case lp.SUBSCRIBE:
 			fh = FixedHeader{MessageType: pbx.MessageType_SUBSCRIBE, FlowControl: pbx.FlowControl_ACKNOWLEDGE, MessageLength: int32(len(rawMsg))}
 		case lp.UNSUBSCRIBE:

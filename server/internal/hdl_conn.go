@@ -44,7 +44,7 @@ const (
 func (c *_Conn) readLoop(ctx context.Context) (err error) {
 	defer func() {
 		log.Info("conn.Handler", "closing...")
-		c.close()
+		c.closeW.Done()
 	}()
 
 	reader := bufio.NewReaderSize(c.socket, 65536)
@@ -52,6 +52,8 @@ func (c *_Conn) readLoop(ctx context.Context) (err error) {
 	for {
 		select {
 		case <-ctx.Done():
+			return nil
+		case <-c.closeC:
 			return nil
 		default:
 			// Set read/write deadlines so we can close dangling connections
@@ -145,6 +147,27 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		}
 	case lp.DISCONNECT:
 		c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
+		// An attempt to relay to a topic.
+	case lp.RELAY:
+		m := *inMsg.(*lp.Relay)
+		ack := &lp.ControlMessage{
+			MessageType: lp.RELAY,
+			FlowControl: lp.ACKNOWLEDGE,
+			MessageID:   m.MessageID,
+		}
+		// Relay for each request
+		for _, req := range m.RelayRequests {
+			if err := c.onRelay(req); err != nil {
+				status = err.Status
+				c.notifyError(err, m.MessageID)
+				continue
+			}
+		}
+
+		if m.IsForwarded {
+			return nil
+		}
+		c.send <- ack
 	// An attempt to subscribe to a topic.
 	case lp.SUBSCRIBE:
 		m := *inMsg.(*lp.Subscribe)
@@ -233,7 +256,6 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 
 // writeLook handles outbound Messages
 func (c *_Conn) writeLoop(ctx context.Context) {
-	c.closeW.Add(1)
 	defer c.closeW.Done()
 
 	for {
@@ -303,6 +325,41 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 	return clientid, nil
 }
 
+// onRelay is a handler for Subscribe events of delivery mode type RELAY.
+func (c *_Conn) onRelay(req *lp.RelayRequest) *types.Error {
+	start := time.Now()
+	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+
+	//Parse the key
+	topic := security.ParseKey(req.Topic)
+	if topic.TopicType == security.TopicInvalid {
+		return types.ErrBadRequest
+	}
+
+	if !c.insecure {
+		if _, err := c.onSecureRequest(topic); err != nil {
+			return err
+		}
+	}
+
+	if req.Last != "" {
+		msgs, err := store.Message.Get(c.clientID.Contract(), topic.Topic, req.Last)
+		if err != nil {
+			log.Error("conn.onRelay", "query last messages"+err.Error())
+			return types.ErrServerError
+		}
+
+		// Range over the messages from the store and forward them
+		for _, m := range msgs {
+			msg := m             // Copy message
+			msg.DeliveryMode = 3 // Set Delivery Mode to Relay
+			c.SendMessage(msg)
+		}
+	}
+
+	return nil
+}
+
 // onSubscribe is a handler for Subscribe events.
 func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Error {
 	start := time.Now()
@@ -324,19 +381,6 @@ func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Err
 		return types.ErrServerError
 	}
 
-	if subsc.Last != "" {
-		msgs, err := store.Message.Get(c.clientID.Contract(), topic.Topic, subsc.Last)
-		if err != nil {
-			log.Error("conn.OnSubscribe", "query last messages"+err.Error())
-			return types.ErrServerError
-		}
-
-		// Range over the messages from the store and forward them to subscribers
-		for _, m := range msgs {
-			msg := m // Copy message
-			c.SendMessage(&msg)
-		}
-	}
 	return nil
 }
 

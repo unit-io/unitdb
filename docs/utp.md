@@ -24,6 +24,7 @@
  + [Message Types](#Message-Types)
    - [CONNECT](#CONNECT---Connection-Request)
    - [PUBLISH](#PUBLISH---Publish-message)
+   - [RELAY](#RELAY---Relay-request)
    - [SUBSCRIBE](#SUBSCRIBE---Subscribe-request)
    - [UNSUBSCRIBE](#UNSUBSCRIBE---Unsubscribe-request)
    - [PINGREQ](#PINGREQ---PING-request)
@@ -44,6 +45,7 @@ An application transport the data by uTP across network, it contains payload dat
 ### Client
 A Client opens the network connection to the Server using TCP/IP, WebSocket, GRPC or other bi-direction network protocols.
 - Pubslihes Application Mesasges to a topic that other Clients subscribes to.
+- Sends a relay request to retrieve persisted Application Messages from Server.
 - Subscribes to a topic to receive Application Messages.
 - Unsubcribe to remove a topic subscription.
 - Closes the network connection to the Server.
@@ -51,6 +53,7 @@ A Client opens the network connection to the Server using TCP/IP, WebSocket, GRP
 ### Server
 - Accepts the network connections from Clients.
 - Recieves and store Application Messages published by Clients.
+- Relays pesisted Application Messages that matches the relay requests from Clients.
 - Processes topic subscription requests from Clients.
 - Route Application Messages that match Client subscriptions.
 - Closes the network connection from the Client.
@@ -75,15 +78,16 @@ Represented as enum value, the values are shown below.
 | RERSERVED | 0 | Forbidden |
 | CONNECT |	1 |	Client to Server |
 | PUBLISH |	2 |	Client to Server or Server to Client |
-| SUBSCRIBE | 3 | Client to Server |
-| UNSUBSCRIBE |	4	| Client to Server |
-| PINGREQ |	5 | Client to Server |
-| DISCONNECT | 6 | Client to Server or Server to Client |
+| RELAY | 3 | Client to Server |
+| SUBSCRIBE | 4 | Client to Server |
+| UNSUBSCRIBE |	5	| Client to Server |
+| PINGREQ |	6 | Client to Server |
+| DISCONNECT | 7 | Client to Server or Server to Client |
 
 ### Flow Control
 Flow Control is Control Message sent in response to a uTP Message Type or another Control Message.
 
-Client will send one of Message Type CONNECT, SUBSCRIBE, UNSUBSCRIBE, or PINGREQ  then Server will reponse with ACKNOWLEDGE Control Message. PUBLISH Message is sent from a Client to a Server or from a Server to a Client and if Delivery Mode is Express Delivery  then the receiver will respond with ACKNOWLEDGE Control Message. 
+Client will send one of Message Type CONNECT, RELAY, SUBSCRIBE, UNSUBSCRIBE, or PINGREQ  then Server will reponse with ACKNOWLEDGE Control Message. PUBLISH Message is sent from a Client to a Server or from a Server to a Client and if Delivery Mode is Express Delivery then the receiver will respond with ACKNOWLEDGE Control Message. 
 
 | Name | Value | Direction of Flow |
 | :--- | :--- | :--- |
@@ -91,8 +95,8 @@ Client will send one of Message Type CONNECT, SUBSCRIBE, UNSUBSCRIBE, or PINGREQ
 | ACKNOWLEDGE | 1 | Client to Server or Server to Client |
 | NOTIFY | 2 | Server to Client |
 | RECEIVE | 3 | Client to Server |
-| RECEIPT | 4 | Client to Server or Server to Client |
-| COMPLETE | 5 | Client to Server or Server to Client |
+| RECEIPT | 4 | Client to Server |
+| COMPLETE | 5 | Server to Client |
 
 ### Message Length
 The Message Length represents number of bytes within the current Message.
@@ -106,7 +110,8 @@ In order to implement a Reliable Message Delivery flow the Client and Server nee
 The Server persists an unique Session State per Client Identifier. Client can also specify Sesson Key during Connection to persist multiple Session States per Client Identifier. The Session can continue after network re-connection until Client specify Clean Session during a new Connection.
 
 The Client Session pesist following States:
-- Reliable and Batch Delivery messages sent to the Server, but have not been completely acknowledged.
+- Reliable and Batch Delivery messages sent to the Server, but have not been acknowledged.
+- Relay request sent to the Server, but have not been acknowledged.
 - Reliable and Batch Delivery messages which have been received from the Server, but have not been completely acknowledged.
 
 The Server Session persiste following states:
@@ -278,6 +283,26 @@ The PublishMessage contains folowing fields:
 ### TTL
 A publisher can specify time to-live (TTL) when publishing an Application Message.
 
+### RELAY - Relay request
+The RELAY Message is sent from the Client to the Server to get persisted Application Messages from server for one or more topics. Each Relay request pairs the topics with last durations. The Server sends PUBLISH Messages to the Client to forward Application Messages that were persisted by the Server for the Topics that match these Relay requests. The RELAY Message also specifies (for each request) the Last duration for which the Server can send persisted Application Messages to the Client.
+
+The payload contains following fields.
+
+|  Name | Type |
+| :--- | :--- |
+| MessageID | int32 |
+| RelayRequests | repeated RelayRequest |
+
+The RelayRequest contains folowing fields:
+
+|  Name | Type |
+| :--- | :--- |
+| Topic | string |
+| Last | string |
+
+#### Last
+A Client can specify Last duration (for example "1h") to retrive persisted Application Messages published to the Topic.
+
 ### SUBSCRIBE - Subscribe request
 The SUBSCRIBE Message is sent from the Client to the Server to create one or more Subscriptions. Each Subscription registers one or more Topics for a Client. The Server sends PUBLISH Messages to the Client to forward Application Messages that were published to Topics that match these Subscriptions. The SUBSCRIBE Message also specifies (for each Subscription) the Delivery Mode with which the Server can send Application Messages to the Client.
 
@@ -295,10 +320,7 @@ The Subscription contains folowing fields:
 | DeliveryMode | int32 |
 | Delay | int32 |
 | Topic | string |
-| Last | string |
 
-#### Last
-A Subscriber can spcify Last duration (for example "1h") to retrive persisted Application Messages published to the subscribing Topic.
 
 ### UNSUBSCRIBE - Unsubscribe request
 An UNSUBSCRIBE Message is sent by the Client to the Server, to unsubscribe from topics.
@@ -320,7 +342,7 @@ The DISCONNECT Message is the final uTP Message sent from the Client or the Serv
 
 ## Control Message
 ### ACKNOWLEDGE - acknowledgement
-The ACKNOWLEDGE Control Message is sent by the Server in response to CONNECT, SUBSCRIBE, UNSUBSCRIBE, PUBLISH or PINGREQ Message from a Client. 
+The ACKNOWLEDGE Control Message is sent by the Server in response to CONNECT, RELAY, SUBSCRIBE, UNSUBSCRIBE, PUBLISH or PINGREQ Message from a Client. 
 
 The ACKNOWLEGE Message on CONNECT is sent with Message in the form of binary data that contains below Payload inforation. 
 
@@ -358,11 +380,9 @@ The Server must send a NOTIFY Control Message containing a new Message Identifie
 The Client must send a RECEIVE Control Message to respond to the NOTIFY Control Message to tell Server it is ready to receive the message. It must contain the same Message Identifier from NOTIFY Control Message.
 
 ### RECEIPT - Publish receipt
-The Server must respond with RECEIPT Control Message if it receive a PUBLISH Message with Delivery Mode as RELIABLE or BATCH Delivery. 
-
 The Client must respond to a PUBLISH Message with a RECEIPT Control Message if it has a matching subscription with Delivery Mode RELIABLE or BATCH Delivery and sender has sent a PUBLISH Message with RELIABLE or BATCH Delivery Mode.
 
 The RECEIPT Control Message must contain the same Message Identifier from PUBLISH Message.
 
 ### COMPLETE - Publish complete
-The Client or the Server must respond with COMPLETE Control Message if it receives a RECEIPT Control Message to mark the Publish complete. The COMPLETE Control Message must contain the same Message Identifier from RECEIPT Control Message.
+The Server must respond with COMPLETE Control Message if it receives a RECEIPT Control Message from Client to mark the Publish complete. The COMPLETE Control Message must contain the same Message Identifier from RECEIPT Control Message.

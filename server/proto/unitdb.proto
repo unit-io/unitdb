@@ -29,10 +29,11 @@ enum MessageType {
 	RERSERVED=0;
 	CONNECT=1;
 	PUBLISH=2;
-	SUBSCRIBE=3;
-	UNSUBSCRIBE=4;
-	PINGREQ=5;
-	DISCONNECT=6;
+	RELAY=3;
+	SUBSCRIBE=4;
+	UNSUBSCRIBE=5;
+	PINGREQ=6;
+	DISCONNECT=7;
 }
 
 message FixedHeader {
@@ -95,6 +96,18 @@ message Publish {
 	repeated PublishMessage Messages=3;
 }
 
+// RelayRequest is pairing the Topic and Last parameter together
+message RelayRequest {
+	string Topic=1;
+	string Last=2;
+}
+
+// Relay tells the server which topics and last durations the client would like get data persisted on Servr. The Delivery Mode for relay is EXPRESS.
+message Relay {
+	int32 MessageID=1;
+	repeated RelayRequest relayRequests=2;
+}
+
 // Subscription is pairing the Delivery Mode and Topic together
 // for the delivery mode's pairs in unsubscribe and subscribe.
 // Delay in Millisecond to delay the messsage delivery if DeliveryMode is RELIEABLE or BATCH.
@@ -105,7 +118,6 @@ message Subscription {
 	int32 DeliveryMode=1;
 	int32 Delay=2;
 	string Topic=3;
-	string Last=4;
 }
 
 // Subscribe tells the server which topics the client would like to subscribe to and choose a Delivery Mode.
