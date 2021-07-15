@@ -14,3 +14,5 @@ require (
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
 	google.golang.org/grpc v1.39.0
 )
+
+replace github.com/unit-io/unitdb-go => /src/github.com/unit-io/unitdb-go

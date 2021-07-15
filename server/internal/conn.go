@@ -29,21 +29,19 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/net/utp"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/store"
 	"github.com/unit-io/unitdb/server/internal/types"
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 type _Conn struct {
 	sync.Mutex
-	proto              lp.Proto
-	adp                lp.ProtoAdapter
 	socket             net.Conn
-	send               chan lp.LineProtocol
-	recv               chan lp.LineProtocol
-	pub                chan *lp.Publish
+	send               chan lp.MessagePack
+	recv               chan lp.MessagePack
+	pub                chan *utp.Publish
 	stop               chan interface{}
 	insecure           bool           // The insecure flag provided by client will not perform key validation and permissions check on the topic.
 	username           string         // The username provided by the client during connect.
@@ -69,12 +67,11 @@ type _Conn struct {
 func (s *_Service) newConn(t net.Conn) *_Conn {
 	sessID := uid.NewLID()
 	c := &_Conn{
-		adp:        &utp.Message{},
 		socket:     t,
 		MessageIds: message.NewMessageIds(),
-		send:       make(chan lp.LineProtocol, 1), // buffered
-		recv:       make(chan lp.LineProtocol),
-		pub:        make(chan *lp.Publish),
+		send:       make(chan lp.MessagePack, 1), // buffered
+		recv:       make(chan lp.MessagePack),
+		pub:        make(chan *utp.Publish),
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		connID:     sessID,
 		sessID:     sessID,
@@ -94,14 +91,13 @@ func (s *_Service) newConn(t net.Conn) *_Conn {
 // newRpcConn a new connection in cluster
 func (s *_Service) newRpcConn(conn interface{}, connID, sessID uid.LID, clientID uid.ID) *_Conn {
 	c := &_Conn{
-		adp:        &utp.Message{},
 		connID:     connID,
 		clientID:   clientID,
 		sessID:     sessID,
 		MessageIds: message.NewMessageIds(),
-		send:       make(chan lp.LineProtocol, 1), // buffered
-		recv:       make(chan lp.LineProtocol),
-		pub:        make(chan *lp.Publish),
+		send:       make(chan lp.MessagePack, 1), // buffered
+		recv:       make(chan lp.MessagePack),
+		pub:        make(chan *utp.Publish),
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		service:    s,
 		subs:       message.NewStats(),
@@ -125,17 +121,17 @@ func (c *_Conn) Type() message.SubscriberType {
 
 // Send forwards the message to the underlying client.
 func (c *_Conn) SendMessage(msg *message.Message) bool {
-	pubMsg := &lp.PublishMessage{
+	pubMsg := &utp.PublishMessage{
 		Topic:   msg.Topic,   // The topic for this message.
 		Payload: msg.Payload, // The payload for this message.
 	}
 	if msg.MessageID == 0 {
-		msg.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+		msg.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 	}
-	pub := &lp.Publish{
+	pub := &utp.Publish{
 		MessageID:    msg.MessageID,    // The ID of the message
 		DeliveryMode: msg.DeliveryMode, // The delivery mode of the message
-		Messages:     []*lp.PublishMessage{pubMsg},
+		Messages:     []*utp.PublishMessage{pubMsg},
 	}
 
 	// Check batch, relay or delay delivery.
@@ -145,7 +141,7 @@ func (c *_Conn) SendMessage(msg *message.Message) bool {
 	}
 
 	// persist outbound
-	store.Log.PersistOutbound(c.adp, uint32(c.connID), pub)
+	store.Log.PersistOutbound(uint32(c.connID), pub)
 
 	// Acknowledge the publication
 	select {
@@ -178,7 +174,7 @@ func (c *_Conn) SendRawBytes(buf []byte) bool {
 }
 
 // subscribe subscribes to a particular topic.
-func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, sub *lp.Subscription) (err error) {
+func (c *_Conn) subscribe(msg utp.Subscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -205,7 +201,7 @@ func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, sub *lp.Subsc
 		if first := c.subs.Increment(topic.Topic[:topic.Size], key, messageId); first {
 			// Subscribe the subscriber
 			payload := make([]byte, 9)
-			payload[0] = sub.DeliveryMode
+			payload[0] = uint8(sub.DeliveryMode)
 			binary.LittleEndian.PutUint32(payload[1:5], uint32(c.connID))
 			binary.LittleEndian.PutUint32(payload[5:9], uint32(sub.Delay))
 			if err = store.Subscription.Put(c.clientID.Contract(), messageId, topic.Topic, payload); err != nil {
@@ -220,7 +216,7 @@ func (c *_Conn) subscribe(msg lp.Subscribe, topic *security.Topic, sub *lp.Subsc
 }
 
 // unsubscribe unsubscribes this client from a particular topic.
-func (c *_Conn) unsubscribe(msg lp.Unsubscribe, topic *security.Topic) (err error) {
+func (c *_Conn) unsubscribe(msg utp.Unsubscribe, topic *security.Topic) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -246,7 +242,7 @@ func (c *_Conn) unsubscribe(msg lp.Unsubscribe, topic *security.Topic) (err erro
 }
 
 // publish publishes a message to everyone and returns the number of outgoing bytes written.
-func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMessage) (err error) {
+func (c *_Conn) publish(pkt utp.Publish, topic *security.Topic, m *utp.PublishMessage) (err error) {
 	c.service.meter.InMsgs.Inc(1)
 	c.service.meter.InBytes.Inc(int64(len(m.Payload)))
 	// subscription count
@@ -259,7 +255,7 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 	}
 	pubMsg := &message.Message{
 		MessageID: pkt.MessageID,
-		Topic:     topic.Topic[:topic.Size],
+		Topic:     string(topic.Topic[:topic.Size]),
 		Payload:   m.Payload,
 	}
 	for _, subscription := range subscriptions {
@@ -269,7 +265,7 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 		sub := Globals.connCache.get(connID)
 		if sub != nil {
 			if pubMsg.MessageID == 0 {
-				pubMsg.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+				pubMsg.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 			}
 			switch pkt.DeliveryMode {
 			// Publisher's DeliveryMode RELIABLE or BATCH
@@ -277,13 +273,13 @@ func (c *_Conn) publish(pkt lp.Publish, topic *security.Topic, m *lp.PublishMess
 				switch pubMsg.DeliveryMode {
 				// Subscriber's DeliveryMode RELIABLE or BATCH
 				case 1, 2:
-					notify := &lp.ControlMessage{
-						MessageType: lp.PUBLISH,
-						FlowControl: lp.NOTIFY,
+					notify := &utp.ControlMessage{
+						MessageType: utp.PUBLISH,
+						FlowControl: utp.NOTIFY,
 						MessageID:   pubMsg.MessageID,
 					}
 					// persist outbound
-					store.Log.PersistOutbound(sub.adp, uint32(sub.sessID), &pkt)
+					store.Log.PersistOutbound(uint32(sub.sessID), &pkt)
 					sub.send <- notify
 				// Subscriber's DeliveryMode EXPRESS
 				case 0:
@@ -318,7 +314,7 @@ func (c *_Conn) resume(prefix uint32) {
 	// contract is used as blockId and key prefix
 	keys := store.Log.Keys(prefix)
 	for _, k := range keys {
-		msg := store.Log.Get(c.adp, k)
+		msg := store.Log.Get(k)
 		if msg == nil {
 			continue
 		}
@@ -326,12 +322,12 @@ func (c *_Conn) resume(prefix uint32) {
 		// isKeyOutbound
 		if (k & (1 << 4)) == 0 {
 			switch msg.Type() {
-			case lp.PUBLISH:
-				m := msg.(*lp.Publish)
-				c.MessageIds.ResumeID(m.MessageID)
-				notify := &lp.ControlMessage{
-					MessageType: lp.PUBLISH,
-					FlowControl: lp.NOTIFY,
+			case utp.PUBLISH:
+				m := msg.(*utp.Publish)
+				c.MessageIds.ResumeID(message.MID(m.MessageID))
+				notify := &utp.ControlMessage{
+					MessageType: utp.PUBLISH,
+					FlowControl: utp.NOTIFY,
 					MessageID:   m.MessageID,
 				}
 				c.send <- notify
@@ -347,7 +343,7 @@ func (c *_Conn) resume(prefix uint32) {
 // sendClientID generate unique client and send it to new client
 func (c *_Conn) sendClientID(clientidentifier string) {
 	c.SendMessage(&message.Message{
-		Topic:   []byte("unitdb/clientid/"),
+		Topic:   "unitdb/clientid/",
 		Payload: []byte(clientidentifier),
 	})
 }
@@ -357,7 +353,7 @@ func (c *_Conn) notifyError(err *types.Error, messageID uint16) {
 	err.ID = int(messageID)
 	if b, err := json.Marshal(err); err == nil {
 		c.SendMessage(&message.Message{
-			Topic:   []byte("unitdb/error/"),
+			Topic:   "unitdb/error/",
 			Payload: b,
 		})
 	}
@@ -374,15 +370,15 @@ func TimeNow() time.Time {
 	return time.Now().UTC().Round(time.Millisecond)
 }
 
-func (c *_Conn) storeInbound(m lp.LineProtocol) {
+func (c *_Conn) storeInbound(m lp.MessagePack) {
 	if c.clientID != nil {
-		store.Log.PersistInbound(c.adp, uint32(c.sessID), m)
+		store.Log.PersistInbound(uint32(c.sessID), m)
 	}
 }
 
-func (c *_Conn) storeOutbound(m lp.LineProtocol) {
+func (c *_Conn) storeOutbound(m lp.MessagePack) {
 	if c.clientID != nil {
-		store.Log.PersistOutbound(c.adp, uint32(c.sessID), m)
+		store.Log.PersistOutbound(uint32(c.sessID), m)
 	}
 }
 

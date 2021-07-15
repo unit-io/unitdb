@@ -25,6 +25,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/message"
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 const (
@@ -170,7 +171,7 @@ func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches 
 	resp, err := adp.Get(contract, topic, last)
 	for _, payload := range resp {
 		msg := message.Message{
-			Topic:   topic,
+			Topic:   string(topic),
 			Payload: payload,
 		}
 		matches = append(matches, &msg)
@@ -200,23 +201,23 @@ type MessageLog struct{}
 var Log MessageLog
 
 // PersistOutbound handles which outgoing messages are stored
-func (l *MessageLog) PersistOutbound(proto lp.ProtoAdapter, blockID uint32, outMsg lp.LineProtocol) {
+func (l *MessageLog) PersistOutbound(blockID uint32, outMsg lp.MessagePack) {
 	switch outMsg.(type) {
-	case *lp.Publish:
+	case *utp.Publish:
 		// Received a publish. store it in ibound
 		// until ACKNOWLEDGE or RECEIPT is received.
 		key := uint64(outMsg.Info().MessageID)<<32 + uint64(blockID)
-		m, err := lp.Encode(proto, outMsg)
+		m, err := lp.Encode(outMsg)
 		if err != nil {
 			log.ErrLogger.Err(err).Str("context", "store.PersistInbound")
 			return
 		}
 		adp.PutMessage(key, m.Bytes())
 	}
-	if outMsg.Type() == lp.FLOWCONTROL {
-		msg := *outMsg.(*lp.ControlMessage)
+	if outMsg.Type() == utp.FLOWCONTROL {
+		msg := *outMsg.(*utp.ControlMessage)
 		switch msg.FlowControl {
-		case lp.COMPLETE:
+		case utp.COMPLETE:
 			// Sending ACKNOWLEDGE, delete matching PUBLISH for EXPRESS delivery mode
 			// or sending COMPLETE, delete matching RECEIVE for RELIABLE delivery mode from ibound
 			key := uint64(outMsg.Info().MessageID)<<32 + uint64(blockID)
@@ -226,15 +227,15 @@ func (l *MessageLog) PersistOutbound(proto lp.ProtoAdapter, blockID uint32, outM
 }
 
 // PersistInbound handles which incoming messages are stored
-func (l *MessageLog) PersistInbound(proto lp.ProtoAdapter, blockID uint32, inMsg lp.LineProtocol) {
-	if inMsg.Type() == lp.FLOWCONTROL {
-		msg := *inMsg.(*lp.ControlMessage)
+func (l *MessageLog) PersistInbound(blockID uint32, inMsg lp.MessagePack) {
+	if inMsg.Type() == utp.FLOWCONTROL {
+		msg := *inMsg.(*utp.ControlMessage)
 		switch msg.FlowControl {
-		case lp.RECEIPT:
+		case utp.RECEIPT:
 			// Sending RECEIPT. store in ibound
 			// until COMPLETE is sent.
 			key := uint64(inMsg.Info().MessageID)<<32 + uint64(blockID)
-			m, err := lp.Encode(proto, inMsg)
+			m, err := lp.Encode(inMsg)
 			if err != nil {
 				log.ErrLogger.Err(err).Str("context", "store.PersistOutbound")
 				return
@@ -245,13 +246,12 @@ func (l *MessageLog) PersistInbound(proto lp.ProtoAdapter, blockID uint32, inMsg
 }
 
 // Get performs a query and attempts to fetch message for the given key
-func (l *MessageLog) Get(proto lp.ProtoAdapter, key uint64) lp.LineProtocol {
+func (l *MessageLog) Get(key uint64) lp.MessagePack {
 	if raw, err := adp.GetMessage(key); raw != nil && err == nil {
 		r := bytes.NewReader(raw)
-		if msg, err := lp.Read(proto, r); err == nil {
+		if msg, err := lp.Read(r); err == nil {
 			return msg
 		}
-
 	}
 	return nil
 }

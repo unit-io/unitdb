@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/store"
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 const (
@@ -29,7 +29,7 @@ type (
 	batch struct {
 		count int
 		size  int
-		msgs  []*lp.PublishMessage
+		msgs  []*utp.PublishMessage
 	}
 	batchManager struct {
 		mu           sync.RWMutex
@@ -45,7 +45,7 @@ type (
 
 func (m *batchManager) newBatch(timeID timeID) *batch {
 	b := &batch{
-		msgs: make([]*lp.PublishMessage, 0),
+		msgs: make([]*utp.PublishMessage, 0),
 	}
 	m.batchGroup[timeID] = b
 
@@ -90,7 +90,7 @@ func (m *batchManager) close() {
 }
 
 // add adds a publish message to a batch in the batch group.
-func (m *batchManager) add(delay int32, p *lp.PublishMessage) {
+func (m *batchManager) add(delay int32, p *utp.PublishMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	timeID := m.TimeID(delay)
@@ -188,11 +188,11 @@ func (m *batchManager) publish(c *_Conn, publishWaitTimeout time.Duration) {
 				m.stopWg.Done()
 				return
 			}
-			pub := &lp.Publish{Messages: b.msgs}
-			pub.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+			pub := &utp.Publish{Messages: b.msgs}
+			pub.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 
 			// persist outbound
-			store.Log.PersistOutbound(c.adp, uint32(c.connID), pub)
+			store.Log.PersistOutbound(uint32(c.connID), pub)
 
 			select {
 			case c.pub <- pub:
@@ -201,11 +201,11 @@ func (m *batchManager) publish(c *_Conn, publishWaitTimeout time.Duration) {
 			}
 		case b := <-m.send:
 			if b != nil {
-				pub := &lp.Publish{Messages: b.msgs}
-				pub.MessageID = c.MessageIds.NextID(lp.PUBLISH.Value())
+				pub := &utp.Publish{Messages: b.msgs}
+				pub.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 
 				// persist outbound
-				store.Log.PersistOutbound(c.adp, uint32(c.connID), pub)
+				store.Log.PersistOutbound(uint32(c.connID), pub)
 				select {
 				case c.pub <- pub:
 				case <-time.After(publishWaitTimeout):

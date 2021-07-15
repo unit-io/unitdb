@@ -18,22 +18,24 @@ package message
 
 import (
 	"sync"
+
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 // MID is 32-bit local message identifier
-type MID uint16
+type MID int32
 
 type MessageIds struct {
 	sync.RWMutex
-	id     uint16
-	resume map[uint16]struct{}
-	index  map[uint16]uint8 // map[MID]PacketType
+	id     MID
+	resume map[MID]struct{}
+	index  map[MID]utp.MessageType // map[MID]PacketType
 }
 
 func NewMessageIds() MessageIds {
 	return MessageIds{
-		resume: make(map[uint16]struct{}),
-		index:  make(map[uint16]uint8),
+		resume: make(map[MID]struct{}),
+		index:  make(map[MID]utp.MessageType),
 	}
 }
 
@@ -43,19 +45,19 @@ func (mids *MessageIds) Reset() {
 	mids.id = 0
 }
 
-func (mids *MessageIds) ResumeID(id uint16) {
+func (mids *MessageIds) ResumeID(id MID) {
 	mids.Lock()
 	defer mids.Unlock()
 	mids.resume[id] = struct{}{}
 }
 
-func (mids *MessageIds) FreeID(id uint16) {
+func (mids *MessageIds) FreeID(id MID) {
 	mids.Lock()
 	defer mids.Unlock()
 	delete(mids.index, id)
 }
 
-func (mids *MessageIds) NextID(pktType uint8) uint16 {
+func (mids *MessageIds) NextID(pktType utp.MessageType) MID {
 	mids.Lock()
 	defer mids.Unlock()
 	mids.id++
@@ -66,7 +68,7 @@ func (mids *MessageIds) NextID(pktType uint8) uint16 {
 	return mids.id
 }
 
-func (mids *MessageIds) GetType(id uint16) uint8 {
+func (mids *MessageIds) GetType(id MID) utp.MessageType {
 	mids.RLock()
 	defer mids.RUnlock()
 	return mids.index[id]

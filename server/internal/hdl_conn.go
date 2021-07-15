@@ -34,6 +34,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/store"
 	"github.com/unit-io/unitdb/server/internal/types"
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 const (
@@ -60,7 +61,7 @@ func (c *_Conn) readLoop(ctx context.Context) (err error) {
 			c.socket.SetDeadline(time.Now().Add(time.Second * 120))
 
 			// Decode an incoming Message
-			pkt, err := lp.Read(c.adp, reader)
+			pkt, err := lp.Read(reader)
 			if err != nil {
 				return err
 			}
@@ -75,7 +76,7 @@ func (c *_Conn) readLoop(ctx context.Context) (err error) {
 }
 
 // handler handles inbound Messages.
-func (c *_Conn) handler(inMsg lp.LineProtocol) error {
+func (c *_Conn) handler(inMsg lp.MessagePack) error {
 	start := time.Now()
 	var status int = 200
 	defer func() {
@@ -85,9 +86,9 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 
 	switch inMsg.Type() {
 	// An attempt to connect.
-	case lp.CONNECT:
+	case utp.CONNECT:
 		var returnCode uint8
-		m := *inMsg.(*lp.Connect)
+		m := *inMsg.(*utp.Connect)
 
 		c.insecure = m.InsecureFlag
 		c.username = string(m.Username)
@@ -98,11 +99,15 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		}
 
 		// Write the ack
-		connack := &lp.ConnectAcknowledge{ReturnCode: returnCode, Epoch: uid.ID(m.ClientID).Epoch(), ConnID: uint32(c.connID)}
-		ack := &lp.ControlMessage{
-			MessageType: lp.CONNECT,
-			FlowControl: lp.ACKNOWLEDGE,
-			Message:     connack,
+		connack := &utp.ConnectAcknowledge{ReturnCode: returnCode, Epoch: int32(clientID.Epoch()), ConnID: int32(c.connID)}
+		rawAck, err1 := connack.ToBinary()
+		if err1 != nil {
+			return types.ErrServerError
+		}
+		ack := &utp.ControlMessage{
+			MessageType: utp.CONNECT,
+			FlowControl: utp.ACKNOWLEDGE,
+			Message:     rawAck.Bytes(),
 		}
 		c.send <- ack
 
@@ -121,11 +126,11 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 			batchCountThreshold: int(m.BatchCountThreshold),
 		})
 
-		var sessKey uint32
+		var sessKey int32
 		if m.SessKey != 0 {
 			sessKey = m.SessKey
 		} else {
-			sessKey = c.clientID.Epoch()
+			sessKey = int32(c.clientID.Epoch())
 		}
 
 		// Take care of any messages in the store
@@ -142,17 +147,17 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		rawSess := make([]byte, 4)
 		binary.LittleEndian.PutUint32(rawSess[0:4], uint32(sessID))
 		store.Session.Put(uint64(sessKey), rawSess)
-		if sessKey != c.clientID.Epoch() {
+		if sessKey != int32(c.clientID.Epoch()) {
 			store.Session.Put(uint64(c.clientID.Epoch()), rawSess)
 		}
-	case lp.DISCONNECT:
+	case utp.DISCONNECT:
 		c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
 		// An attempt to relay to a topic.
-	case lp.RELAY:
-		m := *inMsg.(*lp.Relay)
-		ack := &lp.ControlMessage{
-			MessageType: lp.RELAY,
-			FlowControl: lp.ACKNOWLEDGE,
+	case utp.RELAY:
+		m := *inMsg.(*utp.Relay)
+		ack := &utp.ControlMessage{
+			MessageType: utp.RELAY,
+			FlowControl: utp.ACKNOWLEDGE,
 			MessageID:   m.MessageID,
 		}
 		// Relay for each request
@@ -169,11 +174,11 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		}
 		c.send <- ack
 	// An attempt to subscribe to a topic.
-	case lp.SUBSCRIBE:
-		m := *inMsg.(*lp.Subscribe)
-		ack := &lp.ControlMessage{
-			MessageType: lp.SUBSCRIBE,
-			FlowControl: lp.ACKNOWLEDGE,
+	case utp.SUBSCRIBE:
+		m := *inMsg.(*utp.Subscribe)
+		ack := &utp.ControlMessage{
+			MessageType: utp.SUBSCRIBE,
+			FlowControl: utp.ACKNOWLEDGE,
 			MessageID:   m.MessageID,
 		}
 		// Subscribe for each subscription
@@ -192,11 +197,11 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		c.send <- ack
 
 	// An attempt to unsubscribe from a topic.
-	case lp.UNSUBSCRIBE:
-		m := *inMsg.(*lp.Unsubscribe)
-		ack := &lp.ControlMessage{
-			MessageType: lp.UNSUBSCRIBE,
-			FlowControl: lp.ACKNOWLEDGE,
+	case utp.UNSUBSCRIBE:
+		m := *inMsg.(*utp.Unsubscribe)
+		ack := &utp.ControlMessage{
+			MessageType: utp.UNSUBSCRIBE,
+			FlowControl: utp.ACKNOWLEDGE,
 			MessageID:   m.MessageID,
 		}
 		// Unsubscribe from each subscription
@@ -210,40 +215,40 @@ func (c *_Conn) handler(inMsg lp.LineProtocol) error {
 		c.send <- ack
 
 	// Ping response, respond appropriately.
-	case lp.PINGREQ:
-		ack := &lp.ControlMessage{
-			MessageType: lp.PINGREQ,
-			FlowControl: lp.ACKNOWLEDGE,
+	case utp.PINGREQ:
+		ack := &utp.ControlMessage{
+			MessageType: utp.PINGREQ,
+			FlowControl: utp.ACKNOWLEDGE,
 		}
 		c.send <- ack
 
-	case lp.PUBLISH:
-		m := *inMsg.(*lp.Publish)
+	case utp.PUBLISH:
+		m := *inMsg.(*utp.Publish)
 		if err := c.onPublish(m); err != nil {
 			status = err.Status
 			c.notifyError(err, m.MessageID)
 		}
-	case lp.FLOWCONTROL:
+	case utp.FLOWCONTROL:
 		// Persist incoming
 		c.storeInbound(inMsg)
 
-		m := *inMsg.(*lp.ControlMessage)
+		m := *inMsg.(*utp.ControlMessage)
 		switch m.FlowControl {
-		case lp.RECEIVE:
+		case utp.RECEIVE:
 			key := uint64(m.Info().MessageID)<<32 + uint64(c.sessID)
 			// Get message from Log store
-			msg := store.Log.Get(c.adp, key)
+			msg := store.Log.Get(key)
 			if msg == nil {
 				return types.ErrServerError
 			}
 			switch msg.(type) {
-			case *lp.Publish:
+			case *utp.Publish:
 				c.send <- msg
 			}
-		case lp.RECEIPT:
-			comp := &lp.ControlMessage{
-				MessageType: lp.PUBLISH,
-				FlowControl: lp.COMPLETE,
+		case utp.RECEIPT:
+			comp := &utp.ControlMessage{
+				MessageType: utp.PUBLISH,
+				FlowControl: utp.COMPLETE,
 				MessageID:   m.MessageID,
 			}
 			c.storeOutbound(comp)
@@ -269,7 +274,7 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(c.adp, msg)
+			m, err := lp.Encode(msg)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
@@ -280,7 +285,7 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(c.adp, msg)
+			m, err := lp.Encode(msg)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
@@ -326,12 +331,12 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 }
 
 // onRelay is a handler for Subscribe events of delivery mode type RELAY.
-func (c *_Conn) onRelay(req *lp.RelayRequest) *types.Error {
+func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(req.Topic)
+	topic := security.ParseKey([]byte(req.Topic))
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -361,12 +366,12 @@ func (c *_Conn) onRelay(req *lp.RelayRequest) *types.Error {
 }
 
 // onSubscribe is a handler for Subscribe events.
-func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Error {
+func (c *_Conn) onSubscribe(sub utp.Subscribe, subsc *utp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(subsc.Topic)
+	topic := security.ParseKey([]byte(subsc.Topic))
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -387,12 +392,12 @@ func (c *_Conn) onSubscribe(sub lp.Subscribe, subsc *lp.Subscription) *types.Err
 // ------------------------------------------------------------------------------------
 
 // onUnsubscribe is a handler for Unsubscribe events.
-func (c *_Conn) onUnsubscribe(unsub lp.Unsubscribe, subsc *lp.Subscription) *types.Error {
+func (c *_Conn) onUnsubscribe(unsub utp.Unsubscribe, subsc *utp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey(subsc.Topic)
+	topic := security.ParseKey([]byte(subsc.Topic))
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -411,13 +416,13 @@ func (c *_Conn) onUnsubscribe(unsub lp.Unsubscribe, subsc *lp.Subscription) *typ
 }
 
 // OnPublish is a handler for Publish events.
-func (c *_Conn) onPublish(pub lp.Publish) *types.Error {
+func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	for _, m := range pub.Messages {
 		//Parse the key
-		topic := security.ParseKey(m.Topic)
+		topic := security.ParseKey([]byte(m.Topic))
 		if topic.TopicType == security.TopicInvalid {
 			return types.ErrBadRequest
 		}
@@ -454,10 +459,10 @@ func (c *_Conn) onPublish(pub lp.Publish) *types.Error {
 }
 
 // acknowledge acknowledges a Publish Message
-func (c *_Conn) acknowledge(pub lp.Publish) *types.Error {
-	ack := &lp.ControlMessage{
-		MessageType: lp.PUBLISH,
-		FlowControl: lp.ACKNOWLEDGE,
+func (c *_Conn) acknowledge(pub utp.Publish) *types.Error {
+	ack := &utp.ControlMessage{
+		MessageType: utp.PUBLISH,
+		FlowControl: utp.ACKNOWLEDGE,
 		MessageID:   pub.MessageID,
 	}
 	c.send <- ack
@@ -490,7 +495,7 @@ func (c *_Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool
 	defer func() {
 		if b, err := json.Marshal(resp); err == nil {
 			c.SendMessage(&message.Message{
-				Topic:   []byte("unitdb/" + string(topic.Topic[:topic.Size])),
+				Topic:   "unitdb/" + string(topic.Topic[:topic.Size]),
 				Payload: b,
 			})
 		}

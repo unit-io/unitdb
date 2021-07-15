@@ -34,6 +34,7 @@ import (
 	rh "github.com/unit-io/unitdb/server/internal/pkg/hash"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
+	"github.com/unit-io/unitdb/server/utp"
 )
 
 const (
@@ -103,9 +104,9 @@ type ClusterReq struct {
 	// Cluster is desynchronized.
 	Signature string
 
-	MsgSub   *lp.Subscribe
-	MsgPub   *lp.Publish
-	MsgUnsub *lp.Unsubscribe
+	MsgSub   *utp.Subscribe
+	MsgPub   *utp.Publish
+	MsgUnsub *utp.Unsubscribe
 	Topic    *security.Topic
 	Type     uint8
 	Message  *message.Message
@@ -119,9 +120,9 @@ type ClusterReq struct {
 // ClusterResp is a Master to Proxy response message.
 type ClusterResp struct {
 	Type     uint8
-	MsgSub   *lp.Subscribe
-	MsgPub   *lp.Publish
-	MsgUnsub *lp.Unsubscribe
+	MsgSub   *utp.Subscribe
+	MsgPub   *utp.Publish
+	MsgUnsub *utp.Unsubscribe
 	Msg      []byte
 	Topic    *security.Topic
 	Message  *message.Message
@@ -310,7 +311,6 @@ func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
-		conn.proto = msg.Conn.Proto
 		conn.connID = msg.Conn.ConnID
 		conn.clientID = msg.Conn.ClientID
 
@@ -373,7 +373,7 @@ func (c *Cluster) isRemoteContract(contract string) bool {
 }
 
 // Forward client message to the Master (cluster node which owns the topic)
-func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
+func (c *Cluster) routeToContract(msg lp.MessagePack, topic *security.Topic, msgType uint8, m *message.Message, conn *_Conn) error {
 	// Find the cluster node which owns the topic, then forward to it.
 	n := c.nodeForContract(fmt.Sprint(conn.clientID.Contract()))
 	if n == nil {
@@ -387,18 +387,18 @@ func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, ms
 	conn.nodes[n.name] = true
 
 	// var msgSub,msgPub,msgUnsub lp.Packet
-	var msgSub *lp.Subscribe
-	var msgPub *lp.Publish
-	var msgUnsub *lp.Unsubscribe
+	var msgSub *utp.Subscribe
+	var msgPub *utp.Publish
+	var msgUnsub *utp.Unsubscribe
 	switch msgType {
 	case message.SUBSCRIBE:
-		msgSub = msg.(*lp.Subscribe)
+		msgSub = msg.(*utp.Subscribe)
 		msgSub.IsForwarded = true
 	case message.UNSUBSCRIBE:
-		msgUnsub = msg.(*lp.Unsubscribe)
+		msgUnsub = msg.(*utp.Unsubscribe)
 		msgUnsub.IsForwarded = true
 	case message.PUBLISH:
-		msgPub = msg.(*lp.Publish)
+		msgPub = msg.(*utp.Publish)
 		msgPub.IsForwarded = true
 	}
 	return n.forward(
@@ -413,7 +413,6 @@ func (c *Cluster) routeToContract(msg lp.LineProtocol, topic *security.Topic, ms
 			Message:   m,
 			Conn: &ClusterSess{
 				//RemoteAddr: conn.(),
-				Proto:    conn.proto,
 				ConnID:   conn.connID,
 				SessID:   conn.sessID,
 				ClientID: conn.clientID}})
@@ -471,9 +470,9 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 
 	gob.Register([]interface{}{})
 	gob.Register(map[string]interface{}{})
-	gob.Register(lp.Publish{})
-	gob.Register(lp.Subscribe{})
-	gob.Register(lp.Unsubscribe{})
+	gob.Register(utp.Publish{})
+	gob.Register(utp.Subscribe{})
+	gob.Register(utp.Unsubscribe{})
 
 	Globals.Cluster = &Cluster{
 		thisNodeName: thisName,
@@ -530,10 +529,7 @@ func (c *_Conn) rpcWriteLoop() {
 				// channel closed
 				return
 			}
-			if c.adp == nil {
-				return
-			}
-			m, err := lp.Encode(c.adp, msg)
+			m, err := lp.Encode(msg)
 			if err != nil {
 				log.Error("conn.writeRpc", err.Error())
 				return
