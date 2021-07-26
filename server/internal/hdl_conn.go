@@ -232,10 +232,10 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		// Persist incoming
 		c.storeInbound(inMsg)
 
-		m := *inMsg.(*utp.ControlMessage)
-		switch m.FlowControl {
+		ctrlMsg := *inMsg.(*utp.ControlMessage)
+		switch ctrlMsg.FlowControl {
 		case utp.RECEIVE:
-			key := uint64(m.Info().MessageID)<<32 + uint64(c.sessID)
+			key := uint64(ctrlMsg.Info().MessageID)<<32 + uint64(c.sessID)
 			// Get message from Log store
 			msg := store.Log.Get(key)
 			if msg == nil {
@@ -249,7 +249,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			comp := &utp.ControlMessage{
 				MessageType: utp.PUBLISH,
 				FlowControl: utp.COMPLETE,
-				MessageID:   m.MessageID,
+				MessageID:   ctrlMsg.MessageID,
 			}
 			c.storeOutbound(comp)
 			c.send <- comp
@@ -269,28 +269,28 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 			return
 		case <-c.closeC:
 			return
-		case msg, ok := <-c.pub:
+		case pub, ok := <-c.pub:
 			if !ok {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(msg)
+			buf, err := lp.Encode(pub)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
 			}
-			c.socket.Write(m.Bytes())
-		case msg, ok := <-c.send:
+			c.socket.Write(buf.Bytes())
+		case outMsg, ok := <-c.send:
 			if !ok {
 				// Channel closed.
 				return
 			}
-			m, err := lp.Encode(msg)
+			buf, err := lp.Encode(outMsg)
 			if err != nil {
 				log.Error("conn.writeLoop", err.Error())
 				return
 			}
-			c.socket.Write(m.Bytes())
+			c.socket.Write(buf.Bytes())
 		}
 	}
 }
@@ -355,9 +355,9 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 		}
 
 		// Range over the messages from the store and forward them
-		for _, m := range msgs {
-			msg := m             // Copy message
-			msg.DeliveryMode = 3 // Set Delivery Mode to Relay
+		for _, msg := range msgs {
+			newMsg := msg           // Copy message
+			newMsg.DeliveryMode = 2 // Set Delivery Mode to Batch delivery of messages on relay request
 			c.SendMessage(msg)
 		}
 	}
@@ -366,12 +366,12 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 }
 
 // onSubscribe is a handler for Subscribe events.
-func (c *_Conn) onSubscribe(sub utp.Subscribe, subsc *utp.Subscription) *types.Error {
+func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey([]byte(subsc.Topic))
+	topic := security.ParseKey([]byte(sub.Topic))
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -382,7 +382,7 @@ func (c *_Conn) onSubscribe(sub utp.Subscribe, subsc *utp.Subscription) *types.E
 		}
 	}
 
-	if err := c.subscribe(sub, topic, subsc); err != nil {
+	if err := c.subscribe(subMsg, topic, sub); err != nil {
 		return types.ErrServerError
 	}
 
@@ -392,12 +392,12 @@ func (c *_Conn) onSubscribe(sub utp.Subscribe, subsc *utp.Subscription) *types.E
 // ------------------------------------------------------------------------------------
 
 // onUnsubscribe is a handler for Unsubscribe events.
-func (c *_Conn) onUnsubscribe(unsub utp.Unsubscribe, subsc *utp.Subscription) *types.Error {
+func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey([]byte(subsc.Topic))
+	topic := security.ParseKey([]byte(sub.Topic))
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -408,7 +408,7 @@ func (c *_Conn) onUnsubscribe(unsub utp.Unsubscribe, subsc *utp.Subscription) *t
 		}
 	}
 
-	if err := c.unsubscribe(unsub, topic); err != nil {
+	if err := c.unsubscribe(unsubMsg, topic); err != nil {
 		return types.ErrServerError
 	}
 
@@ -420,16 +420,16 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
-	for _, m := range pub.Messages {
+	for _, pubMsg := range pub.Messages {
 		//Parse the key
-		topic := security.ParseKey([]byte(m.Topic))
+		topic := security.ParseKey([]byte(pubMsg.Topic))
 		if topic.TopicType == security.TopicInvalid {
 			return types.ErrBadRequest
 		}
 
 		// Check whether the key is 'unitdb' which means it's an API request
 		if len(topic.Key) == 6 && string(topic.Key) == "unitdb" {
-			c.onSpecialRequest(topic, m.Payload)
+			c.onSpecialRequest(topic, pubMsg.Payload)
 			return nil
 		}
 
@@ -443,13 +443,13 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 			}
 		}
 
-		err := store.Message.Put(c.clientID.Contract(), topic.Topic, m.Payload, m.Ttl)
+		err := store.Message.Put(c.clientID.Contract(), topic.Topic, pubMsg.Payload, pubMsg.Ttl)
 		if err != nil {
 			log.Error("conn.onPublish", "store message "+err.Error())
 			return types.ErrServerError
 		}
 		// Iterate through all subscribers and send them the message
-		go c.publish(pub, topic, m)
+		go c.publish(pub, topic, pubMsg)
 		// time.Sleep(100*time.Millisecond)
 		// panic("exit on publish")
 	}

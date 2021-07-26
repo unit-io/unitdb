@@ -45,7 +45,7 @@ type ControlMessage struct {
 
 // ToBinary encodes the Control Message into binary data
 func (c *ControlMessage) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var err error
 	var fh FixedHeader
 	ctrl := pbx.ControlMessage{
@@ -54,7 +54,7 @@ func (c *ControlMessage) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&ctrl)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	switch c.FlowControl {
 	case ACKNOWLEDGE:
@@ -81,9 +81,9 @@ func (c *ControlMessage) ToBinary() (bytes.Buffer, error) {
 	case COMPLETE:
 		fh = FixedHeader{MessageType: PUBLISH, FlowControl: COMPLETE, MessageLength: len(rawMsg)}
 	}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (c *ControlMessage) FromBinary(fh FixedHeader, data []byte) {

@@ -62,7 +62,7 @@ type Disconnect struct {
 }
 
 func (c *Connect) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	conn := pbx.Connect{
 		Version:             c.Version,
 		InsecureFlag:        c.InsecureFlag,
@@ -78,12 +78,12 @@ func (c *Connect) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&conn)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: CONNECT, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (c *Connect) FromBinary(fh FixedHeader, data []byte) {
@@ -114,7 +114,7 @@ func (c *Connect) Info() Info {
 }
 
 func (c *ConnectAcknowledge) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	connack := pbx.ConnectAcknowledge{
 		ReturnCode: int32(c.ReturnCode),
 		Epoch:      c.Epoch,
@@ -122,12 +122,10 @@ func (c *ConnectAcknowledge) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&connack)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
-	fh := FixedHeader{MessageType: CONNECT, FlowControl: ACKNOWLEDGE, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (c *ConnectAcknowledge) FromBinary(fh FixedHeader, data []byte) {
@@ -150,16 +148,16 @@ func (c *ConnectAcknowledge) Info() Info {
 }
 
 func (p *Pingreq) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var pingreq pbx.PingRequest
 	rawMsg, err := proto.Marshal(&pingreq)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: PINGREQ, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (p *Pingreq) FromBinary(fh FixedHeader, data []byte) {
@@ -178,16 +176,16 @@ func (p *Pingreq) Info() Info {
 }
 
 func (d *Disconnect) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var disc pbx.Disconnect
 	rawMsg, err := proto.Marshal(&disc)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: DISCONNECT, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (d *Disconnect) FromBinary(fh FixedHeader, data []byte) {

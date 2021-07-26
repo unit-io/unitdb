@@ -16,61 +16,42 @@ func main() {
 	}
 	defer db.Close()
 
-	topic := []byte("teams.alpha.ch1")
-	msg := []byte("msg for team alpha channel1")
+	topic := []byte("teams.private.sales.saleschannel.message")
+	msg := []byte("msg for sales channel")
 	db.Put(topic, msg)
 
-	// Send message to all recipients of channel1 in team alpha
-	topic = []byte("teams.alpha.ch1.*")
+	// Send message to all channels in team sales
+	topic = []byte("teams.private.sales.*.message")
 	msg = []byte("msg for team alpha channel1 all recipients")
 	db.Put(topic, msg)
 
-	// Send message to all channels in team alpha
-	topic = []byte("teams.alpha...")
+	// Send message to all private teams
+	topic = []byte("teams.private...")
 	msg = []byte("msg for team alpha all channels")
 	db.Put(topic, msg)
 
-	// Get message for team alpha channel1
-	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1?last=1h")).WithLimit(10)); err == nil {
+	// Get message for sales channel
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.private.sales.saleschannel.message?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
 	}
-
-	// Get message for team alpha channel1 recipient1
-	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.r1?last=1h")).WithLimit(10)); err == nil {
-		for _, msg := range msgs {
-			log.Printf("%s ", msg)
-		}
-	}
-
-	// Get message for team alpha channel2
-	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch2?last=1h")).WithLimit(10)); err == nil {
-		for _, msg := range msgs {
-			log.Printf("%s ", msg)
-		}
-	}
-
-	// Specify time to live so if you run the program again after 1 min you will not receive this message
-	topic = []byte("teams.alpha.ch1.r1?ttl=1m")
-	msg = []byte("msg with 1m ttl for team alpha channel1 recipient1")
-	db.Put(topic, msg)
 
 	// Delete message
 	messageId := db.NewID()
-	entry := unitdb.NewEntry([]byte("teams.alpha.ch1.r1"), []byte("msg for team alpha channel1 recipient1")).WithID(messageId)
+	entry := unitdb.NewEntry([]byte("teams.public.customersupport.connectchannel.message"), []byte("msg for customer connect channel")).WithID(messageId)
 	db.PutEntry(entry)
 
 	db.Sync()
 
-	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.r1"), nil).WithID(messageId))
+	err = db.DeleteEntry(unitdb.NewEntry([]byte("teams.public.customersupport.connectchannel.message"), nil).WithID(messageId))
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	// Get message for team alpha channel1 recipient1
-	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.r1?last=1h")).WithLimit(10)); err == nil {
+	// Get message for customer connect channel
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.public.customersupport.connectchannel.message?last=1h")).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}
@@ -79,10 +60,10 @@ func main() {
 	// Topic isolation using contract
 	contract, err := db.NewContract()
 
-	db.PutEntry(unitdb.NewEntry([]byte("teams.alpha.ch1.r1"), []byte("msg for team alpha channel1 recipient1")).WithContract(contract))
+	db.PutEntry(unitdb.NewEntry([]byte("teams.public.customersupport.connectchannel.message"), []byte("msg for customer connect channel")).WithContract(contract))
 
-	// Get message for team alpha channel1 recipient1 with new contract
-	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.alpha.ch1.r1?last=1h")).WithContract(contract).WithLimit(10)); err == nil {
+	// Get message for customer connect chanel with new contract
+	if msgs, err := db.Get(unitdb.NewQuery([]byte("teams.public.customersupport.connectchannel.message?last=1h")).WithContract(contract).WithLimit(10)); err == nil {
 		for _, msg := range msgs {
 			log.Printf("%s ", msg)
 		}

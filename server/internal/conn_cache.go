@@ -24,12 +24,12 @@ import (
 
 type _ConnCache struct {
 	sync.RWMutex
-	m map[uid.LID]*_Conn
+	connections map[uid.LID]*_Conn
 }
 
 func NewConnCache() *_ConnCache {
 	cache := &_ConnCache{
-		m: make(map[uid.LID]*_Conn),
+		connections: make(map[uid.LID]*_Conn),
 	}
 
 	return cache
@@ -38,14 +38,14 @@ func NewConnCache() *_ConnCache {
 func (cc *_ConnCache) add(conn *_Conn) {
 	cc.Lock()
 	defer cc.Unlock()
-	cc.m[conn.connID] = conn
+	cc.connections[conn.connID] = conn
 }
 
 // get fetches a connection from cache by connection ID.
 func (cc *_ConnCache) get(connID uid.LID) *_Conn {
 	cc.Lock()
 	defer cc.Unlock()
-	if conn := cc.m[connID]; conn != nil {
+	if conn := cc.connections[connID]; conn != nil {
 		return conn
 	}
 
@@ -55,5 +55,5 @@ func (cc *_ConnCache) get(connID uid.LID) *_Conn {
 func (cc *_ConnCache) delete(connID uid.LID) {
 	cc.Lock()
 	defer cc.Unlock()
-	delete(cc.m, connID)
+	delete(cc.connections, connID)
 }

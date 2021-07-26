@@ -27,9 +27,9 @@ type (
 		batchByteThreshold  int
 	}
 	batch struct {
-		count int
-		size  int
-		msgs  []*utp.PublishMessage
+		count       int
+		size        int
+		pubMessages []*utp.PublishMessage
 	}
 	batchManager struct {
 		mu           sync.RWMutex
@@ -45,7 +45,7 @@ type (
 
 func (m *batchManager) newBatch(timeID timeID) *batch {
 	b := &batch{
-		msgs: make([]*utp.PublishMessage, 0),
+		pubMessages: make([]*utp.PublishMessage, 0),
 	}
 	m.batchGroup[timeID] = b
 
@@ -90,7 +90,7 @@ func (m *batchManager) close() {
 }
 
 // add adds a publish message to a batch in the batch group.
-func (m *batchManager) add(delay int32, p *utp.PublishMessage) {
+func (m *batchManager) add(delay int32, pubMsg *utp.PublishMessage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	timeID := m.TimeID(delay)
@@ -98,9 +98,9 @@ func (m *batchManager) add(delay int32, p *utp.PublishMessage) {
 	if !ok {
 		b = m.newBatch(timeID)
 	}
-	b.msgs = append(b.msgs, p)
+	b.pubMessages = append(b.pubMessages, pubMsg)
 	b.count++
-	b.size += len(p.Payload)
+	b.size += len(pubMsg.Payload)
 	if b.count > m.opts.batchCountThreshold || b.size > m.opts.batchByteThreshold {
 		m.push(b)
 		delete(m.batchGroup, timeID)
@@ -108,9 +108,9 @@ func (m *batchManager) add(delay int32, p *utp.PublishMessage) {
 }
 
 // push enqueues a batch to publish.
-func (m *batchManager) push(p *batch) {
-	if len(p.msgs) != 0 {
-		m.publishQueue <- p
+func (m *batchManager) push(b *batch) {
+	if len(b.pubMessages) != 0 {
+		m.publishQueue <- b
 	}
 }
 
@@ -188,7 +188,7 @@ func (m *batchManager) publish(c *_Conn, publishWaitTimeout time.Duration) {
 				m.stopWg.Done()
 				return
 			}
-			pub := &utp.Publish{Messages: b.msgs}
+			pub := &utp.Publish{Messages: b.pubMessages}
 			pub.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 
 			// persist outbound
@@ -201,7 +201,7 @@ func (m *batchManager) publish(c *_Conn, publishWaitTimeout time.Duration) {
 			}
 		case b := <-m.send:
 			if b != nil {
-				pub := &utp.Publish{Messages: b.msgs}
+				pub := &utp.Publish{Messages: b.pubMessages}
 				pub.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 
 				// persist outbound

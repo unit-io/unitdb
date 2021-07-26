@@ -174,7 +174,7 @@ func (c *_Conn) SendRawBytes(buf []byte) bool {
 }
 
 // subscribe subscribes to a particular topic.
-func (c *_Conn) subscribe(msg utp.Subscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
+func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -186,9 +186,9 @@ func (c *_Conn) subscribe(msg utp.Subscribe, topic *security.Topic, sub *utp.Sub
 			return err
 		}
 	}
-	if exists := c.subs.Exist(key); exists && !msg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
+	if exists := c.subs.Exist(key); exists && !subMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		// The contract is handled by a remote node. Forward message to it.
-		if err := Globals.Cluster.routeToContract(&msg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
+		if err := Globals.Cluster.routeToContract(&subMsg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to remote topic")
 			return err
 		}
@@ -216,7 +216,7 @@ func (c *_Conn) subscribe(msg utp.Subscribe, topic *security.Topic, sub *utp.Sub
 }
 
 // unsubscribe unsubscribes this client from a particular topic.
-func (c *_Conn) unsubscribe(msg utp.Unsubscribe, topic *security.Topic) (err error) {
+func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -231,9 +231,9 @@ func (c *_Conn) unsubscribe(msg utp.Unsubscribe, topic *security.Topic) (err err
 		// Decrement the subscription counter
 		c.service.meter.Subscriptions.Dec(1)
 	}
-	if !msg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
+	if !unsubMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		// The topic is handled by a remote node. Forward message to it.
-		if err := Globals.Cluster.routeToContract(&msg, topic, message.UNSUBSCRIBE, &message.Message{}, c); err != nil {
+		if err := Globals.Cluster.routeToContract(&unsubMsg, topic, message.UNSUBSCRIBE, &message.Message{}, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to remote topic")
 			return err
 		}
@@ -242,9 +242,9 @@ func (c *_Conn) unsubscribe(msg utp.Unsubscribe, topic *security.Topic) (err err
 }
 
 // publish publishes a message to everyone and returns the number of outgoing bytes written.
-func (c *_Conn) publish(pkt utp.Publish, topic *security.Topic, m *utp.PublishMessage) (err error) {
+func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.PublishMessage) (err error) {
 	c.service.meter.InMsgs.Inc(1)
-	c.service.meter.InBytes.Inc(int64(len(m.Payload)))
+	c.service.meter.InBytes.Inc(int64(len(pubMsg.Payload)))
 	// subscription count
 	msgCount := 0
 
@@ -253,44 +253,44 @@ func (c *_Conn) publish(pkt utp.Publish, topic *security.Topic, m *utp.PublishMe
 		log.ErrLogger.Err(err).Str("context", "conn.publish")
 		return err
 	}
-	pubMsg := &message.Message{
-		MessageID: pkt.MessageID,
+	msg := &message.Message{
+		MessageID: pub.MessageID,
 		Topic:     string(topic.Topic[:topic.Size]),
-		Payload:   m.Payload,
+		Payload:   pubMsg.Payload,
 	}
 	for _, subscription := range subscriptions {
-		pubMsg.DeliveryMode = subscription[0]
+		msg.DeliveryMode = subscription[0]
 		connID := uid.LID(binary.LittleEndian.Uint32(subscription[1:5]))
-		pubMsg.Delay = int32(uid.LID(binary.LittleEndian.Uint32(subscription[5:9])))
+		msg.Delay = int32(uid.LID(binary.LittleEndian.Uint32(subscription[5:9])))
 		sub := Globals.connCache.get(connID)
 		if sub != nil {
-			if pubMsg.MessageID == 0 {
-				pubMsg.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
+			if msg.MessageID == 0 {
+				msg.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
 			}
-			switch pkt.DeliveryMode {
+			switch pub.DeliveryMode {
 			// Publisher's DeliveryMode RELIABLE or BATCH
 			case 1, 2:
-				switch pubMsg.DeliveryMode {
+				switch msg.DeliveryMode {
 				// Subscriber's DeliveryMode RELIABLE or BATCH
 				case 1, 2:
 					notify := &utp.ControlMessage{
 						MessageType: utp.PUBLISH,
 						FlowControl: utp.NOTIFY,
-						MessageID:   pubMsg.MessageID,
+						MessageID:   msg.MessageID,
 					}
 					// persist outbound
-					store.Log.PersistOutbound(uint32(sub.sessID), &pkt)
+					store.Log.PersistOutbound(uint32(sub.sessID), &pub)
 					sub.send <- notify
 				// Subscriber's DeliveryMode EXPRESS
 				case 0:
-					if !sub.SendMessage(pubMsg) {
+					if !sub.SendMessage(msg) {
 						log.ErrLogger.Err(err).Str("context", "conn.publish")
 					}
 					msgCount++
 				}
 			// Publisher's DeliveryMode Express
 			case 0:
-				if !sub.SendMessage(pubMsg) {
+				if !sub.SendMessage(msg) {
 					log.ErrLogger.Err(err).Str("context", "conn.publish")
 				}
 				msgCount++
@@ -298,10 +298,10 @@ func (c *_Conn) publish(pkt utp.Publish, topic *security.Topic, m *utp.PublishMe
 		}
 	}
 	c.service.meter.OutMsgs.Inc(int64(msgCount))
-	c.service.meter.OutBytes.Inc(pubMsg.Size() * int64(msgCount))
+	c.service.meter.OutBytes.Inc(msg.Size() * int64(msgCount))
 
-	if !pkt.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
-		if err = Globals.Cluster.routeToContract(&pkt, topic, message.PUBLISH, pubMsg, c); err != nil {
+	if !pub.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
+		if err = Globals.Cluster.routeToContract(&pub, topic, message.PUBLISH, msg, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connID)).Msg("unable to publish to remote topic")
 			return err
 		}
@@ -323,12 +323,12 @@ func (c *_Conn) resume(prefix uint32) {
 		if (k & (1 << 4)) == 0 {
 			switch msg.Type() {
 			case utp.PUBLISH:
-				m := msg.(*utp.Publish)
-				c.MessageIds.ResumeID(message.MID(m.MessageID))
+				pub := msg.(*utp.Publish)
+				c.MessageIds.ResumeID(message.MID(pub.MessageID))
 				notify := &utp.ControlMessage{
 					MessageType: utp.PUBLISH,
 					FlowControl: utp.NOTIFY,
-					MessageID:   m.MessageID,
+					MessageID:   pub.MessageID,
 				}
 				c.send <- notify
 			default:

@@ -39,40 +39,41 @@ type Publish struct {
 }
 
 func (p *Publish) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 
-	var pubMessages []*pbx.PublishMessage
-	for _, m := range p.Messages {
-		var pubMsg pbx.PublishMessage
-		pubMsg.Topic = string(m.Topic)
-		pubMsg.Payload = m.Payload
-		pubMsg.Ttl = m.Ttl
-		pubMessages = append(pubMessages, &pubMsg)
+	var protoMessages []*pbx.PublishMessage
+	for _, pubMsg := range p.Messages {
+		protoMsg := &pbx.PublishMessage{
+			Topic:   string(pubMsg.Topic),
+			Payload: pubMsg.Payload,
+			Ttl:     pubMsg.Ttl,
+		}
+		protoMessages = append(protoMessages, protoMsg)
 	}
 	pub := pbx.Publish{
 		MessageID:    int32(p.MessageID),
 		DeliveryMode: int32(p.DeliveryMode),
-		Messages:     pubMessages,
+		Messages:     protoMessages,
 	}
 	rawMsg, err := proto.Marshal(&pub)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: PUBLISH, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (p *Publish) FromBinary(fh FixedHeader, data []byte) {
 	var pub pbx.Publish
 	proto.Unmarshal(data, &pub)
 	var pubMessages []*PublishMessage
-	for _, m := range pub.Messages {
+	for _, protoMsg := range pub.Messages {
 		pubMsg := &PublishMessage{
-			Topic:   m.Topic,
-			Payload: m.Payload,
-			Ttl:     m.Ttl,
+			Topic:   protoMsg.Topic,
+			Payload: protoMsg.Payload,
+			Ttl:     protoMsg.Ttl,
 		}
 		pubMessages = append(pubMessages, pubMsg)
 	}

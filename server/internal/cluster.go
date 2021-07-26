@@ -104,9 +104,9 @@ type ClusterReq struct {
 	// Cluster is desynchronized.
 	Signature string
 
-	MsgSub   *utp.Subscribe
-	MsgPub   *utp.Publish
-	MsgUnsub *utp.Unsubscribe
+	SubMsg   *utp.Subscribe
+	PubMsg   *utp.Publish
+	UnsubMsg *utp.Unsubscribe
 	Topic    *security.Topic
 	Type     uint8
 	Message  *message.Message
@@ -120,10 +120,10 @@ type ClusterReq struct {
 // ClusterResp is a Master to Proxy response message.
 type ClusterResp struct {
 	Type     uint8
-	MsgSub   *utp.Subscribe
-	MsgPub   *utp.Publish
-	MsgUnsub *utp.Unsubscribe
-	Msg      []byte
+	SubMsg   *utp.Subscribe
+	PubMsg   *utp.Publish
+	UnsubMsg *utp.Unsubscribe
+	RespMsg  []byte
 	Topic    *security.Topic
 	Message  *message.Message
 	// Connection ID to forward message to, if any.
@@ -185,12 +185,12 @@ func (n *ClusterNode) reconnect() {
 	}
 }
 
-func (n *ClusterNode) call(proc string, msg, resp interface{}) error {
+func (n *ClusterNode) call(proc string, reqMsg, respMsg interface{}) error {
 	if !n.connected {
 		return errors.New("cluster.call: node '" + n.name + "' not connected")
 	}
 
-	if err := n.endpoint.Call(proc, msg, resp); err != nil {
+	if err := n.endpoint.Call(proc, reqMsg, respMsg); err != nil {
 		log.Fatal("cluster.call", "call failed to "+n.name, err)
 
 		n.lock.Lock()
@@ -206,7 +206,7 @@ func (n *ClusterNode) call(proc string, msg, resp interface{}) error {
 	return nil
 }
 
-func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *rpc.Call) *rpc.Call {
+func (n *ClusterNode) callAsync(proc string, reqMsg, respMsg interface{}, done chan *rpc.Call) *rpc.Call {
 	if done != nil && cap(done) == 0 {
 		log.Fatal("cluster.callAsync", "RPC done channel is unbuffered", nil)
 	}
@@ -214,8 +214,8 @@ func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *r
 	if !n.connected {
 		call := &rpc.Call{
 			ServiceMethod: proc,
-			Args:          msg,
-			Reply:         resp,
+			Args:          reqMsg,
+			Reply:         respMsg,
 			Error:         errors.New("cluster.callAsync: node '" + n.name + "' not connected"),
 			Done:          done,
 		}
@@ -243,18 +243,18 @@ func (n *ClusterNode) callAsync(proc string, msg, resp interface{}, done chan *r
 		}
 	}()
 
-	call := n.endpoint.Go(proc, msg, resp, myDone)
+	call := n.endpoint.Go(proc, reqMsg, respMsg, myDone)
 	call.Done = done
 
 	return call
 }
 
 // Proxy forwards message to master
-func (n *ClusterNode) forward(msg *ClusterReq) error {
+func (n *ClusterNode) forward(forwMsg *ClusterReq) error {
 	log.Info("cluster.forward", "forwarding request to node "+n.name)
-	msg.Node = Globals.Cluster.thisNodeName
+	forwMsg.Node = Globals.Cluster.thisNodeName
 	rejected := false
-	err := n.call("Cluster.Master", msg, &rejected)
+	err := n.call("Cluster.Master", forwMsg, &rejected)
 	if err == nil && rejected {
 		err = errors.New("cluster.forward: master node out of sync")
 	}
@@ -284,43 +284,43 @@ type Cluster struct {
 // The message is treated like it came from a session: find or create a session locally,
 // dispatch the message to it like it came from a normal ws/lp connection.
 // Called by a remote node.
-func (c *Cluster) Master(msg *ClusterReq, rejected *bool) error {
-	log.Info("cluster.Master", "master request received from node "+msg.Node)
+func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
+	log.Info("cluster.Master", "master request received from node "+reqMsg.Node)
 
 	// Find the local connection associated with the given remote connection.
-	conn := Globals.connCache.get(msg.Conn.ConnID)
+	conn := Globals.connCache.get(reqMsg.Conn.ConnID)
 
-	if msg.ConnGone {
+	if reqMsg.ConnGone {
 		// Original session has disconnected. Tear down the local proxied session.
 		if conn != nil {
 			conn.stop <- nil
 		}
-	} else if msg.Signature == c.ring.Signature() {
+	} else if reqMsg.Signature == c.ring.Signature() {
 		// This cluster member received a request for a topic it owns.
 
 		if conn == nil {
 			// If the session is not found, create it.
-			node := Globals.Cluster.nodes[msg.Node]
+			node := Globals.Cluster.nodes[reqMsg.Node]
 			if node == nil {
-				log.Error("cluster.Master", "request from an unknown node "+msg.Node)
+				log.Error("cluster.Master", "request from an unknown node "+reqMsg.Node)
 				return nil
 			}
 
-			log.Info("cluster.Master", "new connection request"+fmt.Sprint(msg.Conn.ConnID))
-			conn = Globals.Service.newRpcConn(node, msg.Conn.ConnID, msg.Conn.SessID, msg.Conn.ClientID)
+			log.Info("cluster.Master", "new connection request"+fmt.Sprint(reqMsg.Conn.ConnID))
+			conn = Globals.Service.newRpcConn(node, reqMsg.Conn.ConnID, reqMsg.Conn.SessID, reqMsg.Conn.ClientID)
 			go conn.rpcWriteLoop()
 		}
 		// Update session params which may have changed since the last call.
-		conn.connID = msg.Conn.ConnID
-		conn.clientID = msg.Conn.ClientID
+		conn.connID = reqMsg.Conn.ConnID
+		conn.clientID = reqMsg.Conn.ClientID
 
-		switch msg.Type {
+		switch reqMsg.Type {
 		case message.SUBSCRIBE:
-			conn.handler(msg.MsgSub)
+			conn.handler(reqMsg.SubMsg)
 		case message.UNSUBSCRIBE:
-			conn.handler(msg.MsgUnsub)
+			conn.handler(reqMsg.UnsubMsg)
 		case message.PUBLISH:
-			conn.handler(msg.MsgPub)
+			conn.handler(reqMsg.PubMsg)
 		}
 	} else {
 		// Reject the request: wrong signature, cluster is out of sync.
@@ -338,7 +338,7 @@ func (Cluster) Proxy(resp *ClusterResp, unused *bool) error {
 	// Find appropriate connection, send the message to it
 
 	if conn := Globals.connCache.get(resp.FromConnID); conn != nil {
-		if !conn.SendRawBytes(resp.Msg) {
+		if !conn.SendRawBytes(resp.RespMsg) {
 			log.Error("cluster.Proxy", "Proxy: timeout")
 		}
 	} else {
@@ -387,27 +387,27 @@ func (c *Cluster) routeToContract(msg lp.MessagePack, topic *security.Topic, msg
 	conn.nodes[n.name] = true
 
 	// var msgSub,msgPub,msgUnsub lp.Packet
-	var msgSub *utp.Subscribe
-	var msgPub *utp.Publish
-	var msgUnsub *utp.Unsubscribe
+	var subMsg *utp.Subscribe
+	var pubMsg *utp.Publish
+	var unsubMsg *utp.Unsubscribe
 	switch msgType {
 	case message.SUBSCRIBE:
-		msgSub = msg.(*utp.Subscribe)
-		msgSub.IsForwarded = true
+		subMsg = msg.(*utp.Subscribe)
+		subMsg.IsForwarded = true
 	case message.UNSUBSCRIBE:
-		msgUnsub = msg.(*utp.Unsubscribe)
-		msgUnsub.IsForwarded = true
+		unsubMsg = msg.(*utp.Unsubscribe)
+		unsubMsg.IsForwarded = true
 	case message.PUBLISH:
-		msgPub = msg.(*utp.Publish)
-		msgPub.IsForwarded = true
+		pubMsg = msg.(*utp.Publish)
+		pubMsg.IsForwarded = true
 	}
 	return n.forward(
 		&ClusterReq{
 			Node:      c.thisNodeName,
 			Signature: c.ring.Signature(),
-			MsgSub:    msgSub,
-			MsgUnsub:  msgUnsub,
-			MsgPub:    msgPub,
+			SubMsg:    subMsg,
+			UnsubMsg:  unsubMsg,
+			PubMsg:    pubMsg,
 			Topic:     topic,
 			Type:      msgType,
 			Message:   m,
@@ -524,26 +524,26 @@ func (c *_Conn) rpcWriteLoop() {
 
 	for {
 		select {
-		case msg, ok := <-c.send:
+		case outMsg, ok := <-c.send:
 			if !ok || c.clnode.endpoint == nil {
 				// channel closed
 				return
 			}
-			m, err := lp.Encode(msg)
+			buf, err := lp.Encode(outMsg)
 			if err != nil {
 				log.Error("conn.writeRpc", err.Error())
 				return
 			}
 			// The error is returned if the remote node is down. Which means the remote
 			// session is also disconnected.
-			if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: m.Bytes(), FromConnID: c.connID}, &unused); err != nil {
+			if err := c.clnode.call("Cluster.Proxy", &ClusterResp{RespMsg: buf.Bytes(), FromConnID: c.connID}, &unused); err != nil {
 				log.Error("conn.writeRPC", err.Error())
 				return
 			}
-		case msg := <-c.stop:
+		case stop := <-c.stop:
 			// Shutdown is requested, don't care if the message is delivered
-			if msg != nil {
-				c.clnode.call("Cluster.Proxy", &ClusterResp{Msg: msg.([]byte), FromConnID: c.connID}, &unused)
+			if stop != nil {
+				c.clnode.call("Cluster.Proxy", &ClusterResp{RespMsg: stop.([]byte), FromConnID: c.connID}, &unused)
 			}
 			return
 		}

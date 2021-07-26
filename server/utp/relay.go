@@ -39,12 +39,13 @@ type Relay struct {
 }
 
 func (r *Relay) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var reqs []*pbx.RelayRequest
 	for _, req := range r.RelayRequests {
-		var r pbx.RelayRequest
-		r.Topic = string(req.Topic)
-		r.Last = req.Last
+		r := pbx.RelayRequest{
+			Topic: string(req.Topic),
+			Last:  req.Last,
+		}
 		reqs = append(reqs, &r)
 	}
 	rel := pbx.Relay{
@@ -53,12 +54,12 @@ func (r *Relay) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&rel)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: RELAY, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (r *Relay) FromBinary(fh FixedHeader, data []byte) {
@@ -66,9 +67,10 @@ func (r *Relay) FromBinary(fh FixedHeader, data []byte) {
 	proto.Unmarshal(data, &rel)
 	var reqs []*RelayRequest
 	for _, req := range rel.RelayRequests {
-		r := &RelayRequest{}
-		r.Topic = req.Topic
-		r.Last = req.Last
+		r := &RelayRequest{
+			Topic: req.Topic,
+			Last:  req.Last,
+		}
 		reqs = append(reqs, r)
 	}
 

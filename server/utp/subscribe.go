@@ -48,13 +48,14 @@ type Unsubscribe struct {
 }
 
 func (s *Subscribe) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var subs []*pbx.Subscription
 	for _, subscription := range s.Subscriptions {
-		var sub pbx.Subscription
-		sub.DeliveryMode = int32(subscription.DeliveryMode)
-		sub.Delay = subscription.Delay
-		sub.Topic = string(subscription.Topic)
+		sub := pbx.Subscription{
+			DeliveryMode: int32(subscription.DeliveryMode),
+			Delay:        subscription.Delay,
+			Topic:        string(subscription.Topic),
+		}
 		subs = append(subs, &sub)
 	}
 	sub := pbx.Subscribe{
@@ -63,12 +64,12 @@ func (s *Subscribe) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&sub)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: SUBSCRIBE, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (s *Subscribe) FromBinary(fh FixedHeader, data []byte) {
@@ -76,10 +77,11 @@ func (s *Subscribe) FromBinary(fh FixedHeader, data []byte) {
 	proto.Unmarshal(data, &sub)
 	var subs []*Subscription
 	for _, subscription := range sub.Subscriptions {
-		sub := &Subscription{}
-		sub.DeliveryMode = uint8(subscription.DeliveryMode)
-		sub.Delay = subscription.Delay
-		sub.Topic = subscription.Topic
+		sub := &Subscription{
+			DeliveryMode: uint8(subscription.DeliveryMode),
+			Delay:        subscription.Delay,
+			Topic:        subscription.Topic,
+		}
 		subs = append(subs, sub)
 	}
 
@@ -98,13 +100,14 @@ func (s *Subscribe) Info() Info {
 }
 
 func (u *Unsubscribe) ToBinary() (bytes.Buffer, error) {
-	var msg bytes.Buffer
+	var buf bytes.Buffer
 	var subs []*pbx.Subscription
 	for _, subscription := range u.Subscriptions {
-		var sub pbx.Subscription
-		sub.DeliveryMode = int32(subscription.DeliveryMode)
-		sub.Delay = subscription.Delay
-		sub.Topic = string(subscription.Topic)
+		sub := pbx.Subscription{
+			DeliveryMode: int32(subscription.DeliveryMode),
+			Delay:        subscription.Delay,
+			Topic:        string(subscription.Topic),
+		}
 		subs = append(subs, &sub)
 	}
 	unsub := pbx.Unsubscribe{
@@ -113,12 +116,12 @@ func (u *Unsubscribe) ToBinary() (bytes.Buffer, error) {
 	}
 	rawMsg, err := proto.Marshal(&unsub)
 	if err != nil {
-		return msg, err
+		return buf, err
 	}
 	fh := FixedHeader{MessageType: UNSUBSCRIBE, MessageLength: len(rawMsg)}
-	msg = fh.pack()
-	_, err = msg.Write(rawMsg)
-	return msg, err
+	buf = fh.pack()
+	_, err = buf.Write(rawMsg)
+	return buf, err
 }
 
 func (u *Unsubscribe) FromBinary(fh FixedHeader, data []byte) {
@@ -126,10 +129,11 @@ func (u *Unsubscribe) FromBinary(fh FixedHeader, data []byte) {
 	proto.Unmarshal(data, &unsub)
 	var subs []*Subscription
 	for _, subscription := range unsub.Subscriptions {
-		sub := &Subscription{}
-		sub.DeliveryMode = uint8(subscription.DeliveryMode)
-		sub.Delay = subscription.Delay
-		sub.Topic = subscription.Topic
+		sub := &Subscription{
+			DeliveryMode: uint8(subscription.DeliveryMode),
+			Delay:        subscription.Delay,
+			Topic:        subscription.Topic,
+		}
 		subs = append(subs, sub)
 	}
 

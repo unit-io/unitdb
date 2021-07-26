@@ -15,4 +15,4 @@ require (
 	google.golang.org/grpc v1.39.0
 )
 
-replace github.com/unit-io/unitdb-go => /src/github.com/unit-io/unitdb-go
+// replace github.com/unit-io/unitdb-go => /src/github.com/unit-io/unitdb-go
