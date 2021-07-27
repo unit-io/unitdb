@@ -17,8 +17,8 @@
 package security
 
 import (
-	"bytes"
 	"errors"
+	"strings"
 
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/pkg/encoding"
@@ -66,8 +66,8 @@ func (splitFunc) options(c rune) bool {
 
 // Topic represents a parsed topic.
 type Topic struct {
-	Key       []byte // Gets or sets the API key of the topic.
-	Topic     []byte // Gets or sets the topic string.
+	Key       string // Gets or sets the API key of the topic.
+	Topic     string // Gets or sets the topic string.
 	TopicType uint8
 	Size      int // Topic size without options
 }
@@ -92,15 +92,15 @@ func (k Key) SetPermissions(value uint32) {
 
 // Target returns the topic (first element of the query, second element of an parts)
 func (topic *Topic) Target() uint32 {
-	return hash.WithSalt(topic.Topic[:topic.Size], message.Contract)
+	return hash.WithSalt([]byte(topic.Topic[:topic.Size]), message.Contract)
 }
 
 // ParseKey attempts to parse the key
-func ParseKey(text []byte) (topic *Topic) {
+func ParseKey(text string) (topic *Topic) {
 	topic = new(Topic)
 	var fn splitFunc
 
-	parts := bytes.FieldsFunc(text, fn.splitKey)
+	parts := strings.FieldsFunc(text, fn.splitKey)
 	if parts == nil || len(parts) < 2 {
 		// topic.TopicType = TopicInvalid
 		topic.Topic = parts[0]
@@ -109,7 +109,7 @@ func ParseKey(text []byte) (topic *Topic) {
 	}
 	topic.Key = parts[0]
 	topic.Topic = parts[1]
-	parts = bytes.FieldsFunc(parts[1], fn.options)
+	parts = strings.FieldsFunc(parts[1], fn.options)
 	l := len(parts)
 	if parts == nil || l < 1 {
 		topic.TopicType = TopicInvalid
@@ -121,7 +121,7 @@ func ParseKey(text []byte) (topic *Topic) {
 }
 
 // ValidateTopic validates the topic string.
-func (k Key) ValidateTopic(contract uint32, topic []byte) (ok bool, wildcard bool) {
+func (k Key) ValidateTopic(contract uint32, topic string) (ok bool, wildcard bool) {
 	// var fn splitFunc
 	// Bytes 4-5-6-7 contains target hash
 	target := uint32(k[4])<<24 | uint32(k[5])<<16 | uint32(k[6])<<8 | uint32(k[7])
@@ -132,24 +132,23 @@ func (k Key) ValidateTopic(contract uint32, topic []byte) (ok bool, wildcard boo
 		if target == hash.WithSalt([]byte("..."), contract) { // Key target was "..." (1472774773 == hash("..."))
 			return true, true
 		}
-		return target == hash.WithSalt(topic, contract), true
+		return target == hash.WithSalt([]byte(topic), contract), true
 	}
 
-	h := hash.WithSalt(topic, contract)
+	h := hash.WithSalt([]byte(topic), contract)
 	return h == target, ((targetPath >> 23) & 1) == 0
 }
 
 // SetTarget sets the topic for the key.
-func (k Key) SetTarget(contract uint32, topic []byte) error {
+func (k Key) SetTarget(contract uint32, topic string) error {
 	var fn splitFunc
 	// 1st bit is 0 for wildcard, 1 for strict type
 	bitPath := uint32(1 << 23)
-	if bytes.HasSuffix(topic, []byte("...")) {
+	if strings.HasSuffix(topic, "...") {
 		bitPath = 0
-		//topic = bytes.TrimRight(topic, "...")
 	}
 
-	parts := bytes.FieldsFunc(topic, fn.splitTopic)
+	parts := strings.FieldsFunc(topic, fn.splitTopic)
 
 	// Perform some validation
 	if len(parts) > 23 {
@@ -158,7 +157,7 @@ func (k Key) SetTarget(contract uint32, topic []byte) error {
 
 	// Encode all of the parts
 	for _, part := range parts {
-		if bytes.HasSuffix(part, []byte{'*'}) {
+		if strings.HasSuffix(part, "*") {
 			bitPath = 0
 			break
 		}
@@ -166,11 +165,11 @@ func (k Key) SetTarget(contract uint32, topic []byte) error {
 
 	// Encode all of the parts
 	for idx, part := range parts {
-		if !bytes.HasSuffix(part, []byte{'*'}) && !bytes.HasSuffix(part, []byte("...")) {
+		if !strings.HasSuffix(part, "*") && !strings.HasSuffix(part, "...") {
 			bitPath |= uint32(1 << (22 - uint16(idx)))
 		}
 	}
-	value := hash.WithSalt(topic, contract)
+	value := hash.WithSalt([]byte(topic), contract)
 
 	// Set the bit path
 	k[1] = byte(bitPath >> 16)
@@ -192,7 +191,7 @@ func (k Key) HasPermission(flag uint32) bool {
 }
 
 // GenerateKey generates a new key.
-func GenerateKey(contract uint32, topic []byte, permissions uint32) (string, error) {
+func GenerateKey(contract uint32, topic string, permissions uint32) (string, error) {
 	key := Key(make([]byte, rawLen))
 	key.SetPermissions(permissions)
 	if err := key.SetTarget(contract, topic); err != nil {
@@ -218,17 +217,14 @@ func (k Key) Encode() string {
 	return string(text)
 }
 
-func DecodeKey(key []byte) (Key, error) {
+func DecodeKey(key string) (Key, error) {
 	if len(key) != encodedLen {
 		return Key{}, errors.New("Key provided is invalid")
 	}
 
 	// Base8 decoding is done to buffer
 	buffer := make([]byte, rawLen)
-	encoding.Decode8(buffer, key)
-
-	// Resize the slice, since it is changed.
-	//buffer = buffer[0:rawLen]
+	encoding.Decode8(buffer, []byte(key))
 
 	// Then XOR the entire array with the salt.
 	for i := 2; i < rawLen; i += 2 {

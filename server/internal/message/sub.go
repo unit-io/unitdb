@@ -81,7 +81,7 @@ type Stats struct {
 
 type Stat struct {
 	ID      []byte
-	Topic   []byte
+	Topic   string
 	Counter int
 }
 
@@ -93,7 +93,7 @@ func NewStats() *Stats {
 }
 
 // Increment adds the subscription to the stats.
-func (s *Stats) Increment(topic []byte, key string, id []byte) (first bool) {
+func (s *Stats) Increment(topic string, key string, id []byte) (first bool) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -110,7 +110,7 @@ func (s *Stats) Increment(topic []byte, key string, id []byte) (first bool) {
 }
 
 // Decrement remove a subscription from the stats.
-func (s *Stats) Decrement(topic []byte, key string) (last bool, id []byte) {
+func (s *Stats) Decrement(topic string, key string) (last bool, id []byte) {
 	s.Lock()
 	defer s.Unlock()
 

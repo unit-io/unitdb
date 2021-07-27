@@ -23,7 +23,7 @@ Make use of the client by importing it in your Go client source code. For exampl
 
 The memdb supports Get, Set, Delete operations. It also supports batch operations.
 
-Samples are available in the cmd directory for reference.
+Samples are available in the examples directory for reference.
 
 ### Opening a database
 To open or create a new database, use the memdb.Open() function:
@@ -101,7 +101,7 @@ use DB.Delete() function to delete a key-value pair.
 ```
 
 ### Batch operation
-Use batch operation to bulk insert records into memdb or bulk delete records from memdb. See examples under cmd/memdb folder.
+Use batch operation to bulk insert records into memdb or bulk delete records from memdb. See examples under examples/memdb folder.
 
 #### Writing to a batch
 Use Batch.Put() to insert a new key-value or Batch.Delete() to delete a key-value from DB.

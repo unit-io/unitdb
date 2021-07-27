@@ -172,6 +172,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		if m.IsForwarded {
 			return nil
 		}
+
 		c.send <- ack
 	// An attempt to subscribe to a topic.
 	case utp.SUBSCRIBE:
@@ -182,8 +183,8 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			MessageID:   m.MessageID,
 		}
 		// Subscribe for each subscription
-		for _, subsc := range m.Subscriptions {
-			if err := c.onSubscribe(m, subsc); err != nil {
+		for _, sub := range m.Subscriptions {
+			if err := c.onSubscribe(m, sub); err != nil {
 				status = err.Status
 				c.notifyError(err, m.MessageID)
 				continue
@@ -194,6 +195,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		if m.IsForwarded {
 			return nil
 		}
+
 		c.send <- ack
 
 	// An attempt to unsubscribe from a topic.
@@ -210,6 +212,10 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 				status = err.Status
 				c.notifyError(err, m.MessageID)
 			}
+		}
+
+		if m.IsForwarded {
+			return nil
 		}
 
 		c.send <- ack
@@ -336,7 +342,7 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey([]byte(req.Topic))
+	topic := security.ParseKey(req.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -357,7 +363,7 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 		// Range over the messages from the store and forward them
 		for _, msg := range msgs {
 			newMsg := msg           // Copy message
-			newMsg.DeliveryMode = 2 // Set Delivery Mode to Batch delivery of messages on relay request
+			newMsg.DeliveryMode = 2 // Set Delivery Mode to Batch delivery on relay request
 			c.SendMessage(msg)
 		}
 	}
@@ -371,7 +377,7 @@ func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey([]byte(sub.Topic))
+	topic := security.ParseKey(sub.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -397,7 +403,7 @@ func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *
 	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
 	//Parse the key
-	topic := security.ParseKey([]byte(sub.Topic))
+	topic := security.ParseKey(sub.Topic)
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
@@ -422,7 +428,7 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 
 	for _, pubMsg := range pub.Messages {
 		//Parse the key
-		topic := security.ParseKey([]byte(pubMsg.Topic))
+		topic := security.ParseKey(pubMsg.Topic)
 		if topic.TopicType == security.TopicInvalid {
 			return types.ErrBadRequest
 		}
@@ -450,8 +456,10 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 		}
 		// Iterate through all subscribers and send them the message
 		go c.publish(pub, topic, pubMsg)
-		// time.Sleep(100*time.Millisecond)
-		// panic("exit on publish")
+	}
+
+	if pub.IsForwarded {
+		return nil
 	}
 
 	// acknowledge a Message
@@ -548,7 +556,7 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	var resp []*types.KeyGenResponse
 	// Use the cipher to generate the key
 	for _, m := range req {
-		key, err := security.GenerateKey(c.clientID.Contract(), []byte(m.Topic), m.Access())
+		key, err := security.GenerateKey(c.clientID.Contract(), m.Topic, m.Access())
 		if err != nil {
 			switch err {
 			case security.ErrTargetTooLong:
