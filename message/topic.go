@@ -33,10 +33,10 @@ const (
 	TopicInvalid = uint8(iota)
 	TopicStatic
 	TopicWildcard
-	TopicWildcardSymbol = '*'
-	TopicGenericSymbol  = "..."
-	TopicSeparator      = '.' // The separator character.
-	TopicMaxDepth       = 100 // Maximum depth for topic using a separator
+	TopicWildcardSymbol      = '*'
+	TopicMultiWildcardSymbol = "..."
+	TopicSeparator           = '.' // The separator character.
+	TopicMaxDepth            = 100 // Maximum depth for topic using a separator
 
 	// Wildcard wildcard is hash for wildcard topic such as '*' or '...'
 	Wildcard = uint32(857445537)
@@ -132,15 +132,6 @@ func (t *Topic) Last() (time.Time, int, bool) {
 	return zeroTime, 0, ok
 }
 
-// toUnix converts the time to Unix Time with validation.
-func toUnix(t int64) time.Time {
-	if t == 0 {
-		return zeroTime
-	}
-
-	return time.Unix(t, 0)
-}
-
 // getOption retrieves a Uint option.
 func (t *Topic) getOption(name string) (string, int, bool) {
 	for i := 0; i < len(t.Options); i++ {
@@ -207,8 +198,6 @@ func (t *Topic) Parse(contract uint32, wildcard bool) {
 		return
 	}
 	parseStaticTopic(contract, t)
-
-	return
 }
 
 // parseStaticTopic attempts to parse the topic from the underlying slice.
@@ -254,10 +243,10 @@ func parseWildcardTopic(contract uint32, topic *Topic) (ok bool) {
 	}
 
 	depth := uint8(0)
-	q := []byte(TopicGenericSymbol)
+	q := []byte(TopicMultiWildcardSymbol)
 	if bytes.HasSuffix(topic.Topic, q) {
 		depth++
-		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicGenericSymbol))
+		topic.Topic = bytes.TrimRight(topic.Topic, string(TopicMultiWildcardSymbol))
 		topic.TopicType = TopicWildcard
 		topic.Depth = TopicMaxDepth
 	}

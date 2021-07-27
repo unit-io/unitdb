@@ -135,7 +135,7 @@ func (c *_Conn) SendMessage(msg *message.Message) bool {
 	}
 
 	// Check batch, relay or delay delivery.
-	if msg.DeliveryMode == 2 || msg.DeliveryMode == 3 || msg.Delay > 0 {
+	if msg.DeliveryMode == 2 || msg.Delay > 0 {
 		c.batchManager.add(msg.Delay, pubMsg)
 		return true
 	}
@@ -180,7 +180,7 @@ func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.
 
 	key := string(topic.Key)
 	if key == "" {
-		key, err = security.GenerateKey(c.clientID.Contract(), []byte(topic.Topic), security.AllowNone)
+		key, err = security.GenerateKey(c.clientID.Contract(), topic.Topic, security.AllowNone)
 		if err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.subscribe")
 			return err
@@ -302,7 +302,7 @@ func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.Publ
 
 	if !pub.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
 		if err = Globals.Cluster.routeToContract(&pub, topic, message.PUBLISH, msg, c); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connID)).Msg("unable to publish to remote topic")
+			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connID)).Msg("unable to publish to a remote topic")
 			return err
 		}
 	}

@@ -133,11 +133,11 @@ type SubscriptionStore struct{}
 // Message is the ancor for storing/retrieving Message objects
 var Subscription SubscriptionStore
 
-func (s *SubscriptionStore) Put(contract uint32, messageId, topic, payload []byte) error {
+func (s *SubscriptionStore) Put(contract uint32, messageId []byte, topic string, payload []byte) error {
 	return adp.PutWithID(contract^connStoreId, messageId, topic, payload, "")
 }
 
-func (s *SubscriptionStore) Get(contract uint32, topic []byte) (matches [][]byte, err error) {
+func (s *SubscriptionStore) Get(contract uint32, topic string) (matches [][]byte, err error) {
 	resp, err := adp.Get(contract^connStoreId, topic, "")
 	for _, payload := range resp {
 		if payload == nil {
@@ -153,7 +153,7 @@ func (s *SubscriptionStore) NewID() ([]byte, error) {
 	return adp.NewID()
 }
 
-func (s *SubscriptionStore) Delete(contract uint32, messageId, topic []byte) error {
+func (s *SubscriptionStore) Delete(contract uint32, messageId []byte, topic string) error {
 	return adp.Delete(contract^connStoreId, messageId, topic)
 }
 
@@ -163,11 +163,11 @@ type MessageStore struct{}
 // Message is the anchor for storing/retrieving Message objects
 var Message MessageStore
 
-func (m *MessageStore) Put(contract uint32, topic, payload []byte, ttl string) error {
+func (m *MessageStore) Put(contract uint32, topic string, payload []byte, ttl string) error {
 	return adp.Put(contract, topic, payload, ttl)
 }
 
-func (m *MessageStore) Get(contract uint32, topic []byte, last string) (matches []*message.Message, err error) {
+func (m *MessageStore) Get(contract uint32, topic string, last string) (matches []*message.Message, err error) {
 	resp, err := adp.Get(contract, topic, last)
 	for _, payload := range resp {
 		msg := message.Message{

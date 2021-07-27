@@ -33,11 +33,7 @@ Make use of the client by importing it in your Go client source code. For exampl
 
 Unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, and writing to wildcard topics. See [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
-Samples are available in the examples directory for reference. To build unitdb client from latest source code use "replace" in go.mod to point to your local module.
-
-```golang
-go mod edit -replace github.com/unit-io/unitdb-go=$GOPATH/src/github.com/unit-io/unitdb-go
-```
+Samples are available in the examples directory for reference.
 
 ## Clustering
 To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended.
@@ -48,6 +44,11 @@ To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 node
 ```
 
 Above example shows each Unitdb node running on the same host, so each node must listen on different ports. This would not be necessary if each node ran on a different host.
+
+## Client Libraries
+Make use of officially supported client libraries to connect to unitdb server running on single node and running on a cluster.
+- [unitdb-go](https://github.com/unit-io/unitdb-go) Lightweight and high performance unitdb Go client library.
+- [unitdb-dart](https://github.com/unit-io/unitdb-dart) High performance unitdb Flutter/Dart client library.
 
 ## Architecture Overview
 The unitdb engine handles data from the point put request is received through writing data to the physical disk. Data is compressed and encrypted (if encryption is set) then written to a WAL for immediate durability. Entries are written to memdb and become immediately queryable. The memdb entries are periodically written to log files in the form of blocks.

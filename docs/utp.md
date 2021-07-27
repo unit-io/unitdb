@@ -45,7 +45,7 @@ An application transport the data by uTP across network, it contains payload dat
 ### Client
 A Client opens the network connection to the Server using TCP/IP, WebSocket, GRPC or other bi-direction network protocols.
 - Pubslihes Application Mesasges to a topic that other Clients subscribes to.
-- Sends a relay request to retrieve persisted Application Messages from Server.
+- Sends a relay request to retrieve Application Messages persisted on Server.
 - Subscribes to a topic to receive Application Messages.
 - Unsubcribe to remove a topic subscription.
 - Closes the network connection to the Server.
@@ -284,7 +284,7 @@ The PublishMessage contains folowing fields:
 A publisher can specify time to-live (TTL) when publishing an Application Message.
 
 ### RELAY - Relay request
-The RELAY Message is sent from the Client to the Server to get persisted Application Messages from server for one or more topics. Each Relay request pairs the topics with last durations. The Server sends PUBLISH Messages to the Client to forward Application Messages that were persisted by the Server for the Topics that match these Relay requests. The RELAY Message also specifies (for each request) the Last duration for which the Server can send persisted Application Messages to the Client.
+The RELAY Message is sent from the Client to the Server to get Application Messages persisted on server for one or more topics. Each Relay request pairs the topics with last durations. The Server sends PUBLISH Messages to the Client to forward Application Messages that were persisted by the Server for the Topics that match these Relay requests. The RELAY Message also specifies (for each request) the Last duration for which the Server can send stored Application Messages to the Client.
 
 The payload contains following fields.
 
@@ -301,7 +301,7 @@ The RelayRequest contains folowing fields:
 | Last | string |
 
 #### Last
-A Client can specify Last duration (for example "1h") to retrive persisted Application Messages published to the Topic.
+A Client can specify Last duration (for example "1h") to retrive Application Messages published to the Topic.
 
 ### SUBSCRIBE - Subscribe request
 The SUBSCRIBE Message is sent from the Client to the Server to create one or more Subscriptions. Each Subscription registers one or more Topics for a Client. The Server sends PUBLISH Messages to the Client to forward Application Messages that were published to Topics that match these Subscriptions. The SUBSCRIBE Message also specifies (for each Subscription) the Delivery Mode with which the Server can send Application Messages to the Client.
