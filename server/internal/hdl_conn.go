@@ -151,7 +151,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			store.Session.Put(uint64(c.clientID.Epoch()), rawSess)
 		}
 	case utp.DISCONNECT:
-		c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
+		go c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
 		// An attempt to relay to a topic.
 	case utp.RELAY:
 		m := *inMsg.(*utp.Relay)

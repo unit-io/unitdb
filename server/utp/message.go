@@ -89,8 +89,7 @@ func (fh *FixedHeader) FromBinary(r io.Reader) error {
 
 	// read FixedHeader
 	head := make([]byte, fhSize)
-	_, err = io.ReadFull(r, head)
-	if err != nil {
+	if _, err := io.ReadFull(r, head); err != nil {
 		return err
 	}
 

@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -95,6 +96,18 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	if err != nil {
 		log.Fatal("service", "Failed to connect to DB:", err)
 	}
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		for {
+			select {
+			case <-s.context.Done():
+				return
+			case <-ticker.C:
+				log.ErrLogger.Debug().Str("context", "NewService").Int64("goroutines", int64(runtime.NumGoroutine())).Int64("connections", s.meter.Connections.Count()).Msg("")
+			}
+		}
+	}()
 
 	return s, nil
 }

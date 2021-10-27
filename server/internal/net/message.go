@@ -35,7 +35,9 @@ type MessagePack interface {
 // Read unpacks the packet from the provided reader.
 func Read(r io.Reader) (MessagePack, error) {
 	var fh utp.FixedHeader
-	fh.FromBinary(r)
+	if err := fh.FromBinary(r); err != nil {
+		return nil, err
+	}
 
 	// Check for empty Messages
 	switch fh.MessageType {
