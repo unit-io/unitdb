@@ -43,7 +43,9 @@ func Read(r io.Reader) (MessagePack, error) {
 	switch fh.MessageType {
 	case 0:
 		// TODO fixe zero length message issue.
-		return &utp.Pingreq{}, nil
+		// return &utp.Pingreq{}, nil
+		fmt.Println("message::Read: Invalid zero-length packet type ", fh.MessageType)
+		return nil, fmt.Errorf("message::Read: Invalid zero-length packet type %d", fh.MessageType)
 	case utp.PINGREQ:
 		return &utp.Pingreq{}, nil
 	case utp.DISCONNECT:

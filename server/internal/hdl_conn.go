@@ -18,11 +18,11 @@ package internal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -43,9 +43,14 @@ const (
 )
 
 func (c *_Conn) readLoop(ctx context.Context) (err error) {
+	var pkt lp.MessagePack
+
 	defer func() {
 		log.Info("conn.Handler", "closing...")
 		c.closeW.Done()
+		if err != nil {
+			c.internalConnLost(err)
+		}
 	}()
 
 	reader := bufio.NewReaderSize(c.socket, 65536)
@@ -61,14 +66,13 @@ func (c *_Conn) readLoop(ctx context.Context) (err error) {
 			c.socket.SetDeadline(time.Now().Add(time.Second * 120))
 
 			// Decode an incoming Message
-			pkt, err := lp.Read(reader)
+			pkt, err = lp.Read(reader)
 			if err != nil {
 				return err
 			}
 
 			// Message handler
 			if err = c.handler(pkt); err != nil {
-				fmt.Println("read:: handler error", err)
 				return err
 			}
 		}
@@ -266,8 +270,15 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 }
 
 // writeLook handles outbound Messages
-func (c *_Conn) writeLoop(ctx context.Context) {
-	defer c.closeW.Done()
+func (c *_Conn) writeLoop(ctx context.Context) (err error) {
+	var buf bytes.Buffer
+
+	defer func() {
+		c.closeW.Done()
+		if err != nil {
+			c.internalConnLost(err)
+		}
+	}()
 
 	for {
 		select {
@@ -280,10 +291,9 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			buf, err := lp.Encode(pub)
+			buf, err = lp.Encode(pub)
 			if err != nil {
-				log.Error("conn.writeLoop", err.Error())
-				return
+				return err
 			}
 			c.socket.Write(buf.Bytes())
 		case outMsg, ok := <-c.send:
@@ -291,10 +301,9 @@ func (c *_Conn) writeLoop(ctx context.Context) {
 				// Channel closed.
 				return
 			}
-			buf, err := lp.Encode(outMsg)
+			buf, err = lp.Encode(outMsg)
 			if err != nil {
-				log.Error("conn.writeLoop", err.Error())
-				return
+				return err
 			}
 			c.socket.Write(buf.Bytes())
 		}

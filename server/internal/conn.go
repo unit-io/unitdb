@@ -19,11 +19,13 @@ package internal
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -62,6 +64,7 @@ type _Conn struct {
 	// Close.
 	closeW sync.WaitGroup
 	closeC chan struct{}
+	closed uint32
 }
 
 func (s *_Service) newConn(t net.Conn) *_Conn {
@@ -389,7 +392,9 @@ func (c *_Conn) close() error {
 	}
 	defer c.socket.Close()
 
-	c.batchManager.close()
+	if !c.setClosed() {
+		return errors.New("error disconnecting client")
+	}
 
 	// Signal all goroutines.
 	close(c.closeC)
@@ -409,12 +414,52 @@ func (c *_Conn) close() error {
 	defer log.ConnLogger.Info().Str("context", "conn.close").Int64("connid", int64(c.connID)).Msg("conn closed")
 	Globals.Cluster.connGone(c)
 	close(c.send)
+
+	c.batchManager.close()
+
 	// Decrement the connection counter
 	c.service.meter.Connections.Dec(1)
+
 	return nil
 }
 
-// clientDisconnect cleanup when client send disconnect request or an error occurs.
+// clientDisconnect close connection when client send disconnect request or an error occurs.
 func (c *_Conn) clientDisconnect(err error) {
+	log.ConnLogger.Debug().Err(err).Str("context", "conn.internalConnLost")
+	if err := c.ok(); err != nil {
+		log.ConnLogger.Debug().Str("context", "conn.clientDisconnect").Int64("connid", int64(c.connID)).Msg("client disconnect called but not connected")
+		return
+	}
 	c.close()
+}
+
+// internalConnLost close connection when connection is lost or an error occurs
+func (c *_Conn) internalConnLost(err error) {
+	// It is possible that internalConnLost will be called multiple times simultaneously
+	// (including after sending a DisconnectMessage) as such we only do cleanup etc if the
+	// routines were actually running and are not being disconnected at users request
+	log.ConnLogger.Debug().Err(err).Str("context", "conn.internalConnLost")
+	if err := c.ok(); err != nil {
+		log.ConnLogger.Debug().Str("context", "conn.internalConnLost").Int64("connid", int64(c.connID)).Msg("not connected")
+		return
+	}
+	c.close()
+}
+
+// Set closed flag; return true if not already closed.
+func (c *_Conn) setClosed() bool {
+	return atomic.CompareAndSwapUint32(&c.closed, 0, 1)
+}
+
+// Check whether connection was closed.
+func (c *_Conn) isClosed() bool {
+	return atomic.LoadUint32(&c.closed) != 0
+}
+
+// Check read ok status.
+func (c *_Conn) ok() error {
+	if c.isClosed() {
+		return errors.New("client connection is closed")
+	}
+	return nil
 }
