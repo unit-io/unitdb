@@ -227,12 +227,16 @@ func (fs *_FileSet) getFile(fd _FileDesc) (*_File, error) {
 	return &_File{}, errors.New("file not found")
 }
 
+// sync fsyncs every file in the set. The DB file set holds its files in list,
+// with each entry's files in its fileMap, as in close.
 func (fs *_FileSet) sync() error {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
-	for _, f := range fs.fileMap {
-		if err := f.Sync(); err != nil {
-			return err
+	for _, files := range fs.list {
+		for _, f := range files.fileMap {
+			if err := f.Sync(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -242,8 +246,10 @@ func (fs *_FileSet) size() (int64, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 	size := int64(0)
-	for _, f := range fs.fileMap {
-		size += f.currSize()
+	for _, files := range fs.list {
+		for _, f := range files.fileMap {
+			size += f.currSize()
+		}
 	}
 	return size, nil
 }

@@ -76,14 +76,17 @@ func (e *Entry) WithContract(contract uint32) *Entry {
 	return e
 }
 
-// WithTTL sets TTL for message expiry for the entry.
+// WithTTL sets TTL for message expiry for the entry. The ttl is either a
+// number of seconds or a duration such as "1h". An invalid ttl is ignored.
 func (e *Entry) WithTTL(ttl string) *Entry {
-	val, err := strconv.ParseInt(ttl, 10, 64)
-	if err == nil {
-		e.ExpiresAt = uint32(time.Now().Add(time.Duration(int(val)) * time.Second).Unix())
+	if val, err := strconv.ParseInt(ttl, 10, 64); err == nil {
+		e.ExpiresAt = uint32(time.Now().Add(time.Duration(val) * time.Second).Unix())
+		return e
 	}
-	var duration time.Duration
-	duration, _ = time.ParseDuration(ttl)
+	duration, err := time.ParseDuration(ttl)
+	if err != nil {
+		return e
+	}
 	e.ExpiresAt = uint32(time.Now().Add(duration).Unix())
 	return e
 }

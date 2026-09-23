@@ -397,6 +397,10 @@ func (db *DB) Delete(id, topic []byte) error {
 // It is safe to modify the contents of the argument after Delete returns but
 // not before.
 func (db *DB) DeleteEntry(e *Entry) error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+
 	switch {
 	case db.opts.flags.immutable:
 		return errImmutable
@@ -438,6 +442,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 
 	// If an error is returned from the function then rollback and return error.
 	if err := fn(b, b.commitComplete); err != nil {
+		b.unsetManaged()
 		b.Abort()
 		close(b.commitComplete)
 		return err
@@ -450,14 +455,13 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
-	// start := time.Now()
-	if ok := db.internal.syncHandle.status(); ok {
-		// sync is in-progress.
-		return nil
+	// Sync happens synchronously. If a sync is in progress, wait for it and then
+	// sync whatever it did not cover; close holds the lock for good.
+	select {
+	case db.internal.syncLockC <- struct{}{}:
+	case <-db.internal.closeC:
+		return errClosed
 	}
-
-	// Sync happens synchronously.
-	db.internal.syncLockC <- struct{}{}
 	defer func() {
 		<-db.internal.syncLockC
 	}()

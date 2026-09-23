@@ -43,7 +43,7 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, fixed)
 	copy(buf[:7], inf.header.signature[:])
 	binary.LittleEndian.PutUint32(buf[7:11], inf.header.version)
-	buf[12] = uint8(inf.encryption)
+	buf[11] = uint8(inf.encryption)
 	binary.LittleEndian.PutUint64(buf[12:20], inf.sequence)
 	binary.LittleEndian.PutUint64(buf[20:28], inf.count)
 
@@ -54,7 +54,7 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
 	copy(inf.header.signature[:], data[:7])
 	inf.header.version = binary.LittleEndian.Uint32(data[7:11])
-	inf.encryption = int8(data[7])
+	inf.encryption = int8(data[11])
 	inf.sequence = binary.LittleEndian.Uint64(data[12:20])
 	inf.count = binary.LittleEndian.Uint64(data[20:28])
 

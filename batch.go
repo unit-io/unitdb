@@ -168,11 +168,11 @@ func (b *Batch) writeInternal(fn func(i int, e _Entry, data []byte) error) error
 			return err
 		}
 		if index.delFlag && e.seq != 0 {
-			/// Test filter block for presence.
-			if !b.db.internal.filter.Test(e.seq) {
-				return nil
+			// delete removes the entry from memdb and tests the filter before touching disk.
+			// Returning here on a filter miss would drop the rest of the batch.
+			if err := b.db.delete(e.topicHash, e.seq); err != nil {
+				return err
 			}
-			b.db.delete(e.topicHash, e.seq)
 			continue
 		}
 

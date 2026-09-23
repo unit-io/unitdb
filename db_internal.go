@@ -168,7 +168,11 @@ func (db *DB) close() error {
 func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
 	err := r.blockIterator(func(startSeq, topicHash uint64, off int64) (bool, error) {
-		e, err := db.internal.reader.readEntry(startSeq)
+		// Deleted entries that hold their topic still carry it.
+		e, err := db.internal.reader.readIndexEntry(startSeq)
+		if err == errEntryInvalid {
+			return false, nil
+		}
 		if err != nil {
 			return true, err
 		}
@@ -208,7 +212,12 @@ func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
 		return e, nil
 	}
 
-	return db.internal.reader.readEntry(q.seq)
+	e, err := db.internal.reader.readEntry(q.seq)
+	if err == errEntryInvalid {
+		// The entry is in neither memdb nor the index file, so it was deleted before it was synced.
+		return e, errMsgIDDeleted
+	}
+	return e, err
 }
 
 // lookups are performed in following order
@@ -326,15 +335,38 @@ func (db *DB) delete(topicHash, seq uint64) error {
 		return nil
 	}
 
-	w, err := newBlockWriter(db.fs, db.internal.freeList, nil)
+	// Serialize with Sync, which writes index blocks through its own block writer.
+	select {
+	case db.internal.syncLockC <- struct{}{}:
+	case <-db.internal.closeC:
+		return errClosed
+	}
+	defer func() {
+		<-db.internal.syncLockC
+	}()
+
+	buf := db.internal.bufPool.Get()
+	defer db.internal.bufPool.Put(buf)
+	w, err := newBlockWriter(db.fs, db.internal.freeList, buf)
 	if err != nil {
 		return err
 	}
-	e, err := w.del(seq)
+	e, err := w.del(seq, true)
 	if err != nil {
 		return err
 	}
-	db.internal.freeList.freeBlock(e.msgOffset, e.mSize())
+	if e.seq == 0 {
+		// entry is not on disk.
+		return nil
+	}
+	// Persist the tombstone before releasing the entry's data block.
+	if err := w.write(); err != nil {
+		return err
+	}
+	// The data block of an entry holding its topic is kept so the trie can be loaded on open.
+	if e.topicSize == 0 {
+		db.internal.freeList.freeBlock(e.msgOffset, e.mSize())
+	}
 	db.decount(1)
 	if db.internal.syncWrites {
 		return db.sync()

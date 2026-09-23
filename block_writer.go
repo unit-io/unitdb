@@ -18,6 +18,7 @@ package unitdb
 
 import (
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/unit-io/bpool"
@@ -79,7 +80,10 @@ func (w *_BlockWriter) extend(upperSeq uint64) (int64, error) {
 	return w.indexFile.extend(uint32(off - w.indexFile.currSize()))
 }
 
-func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
+// del marks the entry for seq deleted and returns the entry as it was, or a
+// zero entry if there is nothing to delete. With keepTopic, an entry that holds
+// its topic keeps its offset and topic so the topic stays readable.
+func (w *_BlockWriter) del(seq uint64, keepTopic bool) (_IndexEntry, error) {
 	var delEntry _IndexEntry
 	bIdx := blockIndex(seq)
 	if bIdx > w.blockIdx {
@@ -87,6 +91,9 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 	}
 	r := _BlockReader{indexFile: w.indexFile, offset: blockOffset(bIdx)}
 	b, err := r.readIndexBlock()
+	if err == io.EOF {
+		return delEntry, nil // index block not written yet, so no entry in db to delete
+	}
 	if err != nil {
 		return _IndexEntry{}, err
 	}
@@ -98,12 +105,18 @@ func (w *_BlockWriter) del(seq uint64) (_IndexEntry, error) {
 			break
 		}
 	}
-	if entryIdx == -1 {
+	if entryIdx == -1 || b.entries[entryIdx].deleted() {
 		return delEntry, nil // no entry in db to delete
 	}
+	// Return the entry as it was so the caller can free its data block.
 	delEntry = b.entries[entryIdx]
-	delEntry.msgOffset = -1
-	b.entries[entryIdx] = delEntry
+	tombstone := delEntry
+	if keepTopic && delEntry.topicSize != 0 {
+		tombstone.valueSize = 0
+	} else {
+		tombstone.msgOffset = -1
+	}
+	b.entries[entryIdx] = tombstone
 	b.dirty = true
 	w.indexBlocks[bIdx] = b
 
@@ -296,7 +309,7 @@ func (w *_BlockWriter) rollback() error {
 
 	// roll back index leases
 	for seq := range w.indexLeases {
-		if _, err := w.del(seq); err != nil {
+		if _, err := w.del(seq, false); err != nil {
 			return err
 		}
 	}

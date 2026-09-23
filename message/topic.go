@@ -104,15 +104,21 @@ func (_SplitFunc) splitOpsKeyValue(c rune) bool {
 	return c == '='
 }
 
-// TTL returns a Time-To-Live option.
+// TTL returns the expiry time from the Time-To-Live option, given either as a
+// number of seconds or a duration such as "1h".
 func (t *Topic) TTL() (uint32, bool) {
 	ttl, sec, ok := t.getOption("ttl")
-	if sec > 0 {
-		return uint32(time.Duration(sec) * time.Second), ok
+	if !ok {
+		return 0, false
 	}
-	var duration time.Duration
-	duration, _ = time.ParseDuration(ttl)
-	return uint32(time.Now().Add(duration).Unix()), ok
+	if sec > 0 {
+		return uint32(time.Now().Add(time.Duration(sec) * time.Second).Unix()), true
+	}
+	duration, err := time.ParseDuration(ttl)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(time.Now().Add(duration).Unix()), true
 }
 
 // Last returns the 'last' option, which is a number of messages to retrieve.
@@ -193,6 +199,12 @@ func (t *Topic) ParseKey(text []byte) {
 
 // Parse attempts to parse the static vs wildcard topic.
 func (t *Topic) Parse(contract uint32, wildcard bool) {
+	// ParseKey leaves Topic empty for an invalid key; TopicInvalid is the zero
+	// value, so check Topic rather than TopicType.
+	if len(t.Topic) == 0 {
+		t.TopicType = TopicInvalid
+		return
+	}
 	if wildcard {
 		parseWildcardTopic(contract, t)
 		return

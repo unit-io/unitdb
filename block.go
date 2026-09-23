@@ -55,6 +55,13 @@ func blockOffset(idx int32) int64 {
 	return int64(blockSize * idx)
 }
 
+// deleted reports whether the entry is a tombstone. An entry is deleted either
+// with msgOffset -1, or, if it holds the topic, with valueSize 0 so the topic
+// can still be read when loading the trie. Live entries never have valueSize 0.
+func (e _IndexEntry) deleted() bool {
+	return e.msgOffset == -1 || e.valueSize == 0
+}
+
 func (e _IndexEntry) mSize() uint32 {
 	return idSize + uint32(e.topicSize) + e.valueSize
 }

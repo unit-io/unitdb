@@ -84,10 +84,6 @@ func (db *_SyncHandle) finish() error {
 	return nil
 }
 
-func (db *_SyncHandle) status() (ok bool) {
-	return db.syncInfo.syncStatusOk
-}
-
 func (db *_SyncHandle) reset() error {
 	db.syncInfo.lastSyncSeq = db.syncInfo.upperSeq
 	db.syncInfo.count = 0
@@ -166,7 +162,7 @@ func (db *DB) sync() error {
 		return err
 	}
 	if err := db.fs.sync(); err != nil {
-		return nil
+		return err
 	}
 
 	return nil
@@ -317,6 +313,9 @@ func (db *DB) expireEntries() error {
 			continue
 		}
 		e, err := db.internal.reader.readEntry(we.seq())
+		if err == errMsgIDDeleted {
+			continue
+		}
 		if err != nil {
 			return err
 		}

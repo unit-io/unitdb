@@ -93,15 +93,12 @@ func newTopicTrie() *_TopicTrie {
 // _Trie trie data structure to store topic parts
 type _Trie struct {
 	sync.RWMutex
-	mutex     _Mutex
 	topicTrie *_TopicTrie
 }
 
 // newTrie new trie creates a Trie with an initialized Trie.
-// Mutex is used to lock concurent read/write on a contract, and it does not lock entire trie.
 func newTrie() *_Trie {
 	return &_Trie{
-		mutex:     newMutex(),
 		topicTrie: newTopicTrie(),
 	}
 }
@@ -115,10 +112,16 @@ func (t *_Trie) Count() int {
 
 // add adds a topic to trie.
 func (t *_Trie) add(topic _Topic, parts []message.Part, depth uint8) (added bool) {
-	// Get mutex
-	mu := t.mutex.getMutex(topic.hash)
-	mu.Lock()
-	defer mu.Unlock()
+	t.RLock()
+	_, ok := t.topicTrie.summary[topic.hash]
+	t.RUnlock()
+	if ok {
+		return false
+	}
+
+	// The summary and nodes are shared by all topics, so insert under the trie lock.
+	t.Lock()
+	defer t.Unlock()
 	if _, ok := t.topicTrie.summary[topic.hash]; ok {
 		return false
 	}
@@ -128,28 +131,21 @@ func (t *_Trie) add(topic _Topic, parts []message.Part, depth uint8) (added bool
 			hash:      p.Hash,
 			wildchars: p.Wildchars,
 		}
-		t.RLock()
 		child, ok := curr.children[newPart]
-		t.RUnlock()
 		if !ok {
 			child = &_Node{
 				part:     newPart,
 				parent:   curr,
 				children: make(map[_Part]*_Node),
 			}
-			t.Lock()
 			curr.children[newPart] = child
-			t.Unlock()
 		}
 		curr = child
 	}
-	t.Lock()
 	curr.topics.addUnique(topic)
 	t.topicTrie.summary[topic.hash] = curr
-	t.Unlock()
-	added = true
 	curr.depth = depth
-	return
+	return true
 }
 
 // lookup returns window entry set for given topic.

@@ -16,6 +16,8 @@
 
 package unitdb
 
+import "io"
+
 type _BlockReader struct {
 	indexBlock          _IndexBlock
 	fs                  *_FileSet
@@ -53,29 +55,38 @@ func (r *_BlockReader) readIndexBlock() (_IndexBlock, error) {
 	return r.indexBlock, nil
 }
 
+// readEntry reads the index entry for seq, returning errMsgIDDeleted for deleted entries.
 func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
-	bIdx := blockIndex(seq)
-	r.offset = blockOffset(bIdx)
-	b, err := r.readIndexBlock()
+	e, err := r.readIndexEntry(seq)
 	if err != nil {
 		return _IndexEntry{}, err
 	}
-	entryIdx := -1
-	for i := 0; i < entriesPerIndexBlock; i++ {
-		e := b.entries[i]
-		if e.seq == seq { //topic exist in db
-			if e.msgOffset == -1 {
-				return _IndexEntry{}, errMsgIDDeleted
-			}
-			entryIdx = i
-			break
-		}
-	}
-	if entryIdx == -1 {
-		return _IndexEntry{}, errEntryInvalid
+	if e.deleted() {
+		return _IndexEntry{}, errMsgIDDeleted
 	}
 
-	return b.entries[entryIdx], nil
+	return e, nil
+}
+
+// readIndexEntry reads the index entry for seq, including deleted entries.
+func (r *_BlockReader) readIndexEntry(seq uint64) (_IndexEntry, error) {
+	bIdx := blockIndex(seq)
+	r.offset = blockOffset(bIdx)
+	b, err := r.readIndexBlock()
+	if err == io.EOF {
+		// the index block has not been written yet.
+		return _IndexEntry{}, errEntryInvalid
+	}
+	if err != nil {
+		return _IndexEntry{}, err
+	}
+	for i := 0; i < entriesPerIndexBlock; i++ {
+		if b.entries[i].seq == seq { //topic exist in db
+			return b.entries[i], nil
+		}
+	}
+
+	return _IndexEntry{}, errEntryInvalid
 }
 
 func (r *_BlockReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
