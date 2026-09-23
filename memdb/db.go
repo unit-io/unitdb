@@ -112,6 +112,8 @@ func (db *DB) Close() error {
 		return err
 	}
 
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if db.timeBlocks != nil {
 		db.timeBlocks = nil
 		db.version = -1
@@ -123,12 +125,9 @@ func (db *DB) Close() error {
 
 // Keys gets all keys from DB.
 func (db *DB) Keys() []uint64 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
 	var keys []uint64
 
-	for _, block := range db.timeBlocks {
+	for _, block := range db.blocks() {
 		block.RLock()
 		for ik := range block.records {
 			if ik.delFlag == 0 {
@@ -181,6 +180,14 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return nil, err
 	}
 
+	db.internal.queryManager.mu.Lock()
+	defer db.internal.queryManager.mu.Unlock()
+
+	return db.get(key)
+}
+
+// get gets data for the provided key. The caller must hold queryManager.mu.
+func (db *DB) get(key uint64) ([]byte, error) {
 	db.mu.RLock()
 	// Get time block
 	blockKey := db.blockKey(key)
@@ -240,19 +247,13 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 
 				return block.get(off)
 			}
-			r.RLock()
-			fltr := r.timeRecords[timeID]
-			r.RUnlock()
-			if !fltr.Test(key) {
-				break
-			}
 		}
 	}
 
 	// reset timeBlock and start over
 	db.internal.queryManager.timeFilters[blockKey] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
 
-	return db.Get(key)
+	return db.get(key)
 }
 
 // BlockIterator iterates all time blocks from DB committed to the WAL.
@@ -321,12 +322,9 @@ func (db *DB) Delete(key uint64) error {
 			_, ok := block.records[ikey]
 			block.RUnlock()
 			if !ok {
-				r.RLock()
-				fltr := r.timeRecords[timeID]
-				r.RUnlock()
-				if !fltr.Test(key) {
-					return errEntryDoesNotExist
-				}
+				// Don't stop early on a filter miss: filters are snapshots taken when a
+				// time block is first used, and older time blocks (e.g. concurrent
+				// batches) can receive writes after newer ones, so a miss is not proof.
 				continue
 			}
 
@@ -335,6 +333,11 @@ func (db *DB) Delete(key uint64) error {
 			defer timeLock.RUnlock()
 
 			block.Lock()
+			// Re-check under the write lock; a concurrent Delete may have removed the key.
+			if _, ok := block.records[ikey]; !ok {
+				block.Unlock()
+				return errEntryDoesNotExist
+			}
 			block.delete(key)
 			db.internal.meter.Dels.Inc(1)
 			if block.count == 0 {
@@ -369,6 +372,8 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 		return 0, err
 	}
 
+	db.internal.logManager.rotateMu.RLock()
+	defer db.internal.logManager.rotateMu.RUnlock()
 	timeID := db.timeID()
 	db.mu.RLock()
 	block, ok := db.timeBlocks[timeID]
@@ -426,10 +431,8 @@ func (db *DB) Free(timeID int64) error {
 // Size returns the total number of entries in DB.
 func (db *DB) Size() int64 {
 	size := int64(0)
-	db.mu.RLock()
-	defer db.mu.RUnlock()
 
-	for _, block := range db.timeBlocks {
+	for _, block := range db.blocks() {
 		block.RLock()
 		size += block.count
 		block.RUnlock()

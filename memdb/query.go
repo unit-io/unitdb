@@ -16,7 +16,13 @@
 
 package memdb
 
+import "sync"
+
 type _QueryManager struct {
+	// mu guards all fields; the query cache is shared by concurrent Get calls.
+	mu sync.Mutex
+
+
 	timeRcord   _TimeID
 	timeFilters map[_BlockKey]*_TimeFilter
 	timeBlocks  _TimeBlocks

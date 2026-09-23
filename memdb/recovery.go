@@ -51,12 +51,7 @@ func (db *DB) delete(key uint64) error {
 			_, ok := block.records[iKey(false, key)]
 			block.RUnlock()
 			if !ok {
-				r.RLock()
-				fltr := r.timeRecords[timeID]
-				r.RUnlock()
-				if !fltr.Test(key) {
-					return errEntryDoesNotExist
-				}
+				// No early exit on a filter miss; see DB.Delete.
 				continue
 			}
 			block.Lock()

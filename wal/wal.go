@@ -126,7 +126,8 @@ func (wal *WAL) SignalLogApplied(timeID int64) error {
 		wal.mu.RUnlock()
 	}()
 
-	wal.logCountApplied++
+	// Only a read lock is held, so concurrent callers must update the counter atomically.
+	atomic.AddInt64(&wal.logCountApplied, 1)
 	wal.logStore.del(timeID)
 
 	return nil

@@ -150,6 +150,20 @@ func (db *DB) timeBlock(timeID _TimeID) (*_Block, bool) {
 	return nil, false
 }
 
+// blocks returns a snapshot of the time blocks so callers can lock each block
+// without holding db.mu. Put holds a block lock while acquiring db.mu, so
+// holding db.mu while acquiring a block lock would deadlock.
+func (db *DB) blocks() []*_Block {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	blocks := make([]*_Block, 0, len(db.timeBlocks))
+	for _, b := range db.timeBlocks {
+		blocks = append(blocks, b)
+	}
+
+	return blocks
+}
+
 // addTimeFilter adds unique time block to the set.
 func (db *DB) addTimeFilter(timeID _TimeID, key uint64) error {
 	blockKey := db.blockKey(key)
@@ -224,12 +238,7 @@ func (db *DB) seek(key uint64, cutoff int64) error {
 				}
 				return nil
 			}
-			r.RLock()
-			fltr := r.timeRecords[timeID]
-			r.RUnlock()
-			if !fltr.Test(key) {
-				return errEntryDoesNotExist
-			}
+			// No early exit on a filter miss; see DB.Delete.
 		}
 	}
 
