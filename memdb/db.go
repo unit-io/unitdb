@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/hash"
 	"github.com/unit-io/unitdb/wal"
 )
@@ -88,7 +87,7 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	for i := 0; i < nBlocks; i++ {
-		db.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+		db.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]struct{})}
 	}
 
 	if !options.logResetFlag {
@@ -96,9 +95,6 @@ func Open(opts ...Options) (*DB, error) {
 			return nil, err
 		}
 	}
-
-	// Query manager
-	db.newQueryManager()
 
 	// Log Manager
 	db.newLogManager(&_TinyLogOptions{poolCapacity: nPoolSize, writeInterval: options.logInterval, blockDuration: options.timeBlockDuration})
@@ -180,80 +176,54 @@ func (db *DB) Get(key uint64) ([]byte, error) {
 		return nil, err
 	}
 
-	db.internal.queryManager.mu.Lock()
-	defer db.internal.queryManager.mu.Unlock()
-
-	return db.get(key)
-}
-
-// get gets data for the provided key. The caller must hold queryManager.mu.
-func (db *DB) get(key uint64) ([]byte, error) {
-	db.mu.RLock()
-	// Get time block
-	blockKey := db.blockKey(key)
-	db.mu.RUnlock()
-
-	// first execute query plan
-	if len(db.internal.queryManager.timeFilters[blockKey].timeRecords) == 0 {
-		if err := db.seek(key, 0); err != nil {
-			return nil, err
-		}
-	}
-
-	// Lookup key first for the current timeRecord.
-	block, ok := db.internal.queryManager.timeBlocks[db.internal.queryManager.timeRcord]
-	if ok {
-		block.RLock()
-		off, ok := block.records[iKey(false, key)]
-		block.RUnlock()
-		if ok {
-			block.RLock()
-			defer block.RUnlock()
-
-			db.internal.meter.Gets.Inc(1)
-
-			return block.get(off)
-		}
-	}
-
-	db.mu.RLock()
-	// Get time block
-	r, ok := db.internal.queryManager.timeFilters[blockKey]
-	db.mu.RUnlock()
+	// timeFilters is only written in Open, so it is read without db.mu.
+	r, ok := db.timeFilters[db.blockKey(key)]
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
 
-	var timeIDs []_TimeID
+	// Look in the newest time block first so the latest value wins. There are
+	// only a few live time blocks, so insertion sort into a stack buffer.
+	var buf [16]_TimeID
+	timeIDs := buf[:0]
 	r.RLock()
 	for timeID := range r.timeRecords {
 		timeIDs = append(timeIDs, timeID)
-	}
-	r.RUnlock()
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] > timeIDs[j]
-	})
-	for _, timeID := range timeIDs {
-		block, ok := db.internal.queryManager.timeBlocks[timeID]
-		if ok {
-			block.RLock()
-			off, ok := block.records[iKey(false, key)]
-			block.RUnlock()
-			if ok {
-				block.RLock()
-				defer block.RUnlock()
-				db.internal.meter.Gets.Inc(1)
-				db.internal.queryManager.timeRcord = timeID
-
-				return block.get(off)
-			}
+		for i := len(timeIDs) - 1; i > 0 && timeIDs[i] > timeIDs[i-1]; i-- {
+			timeIDs[i], timeIDs[i-1] = timeIDs[i-1], timeIDs[i]
 		}
 	}
+	r.RUnlock()
 
-	// reset timeBlock and start over
-	db.internal.queryManager.timeFilters[blockKey] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+	// Resolve all candidate blocks under one db.mu read lock; taking it per
+	// block makes its reader count a hot spot under parallel Gets.
+	var blockBuf [16]*_Block
+	blocks := blockBuf[:0]
+	db.mu.RLock()
+	for _, timeID := range timeIDs {
+		blocks = append(blocks, db.timeBlocks[timeID])
+	}
+	db.mu.RUnlock()
 
-	return db.get(key)
+	ikey := iKey(false, key)
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		block.RLock()
+		off, ok := block.records[ikey]
+		if !ok {
+			block.RUnlock()
+			continue
+		}
+		data, err := block.get(off)
+		block.RUnlock()
+		db.internal.meter.Gets.Inc(1)
+
+		return data, err
+	}
+
+	return nil, errEntryDoesNotExist
 }
 
 // BlockIterator iterates all time blocks from DB committed to the WAL.

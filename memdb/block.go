@@ -21,18 +21,14 @@ import (
 	"sync"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/filter"
 )
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	_TimeID     int64
+	_TimeID int64
+	// _TimeFilter indexes the live time blocks that hold keys of a block key.
 	_TimeFilter struct {
-		timeRecords map[_TimeID]*filter.Block
-		// bloom filter adds keys to the filter for all entries in a time block.
-		// filter is checked during get or delete operation
-		// to indicate key definitely not exist in the time block.
-		filter       *filter.Generator
+		timeRecords  map[_TimeID]struct{}
 		sync.RWMutex // Read Write mutex, guards access to internal map.
 	}
 	_TimeBlocks map[_TimeID]*_Block

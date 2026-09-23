@@ -387,3 +387,35 @@ func TestCloseDuringWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestReleasedBlocksPruned checks that time blocks freed after syncing are
+// dropped from the lookup index, so it doesn't grow with every time block.
+func TestReleasedBlocksPruned(t *testing.T) {
+	db, _ := openTestDB(t, WithTimeBlockInterval(10*time.Millisecond), WithLogInterval(2*time.Millisecond))
+	k := uint64(0)
+	for i := 0; i < 20; i++ {
+		for j := 0; j < 100; j++ {
+			if _, err := db.Put(k, testVal(k)); err != nil {
+				t.Fatal(err)
+			}
+			k++
+		}
+		time.Sleep(11 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := db.BlockIterator(func(timeID int64, keys []uint64) (bool, error) {
+		return false, db.Free(timeID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for bk, r := range db.timeFilters {
+		r.RLock()
+		for timeID := range r.timeRecords {
+			if _, ok := db.timeBlock(timeID); !ok {
+				t.Errorf("block key %d still indexes released time block %d", bk, timeID)
+			}
+		}
+		r.RUnlock()
+	}
+}

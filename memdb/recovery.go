@@ -20,8 +20,6 @@ import (
 	"encoding/binary"
 	"sort"
 	"time"
-
-	"github.com/unit-io/unitdb/filter"
 )
 
 // delete deletes entry from the DB.
@@ -62,6 +60,7 @@ func (db *DB) delete(key uint64) error {
 			if len(block.records) == 0 {
 				delete(db.timeBlocks, _TimeID(timeID))
 				db.internal.buffer.Put(block.data)
+				db.removeTimeFilter(timeID)
 			}
 			block.Unlock()
 
@@ -131,12 +130,7 @@ func (db *DB) startRecovery() error {
 				blockKey := db.blockKey(key)
 				r, ok := db.timeFilters[blockKey]
 				if ok {
-					if _, ok := r.timeRecords[timeID]; !ok {
-						r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
-					}
-
-					// Append key to bloom filter
-					r.filter.Append(key)
+					r.timeRecords[timeID] = struct{}{}
 				}
 				db.internal.meter.Puts.Inc(1)
 			}
@@ -166,6 +160,7 @@ func (db *DB) startRecovery() error {
 				if len(block.records) == 0 {
 					delete(db.timeBlocks, _TimeID(timeID))
 					db.internal.buffer.Put(block.data)
+					db.removeTimeFilter(timeID)
 				}
 				block.Unlock()
 			}

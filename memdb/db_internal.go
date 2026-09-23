@@ -20,12 +20,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/wal"
 )
 
@@ -72,9 +70,6 @@ type _DB struct {
 
 	// Write ahead log
 	wal *wal.WAL
-
-	// query
-	queryManager *_QueryManager
 
 	// close
 	closed uint32
@@ -164,85 +159,29 @@ func (db *DB) blocks() []*_Block {
 	return blocks
 }
 
-// addTimeFilter adds unique time block to the set.
+// addTimeFilter records that the time block holds keys of the key's block key.
 func (db *DB) addTimeFilter(timeID _TimeID, key uint64) error {
-	blockKey := db.blockKey(key)
 	db.mu.RLock()
-	r, ok := db.timeFilters[blockKey]
+	r, ok := db.timeFilters[db.blockKey(key)]
 	db.mu.RUnlock()
-	r.Lock()
-	defer r.Unlock()
-	if ok {
-		if _, ok := r.timeRecords[timeID]; !ok {
-			db.mu.Lock()
-			r.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
-			db.mu.Unlock()
-		}
-
-		// Append key to bloom filter
-		r.filter.Append(key)
+	if !ok {
+		return nil
 	}
+	r.Lock()
+	r.timeRecords[timeID] = struct{}{}
+	r.Unlock()
 
 	return nil
 }
 
-func (db *DB) newQueryManager() {
-	queryManager := &_QueryManager{timeBlocks: make(map[_TimeID]*_Block), timeFilters: make(map[_BlockKey]*_TimeFilter)}
-	for i := 0; i < nBlocks; i++ {
-		queryManager.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]*filter.Block), filter: filter.NewFilterGenerator()}
+// removeTimeFilter forgets a released time block, so lookups don't keep
+// visiting blocks that are gone.
+func (db *DB) removeTimeFilter(timeID _TimeID) {
+	for _, r := range db.timeFilters {
+		r.Lock()
+		delete(r.timeRecords, timeID)
+		r.Unlock()
 	}
-
-	db.internal.queryManager = queryManager
-}
-
-// seek finds timeRecords and timeBlock for the provided key and cutoff duration and caches those for query.
-func (db *DB) seek(key uint64, cutoff int64) error {
-	if err := db.ok(); err != nil {
-		return err
-	}
-
-	db.mu.RLock()
-	// Get time block
-	blockKey := db.blockKey(key)
-	r, ok := db.timeFilters[blockKey]
-	db.mu.RUnlock()
-	if !ok {
-		return errEntryDoesNotExist
-	}
-
-	var timeIDs []_TimeID
-	r.RLock()
-	for timeID := range r.timeRecords {
-		timeIDs = append(timeIDs, timeID)
-	}
-	r.RUnlock()
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] > timeIDs[j]
-	})
-	for _, timeID := range timeIDs {
-		db.mu.RLock()
-		block, ok := db.timeBlocks[timeID]
-		db.mu.RUnlock()
-		if ok {
-			block.RLock()
-			_, ok := block.records[iKey(false, key)]
-			block.RUnlock()
-			if ok {
-				b, ok := db.internal.queryManager.timeFilters[blockKey]
-				if ok {
-					b.timeRecords[timeID] = filter.NewFilterBlock(r.filter.Bytes())
-				}
-				db.internal.queryManager.timeBlocks[timeID] = block
-				if cutoff != 0 {
-					db.internal.queryManager.cutoff = _TimeID(cutoff)
-				}
-				return nil
-			}
-			// No early exit on a filter miss; see DB.Delete.
-		}
-	}
-
-	return errEntryDoesNotExist
 }
 
 // move moves the entry to the new block
@@ -337,11 +276,14 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	}
 
 	db.mu.Lock()
-	defer db.mu.Unlock()
 	delete(db.timeBlocks, _TimeID(timeID))
 	db.internal.timeMark.timeUnref(timeID)
-
 	db.internal.buffer.Put(block.data)
+	db.mu.Unlock()
+
+	// Prune after the block is gone, and without db.mu: addTimeFilter takes the
+	// filter lock after db.mu is released, so holding both here could deadlock.
+	db.removeTimeFilter(timeID)
 
 	return nil
 }
