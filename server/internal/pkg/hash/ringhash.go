@@ -143,6 +143,6 @@ func (ring *Ring) Signature() string {
 
 func (ring *Ring) dump() {
 	for _, e := range ring.keys {
-		log.Println("key %s hash %d", e.key, e.hash)
+		log.Printf("key %s hash %d\n", e.key, e.hash)
 	}
 }
