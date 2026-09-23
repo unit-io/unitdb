@@ -241,94 +241,88 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	mu := db.internal.mutex.getMutex(q.internal.prefix)
 	mu.RLock()
 	defer mu.RUnlock()
-	db.lookup(q)
-	if len(q.internal.winEntries) == 0 {
-		return
-	}
-	sort.Slice(q.internal.winEntries[:], func(i, j int) bool {
-		return q.internal.winEntries[i].seq > q.internal.winEntries[j].seq
-	})
-	// A sync writes entries to disk before releasing them from memory, so an
-	// entry can be found in both; drop the duplicates.
-	uniq := q.internal.winEntries[:0]
-	for i, we := range q.internal.winEntries {
-		if i > 0 && we.seq == q.internal.winEntries[i-1].seq {
-			continue
+
+	// Deleted entries and entries outside the contract or cutoff don't count
+	// towards the limit, so fetch more candidates until the limit is met or
+	// there are no more.
+	var outBytes int64
+	for fetch := q.Limit; ; fetch *= 2 {
+		found := db.lookup(q, fetch)
+		sort.Slice(q.internal.winEntries[:], func(i, j int) bool {
+			return q.internal.winEntries[i].seq > q.internal.winEntries[j].seq
+		})
+		// A sync writes entries to disk before releasing them from memory, so an
+		// entry can be found in both; drop the duplicates.
+		uniq := q.internal.winEntries[:0]
+		for i, we := range q.internal.winEntries {
+			if i > 0 && we.seq == q.internal.winEntries[i-1].seq {
+				continue
+			}
+			uniq = append(uniq, we)
 		}
-		uniq = append(uniq, we)
-	}
-	q.internal.winEntries = uniq
-	start := 0
-	limit := q.Limit
-	if len(q.internal.winEntries) < int(q.Limit) {
-		limit = len(q.internal.winEntries)
-	}
+		q.internal.winEntries = uniq
 
-	for {
-		invalidCount := 0
-		for _, query := range q.internal.winEntries[start:limit] {
-			err = func() error {
-				if query.seq == 0 {
-					return nil
-				}
-				s, err := db.readEntry(query)
-				if err != nil {
-					if err == errMsgIDDeleted {
-						invalidCount++
-						return nil
-					}
-					logger.Error().Err(err).Str("context", "db.readEntry")
-					return err
-				}
-				id, val, err := db.internal.reader.readMessage(s)
-				if err != nil {
-					logger.Error().Err(err).Str("context", "data.readMessage")
-					return err
-				}
-				msgID := message.ID(id)
-				if !msgID.EvalPrefix(q.Contract, q.internal.cutoff) {
-					invalidCount++
-					return nil
-				}
-
-				// last bit of ID is an encryption flag.
-				if uint8(id[idSize-1]) == 1 {
-					val, err = db.internal.mac.Decrypt(nil, val)
-					if err != nil {
-						logger.Error().Err(err).Str("context", "mac.decrypt")
-						return err
-					}
-				}
-				var buffer []byte
-				val, err = snappy.Decode(buffer, val)
-				if err != nil {
-					logger.Error().Err(err).Str("context", "snappy.Decode")
-					return err
-				}
-				items = append(items, val)
-				db.internal.meter.OutBytes.Inc(int64(s.valueSize))
-				return nil
-			}()
+		items, outBytes = nil, 0
+		for _, we := range q.internal.winEntries {
+			if len(items) == q.Limit {
+				break
+			}
+			val, size, ok, err := db.readValue(q, we)
 			if err != nil {
 				return items, err
 			}
+			if ok {
+				items = append(items, val)
+				outBytes += int64(size)
+			}
 		}
-
-		if invalidCount == 0 || len(items) == int(q.Limit) || len(q.internal.winEntries) == limit {
+		if len(items) == q.Limit || found < fetch || fetch >= q.internal.opts.maxQueryLimit {
 			break
 		}
-
-		if len(q.internal.winEntries) <= int(q.Limit+invalidCount) {
-			start = limit
-			limit = len(q.internal.winEntries)
-		} else {
-			start = limit
-			limit = limit + invalidCount
-		}
 	}
+	db.internal.meter.OutBytes.Inc(outBytes)
 	db.internal.meter.Gets.Inc(int64(len(items)))
 	db.internal.meter.OutMsgs.Inc(int64(len(items)))
 	return items, nil
+}
+
+// readValue reads and decodes the message for a window entry. It reports false
+// for entries that are deleted or outside the query's contract or cutoff.
+func (db *DB) readValue(q *Query, we _Query) ([]byte, uint32, bool, error) {
+	if we.seq == 0 {
+		return nil, 0, false, nil
+	}
+	s, err := db.readEntry(we)
+	if err == errMsgIDDeleted {
+		return nil, 0, false, nil
+	}
+	if err != nil {
+		logger.Error().Err(err).Str("context", "db.readEntry")
+		return nil, 0, false, err
+	}
+	id, val, err := db.internal.reader.readMessage(s)
+	if err != nil {
+		logger.Error().Err(err).Str("context", "data.readMessage")
+		return nil, 0, false, err
+	}
+	if !message.ID(id).EvalPrefix(q.Contract, q.internal.cutoff) {
+		return nil, 0, false, nil
+	}
+
+	// last bit of ID is an encryption flag.
+	if uint8(id[idSize-1]) == 1 {
+		val, err = db.internal.mac.Decrypt(nil, val)
+		if err != nil {
+			logger.Error().Err(err).Str("context", "mac.decrypt")
+			return nil, 0, false, err
+		}
+	}
+	val, err = snappy.Decode(nil, val)
+	if err != nil {
+		logger.Error().Err(err).Str("context", "snappy.Decode")
+		return nil, 0, false, err
+	}
+	return val, s.valueSize, true, nil
 }
 
 // NewContract generates a new Contract.

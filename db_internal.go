@@ -220,26 +220,26 @@ func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
 	return e, err
 }
 
-// lookups are performed in following order
-// ilookup lookups in memory entries from timeWindow
-// lookup lookups persisted entries from timeWindow file.
-func (db *DB) lookup(q *Query) error {
+// lookup sets the query's window entries to up to limit candidates across the
+// matching topics and returns how many were found; fewer than limit means there
+// are no more. Each topic is looked up in memory (ilookup) and then on disk.
+func (db *DB) lookup(q *Query, limit int) int {
+	q.internal.winEntries = q.internal.winEntries[:0]
 	topics := db.internal.trie.lookup(q.internal.parts, q.internal.depth, q.internal.topicType)
 	sort.Slice(topics[:], func(i, j int) bool {
 		return topics[i].offset > topics[j].offset
 	})
 	for _, topic := range topics {
-		if len(q.internal.winEntries) > q.Limit {
+		if len(q.internal.winEntries) >= limit {
 			break
 		}
-		limit := q.Limit - len(q.internal.winEntries)
-		wEntries := db.internal.timeWindow.lookup(db.fs, topic.hash, topic.offset, q.internal.cutoff, limit)
+		wEntries := db.internal.timeWindow.lookup(db.fs, topic.hash, topic.offset, q.internal.cutoff, limit-len(q.internal.winEntries))
 		for _, we := range wEntries {
 			q.internal.winEntries = append(q.internal.winEntries, _Query{topicHash: topic.hash, seq: we.seq()})
 		}
 	}
 
-	return nil
+	return len(q.internal.winEntries)
 }
 
 func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32, error) {

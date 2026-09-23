@@ -453,6 +453,27 @@ func TestDeleteWithContract(t *testing.T) {
 	assertMsgs(t, [][]byte{testMsg(1)}, get(t, db, NewQuery(topic).WithContract(contract)))
 }
 
+func TestGetLimitSkipsDeleted(t *testing.T) {
+	for _, synced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("synced=%v", synced), func(t *testing.T) {
+			db, _ := openTestDB(t, WithMutable())
+			topic := []byte("unit.ops.limit.deleted")
+			ids := putMsgs(t, db, topic, 0, 6)
+			if synced {
+				syncDB(t, db)
+			}
+			// Delete the three newest; a limit of 3 must return the three oldest.
+			for _, id := range ids[3:] {
+				if err := db.Delete(id, topic); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertMsgs(t, newestFirst(3), get(t, db, NewQuery(topic).WithLimit(3)))
+			assertMsgs(t, newestFirst(3)[:2], get(t, db, NewQuery(topic).WithLimit(2)))
+		})
+	}
+}
+
 func TestPersistAfterSync(t *testing.T) {
 	db, dir := openTestDB(t)
 	topic := []byte("unit.ops.persist")
