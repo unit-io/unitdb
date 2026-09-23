@@ -50,7 +50,10 @@ func (db *_SyncHandle) startRecovery() error {
 		db.internal.closeW.Done()
 	}()
 	fmt.Println("db.recoverLog: start recovery")
-	if ok := db.startSync(); !ok {
+	// Don't use startSync: it skips when the stored sequence has not moved
+	// since the last sync, but after a crash the stored sequence is stale and
+	// the WAL may hold entries past it.
+	if ok := db.initSync(); !ok {
 		return nil
 	}
 	defer func() {
@@ -68,6 +71,8 @@ func (db *_SyncHandle) startRecovery() error {
 		if seqs[len(seqs)-1] > db.syncInfo.upperSeq {
 			db.syncInfo.upperSeq = seqs[len(seqs)-1]
 		}
+		// New entries must not reuse the sequences of recovered ones.
+		db.advanceSeq(seqs[len(seqs)-1])
 		for _, seq := range seqs {
 			memdata, err := db.internal.mem.Lookup(timeID, seq)
 			if err != nil || memdata == nil {

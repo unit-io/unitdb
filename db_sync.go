@@ -53,6 +53,11 @@ func (db *_SyncHandle) startSync() bool {
 		return db.syncInfo.syncStatusOk
 	}
 
+	return db.initSync()
+}
+
+// initSync prepares the window and block writers for a sync.
+func (db *_SyncHandle) initSync() bool {
 	db.rawWindow = db.internal.bufPool.Get()
 	db.rawBlock = db.internal.bufPool.Get()
 
@@ -311,6 +316,7 @@ func (db *DB) expireEntries() error {
 		<-db.internal.syncLockC
 	}()
 	expiredEntries := db.internal.timeWindow.expiryWindowBucket.getExpiredEntries(db.opts.queryOptions.defaultQueryLimit)
+	expired := false
 	for _, expiredEntry := range expiredEntries {
 		we := expiredEntry.(_WinEntry)
 		/// Test filter block if message hash presence.
@@ -326,6 +332,11 @@ func (db *DB) expireEntries() error {
 		}
 		db.internal.freeList.free(e.seq, e.msgOffset, e.mSize())
 		db.decount(1)
+		expired = true
+	}
+	if expired {
+		// Persist the count so it is right after a crash.
+		return db.writeInfo()
 	}
 
 	return nil

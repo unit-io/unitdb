@@ -371,7 +371,8 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	if db.internal.syncWrites {
 		return db.sync()
 	}
-	return nil
+	// Persist the count so it is right after a crash.
+	return db.writeInfo()
 }
 
 // batch starts a new batch.
@@ -389,6 +390,16 @@ func (db *DB) batch() *Batch {
 // seq current seq of the DB.
 func (db *DB) seq() uint64 {
 	return atomic.LoadUint64(&db.internal.dbInfo.sequence)
+}
+
+// advanceSeq raises the DB sequence to at least seq.
+func (db *DB) advanceSeq(seq uint64) {
+	for {
+		cur := atomic.LoadUint64(&db.internal.dbInfo.sequence)
+		if cur >= seq || atomic.CompareAndSwapUint64(&db.internal.dbInfo.sequence, cur, seq) {
+			return
+		}
+	}
 }
 
 func (db *DB) nextSeq() uint64 {
