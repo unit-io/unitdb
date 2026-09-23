@@ -18,6 +18,8 @@ package wal
 
 import (
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"sync"
 	"sync/atomic"
 
@@ -25,7 +27,7 @@ import (
 )
 
 const (
-	version = 1 // file format version
+	version = 2 // file format version; 2 adds a checksum of the log data
 
 	logExt     = ".log"
 	tmpExt     = ".tmp"
@@ -67,6 +69,13 @@ type (
 		Reset      bool
 	}
 )
+
+// ErrCorrupted is returned when a log fails its checksum or cannot be read.
+var ErrCorrupted = errors.New("wal: log is corrupted")
+
+func corrupted(path string, reason string) error {
+	return fmt.Errorf("%w: %s: %s", ErrCorrupted, path, reason)
+}
 
 func newWal(opts Options) (wal *WAL, err error) {
 	wal = &WAL{
@@ -111,6 +120,7 @@ func (wal *WAL) Close() error {
 
 func (wal *WAL) put(log _LogInfo, data *bpool.Buffer) error {
 	log.version = version
+	log.checksum = crc32.Checksum(data.Bytes(), crcTable)
 	wal.logCountWritten++
 	wal.entriesWritten += int64(log.count)
 

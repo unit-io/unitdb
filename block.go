@@ -95,6 +95,7 @@ func (b _IndexBlock) marshalBinary() []byte {
 		buf = buf[16:]
 	}
 	binary.LittleEndian.PutUint16(buf[:2], b.entryIdx)
+	putChecksum(data, indexChecksumOff)
 	return data
 }
 

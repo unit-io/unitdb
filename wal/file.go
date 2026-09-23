@@ -19,6 +19,7 @@ package wal
 import (
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io/ioutil"
 	"os"
 	"path"
@@ -104,7 +105,9 @@ func (fs *_FileStore) put(info _LogInfo, data *bpool.Buffer) error {
 	return nil
 }
 
-func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) _LogInfo {
+// read reads the log for timeID into data. A log that is unreadable or fails
+// its checksum is corrupt; it is left in place and reported.
+func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) (_LogInfo, error) {
 	fs.RLock()
 	defer fs.RUnlock()
 
@@ -112,53 +115,46 @@ func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) _LogInfo {
 
 	if !fs.opened {
 		// trying to use file store, but not open.
-		return info
+		return info, nil
 	}
 
 	log := logPath(fs.dirName, timeID)
 	if !exists(log) {
-		return info
+		return info, nil
 	}
 
 	f, err := os.Open(log)
 	if err != nil {
-		return info
+		return info, err
 	}
+	defer f.Close()
 
-	buf := make([]byte, uint32(logHeaderSize))
-	if _, err := f.ReadAt(buf, 0); err != nil {
-		f.Close()
-		os.Rename(log, corruptPath(fs.dirName, timeID))
-
-		// log was unreadable, return nil
-		return info
+	buf := make([]byte, logHeaderSize)
+	n, err := f.ReadAt(buf, 0)
+	if n < logHeaderSizeV1 {
+		return info, corrupted(log, fmt.Sprintf("short header: %v", err))
 	}
-
-	if err := info.UnmarshalBinary(buf); err != nil {
-		f.Close()
-		os.Rename(log, corruptPath(fs.dirName, timeID))
-
-		// log was unreadable, return nil
-		return info
+	if err := info.UnmarshalBinary(buf[:n]); err != nil {
+		return info, corrupted(log, err.Error())
+	}
+	hdrSize := headerSize(info.version)
+	if info.version > version || n < hdrSize {
+		return info, corrupted(log, fmt.Sprintf("bad header version %d", info.version))
 	}
 
 	if _, err := data.Extend(int64(info.size)); err != nil {
-		return info
+		return info, err
+	}
+	if _, err := f.ReadAt(data.Internal(), int64(hdrSize)); err != nil {
+		return info, corrupted(log, fmt.Sprintf("short data: %v", err))
+	}
+	if info.version >= 2 && crc32.Checksum(data.Bytes(), crcTable) != info.checksum {
+		return info, corrupted(log, "checksum mismatch")
 	}
 
-	if _, err := f.ReadAt(data.Internal(), int64(logHeaderSize)); err != nil {
-		f.Close()
-		os.Rename(log, corruptPath(fs.dirName, timeID))
-
-		// log was unreadable, return nil
-		return info
-	}
-	f.Close()
-
-	return info
+	return info, nil
 }
 
-// all provides a list of all time IDs currently stored in the file store.
 func (fs *_FileStore) all() []int64 {
 	var timeIDs []int64
 	var files _FileInfos

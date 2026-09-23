@@ -18,7 +18,6 @@ package unitdb
 
 import (
 	"encoding/binary"
-	"io"
 	"sort"
 	"sync"
 
@@ -206,22 +205,28 @@ func (l *_Lease) allocate(size uint32) int64 {
 }
 
 func (l *_Lease) read() error {
-	off := int64(0)
+	size := l.file.currSize()
+	if size == 0 {
+		return nil
+	}
+	data := make([]byte, size)
+	if _, err := l.file.ReadAt(data, 0); err != nil {
+		return err
+	}
+	n := binary.LittleEndian.Uint32(data[:4])
+	body := 4 + 12*int64(n)
+	switch {
+	case size == body+checksumSize && matchesChecksum(data, int(body)):
+	case size == body:
+		// format 1 free list, which has no checksum.
+	default:
+		// The free list only tracks reusable space, so drop it rather than
+		// refuse to open; that space is not reused.
+		logger.Error().Err(corrupted(l.file._File, 0, "free list")).Str("context", "lease.read").Msg("dropping free list")
+		return nil
+	}
 	blocks := &_FreeBlocks{cache: make(map[int64]bool)}
-	buf := make([]byte, 4)
-	if _, err := l.file.ReadAt(buf, off); err != nil {
-		if err == io.EOF {
-			return nil
-		}
-		return err
-	}
-	size := binary.LittleEndian.Uint32(buf)
-	off += 4
-	buf = make([]byte, 12*size)
-	if _, err := l.file.ReadAt(buf, off); err != nil {
-		return err
-	}
-	blocks.UnmarshalBinary(buf, size)
+	blocks.UnmarshalBinary(data[4:body], n)
 
 	for _, b := range blocks.fb {
 		l.freeBlock(b.offset, b.size)
@@ -248,6 +253,8 @@ func (l *_Lease) write() error {
 	}
 
 	data := blocks.MarshalBinary()
+	data = append(data, make([]byte, checksumSize)...)
+	putChecksum(data, len(data)-checksumSize)
 	if _, err := l.file.WriteAt(data, off); err != nil {
 		return err
 	}

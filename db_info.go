@@ -35,6 +35,9 @@ type (
 		encryption int8
 		sequence   uint64
 		count      uint64
+
+		// validChecksum is set by UnmarshalBinary; only format 2 has a checksum.
+		validChecksum bool
 	}
 )
 
@@ -46,6 +49,7 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf[11] = uint8(inf.encryption)
 	binary.LittleEndian.PutUint64(buf[12:20], inf.sequence)
 	binary.LittleEndian.PutUint64(buf[20:28], inf.count)
+	putChecksum(buf, infoChecksumOff)
 
 	return buf, nil
 }
@@ -57,6 +61,7 @@ func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
 	inf.encryption = int8(data[11])
 	inf.sequence = binary.LittleEndian.Uint64(data[12:20])
 	inf.count = binary.LittleEndian.Uint64(data[20:28])
+	inf.validChecksum = validChecksum(data[:infoChecksumOff+checksumSize], infoChecksumOff)
 
 	return nil
 }

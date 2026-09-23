@@ -47,6 +47,9 @@ func (r *_WindowReader) readWindowBlock() (_WinBlock, error) {
 	if err != nil {
 		return _WinBlock{}, err
 	}
+	if !validChecksum(buf, windowChecksumOff) {
+		return _WinBlock{}, corrupted(r.winFile, r.offset, "window block")
+	}
 	if err := r.winBlock.unmarshalBinary(buf); err != nil {
 		return _WinBlock{}, err
 	}

@@ -40,7 +40,7 @@ const (
 	nPoolSize             = 27
 	lockPostfix           = ".lock"
 	idSize                = 9 // message ID prefix with additional encryption bit.
-	version               = 1 // file format version.
+	version               = 2 // file format version; 2 adds checksums.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then

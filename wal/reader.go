@@ -61,7 +61,10 @@ func (r *Reader) Iterator(f func(timeID int64) (bool, error)) (err error) {
 	for _, timeID := range r.wal.recoveredTimeIDs {
 		r.offset = 0
 		r.buffer.Reset()
-		info := r.wal.logStore.read(timeID, r.buffer)
+		info, err := r.wal.logStore.read(timeID, r.buffer)
+		if err != nil {
+			return err
+		}
 		r.entryCount = info.count
 		if stop, err := f(timeID); stop || err != nil {
 			return err

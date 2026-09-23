@@ -83,6 +83,7 @@ func (b _WinBlock) marshalBinary() []byte {
 	binary.LittleEndian.PutUint64(buf[8:16], b.topicHash)
 	binary.LittleEndian.PutUint64(buf[16:24], uint64(b.next))
 	binary.LittleEndian.PutUint16(buf[24:26], b.entryIdx)
+	putChecksum(data, windowChecksumOff)
 	return data
 }
 

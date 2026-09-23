@@ -937,8 +937,8 @@ func TestFilterRebuiltFromIndex(t *testing.T) {
 			t.Fatalf("rebuilt filter rules out synced seq %d", seq)
 		}
 	}
-	if size := db.internal.filter.file.currSize(); size != int64(filter.Size()) {
-		t.Fatalf("expected rebuilt filter to be saved (%d bytes); got %d", filter.Size(), size)
+	if size := db.internal.filter.file.currSize(); size != int64(filter.Size()+checksumSize) {
+		t.Fatalf("expected rebuilt filter to be saved (%d bytes); got %d", filter.Size()+checksumSize, size)
 	}
 	if err := db.Delete(ids[0], topic); err != nil {
 		t.Fatal(err)

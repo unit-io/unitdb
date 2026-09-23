@@ -19,6 +19,7 @@ package unitdb
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -33,6 +34,7 @@ import (
 	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
+	"github.com/unit-io/unitdb/wal"
 )
 
 // DB represents the message storage for topic->keys-values.
@@ -127,7 +129,12 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile}}
+	sumFile, err := newFile(path, 1, _FileDesc{fileType: typeChecksum})
+	if err != nil {
+		return nil, err
+	}
+
+	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile, sumFile}}
 	internal := &_DB{
 		mutex: newMutex(),
 		start: time.Now(),
@@ -156,9 +163,33 @@ func Open(path string, opts ...Options) (*DB, error) {
 		closeC: make(chan struct{}),
 	}
 
+	db := &DB{
+		opts: options,
+
+		lock: lock,
+		fs:   fileset,
+
+		internal: internal,
+	}
+	// abort releases the files and lock when Open fails.
+	abort := func(err error) (*DB, error) {
+		if db.internal.mem != nil {
+			db.internal.mem.Close()
+		}
+		db.fs.close()
+		db.lock.unlock()
+		return nil, err
+	}
+
+	// Verify checksums before anything reads or writes the files.
+	if err := db.checkFiles(); err != nil {
+		logger.Error().Err(err).Str("context", "db.checkFiles")
+		return abort(err)
+	}
+
 	// Create a new MAC from the key.
 	if internal.mac, err = crypto.New(options.encryptionKey); err != nil {
-		return nil, err
+		return abort(err)
 	}
 
 	// set encryption flag to encrypt messages.
@@ -168,38 +199,33 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	// Create a blockcache.
 	memdb, err := memdb.Open(memdb.WithLogFilePath(path), memdb.WithMemdbSize(options.memdbSize), memdb.WithBufferSize(options.bufferSize))
+	if errors.Is(err, wal.ErrCorrupted) {
+		return abort(fmt.Errorf("%w: %v", errCorrupted, err))
+	}
 	if err != nil {
-		return nil, err
+		return abort(err)
 	}
 	internal.mem = memdb
 
-	db := &DB{
-		opts: options,
-
-		lock: lock,
-		fs:   fileset,
-
-		internal: internal,
-	}
-
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
+		return abort(err)
 	}
 
 	if err := db.loadFilter(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadFilter")
-		return nil, err
+		return abort(err)
 	}
 
 	// Read freeList.
 	if err := db.internal.freeList.read(); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
-		return nil, err
+		return abort(err)
 	}
 
 	if err := db.recoverLog(); err != nil {
-		// if unable to recover db then close db.
-		panic(fmt.Sprintf("Unable to recover db on sync error %v. Closing db...", err))
+		logger.Error().Err(err).Str("context", "db.recoverLog")
+		return abort(err)
 	}
 
 	db.internal.syncHandle = _SyncHandle{DB: db}

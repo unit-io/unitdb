@@ -141,6 +141,9 @@ func (db *DB) startRecovery() error {
 		}
 		return false, nil
 	})
+	if err != nil {
+		return err
+	}
 
 	for timeID, keys := range delKeys {
 		if block, exists := db.timeBlocks[timeID]; exists {

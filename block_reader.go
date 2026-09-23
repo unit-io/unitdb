@@ -19,10 +19,10 @@ package unitdb
 import "io"
 
 type _BlockReader struct {
-	indexBlock          _IndexBlock
-	fs                  *_FileSet
-	indexFile, dataFile *_File
-	offset              int64
+	indexBlock                   _IndexBlock
+	fs                           *_FileSet
+	indexFile, dataFile, sumFile *_File
+	offset                       int64
 }
 
 func newBlockReader(fs *_FileSet) *_BlockReader {
@@ -40,6 +40,12 @@ func newBlockReader(fs *_FileSet) *_BlockReader {
 	}
 	r.dataFile = dataFile
 
+	sumFile, err := fs.getFile(_FileDesc{fileType: typeChecksum})
+	if err != nil {
+		return nil
+	}
+	r.sumFile = sumFile
+
 	return r
 }
 
@@ -47,6 +53,9 @@ func (r *_BlockReader) readIndexBlock() (_IndexBlock, error) {
 	buf, err := r.indexFile.slice(r.offset, r.offset+int64(blockSize))
 	if err != nil {
 		return _IndexBlock{}, err
+	}
+	if !validChecksum(buf, indexChecksumOff) {
+		return _IndexBlock{}, corrupted(r.indexFile, r.offset, "index block")
 	}
 	if err := r.indexBlock.unmarshalBinary(buf); err != nil {
 		return _IndexBlock{}, err
@@ -95,6 +104,9 @@ func (r *_BlockReader) readMessage(e _IndexEntry) ([]byte, []byte, error) {
 	}
 	message, err := r.dataFile.slice(e.msgOffset, e.msgOffset+int64(e.mSize()))
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := verifyMessage(r.sumFile, r.dataFile, e.seq, e.msgOffset, message); err != nil {
 		return nil, nil, err
 	}
 	return message[:idSize], message[e.topicSize+idSize:], nil

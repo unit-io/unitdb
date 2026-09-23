@@ -92,6 +92,7 @@ func Open(opts ...Options) (*DB, error) {
 
 	if !options.logResetFlag {
 		if err := db.startRecovery(); err != nil {
+			wal.Close()
 			return nil, err
 		}
 	}

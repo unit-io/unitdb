@@ -38,24 +38,33 @@ func (f *Filter) Test(h uint64) bool {
 	return f.filterBlock.Test(h)
 }
 
-// write persists the filter.
+// write persists the filter followed by its checksum.
 func (f *Filter) write() error {
-	_, err := f.file.WriteAt(f.filterBlock.Bytes(), 0)
+	data := f.filterBlock.Bytes()
+	buf := make([]byte, len(data)+checksumSize)
+	copy(buf, data)
+	putChecksum(buf, len(data))
+	_, err := f.file.WriteAt(buf, 0)
 	return err
 }
 
-// loadFilter restores the filter saved by sync. A db without a saved filter,
-// such as one created before the filter was persisted, has it rebuilt from
-// the index so that entries already on disk are never ruled out.
+// loadFilter restores the filter saved by sync. A db without a valid saved
+// filter, such as one created before the filter was persisted, has it rebuilt
+// from the index so that entries already on disk are never ruled out.
 func (db *DB) loadFilter() error {
 	f := &db.internal.filter
-	if size := f.file.currSize(); size == int64(filter.Size()) {
+	if size := f.file.currSize(); size == int64(filter.Size()+checksumSize) {
 		raw := make([]byte, size)
 		if _, err := f.file.ReadAt(raw, 0); err != nil {
 			return err
 		}
-		f.filterBlock = filter.NewFilterGeneratorFromBytes(raw)
-		return nil
+		// Strict: an all-zero filter would rule out every entry.
+		if matchesChecksum(raw, filter.Size()) {
+			f.filterBlock = filter.NewFilterGeneratorFromBytes(raw[:filter.Size()])
+			return nil
+		}
+		// The filter is derived from the index, so rebuild it rather than refuse to open.
+		logger.Error().Err(corrupted(f.file._File, 0, "filter")).Str("context", "db.loadFilter").Msg("rebuilding filter from index")
 	}
 
 	f.filterBlock = filter.NewFilterGenerator()

@@ -25,6 +25,9 @@ import (
 )
 
 type _BlockWriter struct {
+	sums    []_MessageChecksum
+	sumFile *_File
+
 	blockIdx    int32
 	indexBlocks map[int32]_IndexBlock // map[blockIdx]block
 
@@ -68,6 +71,12 @@ func newBlockWriter(fs *_FileSet, lease *_Lease, buf *bpool.Buffer) (*_BlockWrit
 	}
 	w.dataFile = dataFile
 	w.offset = dataFile.currSize()
+
+	sumFile, err := fs.getFile(_FileDesc{fileType: typeChecksum})
+	if err != nil {
+		return nil, err
+	}
+	w.sumFile = sumFile
 	w.dataOffset = dataFile.currSize()
 	return w, nil
 }
@@ -177,6 +186,7 @@ func (w *_BlockWriter) append(e _IndexEntry) (err error) {
 		w.offset += int64(dataLen)
 	}
 	e.msgOffset = off
+	w.sums = append(w.sums, _MessageChecksum{seq: e.seq, sum: checksum(e.cache)})
 
 	if b.leased {
 		w.indexLeases[e.seq] = struct{}{}
@@ -198,6 +208,11 @@ func (w *_BlockWriter) write() error {
 	if _, err := w.dataFile.write(w.buffer.Bytes()); err != nil {
 		return err
 	}
+	// Message checksums go before index blocks, so an indexed message always has one.
+	if err := writeMessageChecksums(w.sumFile, w.sums); err != nil {
+		return err
+	}
+	w.sums = w.sums[:0]
 
 	// Reset buffer before reusing it.
 	w.buffer.Reset()
