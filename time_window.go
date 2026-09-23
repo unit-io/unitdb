@@ -19,6 +19,7 @@ package unitdb
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -223,32 +224,28 @@ func (tw *_TimeWindowBucket) ilookup(topicHash uint64, limit int) (winEntries _W
 	b := tw.windowBlocks.getWindowBlock(topicHash)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	var l int
-	var expiryCount int
 
-	for key := range b.entries {
+	for key, wEntries := range b.entries {
 		if key.topicHash != topicHash {
 			continue
 		}
-		wEntries := b.entries[key]
-		if len(wEntries) > 0 {
-			l = limit + expiryCount - l
-			if len(wEntries) < l {
-				l = len(wEntries)
-			}
-			for i := len(wEntries) - 1; i >= len(wEntries)-l; i-- {
-				we := wEntries[i]
-				if we.isExpired() {
-					if err := tw.expiryWindowBucket.addExpiry(we); err != nil {
-						expiryCount++
-						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
-					}
-					// if id is expired it does not return an error but continue the iteration.
-					continue
+		for _, we := range wEntries {
+			if we.isExpired() {
+				if err := tw.expiryWindowBucket.addExpiry(we); err != nil {
+					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
-				winEntries = append(winEntries, we)
+				// if id is expired it does not return an error but continue the iteration.
+				continue
 			}
+			winEntries = append(winEntries, we)
 		}
+	}
+	// Entries are grouped by time block in a map, so sort to keep the newest.
+	sort.Slice(winEntries, func(i, j int) bool {
+		return winEntries[i].sequence > winEntries[j].sequence
+	})
+	if len(winEntries) > limit {
+		winEntries = winEntries[:limit]
 	}
 	return winEntries
 }
@@ -264,66 +261,29 @@ func (tw *_TimeWindowBucket) lookup(fs *_FileSet, topicHash uint64, off, cutoff 
 	if err != nil {
 		return winEntries
 	}
-	next := func(blockOff int64, f func(_WinBlock) (bool, error)) error {
-		for {
-			r := _WindowReader{winFile: winFile, offset: blockOff}
-			b, err := r.readWindowBlock()
-			if err != nil {
-				return err
-			}
-			if stop, err := f(b); stop || err != nil {
-				return err
-			}
-			if b.next == 0 {
-				return nil
-			}
-			blockOff = b.next
+	// Walk the topic's chain from its newest block. Each block's next links to
+	// an older block at a lower offset; 0 ends the chain.
+	for blockOff := off; ; {
+		r := _WindowReader{winFile: winFile, offset: blockOff}
+		b, err := r.readWindowBlock()
+		if err != nil || b.topicHash != topicHash {
+			break
 		}
-	}
-	expiryCount := 0
-	err = next(off, func(curb _WinBlock) (bool, error) {
-		b := &curb
-		if b.topicHash != topicHash {
-			return true, nil
-		}
-		if len(winEntries) > limit-int(b.entryIdx) {
-			limit = limit - len(winEntries)
-			for i := len(b.entries[:b.entryIdx]) - 1; i >= len(b.entries[:b.entryIdx])-limit; i-- {
-				we := b.entries[i]
-				if we.isExpired() {
-					if err := tw.expiryWindowBucket.addExpiry(we); err != nil {
-						expiryCount++
-						logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
-					}
-					// if id is expired it does not return an error but continue the iteration.
-					continue
-				}
-				winEntries = append(winEntries, we)
-			}
-			if len(winEntries) >= limit {
-				return true, nil
-			}
-		}
-		for i := len(b.entries[:b.entryIdx]) - 1; i >= 0; i-- {
+		for i := int(b.entryIdx) - 1; i >= 0 && len(winEntries) < limit; i-- {
 			we := b.entries[i]
 			if we.isExpired() {
 				if err := tw.expiryWindowBucket.addExpiry(we); err != nil {
-					expiryCount++
 					logger.Error().Err(err).Str("context", "timeWindow.addExpiry")
 				}
 				// if id is expired it does not return an error but continue the iteration.
 				continue
 			}
 			winEntries = append(winEntries, we)
-
 		}
-		if b.cutoff(cutoff) {
-			return true, nil
+		if len(winEntries) >= limit || b.cutoff(cutoff) || b.next == 0 || b.next >= blockOff {
+			break
 		}
-		return false, nil
-	})
-	if err != nil {
-		return winEntries
+		blockOff = b.next
 	}
 
 	return winEntries

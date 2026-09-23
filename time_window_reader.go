@@ -54,25 +54,48 @@ func (r *_WindowReader) readWindowBlock() (_WinBlock, error) {
 	return r.winBlock, nil
 }
 
-// blockIterator iterates all window blocks from disk.
+// blockIterator calls f once per topic stored in the window file, with the
+// first sequence of the topic's oldest block (whose entry holds the topic) and
+// the offset of its newest block, the head of the topic's chain.
 func (r *_WindowReader) blockIterator(f func(startSeq, topicHash uint64, off int64) (bool, error)) (err error) {
-	windowIdx := int32(0)
-	nBlocks := r.windowIdx
-	for windowIdx <= nBlocks {
+	type topicBlocks struct {
+		startSeq uint64
+		hasStart bool
+		headOff  int64
+	}
+	topics := make(map[uint64]*topicBlocks)
+	var order []uint64
+	for windowIdx := int32(0); windowIdx <= r.windowIdx; windowIdx++ {
 		r.offset = winBlockOffset(windowIdx)
 		b, err := r.readWindowBlock()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
 			return err
 		}
-		windowIdx++
-		if b.entryIdx == 0 || b.next != 0 {
+		if b.entryIdx == 0 {
 			continue
 		}
-		// fmt.Println("timeWindow.blockIterator: topicHash, seq ", b.topicHash, b.entries[0].sequence)
-		if stop, err := f(b.entries[0].sequence, b.topicHash, r.offset); stop || err != nil {
+		tb, ok := topics[b.topicHash]
+		if !ok {
+			tb = &topicBlocks{}
+			topics[b.topicHash] = tb
+			order = append(order, b.topicHash)
+		}
+		// New blocks are always appended, so the last block seen is the head.
+		tb.headOff = r.offset
+		if b.next == 0 && !tb.hasStart {
+			tb.startSeq = b.entries[0].sequence
+			tb.hasStart = true
+		}
+	}
+	for _, h := range order {
+		tb := topics[h]
+		if !tb.hasStart {
+			continue
+		}
+		if stop, err := f(tb.startSeq, h, tb.headOff); stop || err != nil {
 			return err
 		}
 	}

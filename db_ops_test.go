@@ -347,6 +347,99 @@ func TestDeleteNotOnDiskAcrossIndexBlocks(t *testing.T) {
 	}
 }
 
+func TestGetAcrossWindowBlocks(t *testing.T) {
+	db, dir := openTestDB(t, WithBufferSize(1<<20), WithMemdbSize(1<<24), WithDefaultQueryLimit(5000))
+	topic := []byte("unit.ops.window.blocks")
+	n := 0
+	// Sync in rounds so the topic's chain grows across several syncs and window
+	// blocks: exactly one full block, one entry over, then several blocks.
+	for _, total := range []int{entriesPerWindowBlock, entriesPerWindowBlock + 1, 3*entriesPerWindowBlock + 10} {
+		for ; n < total; n++ {
+			if err := db.Put(topic, testMsg(n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for db.Count() < uint64(n) {
+			if time.Now().After(deadline) {
+				t.Fatalf("expected %d synced; got %d", n, db.Count())
+			}
+			time.Sleep(100 * time.Millisecond)
+			if err := db.Sync(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertMsgs(t, newestFirst(n), get(t, db, NewQuery(topic)))
+	}
+
+	// A limit that ends inside the second block.
+	limit := entriesPerWindowBlock + 20
+	assertMsgs(t, newestFirst(n)[:limit], get(t, db, NewQuery(topic).WithLimit(limit)))
+
+	// After reopen the chain head comes from loadTrie.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = reopenTestDB(t, dir, WithBufferSize(1<<20), WithMemdbSize(1<<24), WithDefaultQueryLimit(5000))
+	assertMsgs(t, newestFirst(n), get(t, db, NewQuery(topic)))
+
+	// New messages after reopen are linked to the existing chain.
+	if err := db.Put(topic, testMsg(n)); err != nil {
+		t.Fatal(err)
+	}
+	n++
+	deadline := time.Now().Add(10 * time.Second)
+	for db.Count() < uint64(n) {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d synced; got %d", n, db.Count())
+		}
+		time.Sleep(100 * time.Millisecond)
+		if err := db.Sync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertMsgs(t, newestFirst(n), get(t, db, NewQuery(topic)))
+}
+
+func TestGetDuringSyncNoDuplicates(t *testing.T) {
+	db, _ := openTestDB(t)
+	topic := []byte("unit.ops.sync.overlap")
+	ids := putMsgs(t, db, topic, 0, 3)
+	syncDB(t, db)
+
+	// Recreate the moment in a sync when entries are on disk but not yet
+	// released from memory.
+	q := NewQuery(topic)
+	q.internal.opts = &_QueryOptions{defaultQueryLimit: 1000, maxQueryLimit: 100000}
+	if err := q.parse(); err != nil {
+		t.Fatal(err)
+	}
+	hash := db.internal.trie.lookup(q.internal.parts, q.internal.depth, q.internal.topicType)[0].hash
+	for _, id := range ids {
+		db.internal.timeWindow.add(1, hash, newWinEntry(message.ID(id).Sequence(), 0))
+	}
+
+	assertMsgs(t, newestFirst(3), get(t, db, NewQuery(topic)))
+}
+
+func TestGetNewestFromMemory(t *testing.T) {
+	// Messages spread over several memdb time blocks are held in memory in a
+	// map; a limited Get must still return the newest ones.
+	db, _ := openTestDB(t, WithMaxSyncDuration(time.Hour, 1))
+	topic := []byte("unit.ops.memory.newest")
+	n := 0
+	for round := 0; round < 3; round++ {
+		for k := 0; k < 5; k++ {
+			if err := db.Put(topic, testMsg(n)); err != nil {
+				t.Fatal(err)
+			}
+			n++
+		}
+		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second + 10*time.Millisecond)))
+	}
+
+	assertMsgs(t, newestFirst(n)[:4], get(t, db, NewQuery(topic).WithLimit(4)))
+}
 func TestDeleteWithContract(t *testing.T) {
 	db, _ := openTestDB(t, WithMutable())
 	topic := []byte("unit.ops.delete.contract")

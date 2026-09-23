@@ -42,8 +42,11 @@ func newWindowWriter(fs *_FileSet, buf *bpool.Buffer) (*_WindowWriter, error) {
 	}
 	w.winFile = winFile
 	w.offset = winFile.currSize()
-	if w.offset > 0 {
-		w.windowIdx = int32(w.offset / int64(blockSize))
+	// windowIdx is the last used block. Block 0 is never used: offset 0 means
+	// "no block" both for a topic in the trie and for a block's next link.
+	w.windowIdx = 0
+	if w.offset > int64(blockSize) {
+		w.windowIdx = int32(w.offset/int64(blockSize)) - 1
 	}
 
 	return w, nil
@@ -70,7 +73,7 @@ func (w *_WindowWriter) del(seq uint64, winIdx int32) error {
 	b.entryIdx--
 
 	i := entryIdx
-	for ; i < entriesPerIndexBlock-1; i++ {
+	for ; i < entriesPerWindowBlock-1; i++ {
 		b.entries[i] = b.entries[i+1]
 	}
 	b.entries[i] = _WinEntry{}

@@ -248,6 +248,16 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	sort.Slice(q.internal.winEntries[:], func(i, j int) bool {
 		return q.internal.winEntries[i].seq > q.internal.winEntries[j].seq
 	})
+	// A sync writes entries to disk before releasing them from memory, so an
+	// entry can be found in both; drop the duplicates.
+	uniq := q.internal.winEntries[:0]
+	for i, we := range q.internal.winEntries {
+		if i > 0 && we.seq == q.internal.winEntries[i-1].seq {
+			continue
+		}
+		uniq = append(uniq, we)
+	}
+	q.internal.winEntries = uniq
 	start := 0
 	limit := q.Limit
 	if len(q.internal.winEntries) < int(q.Limit) {
