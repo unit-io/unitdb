@@ -408,6 +408,7 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	b.setManaged()
 	// If an error is returned from the function then rollback and return error.
 	if err := fn(b, b.commitComplete); err != nil {
+		b.unsetManaged()
 		b.Abort()
 		close(b.commitComplete)
 		return err
