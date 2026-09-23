@@ -183,6 +183,11 @@ func (db *_SyncHandle) sync(recovery bool) error {
 		logger.Error().Err(err).Str("context", "timeWindow.write")
 		return err
 	}
+	// Write the filter first so it covers every entry in the index.
+	if err := db.internal.filter.write(); err != nil {
+		logger.Error().Err(err).Str("context", "filter.write")
+		return err
+	}
 	if err := db.blockWriter.write(); err != nil {
 		logger.Error().Err(err).Str("context", "block.write")
 		return err

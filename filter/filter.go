@@ -30,6 +30,22 @@ func (b *Generator) Bytes() []byte {
 	return b.filter.Bytes()
 }
 
+// NewFilterGeneratorFromBytes restores a generator from bytes returned by Bytes,
+// so entries can keep being appended to a persisted filter.
+func NewFilterGeneratorFromBytes(b []byte) *Generator {
+	return &Generator{filter: newFilterFromBytes(b, bloomBits, bloomHashes)}
+}
+
+// Test returns false if h was definitely never appended.
+func (b *Generator) Test(h uint64) bool {
+	return b.filter.Test(h)
+}
+
+// Size returns the length in bytes of an encoded filter.
+func Size() int {
+	return int(Uint64Bytes * (bloomHashes + (bloomBits+63)/64))
+}
+
 // Block is a filter block
 type Block struct {
 	filter *Filter

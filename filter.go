@@ -18,15 +18,14 @@ package unitdb
 
 import (
 	"github.com/unit-io/unitdb/filter"
-	"github.com/unit-io/unitdb/memdb"
 )
 
-// Filter filter is bloom filter generator.
+// Filter is a bloom filter of the sequences written to the index. It is kept
+// in memory and persisted by sync before index blocks are written, so the
+// saved filter never rules out an entry that is on disk.
 type Filter struct {
 	file        _FileSet
 	filterBlock *filter.Generator
-	blockCache  *memdb.DB
-	cacheID     uint64
 }
 
 // Append appends an entry to bloom filter.
@@ -36,52 +35,47 @@ func (f *Filter) Append(h uint64) {
 
 // Test tests entry in bloom filter. It returns false if entry definitely does not exist or true may be entry exist in DB.
 func (f *Filter) Test(h uint64) bool {
-	/// Test filter block for presence.
-	fltr, _ := f.getFilterBlock(true)
-	if fltr != nil && !fltr.Test(h) {
-		return false
-	}
-	return true
+	return f.filterBlock.Test(h)
 }
 
-// Close finalizes writing filter to file.
-func (f *Filter) close() error {
-	f.writeFilterBlock()
-	if err := f.file.Close(); err != nil {
+// write persists the filter.
+func (f *Filter) write() error {
+	_, err := f.file.WriteAt(f.filterBlock.Bytes(), 0)
+	return err
+}
+
+// loadFilter restores the filter saved by sync. A db without a saved filter,
+// such as one created before the filter was persisted, has it rebuilt from
+// the index so that entries already on disk are never ruled out.
+func (db *DB) loadFilter() error {
+	f := &db.internal.filter
+	if size := f.file.currSize(); size == int64(filter.Size()) {
+		raw := make([]byte, size)
+		if _, err := f.file.ReadAt(raw, 0); err != nil {
+			return err
+		}
+		f.filterBlock = filter.NewFilterGeneratorFromBytes(raw)
+		return nil
+	}
+
+	f.filterBlock = filter.NewFilterGenerator()
+	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
+	if err != nil {
 		return err
 	}
-	return nil
-}
-
-// writeFilterBlock writes the filter block.
-func (f *Filter) writeFilterBlock() error {
-	d := f.filterBlock.Finish()
-	if _, err := f.file.WriteAt(d, 0); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (f *Filter) getFilterBlock(fillCache bool) (*filter.Block, error) {
-	if f.file.currSize() <= 0 {
-		return nil, nil
-	}
-	var cacheKey uint64
-	if f.blockCache != nil {
-		cacheKey = f.cacheID ^ uint64(f.file.currSize())
-		if data, err := f.blockCache.Get(cacheKey); data != nil {
-			return filter.NewFilterBlock(data), err
+	r := _BlockReader{indexFile: indexFile}
+	for off := int64(0); off+int64(blockSize) <= indexFile.currSize(); off += int64(blockSize) {
+		r.offset = off
+		b, err := r.readIndexBlock()
+		if err != nil {
+			return err
+		}
+		for _, e := range b.entries {
+			if e.seq != 0 {
+				f.Append(e.seq)
+			}
 		}
 	}
 
-	raw := make([]byte, f.file.currSize())
-	if _, err := f.file.ReadAt(raw, 0); err != nil {
-		return nil, err
-	}
-
-	if f.blockCache != nil && fillCache {
-		f.blockCache.Put(cacheKey, raw)
-	}
-	return filter.NewFilterBlock(raw), nil
+	return f.write()
 }

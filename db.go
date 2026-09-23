@@ -173,8 +173,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 	internal.mem = memdb
 
-	internal.filter.blockCache = internal.mem
-
 	db := &DB{
 		opts: options,
 
@@ -186,6 +184,11 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
+	}
+
+	if err := db.loadFilter(); err != nil {
+		logger.Error().Err(err).Str("context", "db.loadFilter")
+		return nil, err
 	}
 
 	// Read freeList.

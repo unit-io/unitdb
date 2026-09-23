@@ -67,23 +67,14 @@ func (b *Filter) Bytes() []byte {
 	return buf.Bytes()
 }
 
-// Hashable -> hashes
-func (b *Filter) hash(h uint64) []uint64 {
-	n := len(b.keys)
-	hashes := make([]uint64, n)
-	for i := 0; i < n; i++ {
-		hashes[i] = h ^ b.keys[i]
-	}
-	return hashes
-}
-
 // Add adds `key` to the filter.
 func (b *Filter) Add(h uint64) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	for _, i := range b.hash(h) {
-		i %= b.m
+	// Each key salts the hash; computed inline to avoid allocating per call.
+	for _, k := range b.keys {
+		i := (h ^ k) % b.m
 		b.bits[i>>6] |= 1 << uint(i&0x3f)
 	}
 	b.n++
@@ -94,8 +85,8 @@ func (b *Filter) Test(h uint64) bool {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	for _, i := range b.hash(h) {
-		i %= b.m
+	for _, k := range b.keys {
+		i := (h ^ k) % b.m
 		if (b.bits[i>>6]>>uint(i&0x3f))&1 == 0 {
 			return false
 		}

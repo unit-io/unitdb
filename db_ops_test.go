@@ -28,6 +28,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/unit-io/unitdb/filter"
+	"github.com/unit-io/unitdb/message"
 )
 
 // smallOpts keeps buffer pools small so tests don't reserve GBs of memory.
@@ -760,6 +763,74 @@ func TestSyncFsyncsFiles(t *testing.T) {
 	}
 	if err := db.sync(); err == nil {
 		t.Fatal("expected fsync error on closed files")
+	}
+}
+
+// syncedSeqs returns the sequences of ids.
+func syncedSeqs(ids [][]byte) []uint64 {
+	var seqs []uint64
+	for _, id := range ids {
+		seqs = append(seqs, message.ID(id).Sequence())
+	}
+	return seqs
+}
+
+func TestFilterPersists(t *testing.T) {
+	db, dir := openTestDB(t, WithMutable())
+	topic := []byte("unit.ops.filter")
+	ids := putMsgs(t, db, topic, 0, 4)
+	syncDB(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db = reopenTestDB(t, dir, WithMutable())
+	for _, seq := range syncedSeqs(ids) {
+		if !db.internal.filter.Test(seq) {
+			t.Fatalf("filter rules out synced seq %d after reopen", seq)
+		}
+	}
+	if db.internal.filter.Test(1 << 40) {
+		t.Fatal("filter should rule out a seq that was never written")
+	}
+
+	// A delete after reopen depends on the filter not ruling the entry out.
+	if err := db.Delete(ids[0], topic); err != nil {
+		t.Fatal(err)
+	}
+	assertMsgs(t, [][]byte{testMsg(3), testMsg(2), testMsg(1)}, get(t, db, NewQuery(topic)))
+	if count := db.Count(); count != 3 {
+		t.Fatalf("expected count 3; got %d", count)
+	}
+}
+
+func TestFilterRebuiltFromIndex(t *testing.T) {
+	db, dir := openTestDB(t, WithMutable())
+	topic := []byte("unit.ops.filter.rebuild")
+	ids := putMsgs(t, db, topic, 0, 4)
+	syncDB(t, db)
+	// Simulate a db created before the filter was persisted.
+	if err := db.internal.filter.file.truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db = reopenTestDB(t, dir, WithMutable())
+	for _, seq := range syncedSeqs(ids) {
+		if !db.internal.filter.Test(seq) {
+			t.Fatalf("rebuilt filter rules out synced seq %d", seq)
+		}
+	}
+	if size := db.internal.filter.file.currSize(); size != int64(filter.Size()) {
+		t.Fatalf("expected rebuilt filter to be saved (%d bytes); got %d", filter.Size(), size)
+	}
+	if err := db.Delete(ids[0], topic); err != nil {
+		t.Fatal(err)
+	}
+	if count := db.Count(); count != 3 {
+		t.Fatalf("expected count 3; got %d", count)
 	}
 }
 
