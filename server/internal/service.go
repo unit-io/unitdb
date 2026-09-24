@@ -24,10 +24,12 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/config"
+	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/net/listener"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
@@ -44,7 +46,9 @@ import (
 type _Service struct {
 	pid     uint32             // The processid is unique Id for the application
 	mac     *crypto.MAC        // The MAC to use for decoding and encoding keys.
-	cache   *sync.Map          // The cache for the contracts.
+	signer  *security.Signer   // The signer to issue and verify topic keys.
+	// acceptUnsignedKeys is 1 when unsigned topic keys are accepted (atomic).
+	acceptUnsignedKeys uint32
 	context context.Context    // context for the service
 	config  *config.Config     // The configuration for the service.
 	cancel  context.CancelFunc // cancellation function
@@ -54,13 +58,20 @@ type _Service struct {
 	grpc    *lp.GrpcServer     // The underlying GRPC server.
 	meter   *Meter             // The metircs to measure timeseries on message events
 	stats   *stats.Stats
+
+	// Shutdown.
+	mu        sync.Mutex
+	closing   bool               // set by Close: new connections are refused
+	listener  *listener.Listener // the main listener, closed by Close
+	conns     sync.WaitGroup     // accepted connections not yet closed
+	inflight  sync.WaitGroup     // publish fan-outs in progress
+	closeOnce sync.Once
 }
 
 func NewService(cfg *config.Config) (s *_Service, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s = &_Service{
 		pid:     uid.NewUnique(),
-		cache:   new(sync.Map),
 		context: ctx,
 		config:  cfg,
 		cancel:  cancel,
@@ -87,9 +98,12 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	s.tcp.Handler = s.onAcceptConn
 
 	// Create a new MAC from the key.
-	if s.mac, err = crypto.New([]byte(s.config.Encryption(s.config.EncryptionConfig).Key)); err != nil {
+	encryptionKey := []byte(s.config.Encryption(s.config.EncryptionConfig).Key)
+	if s.mac, err = crypto.New(encryptionKey); err != nil {
 		return nil, err
 	}
+	s.signer = security.NewSigner(encryptionKey)
+	s.setAcceptUnsignedKeys(cfg.AcceptUnsignedKeys)
 
 	// Open database connection
 	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).Reset)
@@ -110,6 +124,20 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	}()
 
 	return s, nil
+}
+
+// setAcceptUnsignedKeys sets whether unsigned topic keys are accepted.
+func (s *_Service) setAcceptUnsignedKeys(accept bool) {
+	var v uint32
+	if accept {
+		v = 1
+	}
+	atomic.StoreUint32(&s.acceptUnsignedKeys, v)
+}
+
+// acceptsUnsignedKeys reports whether unsigned topic keys are accepted.
+func (s *_Service) acceptsUnsignedKeys() bool {
+	return atomic.LoadUint32(&s.acceptUnsignedKeys) == 1
 }
 
 // netListener creates net.Listener for tcp and unix domains:
@@ -156,12 +184,27 @@ func (s *_Service) listen(addr string) {
 	l.ServeCallback(listener.MatchWS("GET"), s.http.Serve)
 	l.ServeCallback(listener.MatchAny(), s.tcp.Serve)
 
+	s.mu.Lock()
+	s.listener = l
+	s.mu.Unlock()
 	go l.Serve()
 }
 
 // Handle a new connection request
 func (s *_Service) onAcceptConn(t net.Conn) {
+	// Register the connection under the lock so that Close either refuses it
+	// or waits for it.
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		t.Close()
+		return
+	}
 	conn := s.newConn(t)
+	conn.tracked = true
+	s.conns.Add(1)
+	s.mu.Unlock()
+
 	conn.closeW.Add(2)
 	go conn.readLoop(s.context)
 	go conn.writeLoop(s.context)
@@ -189,7 +232,36 @@ func (s *_Service) hookSignals() {
 	}()
 }
 
+// Close shuts the service down: it stops accepting connections, closes the
+// open ones, waits for publishes in progress and only then closes the store,
+// so that nothing uses the store after it is closed. Close may be called more
+// than once.
 func (s *_Service) Close() {
+	s.closeOnce.Do(s.close)
+}
+
+func (s *_Service) close() {
+	s.mu.Lock()
+	s.closing = true
+	l := s.listener
+	s.mu.Unlock()
+
+	// Stop accepting connections.
+	if l != nil {
+		l.Close()
+	}
+	s.grpc.Stop()
+
+	// Close the open connections and wait for all of them, including those
+	// another goroutine is already closing.
+	for _, c := range Globals.connCache.all() {
+		if c.tracked {
+			c.close()
+		}
+	}
+	s.conns.Wait()
+	s.inflight.Wait()
+
 	if s.cancel != nil {
 		s.cancel()
 	}

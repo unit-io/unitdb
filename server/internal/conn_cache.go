@@ -57,3 +57,14 @@ func (cc *_ConnCache) delete(connID uid.LID) {
 	defer cc.Unlock()
 	delete(cc.connections, connID)
 }
+
+// all returns the cached connections.
+func (cc *_ConnCache) all() []*_Conn {
+	cc.RLock()
+	defer cc.RUnlock()
+	conns := make([]*_Conn, 0, len(cc.connections))
+	for _, c := range cc.connections {
+		conns = append(conns, c)
+	}
+	return conns
+}

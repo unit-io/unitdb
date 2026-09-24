@@ -23,12 +23,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/stats"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
@@ -56,15 +56,17 @@ func (c *_Conn) readLoop(ctx context.Context) (err error) {
 	reader := bufio.NewReaderSize(c.socket, 65536)
 
 	for {
+		// Set read/write deadlines so we can close dangling connections. Set
+		// them before checking closeC: close expires the read deadline after
+		// closing closeC, so the expired deadline is never overwritten.
+		c.socket.SetDeadline(time.Now().Add(time.Second * 120))
+
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-c.closeC:
 			return nil
 		default:
-			// Set read/write deadlines so we can close dangling connections
-			c.socket.SetDeadline(time.Now().Add(time.Second * 120))
-
 			// Decode an incoming Message
 			pkt, err = lp.Read(reader)
 			if err != nil {
@@ -113,7 +115,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			FlowControl: utp.ACKNOWLEDGE,
 			Message:     rawAck.Bytes(),
 		}
-		c.send <- ack
+		c.queue(ack)
 
 		if err == types.ErrInvalidClientID {
 			c.sendClientID(clientID.Encode(c.service.mac))
@@ -130,16 +132,10 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			batchCountThreshold: int(m.BatchCountThreshold),
 		})
 
-		var sessKey int32
-		if m.SessKey != 0 {
-			sessKey = m.SessKey
-		} else {
-			sessKey = int32(c.clientID.Epoch())
-		}
+		sessKey := sessionKey(c.clientID, m.SessKey)
 
 		// Take care of any messages in the store
-		sessID := c.sessID
-		if rawSess, err := store.Session.Get(uint64(sessKey)); err == nil {
+		if rawSess, err := store.Session.Get(sessKey); err == nil && len(rawSess) >= 4 {
 			sessID := binary.LittleEndian.Uint32(rawSess[:4])
 			if !m.CleanSessFlag {
 				c.resume(sessID)
@@ -149,10 +145,10 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			c.sessID = uid.LID(sessID)
 		}
 		rawSess := make([]byte, 4)
-		binary.LittleEndian.PutUint32(rawSess[0:4], uint32(sessID))
-		store.Session.Put(uint64(sessKey), rawSess)
-		if sessKey != int32(c.clientID.Epoch()) {
-			store.Session.Put(uint64(c.clientID.Epoch()), rawSess)
+		binary.LittleEndian.PutUint32(rawSess[0:4], uint32(c.sessID))
+		store.Session.Put(sessKey, rawSess)
+		if m.SessKey != 0 {
+			store.Session.Put(sessionKey(c.clientID, 0), rawSess)
 		}
 	case utp.DISCONNECT:
 		go c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
@@ -177,7 +173,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			return nil
 		}
 
-		c.send <- ack
+		c.queue(ack)
 	// An attempt to subscribe to a topic.
 	case utp.SUBSCRIBE:
 		m := *inMsg.(*utp.Subscribe)
@@ -200,7 +196,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			return nil
 		}
 
-		c.send <- ack
+		c.queue(ack)
 
 	// An attempt to unsubscribe from a topic.
 	case utp.UNSUBSCRIBE:
@@ -222,7 +218,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			return nil
 		}
 
-		c.send <- ack
+		c.queue(ack)
 
 	// Ping response, respond appropriately.
 	case utp.PINGREQ:
@@ -230,7 +226,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			MessageType: utp.PINGREQ,
 			FlowControl: utp.ACKNOWLEDGE,
 		}
-		c.send <- ack
+		c.queue(ack)
 
 	case utp.PUBLISH:
 		m := *inMsg.(*utp.Publish)
@@ -249,11 +245,18 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			// Get message from Log store
 			msg := store.Log.Get(key)
 			if msg == nil {
-				return types.ErrServerError
+				// The message is gone, for example after a clean session: tell
+				// the client the flow is complete so it stops asking for it.
+				c.queue(&utp.ControlMessage{
+					MessageType: utp.PUBLISH,
+					FlowControl: utp.COMPLETE,
+					MessageID:   ctrlMsg.MessageID,
+				})
+				return nil
 			}
 			switch msg.(type) {
 			case *utp.Publish:
-				c.send <- msg
+				c.queue(msg)
 			}
 		case utp.RECEIPT:
 			comp := &utp.ControlMessage{
@@ -262,7 +265,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 				MessageID:   ctrlMsg.MessageID,
 			}
 			c.storeOutbound(comp)
-			c.send <- comp
+			c.queue(comp)
 		}
 	}
 
@@ -310,21 +313,32 @@ func (c *_Conn) writeLoop(ctx context.Context) (err error) {
 	}
 }
 
+// sessionKey returns the store key of a connection's session. The key is
+// derived from the client's contract, so a client can never resume the
+// session of another contract. Without a session key from the client, the key
+// is derived from the whole client id rather than its epoch, which only has
+// second resolution and is shared by every client id issued in that second.
+// The top bit keeps session keys apart from message log keys.
+func sessionKey(clientID uid.ID, sessKey int32) uint64 {
+	h := fnv.New64a()
+	h.Write(clientID[8:12]) // contract
+	if sessKey != 0 {
+		var b [5]byte
+		b[0] = 's'
+		binary.LittleEndian.PutUint32(b[1:], uint32(sessKey))
+		h.Write(b[:])
+	} else {
+		h.Write([]byte{'c'})
+		h.Write(clientID)
+	}
+	return h.Sum64() | 1<<63
+}
+
 // onConnect is a handler for Connect events.
 func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onConnect").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
-	var clientid = uid.ID{}
-	if clientID != nil && len(clientID) > c.service.mac.Overhead() {
-		if contract, ok := c.service.cache.Load(crypto.SignatureToUint32(clientID[crypto.EpochSize:crypto.MessageOffset])); ok {
-			clientid, err := uid.CachedClientID(contract.(uint32))
-			if err != nil {
-				return nil, types.ErrUnauthorized
-			}
-			return clientid, nil
-		}
-	}
-
+	// Every client id is decrypted: its MAC is what proves the server issued it.
 	clientid, err := uid.Decode(clientID, c.service.mac)
 
 	if err != nil {
@@ -334,12 +348,6 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 		}
 
 		return clientid, types.ErrInvalidClientID
-	}
-
-	//do not cache primary client Id
-	if !clientid.IsPrimary() {
-		cid := []byte(clientid.Encode(c.service.mac))
-		c.service.cache.LoadOrStore(crypto.SignatureToUint32(cid[crypto.EpochSize:crypto.MessageOffset]), clientid.Contract())
 	}
 
 	return clientid, nil
@@ -357,7 +365,7 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 	}
 
 	if !c.insecure {
-		if _, err := c.onSecureRequest(topic); err != nil {
+		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
 	}
@@ -392,7 +400,7 @@ func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.
 	}
 
 	if !c.insecure {
-		if _, err := c.onSecureRequest(topic); err != nil {
+		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
 	}
@@ -418,7 +426,7 @@ func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *
 	}
 
 	if !c.insecure {
-		if _, err := c.onSecureRequest(topic); err != nil {
+		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
 	}
@@ -445,11 +453,11 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 		// Check whether the key is 'unitdb' which means it's an API request
 		if len(topic.Key) == 6 && string(topic.Key) == "unitdb" {
 			c.onSpecialRequest(topic, pubMsg.Payload)
-			return nil
+			continue
 		}
 
 		if !c.insecure {
-			wildcard, err := c.onSecureRequest(topic)
+			wildcard, err := c.onSecureRequest(topic, security.AllowWrite)
 			if err != nil {
 				return err
 			}
@@ -464,7 +472,11 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 			return types.ErrServerError
 		}
 		// Iterate through all subscribers and send them the message
-		go c.publish(pub, topic, pubMsg)
+		c.service.inflight.Add(1)
+		go func(topic *security.Topic, pubMsg *utp.PublishMessage) {
+			defer c.service.inflight.Done()
+			c.publish(pub, topic, pubMsg)
+		}(topic, pubMsg)
 	}
 
 	if pub.IsForwarded {
@@ -482,19 +494,44 @@ func (c *_Conn) acknowledge(pub utp.Publish) *types.Error {
 		FlowControl: utp.ACKNOWLEDGE,
 		MessageID:   pub.MessageID,
 	}
-	c.send <- ack
+	c.queue(ack)
 	return nil
 }
 
-func (c *_Conn) onSecureRequest(topic *security.Topic) (bool, *types.Error) {
-	// Attempt to decode the key
-	key, err := security.DecodeKey(topic.Key)
+// decodeKey decodes a signed topic key issued for the client's contract, or
+// an unsigned key when the server is configured to accept them.
+func (c *_Conn) decodeKey(text string) (security.Key, *types.Error) {
+	if len(text) == security.SignedKeyLen {
+		key, err := c.service.signer.DecodeKey(c.clientID.Contract(), text)
+		switch err {
+		case nil:
+			return key, nil
+		case security.ErrInvalidSignature:
+			return nil, types.ErrUnauthorized
+		default:
+			return nil, types.ErrBadRequest
+		}
+	}
+	key, err := security.DecodeKey(text)
 	if err != nil {
-		return false, types.ErrBadRequest
+		return nil, types.ErrBadRequest
+	}
+	if !c.service.acceptsUnsignedKeys() {
+		return nil, types.ErrUnauthorized
+	}
+	return key, nil
+}
+
+// onSecureRequest checks that the topic key is valid for the topic and grants
+// the permission the request needs: AllowRead to subscribe, unsubscribe or
+// relay, AllowWrite to publish.
+func (c *_Conn) onSecureRequest(topic *security.Topic, permission uint32) (bool, *types.Error) {
+	key, keyErr := c.decodeKey(topic.Key)
+	if keyErr != nil {
+		return false, keyErr
 	}
 
-	// Check if the key has the permission to read the topic
-	if !key.HasPermission(security.AllowRead) {
+	if !key.HasPermission(permission) {
 		return false, types.ErrUnauthorized
 	}
 
@@ -556,6 +593,12 @@ func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 
 // onKeyGen processes a keygen request.
 func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
+	// Keys grant access to the whole contract, so only its primary client
+	// may generate them.
+	if !c.clientID.IsPrimary() {
+		return types.ErrKeyGenForbidden, false
+	}
+
 	// Deserialize the payload.
 	req := []types.KeyGenRequest{}
 	if err := json.Unmarshal(payload, &req); err != nil {
@@ -565,7 +608,7 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	var resp []*types.KeyGenResponse
 	// Use the cipher to generate the key
 	for _, m := range req {
-		key, err := security.GenerateKey(c.clientID.Contract(), m.Topic, m.Access())
+		key, err := c.service.signer.GenerateKey(c.clientID.Contract(), m.Topic, m.Access())
 		if err != nil {
 			switch err {
 			case security.ErrTargetTooLong:

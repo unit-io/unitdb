@@ -60,9 +60,12 @@ func (mids *MessageIds) FreeID(id MID) {
 func (mids *MessageIds) NextID(pktType utp.MessageType) MID {
 	mids.Lock()
 	defer mids.Unlock()
-	mids.id++
-	if _, ok := mids.resume[mids.id]; ok {
-		mids.NextID(pktType)
+	// Skip the ids of resumed messages that are still in flight.
+	for {
+		mids.id++
+		if _, ok := mids.resume[mids.id]; !ok {
+			break
+		}
 	}
 	mids.index[mids.id] = pktType
 	return mids.id

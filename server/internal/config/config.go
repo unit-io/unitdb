@@ -51,6 +51,11 @@ type Config struct {
 
 	EncryptionConfig json.RawMessage `json:"encryption_config"`
 
+	// AcceptUnsignedKeys accepts the unsigned topic keys issued before keys
+	// were signed. Unsigned keys can be edited or minted by anyone who knows
+	// a contract, so enable it only while clients move to signed keys.
+	AcceptUnsignedKeys bool `json:"accept_unsigned_keys"`
+
 	// Configs for subsystems
 	Cluster json.RawMessage `json:"cluster_config"`
 
