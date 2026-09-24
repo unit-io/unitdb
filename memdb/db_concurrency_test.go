@@ -419,3 +419,91 @@ func TestReleasedBlocksPruned(t *testing.T) {
 		r.RUnlock()
 	}
 }
+
+// TestGetDuringFree checks values returned by Get stay intact while their time
+// block is freed and its buffer reused for new writes. Get used to return a
+// slice of the block's pooled buffer, so a reader could see another key's value.
+func TestGetDuringFree(t *testing.T) {
+	db, _ := openTestDB(t, WithTimeBlockInterval(5*time.Millisecond), WithLogInterval(time.Millisecond))
+	var next uint64 // keys below next have been put
+	var mu sync.Mutex
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Writer: fills new time blocks, reusing freed buffers.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for k := uint64(0); ; k++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := db.Put(k, testVal(k)); err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			next = k + 1
+			mu.Unlock()
+		}
+	}()
+	// Freer: releases every block committed to the log.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			db.BlockIterator(func(timeID int64, keys []uint64) (bool, error) {
+				return false, db.Free(timeID)
+			})
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	// Readers: a value must match its key, and still match after more writes.
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				mu.Lock()
+				n := next
+				mu.Unlock()
+				if n == 0 {
+					continue
+				}
+				k := n - 1 - uint64(i%64)
+				if k >= n {
+					continue
+				}
+				val, err := db.Get(k)
+				if err != nil {
+					continue // freed or not yet visible
+				}
+				want := string(testVal(k))
+				if string(val) != want {
+					t.Errorf("Get(%d) = %q; want %q", k, val, want)
+					return
+				}
+				time.Sleep(100 * time.Microsecond)
+				if string(val) != want {
+					t.Errorf("Get(%d) value changed to %q after its block was freed", k, val)
+					return
+				}
+			}
+		}(r)
+	}
+	time.Sleep(time.Second)
+	close(stop)
+	wg.Wait()
+}

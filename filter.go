@@ -74,8 +74,7 @@ func (db *DB) loadFilter() error {
 	}
 	r := _BlockReader{indexFile: indexFile}
 	for off := int64(0); off+int64(blockSize) <= indexFile.currSize(); off += int64(blockSize) {
-		r.offset = off
-		b, err := r.readIndexBlock()
+		b, err := r.readIndexBlock(off)
 		if err != nil {
 			return err
 		}

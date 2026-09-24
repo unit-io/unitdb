@@ -124,6 +124,9 @@ func (db *DB) close() error {
 	if !db.setClosed() {
 		return errClosed
 	}
+	// Stop the pool's drain goroutine, or every DB opened leaks one. The pool
+	// still serves Get and Put until close returns.
+	defer db.internal.bufPool.Done()
 
 	// Signal all goroutines.
 	close(db.internal.closeC)

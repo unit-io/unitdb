@@ -56,8 +56,8 @@ func newBlockWriter(fs *_FileSet, lease *_Lease, buf *bpool.Buffer) (*_BlockWrit
 		w.blockIdx = int32(w.indexOffset / int64(blockSize))
 		// read final block from index file.
 		if w.indexOffset > int64(w.blockIdx*blockSize) {
-			r := _BlockReader{indexFile: w.indexFile, offset: blockOffset(w.blockIdx)}
-			b, err := r.readIndexBlock()
+			r := _BlockReader{indexFile: w.indexFile}
+			b, err := r.readIndexBlock(blockOffset(w.blockIdx))
 			if err != nil {
 				return nil, err
 			}
@@ -98,8 +98,8 @@ func (w *_BlockWriter) del(seq uint64, keepTopic bool) (_IndexEntry, error) {
 	if bIdx > w.blockIdx {
 		return delEntry, nil // no entry in db to delete
 	}
-	r := _BlockReader{indexFile: w.indexFile, offset: blockOffset(bIdx)}
-	b, err := r.readIndexBlock()
+	r := _BlockReader{indexFile: w.indexFile}
+	b, err := r.readIndexBlock(blockOffset(bIdx))
 	if err == io.EOF {
 		return delEntry, nil // index block not written yet, so no entry in db to delete
 	}
@@ -142,8 +142,8 @@ func (w *_BlockWriter) append(e _IndexEntry) (err error) {
 	b, ok = w.indexBlocks[bIdx]
 	if !ok {
 		if bIdx < w.blockIdx {
-			r := _BlockReader{indexFile: w.indexFile, offset: blockOffset(bIdx)}
-			b, err = r.readIndexBlock()
+			r := _BlockReader{indexFile: w.indexFile}
+			b, err = r.readIndexBlock(blockOffset(bIdx))
 			if err != nil {
 				return err
 			}
