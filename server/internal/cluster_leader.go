@@ -166,7 +166,7 @@ func (c *Cluster) sendPings() {
 		err := node.call("Cluster.Ping", &ClusterPing{
 			Leader:    c.thisNodeName,
 			Term:      c.fo.term,
-			Signature: c.ring.Signature(),
+			Signature: c.getRing().Signature(),
 			Nodes:     c.fo.activeNodes}, &unused)
 
 		if err != nil {
@@ -305,10 +305,10 @@ func (c *Cluster) run() {
 			}
 
 			missed = 0
-			if ping.Signature != c.ring.Signature() {
+			if ping.Signature != c.getRing().Signature() {
 				if rehashSkipped {
 					log.Println("cluster: rehashing at a request of",
-						ping.Leader, ping.Nodes, ping.Signature, c.ring.Signature())
+						ping.Leader, ping.Nodes, ping.Signature, c.getRing().Signature())
 					c.rehash(ping.Nodes)
 					rehashSkipped = false
 

@@ -92,6 +92,9 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 
 	srv := grpc.NewServer(opts...)
 	pbx.RegisterUnitdbServer(srv, s)
+	s.Lock()
+	s.stop = srv.Stop
+	s.Unlock()
 	log.Printf("gRPC/%s%s server is registered", grpc.Version, secure)
 	go func() {
 		if err := srv.Serve(list); err != nil {
@@ -99,6 +102,16 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 		}
 	}()
 	return nil
+}
+
+// Stop stops accepting streams and closes the open ones.
+func (s *GrpcServer) Stop() {
+	s.Lock()
+	stop := s.stop
+	s.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 var _ pbx.UnitdbServer = (*GrpcServer)(nil)

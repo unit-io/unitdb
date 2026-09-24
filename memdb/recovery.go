@@ -59,7 +59,7 @@ func (db *DB) delete(key uint64) error {
 			db.internal.meter.Dels.Inc(1)
 			if len(block.records) == 0 {
 				delete(db.timeBlocks, _TimeID(timeID))
-				db.internal.buffer.Put(block.data)
+				block.free(db.internal.buffer)
 				db.removeTimeFilter(timeID)
 			}
 			block.Unlock()
@@ -162,7 +162,7 @@ func (db *DB) startRecovery() error {
 				db.internal.meter.Dels.Inc(1)
 				if len(block.records) == 0 {
 					delete(db.timeBlocks, _TimeID(timeID))
-					db.internal.buffer.Put(block.data)
+					block.free(db.internal.buffer)
 					db.removeTimeFilter(timeID)
 				}
 				block.Unlock()

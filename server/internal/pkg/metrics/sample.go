@@ -20,7 +20,6 @@ import (
 	"math"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -83,51 +82,57 @@ func (s *sample) Reset() {
 	s.Count = 0
 }
 
+// The statistics of a live sample are computed on a snapshot: it holds only
+// the recorded samples, sorted, and is taken under the sample's lock.
+
 // Cumulative returns cumulative time of all sampled events.
-func (s *sample) Cumulative() time.Duration { return s.Times.cumulative() }
+func (s *sample) Cumulative() time.Duration { return s.Snapshot().Cumulative() }
 
 // HMean returns event duration harmonic mean.
-func (s *sample) HMean() time.Duration { return s.Times.hMean() }
+func (s *sample) HMean() time.Duration { return s.Snapshot().HMean() }
 
 // Avg returns average of number of events recorded.
-func (s *sample) Avg() time.Duration { return s.Times.avg() }
+func (s *sample) Avg() time.Duration { return s.Snapshot().Avg() }
 
 // P50 returns event duration nth percentiles ..
-func (s *sample) P50() time.Duration { return s.Times[s.Times.Len()/2] }
+func (s *sample) P50() time.Duration { return s.Snapshot().P50() }
 
 // P75 returns event duration nth percentiles ..
-func (s *sample) P75() time.Duration { return s.Times.p(0.75) }
+func (s *sample) P75() time.Duration { return s.Snapshot().P75() }
 
 // P95 returns event duration nth percentiles ..
-func (s *sample) P95() time.Duration { return s.Times.p(0.95) }
+func (s *sample) P95() time.Duration { return s.Snapshot().P95() }
 
 // P99 returns event duration nth percentiles ..
-func (s *sample) P99() time.Duration { return s.Times.p(0.99) }
+func (s *sample) P99() time.Duration { return s.Snapshot().P99() }
 
 // P999 returns event duration nth percentiles ..
-func (s *sample) P999() time.Duration { return s.Times.p(0.999) }
+func (s *sample) P999() time.Duration { return s.Snapshot().P999() }
 
 // StdDev returns standard deviation.
-func (s *sample) StdDev() time.Duration { return s.Times.stdDev() }
+func (s *sample) StdDev() time.Duration { return s.Snapshot().StdDev() }
 
 // Long5p returns average of the longest 5% event durations.
-func (s *sample) Long5p() time.Duration { return s.Times.long5p() }
+func (s *sample) Long5p() time.Duration { return s.Snapshot().Long5p() }
 
 // Short5p returns average of the shortest 5% event durations.
-func (s *sample) Short5p() time.Duration { return s.Times.short5p() }
+func (s *sample) Short5p() time.Duration { return s.Snapshot().Short5p() }
 
 // Min returns lowest event duration.
-func (s *sample) Min() time.Duration { return s.Times.min() }
+func (s *sample) Min() time.Duration { return s.Snapshot().Min() }
 
 // Max returns highest event duration.
-func (s *sample) Max() time.Duration { return s.Times.max() }
+func (s *sample) Max() time.Duration { return s.Snapshot().Max() }
 
 //  Range returns event duration range (Max-Min).
-func (s *sample) Range() time.Duration { return s.Times.srange() }
+func (s *sample) Range() time.Duration { return s.Snapshot().Range() }
 
 // AddTime adds a time.Duration to metrics.
 func (s *sample) AddTime(t time.Duration) {
-	s.Times[(atomic.AddUint64(&s.Count, 1)-1)%s.Size] = t
+	s.Lock()
+	defer s.Unlock()
+	s.Times[s.Count%s.Size] = t
+	s.Count++
 }
 
 // SetWallTime optionally sets an elapsed wall time duration.
@@ -135,23 +140,25 @@ func (s *sample) AddTime(t time.Duration) {
 // This is useful for concurrent/parallelized events that overlap
 // in wall time and are writing to a shared metrics instance.
 func (s *sample) SetWallTime(t time.Duration) {
+	s.Lock()
+	defer s.Unlock()
 	s.WallTime = t
 }
 
 // Snapshot returns a read-only copy of the sample.
 func (s *sample) Snapshot() Sample {
-	sample := &sample{}
-
 	s.Lock()
 	defer s.Unlock()
-	sample.Samples = int(math.Min(float64(atomic.LoadUint64(&s.Count)), float64(s.Size)))
-	sample.Count = atomic.LoadUint64(&s.Count)
-	times := make(timeSlice, sample.Samples)
-	copy(times, s.Times[:sample.Samples])
+	samples := s.Count
+	if samples > s.Size {
+		samples = s.Size
+	}
+	times := make(timeSlice, samples)
+	copy(times, s.Times[:samples])
 	sort.Sort(times)
 
 	return &SampleSnapshot{
-		count:     sample.Count,
+		count:     s.Count,
 		timeSlice: times,
 	}
 }
@@ -184,7 +191,12 @@ func (s *SampleSnapshot) HMean() time.Duration { return s.timeSlice.hMean() }
 func (s *SampleSnapshot) Avg() time.Duration { return s.timeSlice.avg() }
 
 // P50 returns event duration nth percentiles ..
-func (s *SampleSnapshot) P50() time.Duration { return s.timeSlice[s.timeSlice.Len()/2] }
+func (s *SampleSnapshot) P50() time.Duration {
+	if len(s.timeSlice) == 0 {
+		return 0
+	}
+	return s.timeSlice[s.timeSlice.Len()/2]
+}
 
 // P75 returns event duration nth percentiles ..
 func (s *SampleSnapshot) P75() time.Duration { return s.timeSlice.p(0.75) }
@@ -229,7 +241,8 @@ func (*SampleSnapshot) SetWallTime(time.Duration) {
 // Snapshot returns the snapshot.
 func (s *SampleSnapshot) Snapshot() Sample { return s }
 
-// These should be self-explanatory:
+// These should be self-explanatory. They expect a sorted slice and return 0
+// for an empty one.
 
 func (ts timeSlice) cumulative() time.Duration {
 	var total time.Duration
@@ -241,6 +254,9 @@ func (ts timeSlice) cumulative() time.Duration {
 }
 
 func (ts timeSlice) hMean() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	var total float64
 
 	for _, t := range ts {
@@ -251,6 +267,9 @@ func (ts timeSlice) hMean() time.Duration {
 }
 
 func (ts timeSlice) avg() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	var total time.Duration
 	for _, t := range ts {
 		total += t
@@ -259,10 +278,20 @@ func (ts timeSlice) avg() time.Duration {
 }
 
 func (ts timeSlice) p(p float64) time.Duration {
-	return ts[int(float64(ts.Len())*p+0.5)-1]
+	if len(ts) == 0 {
+		return 0
+	}
+	i := int(float64(ts.Len())*p+0.5) - 1
+	if i < 0 {
+		i = 0
+	}
+	return ts[i]
 }
 
 func (ts timeSlice) stdDev() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	m := ts.avg()
 	s := 0.00
 
@@ -276,6 +305,9 @@ func (ts timeSlice) stdDev() time.Duration {
 }
 
 func (ts timeSlice) long5p() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	set := ts[int(float64(ts.Len())*0.95+0.5):]
 
 	if len(set) <= 1 {
@@ -293,6 +325,9 @@ func (ts timeSlice) long5p() time.Duration {
 }
 
 func (ts timeSlice) short5p() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	set := ts[:int(float64(ts.Len())*0.05+0.5)]
 
 	if len(set) <= 1 {
@@ -310,10 +345,16 @@ func (ts timeSlice) short5p() time.Duration {
 }
 
 func (ts timeSlice) min() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	return ts[0]
 }
 
 func (ts timeSlice) max() time.Duration {
+	if len(ts) == 0 {
+		return 0
+	}
 	return ts[ts.Len()-1]
 }
 

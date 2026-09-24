@@ -62,9 +62,10 @@ type _Conn struct {
 	batchManager *batchManager
 
 	// Close.
-	closeW sync.WaitGroup
-	closeC chan struct{}
-	closed uint32
+	closeW  sync.WaitGroup
+	closeC  chan struct{}
+	closed  uint32
+	tracked bool // counted in service.conns until closed
 }
 
 func (s *_Service) newConn(t net.Conn) *_Conn {
@@ -106,6 +107,7 @@ func (s *_Service) newRpcConn(conn interface{}, connID, sessID uid.LID, clientID
 		subs:       message.NewStats(),
 		clnode:     conn.(*ClusterNode),
 		nodes:      make(map[string]bool, 3),
+		closeC:     make(chan struct{}),
 	}
 
 	Globals.connCache.add(c)
@@ -143,17 +145,29 @@ func (c *_Conn) SendMessage(msg *message.Message) bool {
 		return true
 	}
 
-	// persist outbound
-	store.Log.PersistOutbound(uint32(c.connID), pub)
+	// Express messages are delivered at most once, so they are not logged
+	// for resume: nothing would ever remove them from the log.
 
 	// Acknowledge the publication
 	select {
 	case c.pub <- pub:
+	case <-c.closeC:
+		return false
 	case <-time.After(publishWaitTimeout):
 		return false
 	}
 
 	return true
+}
+
+// queue queues m for the write loop, unless the connection closes first.
+func (c *_Conn) queue(m lp.MessagePack) bool {
+	select {
+	case c.send <- m:
+		return true
+	case <-c.closeC:
+		return false
+	}
 }
 
 // Send forwards raw bytes to the underlying client.
@@ -176,24 +190,36 @@ func (c *_Conn) SendRawBytes(buf []byte) bool {
 	return true
 }
 
+// subscriptionKey returns the key the connection's subscription to topic is
+// counted under: the topic key, or for an insecure request without a key,
+// a key generated for the topic.
+func (c *_Conn) subscriptionKey(topic *security.Topic) (string, error) {
+	if topic.Key != "" {
+		return topic.Key, nil
+	}
+	return security.GenerateKey(c.clientID.Contract(), topic.Topic[:topic.Size], security.AllowNone)
+}
+
 // subscribe subscribes to a particular topic.
 func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
-	key := string(topic.Key)
-	if key == "" {
-		key, err = security.GenerateKey(c.clientID.Contract(), topic.Topic, security.AllowNone)
-		if err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.subscribe")
-			return err
-		}
+	key, err := c.subscriptionKey(topic)
+	if err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.subscribe")
+		return err
 	}
-	if exists := c.subs.Exist(key); exists && !subMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
-		// The contract is handled by a remote node. Forward message to it.
-		if err := Globals.Cluster.routeToContract(&subMsg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to remote topic")
-			return err
+	if !subMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
+		// The contract is handled by a remote node: subscribe there on the first
+		// subscription. Count it locally, with no store entry, so repeats are
+		// not forwarded again and unsubscribe and close know about it.
+		if first := c.subs.Increment(topic.Topic[:topic.Size], key, nil); first {
+			if err := Globals.Cluster.routeToContract(&subMsg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
+				c.subs.Decrement(topic.Topic[:topic.Size], key)
+				log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to remote topic")
+				return err
+			}
 		}
 	} else {
 		messageId, err := store.Subscription.NewID()
@@ -207,7 +233,7 @@ func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.
 			payload[0] = uint8(sub.DeliveryMode)
 			binary.LittleEndian.PutUint32(payload[1:5], uint32(c.connID))
 			binary.LittleEndian.PutUint32(payload[5:9], uint32(sub.Delay))
-			if err = store.Subscription.Put(c.clientID.Contract(), messageId, topic.Topic, payload); err != nil {
+			if err = store.Subscription.Put(c.clientID.Contract(), messageId, topic.Topic[:topic.Size], payload); err != nil {
 				log.ErrLogger.Err(err).Str("context", "conn.subscribe").Str("topic", string(topic.Topic[:topic.Size])).Int64("connid", int64(c.connID)).Msg("unable to subscribe to topic") // Unable to subscribe
 				return err
 			}
@@ -223,9 +249,15 @@ func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic) (er
 	c.Lock()
 	defer c.Unlock()
 
-	key := string(topic.Key)
+	key, err := c.subscriptionKey(topic)
+	if err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.unsubscribe")
+		return err
+	}
+	remote := !unsubMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract()))
 	// Remove the subscription from stats and if there's no more subscriptions, notify everyone.
-	if last, messageID := c.subs.Decrement(topic.Topic[:topic.Size], key); last {
+	last, messageID := c.subs.Decrement(topic.Topic[:topic.Size], key)
+	if last && messageID != nil {
 		// Unsubscribe the subscriber
 		if err = store.Subscription.Delete(c.clientID.Contract(), messageID, topic.Topic[:topic.Size]); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Str("topic", string(topic.Topic[:topic.Size])).Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to topic") // Unable to subscribe
@@ -234,8 +266,8 @@ func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic) (er
 		// Decrement the subscription counter
 		c.service.meter.Subscriptions.Dec(1)
 	}
-	if !unsubMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
-		// The topic is handled by a remote node. Forward message to it.
+	if remote && last {
+		// The topic is handled by a remote node, which holds the subscription.
 		if err := Globals.Cluster.routeToContract(&unsubMsg, topic, message.UNSUBSCRIBE, &message.Message{}, c); err != nil {
 			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to remote topic")
 			return err
@@ -276,14 +308,25 @@ func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.Publ
 				switch msg.DeliveryMode {
 				// Subscriber's DeliveryMode RELIABLE or BATCH
 				case 1, 2:
-					notify := &utp.ControlMessage{
+					// Log a copy for this subscriber until it completes the flow:
+					// only this message, on the topic without the publisher's key,
+					// under an id of the subscriber's connection so that messages
+					// from different publishers don't overwrite each other.
+					id := uint16(sub.MessageIds.NextID(utp.PUBLISH))
+					store.Log.PersistOutbound(uint32(sub.sessID), &utp.Publish{
+						MessageID:    id,
+						DeliveryMode: msg.DeliveryMode,
+						Messages: []*utp.PublishMessage{{
+							Topic:   msg.Topic,
+							Payload: msg.Payload,
+							Ttl:     pubMsg.Ttl,
+						}},
+					})
+					sub.queue(&utp.ControlMessage{
 						MessageType: utp.PUBLISH,
 						FlowControl: utp.NOTIFY,
-						MessageID:   msg.MessageID,
-					}
-					// persist outbound
-					store.Log.PersistOutbound(uint32(sub.sessID), &pub)
-					sub.send <- notify
+						MessageID:   id,
+					})
 				// Subscriber's DeliveryMode EXPRESS
 				case 0:
 					if !sub.SendMessage(msg) {
@@ -322,22 +365,19 @@ func (c *_Conn) resume(prefix uint32) {
 			continue
 		}
 
-		// isKeyOutbound
-		if (k & (1 << 4)) == 0 {
-			switch msg.Type() {
-			case utp.PUBLISH:
-				pub := msg.(*utp.Publish)
-				c.MessageIds.ResumeID(message.MID(pub.MessageID))
-				notify := &utp.ControlMessage{
-					MessageType: utp.PUBLISH,
-					FlowControl: utp.NOTIFY,
-					MessageID:   pub.MessageID,
-				}
-				c.send <- notify
-			default:
-				store.Log.Delete(k)
+		// The log keeps publish messages until the subscriber completes the
+		// flow; anything else left over is stale.
+		switch msg.Type() {
+		case utp.PUBLISH:
+			pub := msg.(*utp.Publish)
+			c.MessageIds.ResumeID(message.MID(pub.MessageID))
+			notify := &utp.ControlMessage{
+				MessageType: utp.PUBLISH,
+				FlowControl: utp.NOTIFY,
+				MessageID:   pub.MessageID,
 			}
-		} else {
+			c.queue(notify)
+		default:
 			store.Log.Delete(k)
 		}
 	}
@@ -353,8 +393,12 @@ func (c *_Conn) sendClientID(clientidentifier string) {
 
 // notifyError notifies the connection about an error
 func (c *_Conn) notifyError(err *types.Error, messageID uint16) {
-	err.ID = int(messageID)
-	if b, err := json.Marshal(err); err == nil {
+	// The types.Err* values are shared by every connection, so set the ID on a
+	// copy: writing it in place raced across connections and could send one
+	// client's message ID to another.
+	notice := *err
+	notice.ID = int(messageID)
+	if b, err := json.Marshal(notice); err == nil {
 		c.SendMessage(&message.Message{
 			Topic:   "unitdb/error/",
 			Payload: b,
@@ -364,6 +408,9 @@ func (c *_Conn) notifyError(err *types.Error, messageID uint16) {
 
 func (c *_Conn) unsubAll() {
 	for _, stat := range c.subs.All() {
+		if stat.ID == nil {
+			continue // held by a remote node, which cleans it up on connGone
+		}
 		store.Subscription.Delete(c.clientID.Contract(), stat.ID, stat.Topic)
 	}
 }
@@ -390,20 +437,29 @@ func (c *_Conn) close() error {
 	if r := recover(); r != nil {
 		defer log.ErrLogger.Debug().Str("context", "conn.closing").Msgf("panic recovered '%v'", debug.Stack())
 	}
-	defer c.socket.Close()
-
 	if !c.setClosed() {
 		return errors.New("error disconnecting client")
 	}
 
-	// Signal all goroutines.
+	if c.socket != nil {
+		defer c.socket.Close()
+	}
+
+	// Signal all goroutines. The read loop is blocked reading the socket, so
+	// expire its read deadline; the write loop may still finish a write.
 	close(c.closeC)
+	if c.socket != nil {
+		c.socket.SetReadDeadline(time.Now())
+	}
 	c.closeW.Wait()
 	// Unsubscribe from everything, no need to lock since each Unsubscribe is
 	// already locked. Locking the 'Close()' would result in a deadlock.
 	// Don't close clustered connection, their servers are not being shut down.
 	if c.clnode == nil {
 		for _, stat := range c.subs.All() {
+			if stat.ID == nil {
+				continue // held by a remote node, which cleans it up on connGone
+			}
 			store.Subscription.Delete(c.clientID.Contract(), stat.ID, stat.Topic)
 			// Decrement the subscription counter
 			c.service.meter.Subscriptions.Dec(1)
@@ -413,13 +469,17 @@ func (c *_Conn) close() error {
 	Globals.connCache.delete(c.connID)
 	defer log.ConnLogger.Info().Str("context", "conn.close").Int64("connid", int64(c.connID)).Msg("conn closed")
 	Globals.Cluster.connGone(c)
-	close(c.send)
+	// c.send is left open: goroutines that may still send on it give up on
+	// closeC instead.
 
 	c.batchManager.close()
 
 	// Decrement the connection counter
 	c.service.meter.Connections.Dec(1)
 
+	if c.tracked {
+		c.service.conns.Done()
+	}
 	return nil
 }
 

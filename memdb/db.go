@@ -17,7 +17,6 @@
 package memdb
 
 import (
-	"encoding/binary"
 	"errors"
 	"os"
 	"sort"
@@ -157,18 +156,13 @@ func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
-	scratch, err := block.data.Slice(off, off+4) // read data length.
-	if err != nil {
-		return nil, err
-	}
-	dataLen := int64(binary.LittleEndian.Uint32(scratch[:4]))
-	data, err := block.data.Slice(off, off+dataLen)
+	data, err := block.get(off)
 	if err != nil {
 		return nil, err
 	}
 	db.internal.meter.Gets.Inc(1)
 
-	return data[8+1+4:], nil
+	return data, nil
 }
 
 // Get gets data from most recent time ID for the provided key.

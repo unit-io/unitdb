@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -208,6 +209,21 @@ func TestContractIsolation(t *testing.T) {
 	}
 	if items := get(t, db, NewQuery(topic)); len(items) != 0 {
 		t.Fatalf("master contract: expected no messages; got %q", items)
+	}
+}
+
+// TestTopicIsolation checks topics made of the same parts in another order, or
+// with a repeated part, stay separate; the topic hash used to XOR the parts.
+func TestTopicIsolation(t *testing.T) {
+	db, _ := openTestDB(t)
+	topics := []string{"unit.alice.bob", "unit.bob.alice", "unit.x.x.z", "unit.y.y.z"}
+	for _, topic := range topics {
+		if err := db.Put([]byte(topic), []byte("for "+topic)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, topic := range topics {
+		assertMsgs(t, [][]byte{[]byte("for " + topic)}, get(t, db, NewQuery([]byte(topic))))
 	}
 }
 
@@ -1033,5 +1049,34 @@ func TestConcurrentPutGet(t *testing.T) {
 	close(errC)
 	for err := range errC {
 		t.Fatal(err)
+	}
+}
+
+// TestOpenCloseNoGoroutineLeak checks Close stops the goroutines Open starts,
+// including the buffer pools' drain goroutines (the DB's, its memdb's and its
+// WAL's).
+func TestOpenCloseNoGoroutineLeak(t *testing.T) {
+	dir := t.TempDir()
+	open := func() {
+		db, err := Open(dir+"/db", append(smallOpts(), WithMutable())...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open() // start any process-wide goroutines first
+	before := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		open()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		buf := make([]byte, 1<<16)
+		t.Fatalf("goroutines: %d before, %d after 20 open/close cycles\n%s", before, got, buf[:runtime.Stack(buf, true)])
 	}
 }

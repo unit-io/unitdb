@@ -52,6 +52,10 @@ func Read(r io.Reader) (MessagePack, error) {
 		return &utp.Disconnect{}, nil
 	}
 
+	// The length comes from the peer: check it before allocating.
+	if fh.MessageLength < 0 || fh.MessageLength > MaxFrameSize {
+		return nil, fmt.Errorf("message::Read: invalid message length %d", fh.MessageLength)
+	}
 	rawMsg := make([]byte, fh.MessageLength)
 	_, err := io.ReadFull(r, rawMsg)
 	if err != nil {

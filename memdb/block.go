@@ -61,7 +61,12 @@ func iKey(delFlag bool, k uint64) _Key {
 	return _Key{delFlag: dFlag, key: k}
 }
 
+// get returns a copy of the value at off. The block's buffer goes back to the
+// pool when the block is freed, so a slice of it must not outlive the lock.
 func (b *_Block) get(off int64) ([]byte, error) {
+	if b.data == nil {
+		return nil, errEntryDoesNotExist // freed
+	}
 	scratch, err := b.data.Slice(off, off+4) // read data length.
 	if err != nil {
 		return nil, err
@@ -71,11 +76,16 @@ func (b *_Block) get(off int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	val := make([]byte, len(data)-(8+1+4))
+	copy(val, data[8+1+4:])
 
-	return data[8+1+4:], nil
+	return val, nil
 }
 
 func (b *_Block) put(ikey _Key, data []byte) error {
+	if b.data == nil {
+		return errForbidden // freed
+	}
 	dataLen := int64(len(data) + 8 + 1 + 4) // data len + key len + flag bit + scratch len
 	off, err := b.data.Extend(dataLen)
 	if err != nil {
@@ -105,9 +115,30 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 	return nil
 }
 
+// free returns the block's buffer to the pool and empties the block, so a
+// reader or writer still holding the block finds nothing rather than a buffer
+// reused by another block. The caller holds the block's write lock.
+func (b *_Block) free(pool *bpool.BufferPool) {
+	pool.Put(b.data)
+	b.data = nil
+	b.records = nil
+	b.count = 0
+}
+
+// size returns the size of the block's data; zero once freed.
+func (b *_Block) size() int64 {
+	if b.data == nil {
+		return 0
+	}
+	return b.data.Size()
+}
+
 func (b *_Block) delete(key uint64) error {
 	ikey := iKey(false, key)
-	off := b.records[ikey]
+	off, ok := b.records[ikey]
+	if !ok || b.data == nil {
+		return errEntryDoesNotExist
+	}
 	// k with flag bit
 	var k [9]byte
 	k[0] = 1

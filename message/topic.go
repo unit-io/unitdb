@@ -79,11 +79,7 @@ func (t *Topic) GetHash(contract uint32) uint64 {
 	if len(t.Parts) == 1 {
 		return uint64(contract)
 	}
-	h := t.Parts[0].Hash
-	for _, i := range t.Parts[1:] {
-		h ^= i.Hash
-	}
-	return uint64(h)<<32 + uint64((contract<<8)|uint32(t.Depth))
+	return uint64(t.GetHashCode())<<32 + uint64((contract<<8)|uint32(t.Depth))
 }
 
 // _SplitFunc various split function to split topic using delimeter.
@@ -172,11 +168,13 @@ func (t *Topic) parseOptions(text []byte) (ok bool) {
 	return true
 }
 
-// GetHashCode combines the topic parts into a single hash.
+// GetHashCode combines the topic parts into a single hash. The combination
+// depends on the order of the parts: XOR-ing them made "a.b.c" collide with
+// "a.c.b", and "x.x.z" with "y.y.z", so one topic read the other's messages.
 func (t *Topic) GetHashCode() uint32 {
 	h := t.Parts[0].Hash
 	for _, i := range t.Parts[1:] {
-		h ^= i.Hash
+		h = h*16777619 ^ i.Hash // FNV-1 prime
 	}
 	return h
 }

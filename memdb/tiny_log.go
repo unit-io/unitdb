@@ -231,7 +231,7 @@ func (p *_TinyLogManager) writeLoop(interval time.Duration) {
 					break
 				}
 				block.RLock()
-				size := block.data.Size()
+				size := block.size()
 				block.RUnlock()
 				if size < 1<<20 {
 					break

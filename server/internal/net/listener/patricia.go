@@ -49,10 +49,24 @@ func newPatriciaTreeString(strs ...string) *patriciaTree {
 	return newPatriciaTree(b...)
 }
 
+// matchPrefix reads one byte at a time and stops as soon as the result is
+// known, so it never waits for bytes a short message will not send.
 func (t *patriciaTree) matchPrefix(r io.Reader) bool {
-	buf := make([]byte, t.maxDepth)
-	n, _ := io.ReadFull(r, buf)
-	return t.root.match(buf[:n], true)
+	buf := make([]byte, 0, t.maxDepth)
+	b := make([]byte, 1)
+	for len(buf) < t.maxDepth {
+		if _, err := io.ReadFull(r, b); err != nil {
+			break
+		}
+		buf = append(buf, b[0])
+		if t.root.match(buf, true) {
+			return true
+		}
+		if !t.root.viable(buf) {
+			return false
+		}
+	}
+	return t.root.match(buf, true)
 }
 
 func (t *patriciaTree) match(r io.Reader) bool {
@@ -178,4 +192,24 @@ func (n *ptNode) match(b []byte, prefix bool) bool {
 		b = b[l+1:]
 	}
 	return nextN.match(b, prefix)
+}
+
+// viable reports whether b can still match: b is a prefix of a string in the
+// tree, or a string in the tree is a prefix of b.
+func (n *ptNode) viable(b []byte) bool {
+	l := len(n.prefix)
+	if len(b) <= l {
+		return bytes.HasPrefix(n.prefix, b)
+	}
+	if !bytes.Equal(b[:l], n.prefix) {
+		return false
+	}
+	if n.terminal {
+		return true
+	}
+	nextN, ok := n.next[b[l]]
+	if !ok {
+		return false
+	}
+	return nextN.viable(b[l+1:])
 }

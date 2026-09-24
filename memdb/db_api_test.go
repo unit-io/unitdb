@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -635,5 +636,33 @@ func TestUptime(t *testing.T) {
 		if got := uptime(tt.d); got != tt.want {
 			t.Errorf("uptime(%s): expected %s; got %s", tt.d, tt.want, got)
 		}
+	}
+}
+
+// TestOpenCloseNoGoroutineLeak checks Close stops the goroutines Open starts,
+// including the buffer pool's drain goroutine.
+func TestOpenCloseNoGoroutineLeak(t *testing.T) {
+	dir := t.TempDir()
+	open := func() {
+		db, err := Open(WithLogFilePath(dir), WithLogReset())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open() // start any process-wide goroutines first
+	before := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		open()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		buf := make([]byte, 1<<16)
+		t.Fatalf("goroutines: %d before, %d after 20 open/close cycles\n%s", before, got, buf[:runtime.Stack(buf, true)])
 	}
 }

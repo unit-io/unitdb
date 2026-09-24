@@ -18,11 +18,11 @@ package unitdb
 
 import "io"
 
+// _BlockReader reads index blocks and messages. The DB shares one reader
+// between concurrent readers, so it keeps no state between calls.
 type _BlockReader struct {
-	indexBlock                   _IndexBlock
 	fs                           *_FileSet
 	indexFile, dataFile, sumFile *_File
-	offset                       int64
 }
 
 func newBlockReader(fs *_FileSet) *_BlockReader {
@@ -49,19 +49,21 @@ func newBlockReader(fs *_FileSet) *_BlockReader {
 	return r
 }
 
-func (r *_BlockReader) readIndexBlock() (_IndexBlock, error) {
-	buf, err := r.indexFile.slice(r.offset, r.offset+int64(blockSize))
+// readIndexBlock reads the index block at off.
+func (r *_BlockReader) readIndexBlock(off int64) (_IndexBlock, error) {
+	buf, err := r.indexFile.slice(off, off+int64(blockSize))
 	if err != nil {
 		return _IndexBlock{}, err
 	}
 	if !validChecksum(buf, indexChecksumOff) {
-		return _IndexBlock{}, corrupted(r.indexFile, r.offset, "index block")
+		return _IndexBlock{}, corrupted(r.indexFile, off, "index block")
 	}
-	if err := r.indexBlock.unmarshalBinary(buf); err != nil {
+	var b _IndexBlock
+	if err := b.unmarshalBinary(buf); err != nil {
 		return _IndexBlock{}, err
 	}
 
-	return r.indexBlock, nil
+	return b, nil
 }
 
 // readEntry reads the index entry for seq, returning errMsgIDDeleted for deleted entries.
@@ -79,9 +81,7 @@ func (r *_BlockReader) readEntry(seq uint64) (_IndexEntry, error) {
 
 // readIndexEntry reads the index entry for seq, including deleted entries.
 func (r *_BlockReader) readIndexEntry(seq uint64) (_IndexEntry, error) {
-	bIdx := blockIndex(seq)
-	r.offset = blockOffset(bIdx)
-	b, err := r.readIndexBlock()
+	b, err := r.readIndexBlock(blockOffset(blockIndex(seq)))
 	if err == io.EOF {
 		// the index block has not been written yet.
 		return _IndexEntry{}, errEntryInvalid

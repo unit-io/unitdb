@@ -60,10 +60,6 @@ func (splitFunc) splitKey(c rune) bool {
 	return c == TopicKeySeparator
 }
 
-func (splitFunc) options(c rune) bool {
-	return c == '?'
-}
-
 // Topic represents a parsed topic.
 type Topic struct {
 	Key       string // Gets or sets the API key of the topic.
@@ -101,21 +97,25 @@ func ParseKey(text string) (topic *Topic) {
 	var fn splitFunc
 
 	parts := strings.FieldsFunc(text, fn.splitKey)
-	if parts == nil || len(parts) < 2 {
-		// topic.TopicType = TopicInvalid
-		topic.Topic = parts[0]
-		topic.Size = len(parts[0])
-		return topic
-	}
-	topic.Key = parts[0]
-	topic.Topic = parts[1]
-	parts = strings.FieldsFunc(parts[1], fn.options)
-	l := len(parts)
-	if parts == nil || l < 1 {
+	if len(parts) == 0 {
 		topic.TopicType = TopicInvalid
 		return topic
 	}
-	topic.Size = len(parts[0])
+	if len(parts) < 2 {
+		topic.Topic = parts[0]
+	} else {
+		topic.Key = parts[0]
+		topic.Topic = parts[1]
+	}
+
+	// Size is the length of the topic without its options.
+	topic.Size = strings.IndexByte(topic.Topic, '?')
+	if topic.Size < 0 {
+		topic.Size = len(topic.Topic)
+	}
+	if topic.Size == 0 {
+		topic.TopicType = TopicInvalid
+	}
 
 	return topic
 }

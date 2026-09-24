@@ -205,9 +205,15 @@ RECONNECT:
 	}
 
 WAIT:
-	// Wait for a while
-	time.Sleep(retryTimeout)
-	goto RECONNECT
+	// Wait for a while, unless the transport shuts down: the server can't be
+	// reached, so what is still queued is dropped.
+	select {
+	case <-time.After(retryTimeout):
+		goto RECONNECT
+	case <-t.shutdown:
+		t.shutdownWg.Done()
+		return
+	}
 }
 
 // reportLoop reports periodically number of packets lost

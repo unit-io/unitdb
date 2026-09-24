@@ -50,6 +50,7 @@ var (
 	ErrBadRequest        = &Error{ReturnCode: 0x12, Status: 400, Message: "The request was invalid or cannot be otherwise served."}
 	ErrTargetTooLong     = &Error{ReturnCode: 0x13, Status: 400, Message: "Topic can not have more than 23 parts."}
 	ErrNotImplemented    = &Error{ReturnCode: 0x14, Status: 501, Message: "The server does not recognize the request method."}
+	ErrKeyGenForbidden   = &Error{ReturnCode: 0x15, Status: 403, Message: "Unacceptable identifier, use the primary client Id to generate keys."}
 )
 
 type KeyGenRequest struct {

@@ -90,6 +90,8 @@ func (db *DB) close() error {
 		}
 		db.internal.closer = nil
 	}
+	// Stop the pool's drain goroutine, or every DB opened leaks one.
+	db.internal.buffer.Done()
 
 	db.internal.meter.UnregisterAll()
 
@@ -214,7 +216,12 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 		return nil
 	}
 	block.RLock()
-	blockSize := block.data.Size()
+	blockSize := block.size()
+	if blockSize == 0 {
+		// freed; nothing to write.
+		block.RUnlock()
+		return nil
+	}
 	log, err := block.data.Slice(block.lastOffset, blockSize)
 	block.RUnlock()
 	if err != nil {
@@ -268,8 +275,9 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	}
 
 	block.RLock()
-	defer block.RUnlock()
-	for _, timeRef := range block.timeRefs {
+	timeRefs := block.timeRefs
+	block.RUnlock()
+	for _, timeRef := range timeRefs {
 		if err := db.internal.wal.SignalLogApplied(int64(timeRef)); err != nil {
 			return err
 		}
@@ -278,8 +286,12 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	db.mu.Lock()
 	delete(db.timeBlocks, _TimeID(timeID))
 	db.internal.timeMark.timeUnref(timeID)
-	db.internal.buffer.Put(block.data)
 	db.mu.Unlock()
+
+	// Free under the block's write lock so it waits for readers of the buffer.
+	block.Lock()
+	block.free(db.internal.buffer)
+	block.Unlock()
 
 	// Prune after the block is gone, and without db.mu: addTimeFilter takes the
 	// filter lock after db.mu is released, so holding both here could deadlock.

@@ -114,6 +114,8 @@ func (wal *WAL) Close() error {
 
 	// fmt.Println("wal.close: WALInfo ", wal.WALInfo)
 	wal.logStore.close()
+	// Stop the pool's drain goroutine, or every WAL opened leaks one.
+	wal.bufPool.Done()
 
 	return nil
 }

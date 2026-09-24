@@ -28,7 +28,14 @@ import (
 )
 
 const (
-	MaxMessageSize = 1 << 19
+	// MaxFrameSize is the largest message body accepted on a connection. It
+	// covers the largest publish batch a client sends (3.5 MiB).
+	MaxFrameSize = 4 << 20
+
+	// MaxMessageSize is the largest gRPC message accepted: a frame with its
+	// length prefix, fixed header and the gRPC packet around it, so that the
+	// same messages are accepted over gRPC and TCP.
+	MaxMessageSize = MaxFrameSize + 1<<10
 )
 
 // ErrServerClosed occurs when a tcp server is closed.
@@ -97,6 +104,7 @@ type Server interface {
 type server struct {
 	sync.Mutex
 	opts    *options
+	stop    func() // stops serving, if the server supports it
 	Handler Handler //The handler to invoke when a connection is accepted
 }
 
