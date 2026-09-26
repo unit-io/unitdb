@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"runtime/debug"
 	"strconv"
@@ -53,6 +52,9 @@ type _Conn struct {
 	sessID             uid.LID        // The locally unique session id of the connection.
 	service            *_Service      // The service for this connection.
 	subs               *message.Stats // The subscriptions for this connection.
+	// Where the client's subscriptions are held, by subscription key. Set only
+	// for client connections, not cluster RPC sessions.
+	routes map[string]*subRoute
 	// Reference to the cluster node where the connection has originated. Set only for cluster RPC sessions
 	clnode *ClusterNode
 	// Cluster nodes to inform when disconnected
@@ -200,7 +202,21 @@ func (c *_Conn) subscriptionKey(topic *security.Topic) (string, error) {
 	return security.GenerateKey(c.clientID.Contract(), topic.Topic[:topic.Size], security.AllowNone)
 }
 
-// subscribe subscribes to a particular topic.
+// errPartialWildcard reports a wildcard subscription some nodes could not be
+// sent. It is held elsewhere meanwhile, and sent to them again on rebalance.
+var errPartialWildcard = errors.New("wildcard subscription not held by every node")
+
+// subRoute is where a client's subscription is held in the cluster.
+type subRoute struct {
+	sub     *utp.Subscription // the subscription as the client sent it
+	name    string            // the topic without options
+	localID []byte            // the subscription's id in this node's store, if held here
+	nodes   map[string]bool   // the other nodes holding it
+}
+
+// subscribe subscribes to a particular topic. A client's subscription is held
+// where the cluster ring puts it (see reconcile). A subscription forwarded by
+// another node is held here, once however often it is sent.
 func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
 	c.Lock()
 	defer c.Unlock()
@@ -210,42 +226,52 @@ func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.
 		log.ErrLogger.Err(err).Str("context", "conn.subscribe")
 		return err
 	}
-	if !subMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
-		// The contract is handled by a remote node: subscribe there on the first
-		// subscription. Count it locally, with no store entry, so repeats are
-		// not forwarded again and unsubscribe and close know about it.
-		if first := c.subs.Increment(topic.Topic[:topic.Size], key, nil); first {
-			if err := Globals.Cluster.routeToContract(&subMsg, topic, message.SUBSCRIBE, &message.Message{}, c); err != nil {
-				c.subs.Decrement(topic.Topic[:topic.Size], key)
-				log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to remote topic")
-				return err
-			}
+	name := topic.Topic[:topic.Size]
+	if subMsg.IsForwarded {
+		// Held here for a client of another node, which sends it again after
+		// a rehash or a reconnect.
+		if c.subs.Exist(key) {
+			return nil
 		}
-	} else {
-		messageId, err := store.Subscription.NewID()
+		messageId, err := c.putSubscription(name, sub)
 		if err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.subscribe")
 			return err
 		}
-		if first := c.subs.Increment(topic.Topic[:topic.Size], key, messageId); first {
-			// Subscribe the subscriber
-			payload := make([]byte, 9)
-			payload[0] = uint8(sub.DeliveryMode)
-			binary.LittleEndian.PutUint32(payload[1:5], uint32(c.connID))
-			binary.LittleEndian.PutUint32(payload[5:9], uint32(sub.Delay))
-			if err = store.Subscription.Put(c.clientID.Contract(), messageId, topic.Topic[:topic.Size], payload); err != nil {
-				log.ErrLogger.Err(err).Str("context", "conn.subscribe").Str("topic", string(topic.Topic[:topic.Size])).Int64("connid", int64(c.connID)).Msg("unable to subscribe to topic") // Unable to subscribe
-				return err
-			}
-			// Increment the subscription counter
-			c.service.meter.Subscriptions.Inc(1)
-		}
+		c.subs.Increment(name, key, messageId)
+		return nil
 	}
+	// Count repeats locally, so that only the first is placed and only the
+	// last unsubscribe removes it.
+	if first := c.subs.Increment(name, key, nil); !first {
+		return nil
+	}
+	r := &subRoute{sub: sub, name: name, nodes: make(map[string]bool)}
+	// A topic's owner that is not connected, dead until the ring replaces it,
+	// is tried again, as for a publish.
+	deadline := time.Now().Add(forwardRetryFor)
+	for {
+		err := c.reconcile(r, nil)
+		if err == nil || err == errPartialWildcard {
+			break
+		}
+		if retryable(err) && time.Now().Before(deadline) {
+			time.Sleep(forwardRetry)
+			continue
+		}
+		c.release(r)
+		c.subs.Decrement(name, key)
+		log.ErrLogger.Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Msg("unable to subscribe to topic")
+		return err
+	}
+	if c.routes == nil {
+		c.routes = make(map[string]*subRoute)
+	}
+	c.routes[key] = r
 	return nil
 }
 
 // unsubscribe unsubscribes this client from a particular topic.
-func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic) (err error) {
+func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic, sub *utp.Subscription) (err error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -254,26 +280,148 @@ func (c *_Conn) unsubscribe(unsubMsg utp.Unsubscribe, topic *security.Topic) (er
 		log.ErrLogger.Err(err).Str("context", "conn.unsubscribe")
 		return err
 	}
-	remote := !unsubMsg.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract()))
+	name := topic.Topic[:topic.Size]
 	// Remove the subscription from stats and if there's no more subscriptions, notify everyone.
-	last, messageID := c.subs.Decrement(topic.Topic[:topic.Size], key)
-	if last && messageID != nil {
-		// Unsubscribe the subscriber
-		if err = store.Subscription.Delete(c.clientID.Contract(), messageID, topic.Topic[:topic.Size]); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Str("topic", string(topic.Topic[:topic.Size])).Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to topic") // Unable to subscribe
-			return err
-		}
-		// Decrement the subscription counter
-		c.service.meter.Subscriptions.Dec(1)
+	last, messageID := c.subs.Decrement(name, key)
+	if !last {
+		return nil
 	}
-	if remote && last {
-		// The topic is handled by a remote node, which holds the subscription.
-		if err := Globals.Cluster.routeToContract(&unsubMsg, topic, message.UNSUBSCRIBE, &message.Message{}, c); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to remote topic")
-			return err
+	if unsubMsg.IsForwarded {
+		if messageID != nil {
+			c.deleteSubscription(name, messageID)
 		}
+		return nil
+	}
+	if r := c.routes[key]; r != nil {
+		delete(c.routes, key)
+		c.release(r)
 	}
 	return nil
+}
+
+// rehome moves the connection's subscriptions to where the current ring holds
+// them, and sends them again to the nodes in resend. It reports whether every
+// subscription was placed, and logs the ones that were not if last is set.
+func (c *_Conn) rehome(resend map[string]bool, last bool) bool {
+	c.Lock()
+	defer c.Unlock()
+	ok := true
+	for _, r := range c.routes {
+		if err := c.reconcile(r, resend); err != nil {
+			ok = false
+			if last {
+				log.ErrLogger.Err(err).Str("context", "conn.rehome").Int64("connid", int64(c.connID)).Str("topic", r.name).Msg("unable to move subscription")
+			}
+		}
+	}
+	return ok
+}
+
+// reconcile places a client's subscription where the ring holds it: here, on
+// the topic's owner, or for a wildcard here and on every other node. It adds
+// the new places before it removes the old ones, so the subscription is not
+// missing while it moves, and keeps the old ones if the topic's owner could
+// not take it. Nodes in resend are sent the subscription again although they
+// hold it. It returns an error if the subscription could not be placed here or
+// with the topic's owner, or errPartialWildcard if a wildcard subscription
+// could not be sent to every node. The caller holds the connection's lock.
+func (c *_Conn) reconcile(r *subRoute, resend map[string]bool) error {
+	local, nodes := Globals.Cluster.holders(c.clientID.Contract(), r.name)
+	if local && r.localID == nil {
+		id, err := c.putSubscription(r.name, r.sub)
+		if err != nil {
+			return err
+		}
+		r.localID = id
+	}
+	var partial error
+	want := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		want[n] = true
+		if r.nodes[n] && !resend[n] {
+			continue
+		}
+		if err := Globals.Cluster.subscribeAt(n, r.sub, c); err != nil {
+			if !isWildcardTopic(r.name) {
+				return err
+			}
+			// A wildcard is also held by the other nodes: place it there, and
+			// on this one again later.
+			partial = errPartialWildcard
+			continue
+		}
+		r.nodes[n] = true
+	}
+	if !local && r.localID != nil {
+		c.deleteSubscription(r.name, r.localID)
+		r.localID = nil
+	}
+	for n := range r.nodes {
+		if !want[n] {
+			c.unsubscribeAt(n, r)
+		}
+	}
+	return partial
+}
+
+// release removes a client's subscription from everywhere it is held. The
+// caller holds the connection's lock.
+func (c *_Conn) release(r *subRoute) {
+	if r.localID != nil {
+		c.deleteSubscription(r.name, r.localID)
+		r.localID = nil
+	}
+	for n := range r.nodes {
+		c.unsubscribeAt(n, r)
+	}
+}
+
+// unsubscribeAt removes a client's subscription from node n. A node that
+// cannot be reached has left the ring or restarted, and lost it either way.
+func (c *_Conn) unsubscribeAt(n string, r *subRoute) {
+	if err := Globals.Cluster.unsubscribeAt(n, r.sub, c); err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.unsubscribeAt").Int64("connid", int64(c.connID)).Msg("unable to unsubscribe on " + n)
+	}
+	delete(r.nodes, n)
+}
+
+// putSubscription stores a subscription of this connection to topic in this
+// node's store, and returns its id.
+func (c *_Conn) putSubscription(topic string, sub *utp.Subscription) ([]byte, error) {
+	messageId, err := store.Subscription.NewID()
+	if err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.subscribe")
+		return nil, err
+	}
+	// Subscribe the subscriber
+	payload := make([]byte, 9)
+	payload[0] = sub.DeliveryMode
+	binary.LittleEndian.PutUint32(payload[1:5], uint32(c.connID))
+	binary.LittleEndian.PutUint32(payload[5:9], uint32(sub.Delay))
+	if err := store.Subscription.Put(c.clientID.Contract(), messageId, topic, payload); err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.subscribe").Str("topic", topic).Int64("connid", int64(c.connID)).Msg("unable to subscribe to topic") // Unable to subscribe
+		return nil, err
+	}
+	// Increment the subscription counter
+	c.service.meter.Subscriptions.Inc(1)
+	return messageId, nil
+}
+
+// deleteSubscription removes a subscription of this connection from this
+// node's store.
+func (c *_Conn) deleteSubscription(topic string, messageID []byte) {
+	// Unsubscribe the subscriber
+	if err := store.Subscription.Delete(c.clientID.Contract(), messageID, topic); err != nil {
+		log.ErrLogger.Err(err).Str("context", "conn.unsubscribe").Str("topic", topic).Int64("connid", int64(c.connID)).Msg("unable to unsubscribe to topic") // Unable to subscribe
+		return
+	}
+	// Decrement the subscription counter
+	c.service.meter.Subscriptions.Dec(1)
+}
+
+// isReliable reports whether delivery mode is RELIABLE or BATCH.
+func isReliable(mode uint8) bool {
+	return mode == 1 || mode == 2
 }
 
 // publish publishes a message to everyone and returns the number of outgoing bytes written.
@@ -293,66 +441,85 @@ func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.Publ
 		Topic:     string(topic.Topic[:topic.Size]),
 		Payload:   pubMsg.Payload,
 	}
+	connections := make(map[uint32]*utp.Subscription)
 	for _, subscription := range subscriptions {
-		msg.DeliveryMode = subscription[0]
-		connID := uid.LID(binary.LittleEndian.Uint32(subscription[1:5]))
-		msg.Delay = int32(uid.LID(binary.LittleEndian.Uint32(subscription[5:9])))
-		sub := Globals.connCache.get(connID)
-		if sub != nil {
-			if msg.MessageID == 0 {
-				msg.MessageID = uint16(c.MessageIds.NextID(utp.PUBLISH))
-			}
-			switch pub.DeliveryMode {
-			// Publisher's DeliveryMode RELIABLE or BATCH
-			case 1, 2:
-				switch msg.DeliveryMode {
-				// Subscriber's DeliveryMode RELIABLE or BATCH
-				case 1, 2:
-					// Log a copy for this subscriber until it completes the flow:
-					// only this message, on the topic without the publisher's key,
-					// under an id of the subscriber's connection so that messages
-					// from different publishers don't overwrite each other.
-					id := uint16(sub.MessageIds.NextID(utp.PUBLISH))
-					store.Log.PersistOutbound(uint32(sub.sessID), &utp.Publish{
-						MessageID:    id,
-						DeliveryMode: msg.DeliveryMode,
-						Messages: []*utp.PublishMessage{{
-							Topic:   msg.Topic,
-							Payload: msg.Payload,
-							Ttl:     pubMsg.Ttl,
-						}},
-					})
-					sub.queue(&utp.ControlMessage{
-						MessageType: utp.PUBLISH,
-						FlowControl: utp.NOTIFY,
-						MessageID:   id,
-					})
-				// Subscriber's DeliveryMode EXPRESS
-				case 0:
-					if !sub.SendMessage(msg) {
-						log.ErrLogger.Err(err).Str("context", "conn.publish")
-					}
-					msgCount++
-				}
-			// Publisher's DeliveryMode Express
-			case 0:
-				if !sub.SendMessage(msg) {
-					log.ErrLogger.Err(err).Str("context", "conn.publish")
-				}
-				msgCount++
+		connID := binary.LittleEndian.Uint32(subscription[1:5])
+		if _, ok := connections[connID]; !ok {
+			connections[connID] = &utp.Subscription{
+				DeliveryMode: subscription[0],
+				Delay:        int32(binary.LittleEndian.Uint32(subscription[5:9])),
 			}
 		}
 	}
+	// Messages for clients of other nodes, by node, sent below.
+	remote := make(map[*ClusterNode][]Delivery)
+	for connID, subscription := range connections {
+		sub := Globals.connCache.get(uid.LID(connID))
+		if sub == nil {
+			continue
+		}
+		out := *msg
+		out.DeliveryMode = subscription.DeliveryMode
+		out.Delay = subscription.Delay
+		// Publisher's and subscriber's DeliveryMode RELIABLE or BATCH: the
+		// subscriber fetches the message from the log.
+		reliable := isReliable(pub.DeliveryMode) && isReliable(subscription.DeliveryMode)
+		if sub.clnode != nil {
+			remote[sub.clnode] = append(remote[sub.clnode], Delivery{ConnID: sub.connID, Message: &out, Reliable: reliable})
+			if !reliable {
+				msgCount++
+			}
+			continue
+		}
+		if !sub.deliver(&out, reliable) {
+			log.ErrLogger.Error().Str("context", "conn.publish").Int64("connid", int64(connID)).Msg("unable to deliver message")
+			continue
+		}
+		if !reliable {
+			msgCount++
+		}
+	}
+	Globals.Cluster.deliverRemote(remote)
 	c.service.meter.OutMsgs.Inc(int64(msgCount))
 	c.service.meter.OutBytes.Inc(msg.Size() * int64(msgCount))
 
-	if !pub.IsForwarded && Globals.Cluster.isRemoteContract(fmt.Sprint(c.clientID.Contract())) {
-		if err = Globals.Cluster.routeToContract(&pub, topic, message.PUBLISH, msg, c); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.publish").Int64("connid", int64(c.connID)).Msg("unable to publish to a remote topic")
-			return err
-		}
-	}
 	return nil
+}
+
+// deliver delivers a message to the connection's client: logged for the client
+// to fetch when reliable, sent otherwise. A proxied connection hands the
+// message to the node the client is connected to, which delivers it in the
+// same way, so the client's flow control and message ids stay on one node.
+func (c *_Conn) deliver(m *message.Message, reliable bool) bool {
+	if c.clnode != nil {
+		var unused bool
+		if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Message: m, Reliable: reliable, FromConnID: c.connID}, &unused); err != nil {
+			log.ErrLogger.Err(err).Str("context", "conn.deliver").Int64("connid", int64(c.connID)).Msg("unable to forward message to origin node")
+			return false
+		}
+		return true
+	}
+	if !reliable {
+		return c.SendMessage(m)
+	}
+	// Log a copy for this subscriber until it completes the flow: only this
+	// message, on the topic without the publisher's key, under an id of the
+	// subscriber's connection so that messages from different publishers
+	// don't overwrite each other.
+	id := uint16(c.MessageIds.NextID(utp.PUBLISH))
+	store.Log.PersistOutbound(uint32(c.sessID), &utp.Publish{
+		MessageID:    id,
+		DeliveryMode: m.DeliveryMode,
+		Messages: []*utp.PublishMessage{{
+			Topic:   m.Topic,
+			Payload: m.Payload,
+		}},
+	})
+	return c.queue(&utp.ControlMessage{
+		MessageType: utp.PUBLISH,
+		FlowControl: utp.NOTIFY,
+		MessageID:   id,
+	})
 }
 
 // Load all stored messages and resend them to ensure DeliveryMode > 1,2 even after an application crash.
@@ -456,14 +623,15 @@ func (c *_Conn) close() error {
 	// already locked. Locking the 'Close()' would result in a deadlock.
 	// Don't close clustered connection, their servers are not being shut down.
 	if c.clnode == nil {
-		for _, stat := range c.subs.All() {
-			if stat.ID == nil {
-				continue // held by a remote node, which cleans it up on connGone
+		c.Lock()
+		for _, r := range c.routes {
+			if r.localID != nil {
+				// Held by remote nodes too, which clean it up on connGone.
+				c.deleteSubscription(r.name, r.localID)
 			}
-			store.Subscription.Delete(c.clientID.Contract(), stat.ID, stat.Topic)
-			// Decrement the subscription counter
-			c.service.meter.Subscriptions.Dec(1)
 		}
+		c.routes = nil
+		c.Unlock()
 	}
 
 	Globals.connCache.delete(c.connID)

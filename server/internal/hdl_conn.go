@@ -134,6 +134,12 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 
 		sessKey := sessionKey(c.clientID, m.SessKey)
 
+		// Other nodes may hold the session: its replicas, and the nodes the
+		// client was connected to before.
+		if !m.CleanSessFlag {
+			Globals.Cluster.fetchSession(sessKey)
+		}
+
 		// Take care of any messages in the store
 		if rawSess, err := store.Session.Get(sessKey); err == nil && len(rawSess) >= 4 {
 			sessID := binary.LittleEndian.Uint32(rawSess[:4])
@@ -162,7 +168,7 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		}
 		// Relay for each request
 		for _, req := range m.RelayRequests {
-			if err := c.onRelay(req); err != nil {
+			if err := c.onRelay(m, req); err != nil {
 				status = err.Status
 				c.notifyError(err, m.MessageID)
 				continue
@@ -354,7 +360,7 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 }
 
 // onRelay is a handler for Subscribe events of delivery mode type RELAY.
-func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
+func (c *_Conn) onRelay(relayMsg utp.Relay, req *utp.RelayRequest) *types.Error {
 	start := time.Now()
 	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 
@@ -370,8 +376,18 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 		}
 	}
 
+	// A topic's owner holds all its messages: those it stored as the owner, and
+	// as a replica of the owner before it. The store does not match wildcard
+	// queries, so a wildcard is answered here, as by a standalone server.
+	if name := topic.Topic[:topic.Size]; !relayMsg.IsForwarded && !isWildcardTopic(name) && Globals.Cluster != nil {
+		fwd := &utp.Relay{MessageID: relayMsg.MessageID, RelayRequests: []*utp.RelayRequest{req}}
+		if Globals.Cluster.relayFromHolder(fwd, c.clientID.Contract(), name, c) {
+			return nil
+		}
+	}
+
 	if req.Last != "" {
-		msgs, err := store.Message.Get(c.clientID.Contract(), topic.Topic, req.Last)
+		msgs, err := store.Message.GetAll(c.clientID.Contract(), topic.Topic, req.Last)
 		if err != nil {
 			log.Error("conn.onRelay", "query last messages"+err.Error())
 			return types.ErrServerError
@@ -381,7 +397,7 @@ func (c *_Conn) onRelay(req *utp.RelayRequest) *types.Error {
 		for _, msg := range msgs {
 			newMsg := msg           // Copy message
 			newMsg.DeliveryMode = 2 // Set Delivery Mode to Batch delivery on relay request
-			c.SendMessage(msg)
+			c.deliver(newMsg, false)
 		}
 	}
 
@@ -431,7 +447,7 @@ func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *
 		}
 	}
 
-	if err := c.unsubscribe(unsubMsg, topic); err != nil {
+	if err := c.unsubscribe(unsubMsg, topic, sub); err != nil {
 		return types.ErrServerError
 	}
 
@@ -466,11 +482,28 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 			}
 		}
 
+		if name := topic.Topic[:topic.Size]; !pub.IsForwarded && Globals.Cluster.isRemoteTopic(c.clientID.Contract(), name) {
+			// The topic's owner stores the message and delivers it.
+			fwd := &utp.Publish{MessageID: pub.MessageID, DeliveryMode: pub.DeliveryMode, Messages: []*utp.PublishMessage{pubMsg}}
+			forwarded, err := Globals.Cluster.routeToTopic(fwd, c.clientID.Contract(), name, c)
+			if err != nil {
+				log.Error("conn.onPublish", "forward to topic owner "+err.Error())
+				return types.ErrServerError
+			}
+			if forwarded {
+				continue
+			}
+			// The topic moved to this node while the publish was retried.
+		}
+
 		err := store.Message.Put(c.clientID.Contract(), topic.Topic, pubMsg.Payload, pubMsg.Ttl)
 		if err != nil {
 			log.Error("conn.onPublish", "store message "+err.Error())
 			return types.ErrServerError
 		}
+		// A reliable or batch publish is acknowledged once a replica stores it
+		// too, so that it survives this node failing right after.
+		Globals.Cluster.replicate(c.clientID.Contract(), topic.Topic[:topic.Size], topic.Topic, pubMsg.Payload, pubMsg.Ttl, isReliable(pub.DeliveryMode))
 		// Iterate through all subscribers and send them the message
 		c.service.inflight.Add(1)
 		go func(topic *security.Topic, pubMsg *utp.PublishMessage) {

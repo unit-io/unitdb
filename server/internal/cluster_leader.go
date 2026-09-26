@@ -163,11 +163,14 @@ func (c *Cluster) sendPings() {
 
 	for _, node := range c.nodes {
 		unused := false
-		err := node.call("Cluster.Ping", &ClusterPing{
+		// A node that stalls without its connection failing does not answer:
+		// wait a heartbeat at most, so that it fails the ping, and does not
+		// hold up the pings to the others.
+		err := node.callTimeout("Cluster.Ping", &ClusterPing{
 			Leader:    c.thisNodeName,
 			Term:      c.fo.term,
 			Signature: c.getRing().Signature(),
-			Nodes:     c.fo.activeNodes}, &unused)
+			Nodes:     c.fo.activeNodes}, &unused, c.fo.heartBeat)
 
 		if err != nil {
 			node.failCount++
@@ -194,7 +197,7 @@ func (c *Cluster) sendPings() {
 		activeNodes = append(activeNodes, c.thisNodeName)
 
 		c.fo.activeNodes = activeNodes
-		c.rehash(activeNodes)
+		c.rehashAndRebalance(activeNodes)
 
 		log.Println("cluster: initiating failover rehash for nodes", activeNodes)
 		//globals.hub.rehash <- true
@@ -309,7 +312,7 @@ func (c *Cluster) run() {
 				if rehashSkipped {
 					log.Println("cluster: rehashing at a request of",
 						ping.Leader, ping.Nodes, ping.Signature, c.getRing().Signature())
-					c.rehash(ping.Nodes)
+					c.rehashAndRebalance(ping.Nodes)
 					rehashSkipped = false
 
 					//globals.hub.rehash <- true

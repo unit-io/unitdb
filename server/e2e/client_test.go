@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -93,6 +94,10 @@ type client struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	readErr   error
+
+	// holdNotify, when set, leaves NOTIFYs unanswered, so the server keeps
+	// the messages logged for the session.
+	holdNotify atomic.Bool
 }
 
 func dial(ctx context.Context, addr string) (*client, error) {
@@ -204,7 +209,9 @@ func (c *client) readLoop() {
 				}
 			case p.FlowControl == utp.NOTIFY:
 				// NOTIFY(id): reply RECEIVE so the server delivers the stored publish.
-				c.sendControl(p.MessageID, utp.PUBLISH, utp.RECEIVE, nil)
+				if !c.holdNotify.Load() {
+					c.sendControl(p.MessageID, utp.PUBLISH, utp.RECEIVE, nil)
+				}
 			}
 			select {
 			case c.ctrl <- p:
@@ -227,15 +234,30 @@ func (c *client) close() {
 	c.closeOnce.Do(func() { c.conn.Close() })
 }
 
+// connectOpts are the CONNECT fields the tests vary.
+type connectOpts struct {
+	clientID string
+	insecure bool
+	sessKey  int32
+	username string
+	resume   bool // resume the session instead of starting it clean
+}
+
 // connect sends CONNECT and waits for the acknowledgement.
 func (c *client) connect(clientID string, insecure bool, sessKey int32) (*utp.ConnectAcknowledge, error) {
+	return c.connectWith(connectOpts{clientID: clientID, insecure: insecure, sessKey: sessKey})
+}
+
+// connectWith sends CONNECT with o and waits for the acknowledgement.
+func (c *client) connectWith(o connectOpts) (*utp.ConnectAcknowledge, error) {
 	m := &utp.Connect{
 		Version:       1,
-		InsecureFlag:  insecure,
-		ClientID:      clientID,
+		InsecureFlag:  o.insecure,
+		ClientID:      o.clientID,
 		KeepAlive:     30,
-		CleanSessFlag: true,
-		SessKey:       sessKey,
+		CleanSessFlag: !o.resume,
+		SessKey:       o.sessKey,
+		Username:      o.username,
 	}
 	buf, err := m.ToBinary()
 	if err != nil {
