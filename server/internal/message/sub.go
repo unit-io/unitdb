@@ -28,6 +28,7 @@ const (
 	PINGREQ
 	PINGRESP
 	DISCONNECT
+	RELAY
 
 	fixed = 16
 

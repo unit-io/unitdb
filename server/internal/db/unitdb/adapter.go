@@ -156,6 +156,11 @@ func (a *adapter) Get(contract uint32, topic string, last string) (matches [][]b
 	return a.db.Get(query)
 }
 
+// Count returns the number of messages in the message store.
+func (a *adapter) Count() uint64 {
+	return a.db.Count()
+}
+
 // NewID generates a new messageId.
 func (a *adapter) NewID() ([]byte, error) {
 	id := a.db.NewID()
@@ -173,7 +178,14 @@ func (a *adapter) Delete(contract uint32, messageId []byte, topic string) error 
 }
 
 // PutMessage appends the messages to the store.
+//
+// memdb keeps a version of a key for each time block the key was put in, and
+// a get returns the latest: the older versions are deleted first, so that a
+// later delete removes the key.
 func (a *adapter) PutMessage(key uint64, payload []byte) error {
+	if err := a.deleteVersions(key); err != nil {
+		return err
+	}
 	if _, err := a.mem.Put(key, payload); err != nil {
 		return err
 	}
@@ -191,13 +203,37 @@ func (a *adapter) GetMessage(key uint64) (matches []byte, err error) {
 
 // Keys performs a query and attempts to fetch all keys.
 func (a *adapter) Keys() []uint64 {
-	return a.mem.Keys()
+	// memdb lists a key once for each version of it.
+	keys := a.mem.Keys()
+	seen := make(map[uint64]bool, len(keys))
+	unique := keys[:0]
+	for _, key := range keys {
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, key)
+		}
+	}
+	return unique
 }
 
 // DeleteMessage deletes message from memdb store.
 func (a *adapter) DeleteMessage(key uint64) error {
-	if err := a.mem.Delete(key); err != nil {
-		return err
+	return a.deleteVersions(key)
+}
+
+// maxKeyVersions bounds the versions of a key deleteVersions deletes.
+const maxKeyVersions = 64
+
+// deleteVersions deletes every version of key: memdb deletes the latest one
+// only, and a get then returns the one before.
+func (a *adapter) deleteVersions(key uint64) error {
+	for i := 0; i < maxKeyVersions; i++ {
+		if raw, err := a.mem.Get(key); err != nil || raw == nil {
+			return nil
+		}
+		if err := a.mem.Delete(key); err != nil {
+			return err
+		}
 	}
 	return nil
 }

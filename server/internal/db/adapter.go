@@ -59,6 +59,9 @@ type Adapter interface {
 	// NewID generate messageId that can later used to store and delete message from message store
 	NewID() ([]byte, error)
 
+	// Count returns the number of messages in the message store.
+	Count() uint64
+
 	// Delete is used to delete entry, the SSID provided must be a full SSID
 	// SSID, where first element should be a contract ID. The function is executed synchronously and
 	// it returns an error if some error was encountered during delete.

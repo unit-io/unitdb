@@ -59,7 +59,7 @@ type Ring struct {
 }
 
 // New initializes an empty ringhash with the given number of replicas and a hash function.
-// If the hash function is nil, fnv.New32a() is used.
+// If the hash function is nil, fnv.New32a() is used, mixed by fmix32.
 func NewRing(replicas int, fn Hash) *Ring {
 	ring := &Ring{
 		replicas: replicas,
@@ -69,10 +69,23 @@ func NewRing(replicas int, fn Hash) *Ring {
 		ring.hashfunc = func(data []byte) uint32 {
 			hash := fnv.New32a()
 			hash.Write(data)
-			return hash.Sum32()
+			return fmix32(hash.Sum32())
 		}
 	}
 	return ring
+}
+
+// fmix32 is MurmurHash3's finalizer: every bit of h changes about half the
+// bits of the result. FNV-1a alone changes few high bits for keys that
+// differ in their last bytes, such as consecutive ids, and put them next to
+// each other on the ring, with the same owner.
+func fmix32(h uint32) uint32 {
+	h ^= h >> 16
+	h *= 0x85ebca6b
+	h ^= h >> 13
+	h *= 0xc2b2ae35
+	h ^= h >> 16
+	return h
 }
 
 // Len returns the number of keys in the ring.
@@ -117,6 +130,31 @@ func (ring *Ring) Get(key string) string {
 		return ""
 	}
 
+	return ring.keys[ring.index(key)].key
+}
+
+// GetN returns up to n distinct items for the provided key: the item Get
+// returns, followed by the next distinct items clockwise around the ring.
+func (ring *Ring) GetN(key string, n int) []string {
+	if ring.Len() == 0 || n <= 0 {
+		return nil
+	}
+
+	idx := ring.index(key)
+	seen := make(map[string]bool, n)
+	items := make([]string, 0, n)
+	for i := 0; i < len(ring.keys) && len(items) < n; i++ {
+		item := ring.keys[(idx+i)%len(ring.keys)].key
+		if !seen[item] {
+			seen[item] = true
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+// index returns the position in the ring of the closest item to key.
+func (ring *Ring) index(key string) int {
 	hash := ring.hashfunc([]byte(key))
 
 	// Binary search for appropriate replica.
@@ -130,7 +168,7 @@ func (ring *Ring) Get(key string) string {
 		idx = 0
 	}
 
-	return ring.keys[idx].key
+	return idx
 }
 
 // Signature returns the ring's hash signature. Two identical ringhashes

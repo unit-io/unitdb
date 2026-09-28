@@ -18,12 +18,18 @@ package store
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	adapter "github.com/unit-io/unitdb/server/internal/db"
 	"github.com/unit-io/unitdb/server/internal/message"
 	lp "github.com/unit-io/unitdb/server/internal/net"
+	"github.com/unit-io/unitdb/server/internal/pkg/hash"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/utp"
 )
@@ -32,6 +38,25 @@ const (
 	// Maximum number of records to return
 	maxResults         = 1024
 	connStoreId uint32 = 4105991048 // hash("connectionstore")
+	// Messages stored as a replica of their topic's owner are kept apart from
+	// the ones stored as the owner, so that a relay can ask for each message
+	// from one node only.
+	replicaStoreId uint32 = 2654435761
+	// Messages kept for a replica that could not take them, until it can.
+	hintStoreId uint32 = 2246822519
+	// The topics this node stores messages for.
+	indexStoreId uint32 = 3266489917
+	// Ids of the replicated messages this node stored as a replica.
+	seenStoreId uint32 = 2860486313
+
+	seenTopic = "seen"
+	// Longest a replicated message's id is kept: it only guards against the
+	// message coming again, from a hint, which is handed off within hours.
+	maxSeenTTL = 24 * time.Hour
+
+	topicIndexTopic = "topics"
+	// Most messages a topic's history returns, the store's own maximum.
+	maxHistory = 100000
 )
 
 var adp adapter.Adapter
@@ -70,8 +95,19 @@ func Open(path, jsonconf string, reset bool) error {
 	if err := openAdapter(path, jsonconf, reset); err != nil {
 		return err
 	}
+	wasEmpty = adp.Count() == 0
+	loadTopics()
 
 	return nil
+}
+
+// wasEmpty is set if the message store held no message when it was opened.
+var wasEmpty bool
+
+// WasEmpty reports whether the message store held no message when it was
+// opened: a new node, or one whose disk was lost.
+func WasEmpty() bool {
+	return wasEmpty
 }
 
 // Close terminates connection to persistent storage.
@@ -157,6 +193,106 @@ func (s *SubscriptionStore) Delete(contract uint32, messageId []byte, topic stri
 	return adp.Delete(contract^connStoreId, messageId, topic)
 }
 
+// A stored message starts with a header holding its expiry, as the store gives
+// a message back with neither its id nor its expiry. Messages stored before
+// the header have none.
+var envelopeMagic = [4]byte{0xE5, 0x7A, 0x1C, 0x03}
+
+const envelopeSize = 12 // magic, and expiry as unix seconds (0: none)
+
+func wrap(payload []byte, expiresAt int64) []byte {
+	raw := make([]byte, envelopeSize+len(payload))
+	copy(raw, envelopeMagic[:])
+	binary.LittleEndian.PutUint64(raw[4:12], uint64(expiresAt))
+	copy(raw[envelopeSize:], payload)
+	return raw
+}
+
+// unwrap returns a stored message's payload, and its expiry if it has a
+// header (known).
+func unwrap(raw []byte) (payload []byte, expiresAt int64, known bool) {
+	if len(raw) < envelopeSize || !bytes.Equal(raw[:4], envelopeMagic[:]) {
+		return raw, 0, false
+	}
+	return raw[envelopeSize:], int64(binary.LittleEndian.Uint64(raw[4:12])), true
+}
+
+func expired(expiresAt int64, now time.Time) bool {
+	return expiresAt != 0 && expiresAt <= now.Unix()
+}
+
+// ExpiresAt returns the unix time a message stored now with ttl expires at,
+// or 0 if it does not: ttl is a number of seconds or a duration, as the
+// store takes it, and one the store ignores does not expire.
+func ExpiresAt(ttl string) int64 {
+	if ttl == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseInt(ttl, 10, 64); err == nil {
+		return time.Now().Add(time.Duration(secs) * time.Second).Unix()
+	}
+	if d, err := time.ParseDuration(ttl); err == nil {
+		return time.Now().Add(d).Unix()
+	}
+	return 0
+}
+
+// TopicRef is a topic this node stores messages for.
+type TopicRef struct {
+	Contract uint32
+	Topic    string // without options
+}
+
+// topics are the topics this node stores messages for, indexed in the store
+// as they are first stored, since the store cannot list them.
+var topics = struct {
+	sync.Mutex
+	seen map[TopicRef]bool
+}{seen: make(map[TopicRef]bool)}
+
+func loadTopics() {
+	raw, err := adp.Get(indexStoreId, topicIndexTopic, strconv.Itoa(maxHistory))
+	if err != nil {
+		log.ErrLogger.Err(err).Str("context", "store.loadTopics")
+		return
+	}
+	topics.Lock()
+	defer topics.Unlock()
+	for _, b := range raw {
+		if len(b) > 4 {
+			topics.seen[TopicRef{Contract: binary.LittleEndian.Uint32(b[:4]), Topic: string(b[4:])}] = true
+		}
+	}
+}
+
+// indexTopic records that this node stores messages for topic.
+func indexTopic(contract uint32, topic string) {
+	if i := strings.IndexByte(topic, '?'); i >= 0 {
+		topic = topic[:i]
+	}
+	ref := TopicRef{Contract: contract, Topic: topic}
+	topics.Lock()
+	if topics.seen[ref] {
+		topics.Unlock()
+		return
+	}
+	topics.seen[ref] = true
+	topics.Unlock()
+	b := make([]byte, 4+len(topic))
+	binary.LittleEndian.PutUint32(b[:4], contract)
+	copy(b[4:], topic)
+	if err := adp.Put(indexStoreId, topicIndexTopic, b, ""); err != nil {
+		log.ErrLogger.Err(err).Str("context", "store.indexTopic").Str("topic", topic)
+	}
+}
+
+// HistoryEntry is a stored message, and its expiry if known.
+type HistoryEntry struct {
+	Payload   []byte
+	ExpiresAt int64 // unix seconds, 0 if it does not expire
+	Known     bool  // the expiry is known: the message has a header
+}
+
 // MessageStore is a Message struct to hold methods for persistence mapping for the Message object.
 type MessageStore struct{}
 
@@ -164,12 +300,85 @@ type MessageStore struct{}
 var Message MessageStore
 
 func (m *MessageStore) Put(contract uint32, topic string, payload []byte, ttl string) error {
-	return adp.Put(contract, topic, payload, ttl)
+	if err := adp.Put(contract, topic, wrap(payload, ExpiresAt(ttl)), ttl); err != nil {
+		return err
+	}
+	indexTopic(contract, topic)
+	return nil
+}
+
+// PutReplica stores a message as a replica of its topic's owner, until
+// expiresAt (unix seconds, 0 for never). A message already expired is not
+// stored.
+func (m *MessageStore) PutReplica(contract uint32, topic string, payload []byte, expiresAt int64) error {
+	now := time.Now()
+	if expired(expiresAt, now) {
+		return nil
+	}
+	ttl := ""
+	if expiresAt != 0 {
+		ttl = strconv.FormatInt(expiresAt-now.Unix(), 10)
+	}
+	if err := adp.Put(contract^replicaStoreId, topic, wrap(payload, expiresAt), ttl); err != nil {
+		return err
+	}
+	indexTopic(contract, topic)
+	return nil
+}
+
+// Topics returns the topics this node stores messages for, as their owner or
+// a replica.
+func (m *MessageStore) Topics() []TopicRef {
+	topics.Lock()
+	defer topics.Unlock()
+	refs := make([]TopicRef, 0, len(topics.seen))
+	for ref := range topics.seen {
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// History returns the messages this node stores for topic, as its owner and
+// as a replica, up to the store's maximum, with their expiry where known.
+func (m *MessageStore) History(contract uint32, topic string) ([]HistoryEntry, error) {
+	now := time.Now()
+	var entries []HistoryEntry
+	for _, ns := range []uint32{contract, contract ^ replicaStoreId} {
+		raw, err := adp.Get(ns, topic, strconv.Itoa(maxHistory))
+		if err != nil {
+			return entries, err
+		}
+		for _, b := range raw {
+			payload, expiresAt, known := unwrap(b)
+			if known && expired(expiresAt, now) {
+				continue
+			}
+			entries = append(entries, HistoryEntry{Payload: payload, ExpiresAt: expiresAt, Known: known})
+		}
+	}
+	return entries, nil
+}
+
+// GetAll gets the messages stored for the topic, as its owner and as a
+// replica of its owner.
+func (m *MessageStore) GetAll(contract uint32, topic string, last string) ([]*message.Message, error) {
+	matches, err := m.Get(contract, topic, last)
+	if err != nil {
+		return nil, err
+	}
+	replicas, err := m.Get(contract^replicaStoreId, topic, last)
+	return append(matches, replicas...), err
 }
 
 func (m *MessageStore) Get(contract uint32, topic string, last string) (matches []*message.Message, err error) {
 	resp, err := adp.Get(contract, topic, last)
-	for _, payload := range resp {
+	now := time.Now()
+	for _, raw := range resp {
+		payload, expiresAt, known := unwrap(raw)
+		if known && expired(expiresAt, now) {
+			// The store removes expired messages later.
+			continue
+		}
 		msg := message.Message{
 			Topic:   string(topic),
 			Payload: payload,
@@ -180,6 +389,71 @@ func (m *MessageStore) Get(contract uint32, topic string, last string) (matches 
 	return matches, err
 }
 
+// HintStore holds messages kept for a replica that could not take them when
+// they were stored, to hand them to it once it can.
+type HintStore struct{}
+
+// Hint is the anchor for storing/retrieving hints.
+var Hint HintStore
+
+// hintTopic is the topic of the hints for node: a topic part may not hold
+// every character a node name can.
+func hintTopic(node string) string {
+	return "hints.n" + strconv.FormatUint(uint64(hash.New([]byte(node))), 10)
+}
+
+// NewID returns an id to store a hint under.
+func (h *HintStore) NewID() ([]byte, error) {
+	return adp.NewID()
+}
+
+// Put stores a hint for node under id, until ttl if set.
+func (h *HintStore) Put(node string, id, payload []byte, ttl string) error {
+	return adp.PutWithID(hintStoreId, id, hintTopic(node), payload, ttl)
+}
+
+// Get gets hints for node, up to the store's query limit.
+func (h *HintStore) Get(node string) ([][]byte, error) {
+	return adp.Get(hintStoreId, hintTopic(node), "")
+}
+
+// Delete deletes the hint for node stored under id.
+func (h *HintStore) Delete(node string, id []byte) error {
+	return adp.Delete(hintStoreId, id, hintTopic(node))
+}
+
+// SeenStore holds the ids of the replicated messages this node stored as a
+// replica, so that it stores each once across its own restarts.
+type SeenStore struct{}
+
+// Seen is the anchor for storing/retrieving replicated messages' ids.
+var Seen SeenStore
+
+// Put records id, of a message stored until expiresAt (unix seconds, 0 for
+// never), for as long as the message, up to maxSeenTTL.
+func (s *SeenStore) Put(id string, expiresAt int64) error {
+	ttl := maxSeenTTL
+	if expiresAt != 0 {
+		if left := time.Until(time.Unix(expiresAt, 0)); left < ttl {
+			ttl = left
+		}
+	}
+	if ttl <= 0 {
+		return nil
+	}
+	return adp.Put(seenStoreId, seenTopic, []byte(id), strconv.FormatInt(int64(ttl/time.Second)+1, 10))
+}
+
+// Recent returns up to n ids recorded, newest first.
+func (s *SeenStore) Recent(n int) ([]string, error) {
+	raw, err := adp.Get(seenStoreId, seenTopic, strconv.Itoa(n))
+	ids := make([]string, 0, len(raw))
+	for _, b := range raw {
+		ids = append(ids, string(b))
+	}
+	return ids, err
+}
+
 // SessionStore is a Session struct to hold methods for persistence mapping for the Session object.
 type SessionStore struct{}
 
@@ -187,11 +461,36 @@ type SessionStore struct{}
 var Session SessionStore
 
 func (s *SessionStore) Put(key uint64, payload []byte) error {
-	return adp.PutMessage(key, payload)
+	if err := adp.PutMessage(key, payload); err != nil {
+		return err
+	}
+	if len(payload) >= 4 {
+		logChanged(LogOp{Block: binary.LittleEndian.Uint32(payload[:4]), Key: key, Raw: payload})
+	}
+	return nil
 }
 
 func (s *SessionStore) Get(key uint64) (raw []byte, err error) {
 	return adp.GetMessage(key)
+}
+
+// LogOp is a change this node made to a session's log or row.
+type LogOp struct {
+	Block uint32 // the session id
+	Key   uint64
+	Raw   []byte // the stored bytes; nil deletes the key
+	Reset bool   // deletes every key of the session's log
+}
+
+// OnLogChange, if set, is called with each change this node makes to a
+// session's log or row, for the cluster to replicate it. It is set before the
+// server takes connections.
+var OnLogChange func(LogOp)
+
+func logChanged(op LogOp) {
+	if OnLogChange != nil {
+		OnLogChange(op)
+	}
 }
 
 // MessageLog is a Message struct to hold methods for persistence mapping for the Message object.
@@ -213,6 +512,7 @@ func (l *MessageLog) PersistOutbound(blockID uint32, outMsg lp.MessagePack) {
 			return
 		}
 		adp.PutMessage(key, m.Bytes())
+		logChanged(LogOp{Block: blockID, Key: key, Raw: m.Bytes()})
 	}
 	if outMsg.Type() == utp.FLOWCONTROL {
 		msg := *outMsg.(*utp.ControlMessage)
@@ -222,6 +522,7 @@ func (l *MessageLog) PersistOutbound(blockID uint32, outMsg lp.MessagePack) {
 			// or sending COMPLETE, delete matching RECEIVE for RELIABLE delivery mode from ibound
 			key := uint64(outMsg.Info().MessageID)<<32 + uint64(blockID)
 			adp.DeleteMessage(key)
+			logChanged(LogOp{Block: blockID, Key: key})
 		}
 	}
 }
@@ -241,6 +542,7 @@ func (l *MessageLog) PersistInbound(blockID uint32, inMsg lp.MessagePack) {
 				return
 			}
 			adp.PutMessage(key, m.Bytes())
+			logChanged(LogOp{Block: blockID, Key: key, Raw: m.Bytes()})
 		}
 	}
 }
@@ -271,15 +573,43 @@ func (l *MessageLog) Keys(prefix uint32) []uint64 {
 // Delete is used to delete message.
 func (l *MessageLog) Delete(key uint64) {
 	adp.DeleteMessage(key)
+	logChanged(LogOp{Block: uint32(key), Key: key})
 }
 
 // Reset removes all keys with the prefix from store
 func (l *MessageLog) Reset(prefix uint32) {
+	reset(prefix)
+	logChanged(LogOp{Block: prefix, Reset: true})
+}
+
+func reset(prefix uint32) {
 	keys := adp.Keys()
 	for _, key := range keys {
 		if evalPrefix(prefix, key) {
 			adp.DeleteMessage(key)
 		}
+	}
+}
+
+// Raw returns the stored bytes of a session's log entry or row, or nil.
+func (l *MessageLog) Raw(key uint64) []byte {
+	raw, err := adp.GetMessage(key)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// Apply applies a change another node made to a session's log or row, which
+// this node holds a replica of. It is not replicated again.
+func (l *MessageLog) Apply(op LogOp) {
+	switch {
+	case op.Reset:
+		reset(op.Block)
+	case op.Raw == nil:
+		adp.DeleteMessage(op.Key)
+	default:
+		adp.PutMessage(op.Key, op.Raw)
 	}
 }
 

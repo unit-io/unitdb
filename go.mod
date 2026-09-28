@@ -1,6 +1,6 @@
 module github.com/unit-io/unitdb
 
-go 1.16
+go 1.19
 
 require (
 	github.com/DisposaBoy/JsonConfigReader v0.0.0-20201129172854-99cf318d67e7
@@ -12,4 +12,11 @@ require (
 	golang.org/x/crypto v0.0.0-20210322153248-0c34fe9e7dc2
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
 	google.golang.org/grpc v1.39.0
+)
+
+require (
+	golang.org/x/sys v0.0.0-20210330210617-4fbd30eecc44 // indirect
+	golang.org/x/text v0.3.3 // indirect
+	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
+	google.golang.org/protobuf v1.26.0 // indirect
 )
