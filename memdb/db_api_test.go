@@ -666,3 +666,27 @@ func TestOpenCloseNoGoroutineLeak(t *testing.T) {
 		t.Fatalf("goroutines: %d before, %d after 20 open/close cycles\n%s", before, got, buf[:runtime.Stack(buf, true)])
 	}
 }
+
+// TestPutAfterFreeingLiveTimeBlock frees the block of the live tiny log's
+// time ID, as the engine's recovery does after a reopen in the second of the
+// last writes: it syncs and frees the block recovered for them, which the new
+// tiny log shares. Writes must still find a block.
+func TestPutAfterFreeingLiveTimeBlock(t *testing.T) {
+	db, _ := openTestDB(t)
+	if _, err := db.Put(1, testVal(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Free(int64(db.timeID())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Put(2, testVal(2)); err != nil {
+		t.Fatalf("Put after freeing the live time block: %v", err)
+	}
+	got, err := db.Get(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(testVal(2)) {
+		t.Fatalf("Get = %q, want %q", got, testVal(2))
+	}
+}
