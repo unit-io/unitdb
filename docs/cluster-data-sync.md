@@ -87,7 +87,9 @@ disconnect─▶ ── Master{ConnGone} ─────────────
   sent as the owner's connection is down) goes again to the owner the current
   ring gives, every 100 ms for up to 3 s: longer than failure detection and
   the rehash. One that failed after being sent is not retried: the owner may
-  have processed it.
+  have processed it. A subscribe whose owner is still out of reach after
+  that, as when failure detection is slower, is kept: the rebalance once the
+  ring drops the owner, or once the owner is back, places it.
 - **Relays** go to the topic's owner, which answers from its own messages and
   its replica copies, or to the next replica if the owner does not take it.
 

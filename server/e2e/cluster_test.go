@@ -93,6 +93,9 @@ type clusterOpts struct {
 	// asyncReplication sets async_replication: express publishes and
 	// session changes don't wait for a replica.
 	asyncReplication bool
+	// nodeFailAfter is the heartbeats a node misses before it leaves the
+	// ring; 16 if 0.
+	nodeFailAfter int
 }
 
 // startClusterWith starts a cluster of the named nodes with failover enabled.
@@ -104,6 +107,10 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 		Addr string `json:"addr"`
 	}
 	c := &cluster{t: t}
+	nodeFailAfter := opts.nodeFailAfter
+	if nodeFailAfter == 0 {
+		nodeFailAfter = 16
+	}
 	var confNodes []nodeConf
 	for _, name := range names {
 		n := &clusterNode{name: name, addr: fmt.Sprintf("127.0.0.1:%d", freePort(t))}
@@ -117,7 +124,7 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 			"enabled":         true,
 			"heartbeat":       100,
 			"vote_after":      8,
-			"node_fail_after": 16,
+			"node_fail_after": nodeFailAfter,
 		},
 	}
 	if replicas > 0 {
@@ -1589,6 +1596,48 @@ func TestClusterRequestsDuringFailover(t *testing.T) {
 			c.assertAlive(t, live, "during requests through a failover")
 		})
 	}
+}
+
+// TestClusterSubscribeOutlastsFailureDetection subscribes to a topic whose
+// owner just died, with failure detection slower than the subscribe's
+// retries: the subscription is kept, and placed with the topic's new owner
+// once the ring drops the dead one. It was dropped, although acknowledged.
+func TestClusterSubscribeOutlastsFailureDetection(t *testing.T) {
+	// Out of the ring after 5 s, past the 3 s the subscribe is retried for.
+	c := startClusterWith(t, clusterOpts{nodeFailAfter: 50}, names...)
+	leader, err := c.waitLeader(c.nodes, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := followerOf(leader)
+	dead := c.node(victim)
+	var live []*clusterNode
+	for _, n := range c.nodes {
+		if n != dead {
+			live = append(live, n)
+		}
+	}
+	contract := uint32(0x0c2f0000)
+	cid := newClientID(contract)
+	topic := topicOwnedBy(victim, contract, "groups.slowfail", names...)
+
+	s, err := dial(context.Background(), live[1].tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+		t.Fatal(err)
+	}
+	dead.stop()
+	if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 10*time.Second) {
+		t.Fatalf("subscribe to %s, owned by the dead %s, not acknowledged", topic, victim)
+	}
+	time.Sleep(4 * time.Second) // the rest of failure detection, and the rehash
+	if !publishReaches(t, s, live[0], cid, topic) {
+		t.Errorf("publish on %s did not reach the subscription made after %s died", topic, victim)
+	}
+	c.assertAlive(t, live, "while placing a subscription after a failover")
 }
 
 // TestClusterDeliveryFanOut subscribes many clients of one node to a topic

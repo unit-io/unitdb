@@ -254,9 +254,17 @@ func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.
 		if err == nil || err == errPartialWildcard {
 			break
 		}
-		if retryable(err) && time.Now().Before(deadline) {
-			time.Sleep(forwardRetry)
-			continue
+		if retryable(err) {
+			if time.Now().Before(deadline) {
+				time.Sleep(forwardRetry)
+				continue
+			}
+			// The owner is still out of reach, as when failure detection
+			// takes longer than the retries. The subscription is kept: the
+			// rebalance once the ring drops the owner, or once the owner is
+			// back, places it.
+			log.ErrLogger.Warn().Err(err).Str("context", "conn.subscribe").Int64("connid", int64(c.connID)).Str("topic", name).Msg("topic owner out of reach: the subscription is placed when the ring changes")
+			break
 		}
 		c.release(r)
 		c.subs.Decrement(name, key)
