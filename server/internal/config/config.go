@@ -18,6 +18,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
 
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 )
@@ -90,6 +93,37 @@ func (c *Config) Encryption(encrConfig json.RawMessage) EncryptionConfig {
 	}
 
 	return encr
+}
+
+// EncryptionKeyEnv names the environment variable that overrides
+// encryption_config's key, so that the key can be kept out of the config file.
+const EncryptionKeyEnv = "UNITDB_ENCRYPTION_KEY"
+
+// sampleKey is the key the sample config shipped with up to v0.3. It is
+// public, so client IDs and topic keys signed with it can be forged.
+const sampleKey = "4BWm1vZletvrCDGWsF6mex8oBSd59m6I"
+
+// errNoKey explains how to set a key.
+var errNoKey = errors.New("set encryption_config's key, or " + EncryptionKeyEnv + ", to 32 random characters, for example the output of `openssl rand -base64 24`")
+
+// EncryptionKey returns the key client IDs and topic keys are signed with:
+// the UNITDB_ENCRYPTION_KEY environment variable if set, otherwise
+// encryption_config's key. It refuses a missing key, one of the wrong size,
+// and the old sample key.
+func (c *Config) EncryptionKey() ([]byte, error) {
+	key := os.Getenv(EncryptionKeyEnv)
+	if key == "" && c.EncryptionConfig != nil {
+		key = c.Encryption(c.EncryptionConfig).Key
+	}
+	switch {
+	case key == "":
+		return nil, fmt.Errorf("no encryption key: %w", errNoKey)
+	case key == sampleKey:
+		return nil, fmt.Errorf("the encryption key is the published sample key, which anyone can sign client IDs and topic keys with: %w; clients then need new client IDs and topic keys", errNoKey)
+	case len(key) != 32:
+		return nil, fmt.Errorf("the encryption key has %d bytes, not 32: %w", len(key), errNoKey)
+	}
+	return []byte(key), nil
 }
 
 // StoreConfig represents the configuration for the store.

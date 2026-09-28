@@ -38,9 +38,9 @@ import (
 	"time"
 )
 
-// testKey is the encryption key from the default unitdb.conf. The client-id and
+// testKey is the encryption key the test servers run with. The client-id and
 // topic-key helpers use it to mint credentials the server will accept.
-const testKey = "4BWm1vZletvrCDGWsF6mex8oBSd59m6I"
+const testKey = "test-only-key-do-not-use-0000000"
 
 var build struct {
 	once sync.Once
@@ -167,6 +167,8 @@ type serverOpts struct {
 	logLevel string
 	// env is added to the server's environment, e.g. UNITDB_CLUSTER_CAPS.
 	env []string
+	// key is encryption_config's key; default testKey.
+	key string
 	// expectExit starts the server without waiting for it to be ready, for
 	// a server expected to refuse to start.
 	expectExit bool
@@ -179,6 +181,9 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	}
 	if opts.logLevel == "" {
 		opts.logLevel = "Error"
+	}
+	if opts.key == "" {
+		opts.key = testKey
 	}
 	bin := serverBinary(t)
 	binDir := filepath.Dir(bin)
@@ -202,7 +207,7 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
   "encryption_config": {"key": %q, "identifier": "local", "sealed": false, "timestamp": 1522325758},
   "cluster_config": %s,
   "store_config": {"reset": false, "adapters": {"unitdb": {"database": "unitdb", "mem_size": 500000000}}}
-}`, tcpPort, grpcPort, opts.logLevel, testKey, opts.cluster)
+}`, tcpPort, grpcPort, opts.logLevel, opts.key, opts.cluster)
 	confPath := filepath.Join(binDir, confName)
 	if err := os.WriteFile(confPath, []byte(conf), 0644); err != nil {
 		t.Fatal(err)

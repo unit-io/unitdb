@@ -87,7 +87,7 @@ func main() {
 
 	svc, err := internal.NewService(cfg)
 	if err != nil {
-		panic(err.Error())
+		log.Fatal("main", "Failed to start the service", err)
 	}
 
 	// Start accepting cluster traffic.

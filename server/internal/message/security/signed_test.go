@@ -6,7 +6,7 @@ import (
 )
 
 func TestSignedKey(t *testing.T) {
-	s := NewSigner([]byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I"))
+	s := NewSigner([]byte("test-only-key-do-not-use-0000000"))
 	key, err := s.GenerateKey(testContract, "teams.alpha", AllowRead)
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestSignedKey(t *testing.T) {
 }
 
 func TestSignedKeyRejectsTampering(t *testing.T) {
-	s := NewSigner([]byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I"))
+	s := NewSigner([]byte("test-only-key-do-not-use-0000000"))
 	key, _ := s.GenerateKey(testContract, "teams.alpha", AllowRead)
 
 	// Upgrade the permission byte and re-encode, keeping the old tag.

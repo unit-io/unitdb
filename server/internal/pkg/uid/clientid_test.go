@@ -8,7 +8,7 @@ import (
 
 func newMAC(t *testing.T) *crypto.MAC {
 	t.Helper()
-	mac, err := crypto.New([]byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I"))
+	mac, err := crypto.New([]byte("test-only-key-do-not-use-0000000"))
 	if err != nil {
 		t.Fatal(err)
 	}

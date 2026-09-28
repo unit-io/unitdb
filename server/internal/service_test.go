@@ -71,7 +71,7 @@ func runWithService(m *testing.M) int {
 	cfg := &config.Config{
 		Listen:           tcpAddr,
 		GrpcListen:       grpcAddr,
-		EncryptionConfig: json.RawMessage(`{"key":"4BWm1vZletvrCDGWsF6mex8oBSd59m6I","identifier":"local"}`),
+		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
 	}
@@ -1113,7 +1113,7 @@ func TestShutdownHelper(t *testing.T) {
 	svc, err := NewService(&config.Config{
 		Listen:           tcpAddr,
 		GrpcListen:       grpcAddr,
-		EncryptionConfig: json.RawMessage(`{"key":"4BWm1vZletvrCDGWsF6mex8oBSd59m6I","identifier":"local"}`),
+		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
 	})

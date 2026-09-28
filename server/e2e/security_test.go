@@ -324,3 +324,33 @@ func TestSecurityConnectionFlood(t *testing.T) {
 	t.Logf("opened %d idle connections", len(idle))
 	assertHealthy(t, s, "a flood of idle connections")
 }
+
+// sampleKey is the encryption key earlier versions' sample config shipped
+// with. It is public: a server refuses to run with it.
+const sampleKey = "4BWm1vZletvrCDGWsF6mex8oBSd59m6I"
+
+func TestSecurityRefusesSampleKey(t *testing.T) {
+	s := startServerWith(t, serverOpts{key: sampleKey, expectExit: true})
+	select {
+	case <-s.exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server started with the sample encryption key")
+	}
+	if logs := s.logs.String(); !strings.Contains(logs, "published sample key") {
+		t.Errorf("the server exited without saying why:\n%s", logs)
+	}
+}
+
+func TestSecurityKeyFromEnvironment(t *testing.T) {
+	// The environment overrides the config file's key.
+	s := startServerWith(t, serverOpts{key: sampleKey, env: []string{"UNITDB_ENCRYPTION_KEY=" + testKey}})
+	c, err := dial(context.Background(), s.tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	// A client ID signed with the environment's key is accepted.
+	if _, err := c.connect(newClientID(0x5ec00002), true, nextSess()); err != nil {
+		t.Fatalf("connect with a client ID signed by the environment's key: %v", err)
+	}
+}
