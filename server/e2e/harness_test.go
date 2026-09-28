@@ -26,6 +26,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -95,15 +96,36 @@ func serverSourceDir(t *testing.T) string {
 }
 
 // freePort asks the OS for an unused TCP port and returns it, released.
+// freePort returns a port no one listens on, for a server to bind later.
+//
+// It is below the ephemeral range (from 32768 on Linux, 49152 on macOS): a
+// port from there, free when picked, can be taken by any outgoing
+// connection before the server binds it, such as the nodes' own cluster
+// connections while a node starts, and the server then fails to start.
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 1000; i++ {
+		port := 20000 + rand.Intn(12000)
+		if !takePort(port) {
+			continue
+		}
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		l.Close()
+		return port
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port
+	t.Fatal("no free port")
+	return 0
+}
+
+// takenPorts are the ports freePort returned, which it does not return again.
+var takenPorts sync.Map
+
+func takePort(port int) bool {
+	_, taken := takenPorts.LoadOrStore(port, true)
+	return !taken
 }
 
 // server is a running unitdb server instance.
@@ -241,6 +263,10 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 		// test that exercised it.
 		if logs := s.logs.String(); strings.Contains(logs, "WARNING: DATA RACE") {
 			t.Errorf("server reported a data race:\n%s", logs)
+		} else if t.Failed() && logs != "" {
+			// Where a failure shows only as a refused connection, the server's
+			// own output says why.
+			t.Logf("server %s logs:\n%s", s.tcpAddr, logs)
 		}
 	})
 
