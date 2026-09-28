@@ -1,0 +1,10 @@
+# Regenerate with `buf generate` in this directory, with protoc-gen-go and
+# protoc-gen-go-grpc on the PATH.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: paths=source_relative

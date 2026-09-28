@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 	pbx "github.com/unit-io/unitdb/server/proto"
 )
 

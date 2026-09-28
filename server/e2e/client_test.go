@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lpnet "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"

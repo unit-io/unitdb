@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"sync"
 	"time"
@@ -46,7 +45,7 @@ func MatchWS(strs ...string) Proto {
 // MatchCT only matches the content-type of the request.
 func MatchCT(strs string) Proto {
 	return func(r io.Reader) bool {
-		return matchHTTP2Field(ioutil.Discard, r, "content-type", func(gotValue string) bool {
+		return matchHTTP2Field(io.Discard, r, "content-type", func(gotValue string) bool {
 			return gotValue == strs
 		})
 	}
@@ -281,8 +280,10 @@ func (m *Listener) handleErr(err error) bool {
 		return false
 	}
 
-	if ne, ok := err.(net.Error); ok {
-		return ne.Temporary()
+	// Temporary is deprecated on net.Error as ill-defined, but Accept errors
+	// still report it: see isTemporary in the net package.
+	if t, ok := err.(interface{ Temporary() bool }); ok {
+		return t.Temporary()
 	}
 
 	return false

@@ -21,7 +21,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 	"github.com/unit-io/unitdb/server/common"
 	pbx "github.com/unit-io/unitdb/server/proto"
 	"google.golang.org/grpc"
@@ -43,7 +43,7 @@ func NewGrpcServer(opts ...Options) *GrpcServer {
 }
 
 func StreamConn(
-	stream grpc.Stream,
+	stream common.Stream,
 ) *common.Conn {
 	packetFunc := func(msg proto.Message) *[]byte {
 		return &msg.(*pbx.Packet).Data
@@ -91,7 +91,7 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 	}
 
 	srv := grpc.NewServer(opts...)
-	pbx.RegisterUnitdbServer(srv, s)
+	pbx.RegisterUnitdbServer(srv, unitdbService{s: s})
 	s.Lock()
 	s.stop = srv.Stop
 	s.Unlock()
@@ -114,4 +114,11 @@ func (s *GrpcServer) Stop() {
 	}
 }
 
-var _ pbx.UnitdbServer = (*GrpcServer)(nil)
+// unitdbService registers a GrpcServer with gRPC, which requires services to
+// embed UnimplementedUnitdbServer.
+type unitdbService struct {
+	pbx.UnimplementedUnitdbServer
+	s *GrpcServer
+}
+
+func (u unitdbService) Stream(stream pbx.Unitdb_StreamServer) error { return u.s.Stream(stream) }

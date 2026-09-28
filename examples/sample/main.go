@@ -77,6 +77,9 @@ func main() {
 	// Topic isolation can be achieved using Contract while putting messages into unitdb and querying messages from a topic.
 	// Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using Batch.PutEntry() function.
 	contract, err := db.NewContract()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Writing to single topic in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
@@ -87,6 +90,9 @@ func main() {
 		b.Put(topic, []byte("msg #3 for sales team all channels"))
 		return nil
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Writing to multiple topics in a batch
 	err = db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {

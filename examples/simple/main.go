@@ -59,6 +59,9 @@ func main() {
 
 	// Topic isolation using contract
 	contract, err := db.NewContract()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	db.PutEntry(unitdb.NewEntry([]byte("teams.public.customersupport.connectchannel.message"), []byte("msg for customer connect channel")).WithContract(contract))
 
