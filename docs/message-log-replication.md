@@ -30,10 +30,11 @@ SESSION LOG
 ## Message store
 
 - **Replication.** After storing a message, the owner queues a copy for each
-  other replica; a goroutine per node sends them in batches. A **reliable or
-  batch publish** first waits for one replica, the first in ring order to take
-  it, before it is acknowledged, up to 1 s per replica; the others get it from
-  the queue. Express publishes do not wait.
+  other replica; a goroutine per node sends them in batches. A publish first
+  waits for one replica, the first in ring order to take it, before it is
+  acknowledged, up to 1 s per replica; the others get it from the queue. With
+  `async_replication` set in `cluster_config`, only **reliable and batch
+  publishes** wait, and express publishes are acknowledged at once.
 - **Replica copies** are stored under the replica's own id, in a separate
   replica store (the contract salted with `replicaStoreId`). A unitdb id
   carries the sequence of the store that made it, so writing the owner's id on
@@ -74,6 +75,11 @@ since unitdb cannot list them.
 - Every change to a session's log or row goes, in order, to the session's
   replicas through the same queue, and they apply it to their own memdb under
   the same key: resuming on a replica works like a local resume.
+- A change that stores something, such as a message logged for a client, is
+  made only once one replica has stored it, up to 1 s: the change waits in the
+  queue with the others, so that it cannot overtake an older deletion of the
+  same key. Deletions do not wait: one a replica misses redelivers a message
+  at worst. With `async_replication` set, no change waits.
 - A change a replica missed is kept as a hint naming the key, and the handoff
   sends the key's state then, so that hints need no order.
 - When a client resumes a session, its node gets every other node's copy
@@ -88,12 +94,14 @@ since unitdb cannot list them.
 
 - **A rebuilt node does not get its topics' older history** for topics that
   got no new message since the upgrade that added the topic index.
-- **The last asynchronous writes before a crash can be lost**: express
-  publishes and session log changes do not wait for a replica.
+- **A write no replica took within 1 s can be lost** if its node crashes
+  before a replica gets it: it is acknowledged anyway, so that a slow replica
+  does not stop the cluster. With `async_replication` set, any express
+  publish or session change acknowledged just before a crash can be lost.
 - **A crash between storing a replica and recording its id** can store it
   twice.
-- **Wildcard relays return nothing**: unitdb v0.3.0 does not match wildcard
-  queries.
+- **Wildcard relays return nothing**: the storage engine does not match
+  wildcard queries.
 
 ## Tests
 

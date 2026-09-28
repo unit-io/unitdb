@@ -90,6 +90,9 @@ type clusterOpts struct {
 	replicas int
 	// env is added to the environment of the named nodes.
 	env map[string][]string
+	// asyncReplication sets async_replication: express publishes and
+	// session changes don't wait for a replica.
+	asyncReplication bool
 }
 
 // startClusterWith starts a cluster of the named nodes with failover enabled.
@@ -119,6 +122,9 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 	}
 	if replicas > 0 {
 		clusterConf["replicas"] = replicas
+	}
+	if opts.asyncReplication {
+		clusterConf["async_replication"] = true
 	}
 	conf, _ := json.Marshal(clusterConf)
 	for _, n := range c.nodes {

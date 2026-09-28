@@ -142,6 +142,10 @@ type clusterConfig struct {
 	// Number of nodes storing each message, its topic's owner included.
 	// 1 disables replication; 0 means the default.
 	Replicas int `json:"replicas"`
+	// AsyncReplication acknowledges express publishes and session changes
+	// without waiting for a replica, as reliable publishes are not: lower
+	// latency, but the last ones before a crash can be lost.
+	AsyncReplication bool `json:"async_replication"`
 	// Time a node rebuilding its store keeps a message whose expiry was not
 	// recorded, as a duration; empty means the default.
 	RebuildTTL string `json:"rebuild_ttl"`
@@ -208,7 +212,14 @@ type ReplicaEntry struct {
 type replicaItem struct {
 	entry *ReplicaEntry
 	op    *store.LogOp
+	// done, if set, is sent the result once the item's batch is stored, or
+	// not, for a caller waiting for the replica.
+	done chan<- error
 }
+
+// errReplicaUnable is sent to a waiting caller when the replica cannot take
+// an item: it lacks the capability. The item is kept as a hint.
+var errReplicaUnable = errors.New("cluster: replica cannot take the item")
 
 // replicaHint is a message, or a session log change, kept for a replica that
 // could not take it, and the id it is kept under. For a session log change,
@@ -595,6 +606,9 @@ type Cluster struct {
 
 	// Number of nodes storing each message, its topic's owner included.
 	replicas int
+	// asyncReplication: express publishes and session changes don't wait
+	// for a replica.
+	asyncReplication bool
 	// Time a rebuilt message is kept for, if stored without its expiry.
 	rebuildTTL time.Duration
 	// Set while this node, started with an empty store, copies its topics'
@@ -993,6 +1007,13 @@ func (c *Cluster) forwardTo(n *ClusterNode, msg lp.MessagePack, conn *_Conn) err
 // queue, without waiting. The message is kept as a hint for a replica that
 // does not take it, or whose queue has no room for it, and for each node that
 // should be a replica but is not live, to be handed to it when it is back.
+// waitsForReplica reports whether a publish is acknowledged only once a
+// replica stored it: a reliable one always, an express one unless the
+// cluster replicates asynchronously.
+func (c *Cluster) waitsForReplica(reliable bool) bool {
+	return reliable || (c != nil && !c.asyncReplication)
+}
+
 func (c *Cluster) replicate(contract uint32, name, topic string, payload []byte, ttl string, wait bool) {
 	if c == nil || c.replicas < 2 || isWildcardTopic(name) || !hasCapability(capReplicate) {
 		return
@@ -1237,23 +1258,42 @@ func (n *ClusterNode) replicateLoop(from string) {
 				break fill
 			}
 		}
-		time.Sleep(replicationDelay)
+		// The delay is for asynchronous replication only: a batch that
+		// someone waits for is sent at once.
+		waited := false
+		for _, it := range batch {
+			if it.done != nil {
+				waited = true
+			}
+		}
+		if !waited {
+			time.Sleep(replicationDelay)
+		}
 		req := &ReplicateReq{Node: from}
 		c := Globals.Cluster
+		var waiters []chan<- error
 		for _, it := range batch {
 			switch {
 			case it.entry != nil && !n.supports(capReplicate):
 				if c != nil {
 					c.hint(n.name, *it.entry) // for when it can take it
 				}
+				answer(it.done, errReplicaUnable)
 			case it.entry != nil:
 				req.Entries = append(req.Entries, *it.entry)
+				if it.done != nil {
+					waiters = append(waiters, it.done)
+				}
 			case !n.supports(capSessions):
 				if c != nil {
 					c.hintLog(n.name, *it.op)
 				}
+				answer(it.done, errReplicaUnable)
 			default:
 				req.Log = append(req.Log, *it.op)
+				if it.done != nil {
+					waiters = append(waiters, it.done)
+				}
 			}
 		}
 		if len(req.Entries) == 0 && len(req.Log) == 0 {
@@ -1263,6 +1303,9 @@ func (n *ClusterNode) replicateLoop(from string) {
 		n.sending.Store(true)
 		err := n.call("Cluster.Replicate", req, &unused)
 		n.sending.Store(false)
+		for _, done := range waiters {
+			answer(done, err)
+		}
 		if err != nil {
 			n.lacks(err, capReplicate)
 			n.lacks(err, capSessions)
@@ -1410,18 +1453,32 @@ func sessionRingKey(sessID uint32) string {
 	return "session/" + strconv.FormatUint(uint64(sessID), 10)
 }
 
-// replicateLog queues a change this node made to a session's log or row for
-// the session's replicas. It does not wait for them. The change is kept as a
-// hint for a replica whose queue has no room for it, and for each node that
-// should be a replica but is not live.
+// replicateLog sends a change this node made to a session's log or row to
+// the session's replicas. A change that stores something, such as a message
+// logged for delivery, is first stored on one replica, the first in ring
+// order that takes it, before it returns, unless the cluster replicates
+// asynchronously; the other replicas, and deletions, which at worst
+// redeliver a message if lost, get it from a queue, without waiting. The
+// change is kept as a hint for a replica that does not take it, or whose
+// queue has no room for it, and for each node that should be a replica but
+// is not live.
 func (c *Cluster) replicateLog(op store.LogOp) {
 	if c.replicas < 2 || !hasCapability(capSessions) {
 		return
 	}
+	wait := !c.asyncReplication && !op.Reset && op.Raw != nil
 	key := sessionRingKey(op.Block)
 	live := make(map[string]bool)
 	for _, n := range c.getRingNodes() {
 		live[n] = true
+	}
+	// A waited change goes through the queues too, so that each replica gets
+	// a session's changes in order: sent directly, it could overtake an
+	// older queued deletion of the same key, which would then remove it.
+	var done chan error
+	waiting := 0
+	if wait {
+		done = make(chan error, c.replicas)
 	}
 	for _, replica := range c.getRing().GetN(key, c.replicas) {
 		n := c.nodes[replica]
@@ -1432,16 +1489,52 @@ func (c *Cluster) replicateLog(op store.LogOp) {
 			c.hintLog(replica, op) // for when it can take it
 			continue
 		}
+		it := replicaItem{op: &op}
+		if wait {
+			it.done = done
+		}
 		select {
-		case n.repl <- replicaItem{op: &op}:
+		case n.repl <- it:
+			if wait {
+				waiting++
+			}
 		default:
 			c.hintLog(replica, op)
 		}
+	}
+	if waiting > 0 && !c.awaitReplica(done, waiting) {
+		log.ErrLogger.Warn().Str("context", "cluster.replicateLog").Uint32("session", op.Block).Msg("no replica took the session change in time: it stays queued")
 	}
 	for _, replica := range c.getFullRing().GetN(key, c.replicas) {
 		if !live[replica] {
 			c.hintLog(replica, op)
 		}
+	}
+}
+
+// awaitReplica waits until one of n replicas answers done with success, up
+// to replicaAckTimeout, and reports whether one did.
+func (c *Cluster) awaitReplica(done <-chan error, n int) bool {
+	timeout := time.NewTimer(replicaAckTimeout)
+	defer timeout.Stop()
+	for ; n > 0; n-- {
+		select {
+		case err := <-done:
+			if err == nil {
+				return true
+			}
+		case <-timeout.C:
+			return false
+		}
+	}
+	return false
+}
+
+// answer sends err to a waiting caller, if any. done is buffered for every
+// replica, so it never blocks.
+func answer(done chan<- error, err error) {
+	if done != nil {
+		done <- err
 	}
 }
 
@@ -1695,14 +1788,15 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		drainTimeout = d
 	}
 	Globals.Cluster = &Cluster{
-		ringTarget:      config.RingVersion,
-		ringVersion:     initialRingVersion(config.RingVersion),
-		drainTimeout:    drainTimeout,
-		thisNodeName:    thisName,
-		nodes:           make(map[string]*ClusterNode),
-		replicas:        replicas,
-		rebuildTTL:      rebuildTTL,
-		replicaIDPrefix: thisName + "/" + strconv.FormatInt(time.Now().UnixNano(), 36) + "/"}
+		ringTarget:       config.RingVersion,
+		ringVersion:      initialRingVersion(config.RingVersion),
+		drainTimeout:     drainTimeout,
+		thisNodeName:     thisName,
+		nodes:            make(map[string]*ClusterNode),
+		replicas:         replicas,
+		asyncReplication: config.AsyncReplication,
+		rebuildTTL:       rebuildTTL,
+		replicaIDPrefix:  thisName + "/" + strconv.FormatInt(time.Now().UnixNano(), 36) + "/"}
 
 	var nodeNames []string
 	for _, host := range config.Nodes {

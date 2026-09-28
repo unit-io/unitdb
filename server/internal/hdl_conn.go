@@ -503,7 +503,7 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 		}
 		// A reliable or batch publish is acknowledged once a replica stores it
 		// too, so that it survives this node failing right after.
-		Globals.Cluster.replicate(c.clientID.Contract(), topic.Topic[:topic.Size], topic.Topic, pubMsg.Payload, pubMsg.Ttl, isReliable(pub.DeliveryMode))
+		Globals.Cluster.replicate(c.clientID.Contract(), topic.Topic[:topic.Size], topic.Topic, pubMsg.Payload, pubMsg.Ttl, Globals.Cluster.waitsForReplica(isReliable(pub.DeliveryMode)))
 		// Iterate through all subscribers and send them the message
 		c.service.inflight.Add(1)
 		go func(topic *security.Topic, pubMsg *utp.PublishMessage) {
