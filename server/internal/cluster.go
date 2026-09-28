@@ -51,6 +51,10 @@ const (
 	// 5 owns within about 10% of an even share of the keys; with 20, up to
 	// 30% off.
 	clusterHashReplicas = 160
+	// Time a starting node waits for the others to send it their clients'
+	// subscriptions (resyncOnStart). A move they retry takes up to
+	// rebalanceAttempts * rebalanceRetry.
+	startResyncTimeout = 3 * time.Second
 	// Time between attempts to move subscriptions after a rehash: the other
 	// nodes rehash a few heartbeats after the leader, and reject a move
 	// until then.
@@ -1972,6 +1976,10 @@ func (c *Cluster) Start() {
 	go rpc.Accept(l)
 	//go l.Serve()
 
+	// Before the service takes clients: get back the subscriptions of the
+	// other nodes' clients this node holds, in case it restarted.
+	c.resyncOnStart()
+
 	log.ConnLogger.Info().Str("context", "cluster.Start").Msgf("Cluster of %d nodes initialized, node '%s' listening on [%s]", len(Globals.Cluster.nodes)+1,
 		Globals.Cluster.thisNodeName, c.listenOn)
 }
@@ -2096,6 +2104,10 @@ func (c *Cluster) rehashAndRebalance(nodes []string) {
 type ResyncReq struct {
 	// Name of the node sending this request
 	Node string
+	// Wait answers only once the subscriptions were sent, for a node that
+	// starts: it takes clients once it holds their subscriptions again.
+	// Nodes that do not know the field answer at once.
+	Wait bool
 }
 
 // askResync asks a node back in the ring to send its clients' subscriptions
@@ -2120,8 +2132,45 @@ func (c *Cluster) Resync(req *ResyncReq, unused *bool) error {
 	if err := refuse(capResync); err != nil {
 		return err
 	}
+	if req.Wait {
+		c.rebalance(map[string]bool{req.Node: true})
+		return nil
+	}
 	go c.rebalance(map[string]bool{req.Node: true})
 	return nil
+}
+
+// resyncOnStart asks every other node that answers to send the subscriptions
+// of its clients this node holds, and waits for them, up to
+// startResyncTimeout. A node that restarts before the others fail it over
+// stays in their rings, so nothing else tells them it lost those
+// subscriptions: without this, a publish on one of its topics just after it
+// takes clients again would miss those subscribers. A node that is down, or
+// does not know Resync, is skipped.
+func (c *Cluster) resyncOnStart() {
+	var wg sync.WaitGroup
+	for _, n := range c.nodes {
+		wg.Add(1)
+		go func(n *ClusterNode) {
+			defer wg.Done()
+			endpoint, _, err := dialNode(n.address)
+			if err != nil {
+				return // not up: it has no clients here
+			}
+			defer endpoint.Close()
+			var unused bool
+			call := endpoint.Go("Cluster.Resync", &ResyncReq{Node: c.thisNodeName, Wait: true}, &unused, make(chan *rpc.Call, 1))
+			select {
+			case <-call.Done:
+				if call.Error != nil && !missingMethod(call.Error, capResync) {
+					log.ErrLogger.Warn().Err(call.Error).Str("context", "cluster.resyncOnStart").Msg("unable to resync from " + n.name)
+				}
+			case <-time.After(startResyncTimeout):
+				log.ErrLogger.Warn().Str("context", "cluster.resyncOnStart").Msg("resync from " + n.name + " timed out")
+			}
+		}(n)
+	}
+	wg.Wait()
 }
 
 // rebalance moves every subscription of this node's clients to the nodes the

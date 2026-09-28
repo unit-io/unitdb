@@ -101,6 +101,12 @@ topic's owner, or for a wildcard here and on every other node.
   retrying moves for up to 2 s while the other nodes catch up.
 - **A node that reconnects or rejoins** is sent every subscription it should
   hold. Forwarded subscriptions are held once however often they are sent.
+- **A node that starts** asks every other node that answers to send it those
+  subscriptions, and waits for them (up to 3 s) before it takes clients
+  (`Cluster.resyncOnStart`). A node that restarts before the others fail it
+  over stays in their rings, so nothing else tells them it lost what it held
+  for their clients, and a publish on one of its topics right after it takes
+  clients again would miss those subscribers.
 - **A node that stalled** without its connections failing, as in a
   partition, is asked by the others to send its clients' subscriptions again
   when it rejoins: they dropped what they held for it while it was out.

@@ -2416,3 +2416,56 @@ func followerOf(leader string) string {
 	}
 	return ""
 }
+
+// TestClusterRestartedOwnerKeepsSubscriptions restarts a topic's owner
+// before the others fail it over, and publishes on it as soon as it takes
+// clients, as a reconnecting client does: the subscriptions it held for
+// other nodes' clients must be back by then.
+func TestClusterRestartedOwnerKeepsSubscriptions(t *testing.T) {
+	c := startCluster(t, names...)
+	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	restarted := c.node("one")
+	contract := uint32(0x0c3a0000)
+	cid := newClientID(contract)
+
+	// Subscribers on the other nodes, to topics the restarted node owns.
+	type sub struct {
+		c     *client
+		topic string
+	}
+	var subs []sub
+	for _, n := range c.nodes {
+		if n == restarted {
+			continue
+		}
+		topic := topicOwnedBy(restarted.name, contract, "groups.restartowner."+n.name, names...)
+		s, err := dial(context.Background(), n.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.close()
+		if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+			t.Fatal(err)
+		}
+		if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {
+			t.Fatal("no subscribe ack")
+		}
+		subs = append(subs, sub{s, topic})
+	}
+	time.Sleep(200 * time.Millisecond) // let the forwarded subscriptions settle
+
+	// Down for less than failure detection takes, so it stays in the ring.
+	restarted.stop()
+	time.Sleep(500 * time.Millisecond)
+	if err := restarted.start(); err != nil {
+		t.Fatalf("restart %s: %v\nlogs:\n%s", restarted.name, err, restarted.logs.String())
+	}
+	for _, s := range subs {
+		if !publishReaches(t, s.c, restarted, cid, s.topic) {
+			t.Errorf("publish on %s right after it restarted did not reach its subscriber of %s", restarted.name, s.topic)
+		}
+	}
+	c.assertAlive(t, c.nodes, "after the restart")
+}
