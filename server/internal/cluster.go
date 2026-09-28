@@ -1239,6 +1239,28 @@ func (c *Cluster) handoff(name string) {
 
 // replicateLoop sends the messages and session log changes queued for the
 // node in batches, until the cluster shuts down.
+// delayBatch holds an asynchronous batch for replicationDelay, adding to it
+// what is queued meanwhile. An item someone waits for ends the delay: it
+// would otherwise wait behind the batch, past replicaAckTimeout.
+func (n *ClusterNode) delayBatch(batch []replicaItem) []replicaItem {
+	delay := time.NewTimer(replicationDelay)
+	defer delay.Stop()
+	for len(batch) < replicationBatchSize {
+		select {
+		case it := <-n.repl:
+			batch = append(batch, it)
+			if it.done != nil {
+				return batch
+			}
+		case <-delay.C:
+			return batch
+		case <-n.replDone:
+			return batch
+		}
+	}
+	return batch
+}
+
 func (n *ClusterNode) replicateLoop(from string) {
 	for {
 		var batch []replicaItem
@@ -1266,8 +1288,8 @@ func (n *ClusterNode) replicateLoop(from string) {
 				waited = true
 			}
 		}
-		if !waited {
-			time.Sleep(replicationDelay)
+		if !waited && replicationDelay > 0 {
+			batch = n.delayBatch(batch)
 		}
 		req := &ReplicateReq{Node: from}
 		c := Globals.Cluster
