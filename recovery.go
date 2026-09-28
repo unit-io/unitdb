@@ -29,7 +29,11 @@ func (db *_SyncHandle) recoverWindowBlocks(windowEntries map[uint64]_WindowEntri
 	for h, wEntries := range windowEntries {
 		topicOff, ok := db.internal.trie.getOffset(h)
 		if !ok {
-			return fmt.Errorf("recovery.recoverWindowBlocks: timeWindow sync error, unable to get topic offset from trie %d", h)
+			// A topic no entry on disk names: its first entry was deleted
+			// before a sync, which older versions allowed. Its entries can't
+			// be queried; skip them rather than fail to open.
+			logger.Error().Uint64("topic", h).Int("entries", len(wEntries)).Str("context", "recovery.recoverWindowBlocks").Msg("skipped the entries of a topic whose name was lost")
+			continue
 		}
 		wOff, err := db.windowWriter.append(h, topicOff, wEntries)
 		if err != nil {
