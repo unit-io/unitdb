@@ -9,6 +9,10 @@ updates:
     groups:
       go-dependencies:
         patterns: ["*"]
+    ignore:
+      # gRPC 1.84.x has GO-2026-6443, fixed in 1.85.
+      - dependency-name: google.golang.org/grpc
+        versions: ["1.84.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
