@@ -1,0 +1,138 @@
+# Cluster data synchronisation
+
+How the nodes of a unitdb cluster agree on who holds what, and how
+client requests and data move between them. The code is in
+`server/internal/cluster.go`, `cluster_leader.go`, `conn.go` and
+`hdl_conn.go`.
+
+Each node has its own unitdb store (`db_path`). The cluster keeps three
+things in sync:
+
+- **which node owns each topic**: a ring hash every node computes;
+- **which nodes are alive**: a leader's heartbeats;
+- **where each client's subscriptions are held**, as the ring changes.
+
+Stored messages and session logs are also replicated to more than one node;
+see [message-log-replication.md](message-log-replication.md).
+
+## Ownership: a ring hash keyed by topic
+
+Every topic has one owner: `ring.Get("<contract>/<topic>")`, the topic
+without its options. The owner holds every subscription to the topic, stores
+its messages and delivers them.
+
+- The ring is a consistent hash of the node names in `cluster_config`, with
+  160 points per node (`clusterHashReplicas`). Its hash is FNV-1a mixed by
+  MurmurHash3's finalizer, so that keys differing in their last characters,
+  such as consecutive ids, get independent owners. Each node of 3 to 5 owns
+  within about 10% of an even share of the keys.
+- **Wildcard subscriptions** (`*`, `...`) match topics of every owner, so every
+  node holds them.
+- `Ring.GetN(key, n)` gives a key's owner and the next distinct nodes: its
+  replica set.
+- **The ring is versioned** (`cluster_ring.go`): version 1 is FNV-1a with 20
+  points per node, version 2 the mixed hash with 160. The leader's pings name
+  the version the cluster routes by: the highest every live node supports, up
+  to `ring_version` in `cluster_config`. A switch is a rehash, so
+  subscriptions move with the rebalance. Each topic's first holder under the
+  old version hands its stored messages to the holders the new version adds
+  (`moveHistory`); relays during that may miss what is not copied yet.
+
+## Membership: leader, heartbeats, rehash
+
+A leader, elected in a cut-down Raft with no log, pings every node each
+heartbeat and decides which nodes are live. The ring over the live nodes is
+the one requests are routed by.
+
+```
+ leader ──Ping{term, signature, live nodes}──▶ followers     every heartbeat (75–125 ms)
+   │  a ping times out after a heartbeat, and counts as a failure
+   │  node_fail_after failures in a row → node out of the ring → leader rehashes
+   │  the node answers again → back in the ring → rehash
+ follower: signature differs on 2 pings in a row → rehash(ping's nodes)
+ follower: no ping for vote_after heartbeats → term + 1 → Vote → leader on a majority
+```
+
+With the sample config (`heartbeat` 100 ms, `vote_after` 8,
+`node_fail_after` 16) a lost leader is replaced in about 0.8 s, and a dead or
+frozen node leaves the ring in about 1.6 s. Failover needs 3 nodes or more.
+
+## Request path
+
+A client's node forwards each subscribe, unsubscribe and publish for a topic
+it does not own to the topic's owner, one topic at a time, over net/rpc
+(`Cluster.Master`). The owner treats the forwarded client as a local session,
+an `rpcConn` keyed by the client node's connection id.
+
+```
+client ── node C (client's node) ──────────────────── node O (topic owner)
+SUBSCRIBE ─▶ ACK ◀─ (C acknowledges)
+             ── Master{sub} ──────────────────────▶ rpcConn, subscription stored
+PUBLISH   ─▶ ── Master{pub} ──────────────────────▶ stored, subscribers found
+             ◀─ Deliver{messages for C's clients} ── one call per node, to all at once
+message   ◀─ (C delivers as to a local subscriber: sent, batched, or logged + NOTIFY)
+disconnect─▶ ── Master{ConnGone} ─────────────────▶ rpcConn stopped, subscriptions dropped
+```
+
+- **Delivery happens on the client's node.** The owner hands the message and
+  its delivery mode to the client's node (`Cluster.Deliver`), which delivers
+  it as to a local subscriber. Reliable and batch messages are therefore
+  logged where the client's RECEIVE arrives, and message ids come from the
+  client's own connection.
+- **Which requests a node takes** is decided by its own ring, not by comparing
+  ring signatures, as rings disagree for a few heartbeats after a rehash
+  (`Cluster.takes`): every subscribe and unsubscribe; a publish only for a
+  topic it owns; a relay only for a topic it holds, and not while it rebuilds.
+- **Retries.** A publish or subscribe that was not processed (rejected, or not
+  sent as the owner's connection is down) goes again to the owner the current
+  ring gives, every 100 ms for up to 3 s: longer than failure detection and
+  the rehash. One that failed after being sent is not retried: the owner may
+  have processed it.
+- **Relays** go to the topic's owner, which answers from its own messages and
+  its replica copies, or to the next replica if the owner does not take it.
+
+## Subscriptions across ring changes
+
+Each client subscription records where it is held (`subRoute`): here, on the
+topic's owner, or for a wildcard here and on every other node.
+
+- **After a rehash** each node moves its clients' subscriptions to where the
+  new ring holds them, adding the new places before removing the old, and
+  retrying moves for up to 2 s while the other nodes catch up.
+- **A node that reconnects or rejoins** is sent every subscription it should
+  hold. Forwarded subscriptions are held once however often they are sent.
+- **A node that stalled** without its connections failing, as in a
+  partition, is asked by the others to send its clients' subscriptions again
+  when it rejoins: they dropped what they held for it while it was out.
+- Nodes stop the proxied connections of nodes that left the ring.
+
+## Shutting down
+
+On SIGTERM a node leaves the cluster before it closes its clients'
+connections (`Cluster.drain`). It takes itself out of its own ring, so that
+it forwards its clients' requests to the topics' new owners and rejects those
+for its old topics, which their senders retry. Its ping answers say it is
+leaving, so the leader takes it out of the ring at once rather than after
+failure detection. It waits for the other nodes to rehash, hands off its
+hints and replication queues, and only then closes its clients, which resume
+their sessions elsewhere. It waits `drain_timeout` (default 10s) at most.
+
+## Open gaps
+
+- **Forwarded requests have no timeout.** A client's publish to a node that is
+  frozen but not yet out of the ring blocks until the node resumes or leaves.
+- **Wildcard relays return nothing**, on a standalone server too: the
+  storage engine does not match wildcard queries.
+- **Nodes of v0.3.0 cannot run in one cluster with later ones**: the
+  upgrade from it takes a maintenance window, and a later node refuses to
+  start next to one. Later versions can run together: see
+  [rolling-deploys.md](rolling-deploys.md).
+- Resuming a session asks every node for its copy, adding up to 1 s to the
+  connect.
+
+## Tests
+
+`server/e2e/cluster_test.go` runs real 3-node clusters with failover:
+delivery across every subscriber/publisher/owner combination, reliable and
+batch delivery, wildcards, relays, failover and rejoin, frozen nodes, requests
+during a failover, and fan-out to many subscribers.

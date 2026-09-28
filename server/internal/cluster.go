@@ -68,6 +68,9 @@ const (
 	fetchSessionTimeout = time.Second
 	// Time a reliable publish waits for a replica to store it.
 	replicaAckTimeout = time.Second
+	// Default time a node shutting down waits at most for the others to take
+	// it out of their rings, and for its hints and queues to be sent.
+	defaultDrainTimeout = 10 * time.Second
 	// Time a client request that a topic's owner did not take is sent again
 	// for, and the time between attempts: longer than failure detection and
 	// the other nodes' rehash, for a dead owner to be replaced.
@@ -142,6 +145,13 @@ type clusterConfig struct {
 	// Time a node rebuilding its store keeps a message whose expiry was not
 	// recorded, as a duration; empty means the default.
 	RebuildTTL string `json:"rebuild_ttl"`
+	// Time a node shutting down waits at most for the others to take it out
+	// of their rings, and for what it holds for them to be sent, as a
+	// duration; empty means the default.
+	DrainTimeout string `json:"drain_timeout"`
+	// Highest ring version the cluster routes by, once every node supports
+	// it; 0 means the latest.
+	RingVersion int `json:"ring_version"`
 	// Failover configuration
 	Failover *clusterFailoverConfig
 }
@@ -172,10 +182,14 @@ type ClusterNode struct {
 	// Messages to store on the node as a replica of their topic's owner, and
 	// changes to session logs it holds a replica of, in order.
 	repl chan replicaItem
+	// Set while a batch from repl is being sent.
+	sending atomic.Bool
 	// Closed to stop sending replicas to the node.
 	replDone chan struct{}
 	// Held while handing hints to the node.
 	handoffMu sync.Mutex
+	// What the node can do, as far as this node knows.
+	caps peerCapabilities
 }
 
 // ReplicaEntry is a stored message sent to a replica of its topic's owner.
@@ -556,8 +570,19 @@ type Cluster struct {
 	// Socket for inbound connections
 	inbound *net.TCPListener
 	// Ring hash of every configured node, live or not: a topic's replicas in
-	// it are the nodes that should hold the topic's messages.
+	// it are the nodes that should hold the topic's messages. Replaced when
+	// the ring version changes, so use getFullRing.
 	fullRing *rh.Ring
+	// Every configured node, this one included.
+	allNodes []string
+	// Version of the ring, guarded by ringMu; and the highest the cluster's
+	// configuration allows, 0 for the latest.
+	ringVersion int
+	ringTarget  int
+	// Ring version the cluster was last seen routing by, from the leader's
+	// pings or as the leader; 0 until seen. A change of it moves stored
+	// messages.
+	clusterRing atomic.Int32
 	// Ring hash for mapping topic names to nodes. It is replaced on rehash by
 	// the failover runner while requests read it, so use getRing.
 	ringMu sync.RWMutex
@@ -575,6 +600,12 @@ type Cluster struct {
 	// Set while this node, started with an empty store, copies its topics'
 	// messages from the other nodes.
 	rebuilding atomic.Bool
+	// Set once this node, shutting down, leaves the cluster.
+	leaving atomic.Bool
+	// Set once the cluster is shut down.
+	stopped atomic.Bool
+	// Time it waits at most for that.
+	drainTimeout time.Duration
 
 	// Ids given to the messages this node replicates: this node's name, the
 	// time it started, and a sequence.
@@ -793,9 +824,23 @@ func (c *Cluster) deliverRemote(byNode map[*ClusterNode][]Delivery) {
 		wg.Add(1)
 		go func(n *ClusterNode, deliveries []Delivery) {
 			defer wg.Done()
-			var unused bool
-			if err := n.call("Cluster.Deliver", &DeliverReq{Node: c.thisNodeName, Deliveries: deliveries}, &unused); err != nil {
-				log.ErrLogger.Error().Err(err).Str("context", "cluster.deliverRemote").Int("messages", len(deliveries)).Msg("unable to deliver to clients of " + n.name)
+			if hasCapability(capDeliver) && n.supports(capDeliver) {
+				var unused bool
+				err := n.call("Cluster.Deliver", &DeliverReq{Node: c.thisNodeName, Deliveries: deliveries}, &unused)
+				if err == nil {
+					return
+				}
+				if !n.lacks(err, capDeliver) {
+					log.ErrLogger.Error().Err(err).Str("context", "cluster.deliverRemote").Int("messages", len(deliveries)).Msg("unable to deliver to clients of " + n.name)
+					return
+				}
+			}
+			// A node that cannot take them all at once: one call each.
+			for _, d := range deliveries {
+				var unused bool
+				if err := n.call("Cluster.Proxy", &ClusterResp{Message: d.Message, Reliable: d.Reliable, FromConnID: d.ConnID}, &unused); err != nil {
+					log.ErrLogger.Error().Err(err).Str("context", "cluster.deliverRemote").Msg("unable to deliver to a client of " + n.name)
+				}
 			}
 		}(n, deliveries)
 	}
@@ -806,6 +851,9 @@ func (c *Cluster) deliverRemote(byNode map[*ClusterNode][]Delivery) {
 // as to a local subscriber, all at once: a slow client does not hold up the
 // others. Called by the topic's owner.
 func (c *Cluster) Deliver(req *DeliverReq, unused *bool) error {
+	if err := refuse(capDeliver); err != nil {
+		return err
+	}
 	time.Sleep(deliverDelay)
 	var wg sync.WaitGroup
 	for _, d := range req.Deliveries {
@@ -946,7 +994,7 @@ func (c *Cluster) forwardTo(n *ClusterNode, msg lp.MessagePack, conn *_Conn) err
 // does not take it, or whose queue has no room for it, and for each node that
 // should be a replica but is not live, to be handed to it when it is back.
 func (c *Cluster) replicate(contract uint32, name, topic string, payload []byte, ttl string, wait bool) {
-	if c == nil || c.replicas < 2 || isWildcardTopic(name) {
+	if c == nil || c.replicas < 2 || isWildcardTopic(name) || !hasCapability(capReplicate) {
 		return
 	}
 	key := topicRingKey(contract, name)
@@ -968,6 +1016,10 @@ func (c *Cluster) replicate(contract uint32, name, topic string, payload []byte,
 		if n == nil {
 			continue // this node
 		}
+		if !n.supports(capReplicate) {
+			c.hint(replica, e) // for when it can take it
+			continue
+		}
 		if wait && !stored {
 			var unused bool
 			if err := n.callTimeout("Cluster.Replicate", &ReplicateReq{Node: c.thisNodeName, Entries: []ReplicaEntry{e}}, &unused, replicaAckTimeout); err != nil {
@@ -986,7 +1038,7 @@ func (c *Cluster) replicate(contract uint32, name, topic string, payload []byte,
 	if wait && !stored {
 		log.ErrLogger.Warn().Str("context", "cluster.replicate").Str("topic", name).Msg("no replica took the message: stored on this node only")
 	}
-	for _, replica := range c.fullRing.GetN(key, c.replicas) {
+	for _, replica := range c.getFullRing().GetN(key, c.replicas) {
 		if !live[replica] {
 			c.hint(replica, e)
 		}
@@ -1126,19 +1178,33 @@ func (c *Cluster) handoff(name string) {
 				batch = batch[:replicationBatchSize]
 			}
 			req := &ReplicateReq{Node: c.thisNodeName, Handoff: true}
+			var sent []replicaHint
 			for _, h := range batch {
 				if h.Op != nil {
+					if !n.supports(capSessions) {
+						continue // kept until it can take it
+					}
 					req.Log = append(req.Log, currentState(*h.Op)...)
 				} else {
+					if !n.supports(capReplicate) {
+						continue
+					}
 					req.Entries = append(req.Entries, h.Entry)
 				}
+				sent = append(sent, h)
+			}
+			if len(sent) == 0 {
+				// None of these can go: they would come back each round.
+				return
 			}
 			var unused bool
 			if err := n.call("Cluster.Replicate", req, &unused); err != nil {
 				// Kept for the next handoff.
+				n.lacks(err, capReplicate)
+				n.lacks(err, capSessions)
 				return
 			}
-			for _, h := range batch {
+			for _, h := range sent {
 				if err := store.Hint.Delete(name, h.ID); err != nil {
 					// Not deleted, it would be handed off again and again.
 					log.ErrLogger.Error().Err(err).Str("context", "cluster.handoff").Msg("unable to delete hint for " + name)
@@ -1173,15 +1239,33 @@ func (n *ClusterNode) replicateLoop(from string) {
 		}
 		time.Sleep(replicationDelay)
 		req := &ReplicateReq{Node: from}
+		c := Globals.Cluster
 		for _, it := range batch {
-			if it.entry != nil {
+			switch {
+			case it.entry != nil && !n.supports(capReplicate):
+				if c != nil {
+					c.hint(n.name, *it.entry) // for when it can take it
+				}
+			case it.entry != nil:
 				req.Entries = append(req.Entries, *it.entry)
-			} else {
+			case !n.supports(capSessions):
+				if c != nil {
+					c.hintLog(n.name, *it.op)
+				}
+			default:
 				req.Log = append(req.Log, *it.op)
 			}
 		}
+		if len(req.Entries) == 0 && len(req.Log) == 0 {
+			continue
+		}
 		var unused bool
-		if err := n.call("Cluster.Replicate", req, &unused); err != nil {
+		n.sending.Store(true)
+		err := n.call("Cluster.Replicate", req, &unused)
+		n.sending.Store(false)
+		if err != nil {
+			n.lacks(err, capReplicate)
+			n.lacks(err, capSessions)
 			// Kept for the node until it is back. The node may have stored the
 			// batch before failing, and would then get the messages twice.
 			if c := Globals.Cluster; c != nil {
@@ -1204,6 +1288,9 @@ func (n *ClusterNode) replicateLoop(from string) {
 func (c *Cluster) rebuild() {
 	defer c.rebuilding.Store(false)
 	for _, n := range c.nodes {
+		if !n.supports(capReplicate) {
+			continue // it holds no replicas
+		}
 		var topics RebuildTopicsResp
 		var err error
 		for attempt := 0; attempt < rebuildAttempts; attempt++ {
@@ -1245,6 +1332,9 @@ func (c *Cluster) rebuild() {
 // for the node, whose messages it gets with the rest. Called by the
 // rebuilding node.
 func (c *Cluster) RebuildTopics(req *RebuildReq, resp *RebuildTopicsResp) error {
+	if err := refuse(capReplicate); err != nil {
+		return err
+	}
 	if n := c.nodes[req.Node]; n != nil {
 		n.handoffMu.Lock()
 		c.dropHints(req.Node)
@@ -1255,7 +1345,7 @@ func (c *Cluster) RebuildTopics(req *RebuildReq, resp *RebuildTopicsResp) error 
 		live[n] = true
 	}
 	for _, t := range store.Message.Topics() {
-		holders := c.fullRing.GetN(topicRingKey(t.Contract, t.Topic), c.replicas)
+		holders := c.getFullRing().GetN(topicRingKey(t.Contract, t.Topic), c.replicas)
 		replica := false
 		for _, h := range holders {
 			replica = replica || h == req.Node
@@ -1279,6 +1369,9 @@ func (c *Cluster) RebuildTopics(req *RebuildReq, resp *RebuildTopicsResp) error 
 // RebuildHistory returns the messages this node stores for a topic, for a
 // rebuilding node. Called by the rebuilding node.
 func (c *Cluster) RebuildHistory(req *RebuildHistoryReq, resp *RebuildHistoryResp) error {
+	if err := refuse(capReplicate); err != nil {
+		return err
+	}
 	entries, err := store.Message.History(req.Topic.Contract, req.Topic.Topic)
 	resp.Entries = entries
 	return err
@@ -1322,7 +1415,7 @@ func sessionRingKey(sessID uint32) string {
 // hint for a replica whose queue has no room for it, and for each node that
 // should be a replica but is not live.
 func (c *Cluster) replicateLog(op store.LogOp) {
-	if c.replicas < 2 {
+	if c.replicas < 2 || !hasCapability(capSessions) {
 		return
 	}
 	key := sessionRingKey(op.Block)
@@ -1335,13 +1428,17 @@ func (c *Cluster) replicateLog(op store.LogOp) {
 		if n == nil {
 			continue // this node
 		}
+		if !n.supports(capSessions) {
+			c.hintLog(replica, op) // for when it can take it
+			continue
+		}
 		select {
 		case n.repl <- replicaItem{op: &op}:
 		default:
 			c.hintLog(replica, op)
 		}
 	}
-	for _, replica := range c.fullRing.GetN(key, c.replicas) {
+	for _, replica := range c.getFullRing().GetN(key, c.replicas) {
 		if !live[replica] {
 			c.hintLog(replica, op)
 		}
@@ -1352,6 +1449,9 @@ func (c *Cluster) replicateLog(op store.LogOp) {
 // replica, or as a node the session's client was connected to. Called by a
 // remote node the client connects to.
 func (c *Cluster) FetchSession(req *FetchSessionReq, resp *FetchSessionResp) error {
+	if err := refuse(capSessions); err != nil {
+		return err
+	}
 	row := store.Log.Raw(req.SessKey)
 	if len(row) < 4 {
 		return nil
@@ -1375,13 +1475,15 @@ func (c *Cluster) FetchSession(req *FetchSessionReq, resp *FetchSessionResp) err
 // would go stale as the client goes on here. It waits up to
 // fetchSessionTimeout.
 func (c *Cluster) fetchSession(sessKey uint64) {
-	if c == nil || c.replicas < 2 {
+	if c == nil || c.replicas < 2 || !hasCapability(capSessions) {
 		return
 	}
 	done := make(chan *rpc.Call, len(c.nodes))
 	callers := make(map[*rpc.Call]string, len(c.nodes))
 	for _, n := range c.nodes {
-		callers[n.callAsync("Cluster.FetchSession", &FetchSessionReq{Node: c.thisNodeName, SessKey: sessKey}, &FetchSessionResp{}, done)] = n.name
+		if n.supports(capSessions) {
+			callers[n.callAsync("Cluster.FetchSession", &FetchSessionReq{Node: c.thisNodeName, SessKey: sessKey}, &FetchSessionResp{}, done)] = n.name
+		}
 	}
 	var block uint32
 	var row []byte
@@ -1393,11 +1495,15 @@ func (c *Cluster) fetchSession(sessKey uint64) {
 	var holders []string
 	timeout := time.NewTimer(fetchSessionTimeout)
 	defer timeout.Stop()
-	for i := 0; i < len(c.nodes); i++ {
+	for i := 0; i < len(callers); i++ {
 		select {
 		case call := <-done:
 			resp := call.Reply.(*FetchSessionResp)
-			if call.Error != nil || !resp.Found {
+			if call.Error != nil {
+				c.nodes[callers[call]].lacks(call.Error, capSessions)
+				continue
+			}
+			if !resp.Found {
 				continue
 			}
 			if row == nil {
@@ -1410,7 +1516,7 @@ func (c *Cluster) fetchSession(sessKey uint64) {
 				entries[op.Key] = op.Raw
 			}
 		case <-timeout.C:
-			i = len(c.nodes)
+			i = len(callers)
 		}
 	}
 	for key, raw := range entries {
@@ -1420,7 +1526,7 @@ func (c *Cluster) fetchSession(sessKey uint64) {
 		store.Log.Apply(store.LogOp{Block: block, Key: sessKey, Raw: row})
 	}
 	for _, h := range holders {
-		if !c.isSessionReplica(h, block) {
+		if !c.isSessionReplica(h, block) && c.nodes[h].supports(capSessions) {
 			var unused bool
 			c.nodes[h].callAsync("Cluster.ForgetSession", &ForgetSessionReq{Node: c.thisNodeName, SessKey: sessKey, Block: block}, &unused, nil)
 		}
@@ -1431,7 +1537,7 @@ func (c *Cluster) fetchSession(sessKey uint64) {
 // id block: in the current ring, or in the ring of every configured node.
 func (c *Cluster) isSessionReplica(node string, block uint32) bool {
 	key := sessionRingKey(block)
-	for _, ring := range []*rh.Ring{c.getRing(), c.fullRing} {
+	for _, ring := range []*rh.Ring{c.getRing(), c.getFullRing()} {
 		for _, n := range ring.GetN(key, c.replicas) {
 			if n == node {
 				return true
@@ -1446,6 +1552,9 @@ func (c *Cluster) isSessionReplica(node string, block uint32) bool {
 // would go stale, and be merged back into the session when its client next
 // moves. Called by the node the client resumed on.
 func (c *Cluster) ForgetSession(req *ForgetSessionReq, unused *bool) error {
+	if err := refuse(capSessions); err != nil {
+		return err
+	}
 	if c.isSessionReplica(c.thisNodeName, req.Block) {
 		return nil
 	}
@@ -1459,6 +1568,16 @@ func (c *Cluster) ForgetSession(req *ForgetSessionReq, unused *bool) error {
 // node's store: an id carries the sequence of the store that made it, which
 // another store may use for another message.
 func (c *Cluster) Replicate(req *ReplicateReq, unused *bool) error {
+	if len(req.Entries) > 0 {
+		if err := refuse(capReplicate); err != nil {
+			return err
+		}
+	}
+	if len(req.Log) > 0 {
+		if err := refuse(capSessions); err != nil {
+			return err
+		}
+	}
 	if req.Handoff && c.rebuilding.Load() {
 		// The node's rebuild copies these messages with the rest. It does
 		// not copy session logs: their changes are applied below.
@@ -1567,7 +1686,18 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		}
 		rebuildTTL = d
 	}
+	drainTimeout := defaultDrainTimeout
+	if config.DrainTimeout != "" {
+		d, err := time.ParseDuration(config.DrainTimeout)
+		if err != nil {
+			log.Fatal("cluster.ClusterInit", "invalid drain_timeout", err)
+		}
+		drainTimeout = d
+	}
 	Globals.Cluster = &Cluster{
+		ringTarget:      config.RingVersion,
+		ringVersion:     initialRingVersion(config.RingVersion),
+		drainTimeout:    drainTimeout,
 		thisNodeName:    thisName,
 		nodes:           make(map[string]*ClusterNode),
 		replicas:        replicas,
@@ -1599,11 +1729,12 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		log.Info("cluster.ClusterInit", "Invalid cluster size: 1")
 	}
 
+	Globals.Cluster.allNodes = append([]string(nil), nodeNames...)
+	Globals.Cluster.fullRing = newRing(Globals.Cluster.ringVersion, nodeNames)
+	logRingVersion(Globals.Cluster.ringVersion)
 	if !Globals.Cluster.failoverInit(config.Failover) {
 		Globals.Cluster.rehash(nil)
 	}
-	Globals.Cluster.fullRing = rh.NewRing(clusterHashReplicas, nil)
-	Globals.Cluster.fullRing.Add(nodeNames...)
 
 	sort.Strings(nodeNames)
 	workerId := sort.SearchStrings(nodeNames, thisName) + 1
@@ -1678,7 +1809,36 @@ func (c *_Conn) closeRPC() {
 }
 
 // Start accepting connections.
+// checkPeers stops the process if a configured node that answers runs a
+// version from before replication, as unitdb v0.3.0: it cannot run in one cluster
+// with this one, and the upgrade from it stops every node first
+// (docs/rolling-deploys.md). Every later version takes an empty Replicate.
+// A node that does not answer is not checked: a node of that version fails
+// the pings of a leader of this one, and leaves its ring.
+func (c *Cluster) checkPeers() {
+	for _, n := range c.nodes {
+		endpoint, _, err := dialNode(n.address)
+		if err != nil {
+			continue
+		}
+		var unused bool
+		call := endpoint.Go("Cluster.Replicate", &ReplicateReq{Node: c.thisNodeName}, &unused, make(chan *rpc.Call, 1))
+		select {
+		case <-call.Done:
+			err = call.Error
+		case <-time.After(2 * time.Second):
+			err = nil
+		}
+		endpoint.Close()
+		if missingMethod(err, capReplicate) {
+			log.Fatal("cluster.checkPeers", "node '"+n.name+"' at "+n.address+" runs a version from before replication (unitdb v0.3.0 or older), which cannot run in one cluster with this one: stop every node before upgrading, see docs/rolling-deploys.md", err)
+		}
+	}
+}
+
 func (c *Cluster) Start() {
+	c.checkPeers()
+
 	l, err := listener.New(c.listenOn)
 	if err != nil {
 		panic(err)
@@ -1701,7 +1861,7 @@ func (c *Cluster) Start() {
 	} else {
 		log.ErrLogger.Error().Err(err).Str("context", "cluster.Start").Msg("unable to load replicated messages' ids")
 	}
-	if c.replicas >= 2 && store.WasEmpty() {
+	if c.replicas >= 2 && store.WasEmpty() && hasCapability(capReplicate) {
 		c.rebuilding.Store(true)
 		go c.rebuild()
 	}
@@ -1722,11 +1882,56 @@ func (c *Cluster) Start() {
 		Globals.Cluster.thisNodeName, c.listenOn)
 }
 
-func (c *Cluster) shutdown() {
-	if Globals.Cluster == nil {
+// drain has this node, shutting down, leave the cluster, before it closes its
+// clients' connections: the others take it out of their rings, so that their
+// requests go to the topics' new owners and its clients' subscriptions they
+// held move, and it sends them the hints and replicas it has queued. It waits
+// up to drainTimeout.
+func (c *Cluster) drain() {
+	if c == nil {
 		return
 	}
-	Globals.Cluster = nil
+	deadline := time.Now().Add(c.drainTimeout)
+	c.leaving.Store(true)
+	if c.fo != nil {
+		answer := make(chan bool, 1)
+		c.fo.leave <- answer
+		var wasLeader bool
+		select {
+		case wasLeader = <-answer:
+		case <-time.After(time.Until(deadline)):
+		}
+		// The followers rehash on the second ping without this node.
+		if wasLeader {
+			time.Sleep(3 * c.fo.heartBeat)
+		} else {
+			for c.fo.pingsWithoutSelf.Load() < 3 && time.Now().Before(deadline) {
+				time.Sleep(c.fo.heartBeat / 2)
+			}
+		}
+	}
+	for _, n := range c.nodes {
+		c.handoff(n.name)
+	}
+	for time.Now().Before(deadline) {
+		busy := false
+		for _, n := range c.nodes {
+			busy = busy || len(n.repl) > 0 || n.sending.Load()
+		}
+		if !busy {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	log.Info("cluster.drain", "left the cluster")
+}
+
+func (c *Cluster) shutdown() {
+	// Globals.Cluster stays set: goroutines that read it run until the
+	// process exits, and clearing it raced with them.
+	if c == nil || !c.stopped.CompareAndSwap(false, true) {
+		return
+	}
 	c.inbound.Close()
 
 	if c.fo != nil {
@@ -1742,10 +1947,12 @@ func (c *Cluster) shutdown() {
 }
 
 // Recalculate the ring hash using provided list of nodes or only nodes in a non-failed state.
-// Returns the list of nodes used for ring hash.
+// Returns the list of nodes used for ring hash. A node leaving the cluster
+// leaves itself out.
 func (c *Cluster) rehash(nodes []string) []string {
-	ring := rh.NewRing(clusterHashReplicas, nil)
-
+	if c.leaving.Load() && nodes != nil {
+		nodes = withoutNode(nodes, c.thisNodeName)
+	}
 	var ringKeys []string
 
 	if nodes == nil {
@@ -1756,7 +1963,7 @@ func (c *Cluster) rehash(nodes []string) []string {
 	} else {
 		ringKeys = append(ringKeys, nodes...)
 	}
-	ring.Add(ringKeys...)
+	ring := newRing(c.getRingVersion(), ringKeys)
 
 	c.ringMu.Lock()
 	c.ring = ring
@@ -1803,11 +2010,11 @@ type ResyncReq struct {
 // its connections failing does not know, and is not resynced otherwise.
 func (c *Cluster) askResync(name string) {
 	n := c.nodes[name]
-	if n == nil {
+	if n == nil || !n.supports(capResync) {
 		return
 	}
 	var unused bool
-	if err := n.callTimeout("Cluster.Resync", &ResyncReq{Node: c.thisNodeName}, &unused, rebuildTimeout); err != nil {
+	if err := n.callTimeout("Cluster.Resync", &ResyncReq{Node: c.thisNodeName}, &unused, rebuildTimeout); err != nil && !n.lacks(err, capResync) {
 		log.ErrLogger.Error().Err(err).Str("context", "cluster.askResync").Msg("unable to ask " + name + " to resync")
 	}
 }
@@ -1816,6 +2023,9 @@ func (c *Cluster) askResync(name string) {
 // requesting node to it again. Called by a node that put this one back in
 // its ring.
 func (c *Cluster) Resync(req *ResyncReq, unused *bool) error {
+	if err := refuse(capResync); err != nil {
+		return err
+	}
 	go c.rebalance(map[string]bool{req.Node: true})
 	return nil
 }

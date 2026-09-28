@@ -75,6 +75,14 @@ func NewRing(replicas int, fn Hash) *Ring {
 	return ring
 }
 
+// FNV32a is FNV-1a alone, the ring's hash before it was mixed by fmix32:
+// rings built with it place similar keys next to each other.
+func FNV32a(data []byte) uint32 {
+	hash := fnv.New32a()
+	hash.Write(data)
+	return hash.Sum32()
+}
+
 // fmix32 is MurmurHash3's finalizer: every bit of h changes about half the
 // bits of the result. FNV-1a alone changes few high bits for keys that
 // differ in their last bytes, such as consecutive ids, and put them next to
