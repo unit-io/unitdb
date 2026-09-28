@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mathrand "math/rand"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -89,14 +91,28 @@ func runWithService(m *testing.M) int {
 	return m.Run()
 }
 
+// freeAddr returns an address no one listens on, for the service to bind
+// later. Its port is below the ephemeral range: one from there can be taken
+// by an outgoing connection before the service binds it.
 func freeAddr() string {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		panic(err)
+	for i := 0; i < 1000; i++ {
+		port := 20000 + mathrand.Intn(12000)
+		if _, taken := takenPorts.LoadOrStore(port, true); taken {
+			continue
+		}
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		l.Close()
+		return addr
 	}
-	defer l.Close()
-	return l.Addr().String()
+	panic("no free port")
 }
+
+// takenPorts are the ports freeAddr returned, which it does not return again.
+var takenPorts sync.Map
 
 // testClient speaks raw uTP to the service so the tests only depend on the
 // server's wire protocol.
