@@ -177,7 +177,6 @@ func (b *Batch) writeInternal(fn func(i int, e _Entry, data []byte) error) error
 		}
 
 		// put packed entry into memdb.
-		data = data[:0]
 		data, err = b.buffer.Slice(off+4, off+dataLen)
 		if err != nil {
 			return err

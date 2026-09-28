@@ -343,7 +343,9 @@ func sessionKey(clientID uid.ID, sessKey int32) uint64 {
 // onConnect is a handler for Connect events.
 func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 	start := time.Now()
-	defer log.ErrLogger.Debug().Str("context", "conn.onConnect").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	defer func() {
+		log.ErrLogger.Debug().Str("context", "conn.onConnect").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	}()
 	// Every client id is decrypted: its MAC is what proves the server issued it.
 	clientid, err := uid.Decode(clientID, c.service.mac)
 
@@ -362,7 +364,9 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 // onRelay is a handler for Subscribe events of delivery mode type RELAY.
 func (c *_Conn) onRelay(relayMsg utp.Relay, req *utp.RelayRequest) *types.Error {
 	start := time.Now()
-	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	defer func() {
+		log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	}()
 
 	//Parse the key
 	topic := security.ParseKey(req.Topic)
@@ -407,7 +411,9 @@ func (c *_Conn) onRelay(relayMsg utp.Relay, req *utp.RelayRequest) *types.Error 
 // onSubscribe is a handler for Subscribe events.
 func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.Error {
 	start := time.Now()
-	defer log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	defer func() {
+		log.ErrLogger.Debug().Str("context", "conn.onSubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	}()
 
 	//Parse the key
 	topic := security.ParseKey(sub.Topic)
@@ -433,7 +439,9 @@ func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.
 // onUnsubscribe is a handler for Unsubscribe events.
 func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *types.Error {
 	start := time.Now()
-	defer log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	defer func() {
+		log.ErrLogger.Debug().Str("context", "conn.onUnsubscribe").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	}()
 
 	//Parse the key
 	topic := security.ParseKey(sub.Topic)
@@ -457,7 +465,9 @@ func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *
 // OnPublish is a handler for Publish events.
 func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 	start := time.Now()
-	defer log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	defer func() {
+		log.ErrLogger.Debug().Str("context", "conn.onPublish").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
+	}()
 
 	for _, pubMsg := range pub.Messages {
 		//Parse the key

@@ -852,7 +852,7 @@ func TestSessionKey(t *testing.T) {
 	if sessionKey(idA, 7) == sessionKey(idB, 7) {
 		t.Fatal("clients of different contracts share an explicit session key")
 	}
-	if sessionKey(idA, 0) != sessionKey(idA, 0) || sessionKey(idA, 7) == sessionKey(idA, 0) {
+	if key := sessionKey(idA, 0); sessionKey(idA, 0) != key || sessionKey(idA, 7) == key {
 		t.Fatal("session keys are not stable per client and session key")
 	}
 	if sessionKey(idA, 0)>>48 == 0 {

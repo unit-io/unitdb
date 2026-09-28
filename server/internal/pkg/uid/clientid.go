@@ -54,14 +54,15 @@ func (id ID) SetEpoch(value uint32) {
 	id[3] = byte(value)
 }
 
-// Primary gets the primary client Id
+// Primary gets the primary client Id. It is stored in id[5:7]: id[4] is
+// always zero.
 func (id ID) Primary() uint16 {
-	return uint16(id[4])<<16 | uint16(id[5])<<8 | uint16(id[6])
+	return uint16(id[5])<<8 | uint16(id[6])
 }
 
 // SetPrimary sets the primary client Id
 func (id ID) SetPrimary(value uint16) {
-	id[4] = byte(value >> 16)
+	id[4] = 0
 	id[5] = byte(value >> 8)
 	id[6] = byte(value)
 }

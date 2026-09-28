@@ -283,21 +283,15 @@ func (p *_TinyLogManager) commitLoop() {
 	for {
 		select {
 		case <-p.stop:
-			// run queued jobs from the log queue and
-			// process it until queue is empty.
-			for {
-				select {
-				case tinyLog, ok := <-p.logQueue:
-					if !ok {
-						p.stopWg.Done()
-						return
-					}
-					if err := p.db.tinyCommit(tinyLog); err != nil {
-						fmt.Println("logPool.tinyCommit: error ", err)
-					}
-				default:
+			// run queued jobs from the log queue until the dispatcher
+			// closes it.
+			for tinyLog := range p.logQueue {
+				if err := p.db.tinyCommit(tinyLog); err != nil {
+					fmt.Println("logPool.tinyCommit: error ", err)
 				}
 			}
+			p.stopWg.Done()
+			return
 		case tinyLog := <-p.logQueue:
 			if tinyLog != nil {
 				if err := p.db.tinyCommit(tinyLog); err != nil {

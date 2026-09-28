@@ -75,7 +75,7 @@ func (a *adapter) Open(path, jsonconfig string, reset bool) error {
 	}
 
 	// Make sure we have a directory
-	if err := os.MkdirAll(path, 0777); err != nil {
+	if err := os.MkdirAll(path, 0750); err != nil {
 		log.Error("adapter.Open", "Unable to create db dir")
 	}
 

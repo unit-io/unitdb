@@ -65,8 +65,8 @@ func (arr *Array) write(dst []byte) []byte {
 	sizebuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(sizebuf[:4], uint32(len(arr.buf)))
 	if len(arr.buf) > 0 {
-		dst = append(append(dst, sizebuf...))
-		dst = append(append(dst, arr.buf...))
+		dst = append(dst, sizebuf...)
+		dst = append(dst, arr.buf...)
 	}
 	putArray(arr)
 	return dst

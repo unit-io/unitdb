@@ -126,7 +126,7 @@ func newFile(path string, nFiles int16, fd _FileDesc) (_FileSet, error) {
 		return _FileSet{}, errors.New("no new file")
 	}
 	fileFlag := os.O_CREATE | os.O_RDWR
-	fileMode := os.FileMode(0666)
+	fileMode := os.FileMode(0640)
 	f := _File{}
 	fs := _FileSet{mu: new(sync.RWMutex), fileMap: make(map[int16]_File, nFiles)}
 	for i := int16(0); i < nFiles; i++ {
@@ -272,7 +272,7 @@ func (fs *_FileSet) close() error {
 }
 
 func ensureDir(dirName string) error {
-	err := os.Mkdir(dirName, 0777)
+	err := os.Mkdir(dirName, 0750)
 	if err == nil || os.IsExist(err) {
 		return nil
 	} else {
