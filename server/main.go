@@ -90,12 +90,15 @@ func main() {
 		log.Fatal("main", "Failed to start the service", err)
 	}
 
+	// Set before the cluster starts: its requests, such as the
+	// subscriptions other nodes resend to a node that starts, are handled on
+	// connections of the service.
+	internal.Globals.Service = svc
+
 	// Start accepting cluster traffic.
 	if internal.Globals.Cluster != nil {
 		internal.Globals.Cluster.Start()
 	}
-
-	internal.Globals.Service = svc
 
 	// Listen and serve
 	svc.Listen()
