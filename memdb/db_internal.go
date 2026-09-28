@@ -126,11 +126,15 @@ func (db *DB) cap() float64 {
 	return db.internal.buffer.Capacity()
 }
 
+func (db *DB) newBlock() *_Block {
+	return &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
+}
+
 func (db *DB) addTimeBlock(timeID _TimeID) (ok bool) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if _, ok := db.timeBlocks[timeID]; !ok {
-		db.timeBlocks[timeID] = &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
+		db.timeBlocks[timeID] = db.newBlock()
 		return true
 	}
 
@@ -283,8 +287,16 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 		}
 	}
 
+	// The live tiny log can share the time ID: after a reopen in the second
+	// the last writes were made, it writes to the block recovered for them.
+	// It then gets an empty block, which writes need until the next rotation.
+	current := db.timeID()
 	db.mu.Lock()
-	delete(db.timeBlocks, _TimeID(timeID))
+	if timeID == current {
+		db.timeBlocks[timeID] = db.newBlock()
+	} else {
+		delete(db.timeBlocks, _TimeID(timeID))
+	}
 	db.internal.timeMark.timeUnref(timeID)
 	db.mu.Unlock()
 
