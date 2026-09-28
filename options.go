@@ -191,9 +191,6 @@ func WithDefaultOptions() Options {
 		if o.freeBlockSize == 0 {
 			o.freeBlockSize = 1 << 27 // minimum size of (128MB).
 		}
-		if o.encryptionKey == nil {
-			o.encryptionKey = []byte("4BWm1vZletvrCDGWsF6mex8oBSd59m6I")
-		}
 	})
 }
 
@@ -244,7 +241,17 @@ func WithFreeBlockSize(size int64) Options {
 	})
 }
 
-// WithEncryptionKey sets encryption key to use for data encryption.
+// LegacyEncryptionKey is the key a database encrypted with when it was
+// opened without WithEncryptionKey, up to v0.3.
+//
+// Deprecated: the key is public, so data encrypted with it is not protected.
+// Pass it to WithEncryptionKey only to read such data, until it is written
+// again under a key of your own.
+const LegacyEncryptionKey = "4BWm1vZletvrCDGWsF6mex8oBSd59m6I"
+
+// WithEncryptionKey sets the 32-byte key to encrypt and decrypt with. It is
+// required to encrypt, with WithEncryption or Entry.WithEncryption, and to
+// read encrypted entries.
 func WithEncryptionKey(key []byte) Options {
 	return newFuncOption(func(o *_Options) {
 		o.encryptionKey = key

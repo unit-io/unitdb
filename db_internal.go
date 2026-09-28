@@ -276,6 +276,9 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 }
 
 func (db *DB) setEntry(e *Entry) error {
+	if (db.internal.dbInfo.encryption == 1 || e.Encryption) && db.internal.mac == nil {
+		return ErrNoEncryptionKey
+	}
 	var id message.ID
 	var eBit uint8
 	var seq uint64

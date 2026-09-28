@@ -573,8 +573,11 @@ func TestClosedDB(t *testing.T) {
 	}
 }
 
+// testKey is the encryption key of the encryption tests.
+var testKey = WithEncryptionKey([]byte("test-only-key-do-not-use-0000000"))
+
 func TestEncryptedDB(t *testing.T) {
-	db, dir := openTestDB(t, WithEncryption())
+	db, dir := openTestDB(t, WithEncryption(), testKey)
 	topic := []byte("unit.ops.encrypted")
 	putMsgs(t, db, topic, 0, 5)
 	assertMsgs(t, newestFirst(5), get(t, db, NewQuery(topic)))
@@ -585,7 +588,7 @@ func TestEncryptedDB(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	db = reopenTestDB(t, dir, WithEncryption())
+	db = reopenTestDB(t, dir, WithEncryption(), testKey)
 	assertMsgs(t, newestFirst(5), get(t, db, NewQuery(topic)))
 }
 
@@ -605,20 +608,20 @@ func TestEncryptionDisabledByDefault(t *testing.T) {
 }
 
 func TestEncryptionFlagPersists(t *testing.T) {
-	db, dir := openTestDB(t, WithEncryption())
+	db, dir := openTestDB(t, WithEncryption(), testKey)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// The flag is stored in the db info file, so it survives a reopen without the option.
-	db = reopenTestDB(t, dir)
+	db = reopenTestDB(t, dir, testKey)
 	if db.internal.dbInfo.encryption != 1 {
 		t.Fatalf("expected encryption on after reopen; got %d", db.internal.dbInfo.encryption)
 	}
 }
 
 func TestEncryptedEntry(t *testing.T) {
-	db, _ := openTestDB(t)
+	db, _ := openTestDB(t, testKey)
 	topic := []byte("unit.ops.encrypted.entry")
 
 	if err := db.PutEntry(NewEntry(topic, testMsg(0)).WithEncryption()); err != nil {
@@ -637,6 +640,85 @@ func TestEncryptionKey(t *testing.T) {
 	topic := []byte("unit.ops.encryption.key")
 	putMsgs(t, db, topic, 0, 3)
 
+	assertMsgs(t, newestFirst(3), get(t, db, NewQuery(topic)))
+}
+
+func TestEncryptionNeedsKey(t *testing.T) {
+	t.Run("open with encryption", func(t *testing.T) {
+		if db, err := Open(t.TempDir(), append(smallOpts(), WithEncryption())...); !errors.Is(err, ErrNoEncryptionKey) {
+			if db != nil {
+				db.Close()
+			}
+			t.Fatalf("Open with WithEncryption and no key: %v, want %v", err, ErrNoEncryptionKey)
+		}
+	})
+	t.Run("reopen an encrypted db", func(t *testing.T) {
+		db, dir := openTestDB(t, WithEncryption(), testKey)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if db, err := Open(dir, smallOpts()...); !errors.Is(err, ErrNoEncryptionKey) {
+			if db != nil {
+				db.Close()
+			}
+			t.Fatalf("reopening an encrypted db without a key: %v, want %v", err, ErrNoEncryptionKey)
+		}
+		// With the key, it opens.
+		reopenTestDB(t, dir, testKey)
+	})
+	t.Run("encrypt an entry", func(t *testing.T) {
+		db, _ := openTestDB(t)
+		topic := []byte("unit.ops.nokey.entry")
+		if err := db.PutEntry(NewEntry(topic, testMsg(0)).WithEncryption()); !errors.Is(err, ErrNoEncryptionKey) {
+			t.Fatalf("PutEntry encrypted without a key: %v, want %v", err, ErrNoEncryptionKey)
+		}
+		// Unencrypted writes still work.
+		if err := db.Put(topic, testMsg(1)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("encrypt an entry in a batch", func(t *testing.T) {
+		db, _ := openTestDB(t)
+		err := db.Batch(func(b *Batch, completed <-chan struct{}) error {
+			return b.PutEntry(NewEntry([]byte("unit.ops.nokey.batch"), testMsg(0)).WithEncryption())
+		})
+		if !errors.Is(err, ErrNoEncryptionKey) {
+			t.Fatalf("encrypted batch without a key: %v, want %v", err, ErrNoEncryptionKey)
+		}
+	})
+	t.Run("read an encrypted entry", func(t *testing.T) {
+		db, dir := openTestDB(t, testKey)
+		topic := []byte("unit.ops.nokey.read")
+		if err := db.PutEntry(NewEntry(topic, testMsg(0)).WithEncryption()); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		db = reopenTestDB(t, dir)
+		if _, err := db.Get(NewQuery(topic)); !errors.Is(err, ErrNoEncryptionKey) {
+			t.Fatalf("Get of an encrypted entry without a key: %v, want %v", err, ErrNoEncryptionKey)
+		}
+	})
+}
+
+// TestLegacyEncryptionKey checks data encrypted with the key used when none
+// was given, up to v0.3, reads with LegacyEncryptionKey.
+func TestLegacyEncryptionKey(t *testing.T) {
+	legacy := WithEncryptionKey([]byte(LegacyEncryptionKey))
+	db, dir := openTestDB(t, WithEncryption(), legacy)
+	topic := []byte("unit.ops.legacy")
+	putMsgs(t, db, topic, 0, 3)
+	if err := db.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = reopenTestDB(t, dir, legacy)
 	assertMsgs(t, newestFirst(3), get(t, db, NewQuery(topic)))
 }
 
@@ -748,7 +830,7 @@ func TestBatchContract(t *testing.T) {
 }
 
 func TestBatchEncryption(t *testing.T) {
-	db, _ := openTestDB(t)
+	db, _ := openTestDB(t, testKey)
 	topic := []byte("unit.ops.batch.encryption")
 
 	err := db.Batch(func(b *Batch, completed <-chan struct{}) error {

@@ -187,14 +187,20 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return abort(err)
 	}
 
-	// Create a new MAC from the key.
-	if internal.mac, err = crypto.New(options.encryptionKey); err != nil {
-		return abort(err)
+	// Create a new MAC from the key. Without one, the database neither
+	// encrypts nor decrypts.
+	if options.encryptionKey != nil {
+		if internal.mac, err = crypto.New(options.encryptionKey); err != nil {
+			return abort(err)
+		}
 	}
 
 	// set encryption flag to encrypt messages.
 	if options.flags.encryption {
 		internal.dbInfo.encryption = 1
+	}
+	if internal.dbInfo.encryption == 1 && internal.mac == nil {
+		return abort(ErrNoEncryptionKey)
 	}
 
 	// Create a blockcache.
@@ -337,6 +343,9 @@ func (db *DB) readValue(q *Query, we _Query) ([]byte, uint32, bool, error) {
 
 	// last bit of ID is an encryption flag.
 	if uint8(id[idSize-1]) == 1 {
+		if db.internal.mac == nil {
+			return nil, 0, false, ErrNoEncryptionKey
+		}
 		val, err = db.internal.mac.Decrypt(nil, val)
 		if err != nil {
 			logger.Error().Err(err).Str("context", "mac.decrypt")

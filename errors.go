@@ -21,6 +21,10 @@ import (
 )
 
 var (
+	// ErrNoEncryptionKey is returned when the database needs to encrypt or
+	// decrypt and was opened without WithEncryptionKey.
+	ErrNoEncryptionKey = errors.New("unitdb: encryption needs a key: open the database with WithEncryptionKey")
+
 	errTopicEmpty          = errors.New("Topic is empty")
 	errMsgIDEmpty          = errors.New("Message ID is empty")
 	errMsgIDDeleted        = errors.New("Message ID is deleted")
