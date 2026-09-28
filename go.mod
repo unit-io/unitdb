@@ -1,22 +1,22 @@
 module github.com/unit-io/unitdb
 
-go 1.19
+go 1.25.0
 
 require (
 	github.com/DisposaBoy/JsonConfigReader v0.0.0-20201129172854-99cf318d67e7
-	github.com/golang/protobuf v1.5.2
+	github.com/golang/protobuf v1.5.4
 	github.com/golang/snappy v0.0.3
-	github.com/gorilla/websocket v1.4.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/rs/zerolog v1.21.0
 	github.com/unit-io/bpool v0.1.0
-	golang.org/x/crypto v0.0.0-20210322153248-0c34fe9e7dc2
-	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
-	google.golang.org/grpc v1.39.0
+	golang.org/x/crypto v0.55.0
+	golang.org/x/net v0.58.0
+	google.golang.org/grpc v1.83.2
 )
 
 require (
-	golang.org/x/sys v0.0.0-20210330210617-4fbd30eecc44 // indirect
-	golang.org/x/text v0.3.3 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013 // indirect
-	google.golang.org/protobuf v1.26.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
