@@ -224,9 +224,14 @@ Topic isolation can be achieved using Contract while putting messages into unitd
 ```
 
 #### Message encryption
-Set encryption flag in batch options to encrypt all messages in a batch. 
+Encryption needs a 32-byte key of your own, given when the database is opened. Without one, encrypting or reading an encrypted message returns `unitdb.ErrNoEncryptionKey`, and a database created with encryption does not open.
 
-Note, encryption can also be set on entire database using DB.Open() and set encryption flag in options parameter. 
+```golang
+	// key is 32 random bytes, kept secret, for example from `openssl rand -base64 24`.
+	db, err := unitdb.Open("unitdb", unitdb.WithDefaultOptions(), unitdb.WithEncryptionKey(key))
+```
+
+Set encryption flag in batch options to encrypt all messages in a batch, or use `unitdb.WithEncryption()` in `unitdb.Open()` to encrypt every message in the database.
 
 ```golang
 	db.Batch(func(b *unitdb.Batch, completed <-chan struct{}) error {
@@ -236,6 +241,8 @@ Note, encryption can also be set on entire database using DB.Open() and set encr
 		return nil
 	})
 ```
+
+Up to v0.3 a database encrypted without a key used a built-in key, which is public. To read such data, pass `unitdb.WithEncryptionKey([]byte(unitdb.LegacyEncryptionKey))`, and write it again under a key of your own.
 
 ### Statistics
 The unitdb keeps a running metrics of internal operations it performs. To get unitdb metrics use DB.Varz() function.
