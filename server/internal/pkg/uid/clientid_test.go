@@ -1,6 +1,7 @@
 package uid
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
@@ -108,5 +109,34 @@ func TestNewLIDIsUnique(t *testing.T) {
 			t.Fatalf("duplicate LID %d", id)
 		}
 		seen[id] = true
+	}
+}
+
+// TestClientIDEncodingIsStable checks that client IDs encode as they did in
+// v0.3, with the same key: IDs already issued must stay valid. The expected
+// values were produced by v0.3's code.
+func TestClientIDEncodingIsStable(t *testing.T) {
+	mac, err := crypto.New([]byte("test-only-key-do-not-use-0000000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := ID(make([]byte, rawLen))
+	id.SetEpoch(0x01020304)
+	id.SetPrimary(0xbeef)
+	id.SetPermissions(AllowMaster)
+	id.SetContract(0x6e7c0de0)
+	if raw := fmt.Sprintf("%x", []byte(id)); raw != "0102030400beef016e7c0de0" {
+		t.Fatalf("raw ID %s", raw)
+	}
+	const encoded = "AEBAEBUTQJGYWRbOFeTVTSIZIMcfPGQGQQSbaLAHEeOOCUFXHUPQ"
+	if got := id.Encode(mac); got != encoded {
+		t.Fatalf("Encode = %s, want %s", got, encoded)
+	}
+	back, err := Decode([]byte(encoded), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Primary() != 0xbeef || back.Contract() != 0x6e7c0de0 || back.Epoch() != 0x01020304 || !back.IsPrimary() {
+		t.Fatalf("decoded %x", []byte(back))
 	}
 }

@@ -49,11 +49,12 @@ func New(key []byte) (*MAC, error) {
 	mac := new(MAC)
 	mac.salt = make([]byte, 4)
 	mac.parent = parent
+	// The salt is the last byte of each of the key's first four words: the
+	// nonce prefix every client ID, topic key and encrypted entry was sealed
+	// with. It is part of the nonce, not a secret, and changing it would make
+	// them all fail to decrypt.
 	for i := 0; i < 4; i++ {
-		mac.salt[i] = (byte(key[(4*i)+0]) << 24) |
-			(byte(key[(4*i)+1]) << 16) |
-			(byte(key[(4*i)+2]) << 8) |
-			byte(key[(4*i)+3])
+		mac.salt[i] = key[(4*i)+3]
 	}
 
 	return mac, nil

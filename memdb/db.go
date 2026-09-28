@@ -53,7 +53,7 @@ func Open(opts ...Options) (*DB, error) {
 	}
 
 	// Make sure we have a directory.
-	if err := os.MkdirAll(options.logFilePath, 0777); err != nil {
+	if err := os.MkdirAll(options.logFilePath, 0750); err != nil {
 		return nil, errors.New("DB.Open, Unable to create db dir")
 	}
 
