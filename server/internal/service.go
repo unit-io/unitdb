@@ -98,7 +98,10 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	s.tcp.Handler = s.onAcceptConn
 
 	// Create a new MAC from the key.
-	encryptionKey := []byte(s.config.Encryption(s.config.EncryptionConfig).Key)
+	encryptionKey, err := s.config.EncryptionKey()
+	if err != nil {
+		return nil, err
+	}
 	if s.mac, err = crypto.New(encryptionKey); err != nil {
 		return nil, err
 	}

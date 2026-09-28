@@ -35,8 +35,17 @@ Unitdb supports Get, Put, Delete operations. It also supports encryption, batch 
 
 Samples are available in the examples directory for reference.
 
+## Running the server
+The server signs client IDs and topic keys with a key only it knows, and refuses to start without one. Generate a key and set it as `encryption_config`'s `key` in `unitdb.conf`, or in the `UNITDB_ENCRYPTION_KEY` environment variable:
+
+```
+> export UNITDB_ENCRYPTION_KEY=$(openssl rand -base64 24)
+```
+
+Up to v0.3 the sample `unitdb.conf` shipped with a key, which the server now refuses: it is public, so anyone could sign client IDs and topic keys with it. A deployment that ran with it needs a new key, and its clients new client IDs and topic keys.
+
 ## Clustering
-To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended.
+To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended. Every node needs the same encryption key.
 
 ```
 > ./bin/unitdb -listen=:6060 -grpc_listen=:6080 -cluster_self=one -db_path=/tmp/unitdb/node1
