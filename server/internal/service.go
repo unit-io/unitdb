@@ -241,6 +241,10 @@ func (s *_Service) Close() {
 }
 
 func (s *_Service) close() {
+	// Leave the cluster first, while this node's clients are still served:
+	// the others take over what it holds, and its clients' subscriptions.
+	Globals.Cluster.drain()
+
 	s.mu.Lock()
 	s.closing = true
 	l := s.listener

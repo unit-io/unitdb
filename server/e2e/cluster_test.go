@@ -30,6 +30,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/rpc"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,6 +80,22 @@ func startCluster(t *testing.T, names ...string) *cluster {
 // server's default number if 0.
 func startClusterReplicas(t *testing.T, replicas int, names ...string) *cluster {
 	t.Helper()
+	return startClusterWith(t, clusterOpts{replicas: replicas}, names...)
+}
+
+// clusterOpts are what startClusterWith varies.
+type clusterOpts struct {
+	// replicas is the number of nodes storing each message and session, or
+	// the server's default if 0.
+	replicas int
+	// env is added to the environment of the named nodes.
+	env map[string][]string
+}
+
+// startClusterWith starts a cluster of the named nodes with failover enabled.
+func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster {
+	t.Helper()
+	replicas := opts.replicas
 	type nodeConf struct {
 		Name string `json:"name"`
 		Addr string `json:"addr"`
@@ -104,7 +122,7 @@ func startClusterReplicas(t *testing.T, replicas int, names ...string) *cluster 
 	}
 	conf, _ := json.Marshal(clusterConf)
 	for _, n := range c.nodes {
-		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}})
+		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name]})
 	}
 	return c
 }
@@ -1799,6 +1817,588 @@ func TestClusterReplicaRestartStoresOnce(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("relay on %s, restarted with the owner stopped, returned the message %d times", replica.name, count)
+	}
+}
+
+// TestClusterMixedCapabilities runs a cluster with one node that can do none
+// of the calls added for replication and batched delivery, as an older node,
+// and checks that the others fall back where it is concerned: delivery still
+// works across every node, messages are still replicated between the
+// others, and sessions still resume.
+func TestClusterMixedCapabilities(t *testing.T) {
+	old := "three"
+	start := func(t *testing.T) *cluster {
+		t.Helper()
+		c := startClusterWith(t, clusterOpts{env: map[string][]string{old: {"UNITDB_CLUSTER_CAPS=none"}}}, names...)
+		if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	var capable []string
+	for _, n := range names {
+		if n != old {
+			capable = append(capable, n)
+		}
+	}
+	ring := rh.NewRing(clusterHashReplicas, nil)
+	ring.Add(names...)
+	holders := func(key string) []string { return ring.GetN(key, 2) }
+
+	t.Run("delivery", func(t *testing.T) {
+		c := start(t)
+		contract := uint32(0x0c330000)
+		for _, mode := range []struct {
+			name     string
+			sub, pub uint8
+		}{{"express", 0, 0}, {"reliable", 1, 1}} {
+			for _, own := range names {
+				for _, sub := range c.nodes {
+					for _, pub := range c.nodes {
+						r := route{
+							sub:         sub,
+							pub:         pub,
+							username:    "subscriber@e2e.test",
+							pubUsername: "publisher@e2e.test",
+							contract:    contract,
+							topic:       topicOwnedBy(own, contract, fmt.Sprintf("groups.mixed.%s.%s.%s", mode.name, sub.name, pub.name), names...),
+							mode:        mode.sub,
+							pubMode:     mode.pub,
+						}
+						if !deliversRoute(t, r) {
+							t.Errorf("%s: owner %s, sub on %s, pub on %s: not delivered", mode.name, own, sub.name, pub.name)
+						}
+					}
+				}
+			}
+		}
+		c.assertAlive(t, c.nodes, "with a node of fewer capabilities")
+	})
+
+	t.Run("replication", func(t *testing.T) {
+		c := start(t)
+		ctx := context.Background()
+		contract := uint32(0x0c340000)
+		cid := newClientID(contract)
+		// A topic the two capable nodes hold, and one the old node is a
+		// replica of.
+		var shared, withOld string
+		for i := 0; shared == "" || withOld == ""; i++ {
+			topic := fmt.Sprintf("groups.mixedrep.t%d", i)
+			h := holders(fmt.Sprintf("%d/%s", contract, topic))
+			switch {
+			case h[0] != old && h[1] != old && shared == "":
+				shared = topic
+			case h[0] != old && h[1] == old && withOld == "":
+				withOld = topic
+			}
+		}
+		owner := c.node(holders(fmt.Sprintf("%d/%s", contract, shared))[0])
+		other := c.node(holders(fmt.Sprintf("%d/%s", contract, shared))[1])
+
+		p, err := dial(ctx, other.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.close()
+		if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			t.Fatal(err)
+		}
+		n := 10
+		for i := 0; i < n; i++ {
+			if id, _ := p.publish(1, shared, encodePayload(i, fmt.Sprintf("m%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
+				t.Fatalf("no publish ack on %s", shared)
+			}
+		}
+		// Its replica cannot take it: the publish is acknowledged anyway.
+		if id, _ := p.publish(1, withOld, encodePayload(0, "old"), "1h"); !p.waitAck(id, 3*time.Second) {
+			t.Errorf("reliable publish on %s, whose replica is %s, not acknowledged", withOld, old)
+		}
+		time.Sleep(500 * time.Millisecond)
+
+		owner.stop()
+		r, err := dial(ctx, other.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.close()
+		if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+			t.Fatal(err)
+		}
+		r.relay(shared, "1h")
+		if _, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second); err != nil {
+			t.Errorf("relay of %s on %s after its owner %s stopped: %v", shared, other.name, owner.name, err)
+		}
+	})
+
+	t.Run("sessions", func(t *testing.T) {
+		c := start(t)
+		ctx := context.Background()
+		contract := uint32(0x0c350000)
+		cid := newClientID(contract)
+		home := c.node(capable[0])
+		spare := c.node(capable[1])
+		// A session whose replicas include the other capable node.
+		var s *client
+		var opts connectOpts
+		for attempt := 0; attempt < 50 && s == nil; attempt++ {
+			opts = connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
+			cl, err := dial(ctx, home.tcpAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cl.holdNotify.Store(true)
+			ack, err := cl.connectWith(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := holders(fmt.Sprintf("session/%d", uint32(ack.ConnID)))
+			if h[0] == spare.name || h[1] == spare.name {
+				s = cl
+			} else {
+				cl.close()
+			}
+		}
+		if s == nil {
+			t.Fatal("no session found replicated to " + spare.name)
+		}
+		defer s.close()
+		topic := "groups.mixedsession"
+		if sid, _ := s.subscribe(1, topic); !s.waitAck(sid, 3*time.Second) {
+			t.Fatal("no subscribe ack")
+		}
+		time.Sleep(150 * time.Millisecond)
+
+		p, err := dial(ctx, spare.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.close()
+		if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			t.Fatal(err)
+		}
+		n := 3
+		for i := 0; i < n; i++ {
+			if id, _ := p.publish(1, topic, encodePayload(i, fmt.Sprintf("s%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
+				t.Fatalf("no publish ack for message %d", i)
+			}
+		}
+		deadline := time.After(5 * time.Second)
+		for notified := 0; notified < n; {
+			select {
+			case m := <-s.ctrl:
+				if m.FlowControl == utp.NOTIFY {
+					notified++
+				}
+			case <-deadline:
+				t.Fatalf("subscriber was notified of %d of %d messages", notified, n)
+			}
+		}
+		time.Sleep(500 * time.Millisecond) // replication is asynchronous
+
+		home.stop()
+		s.close()
+		time.Sleep(4 * time.Second) // failure detection and rehash
+		resumed := opts
+		resumed.resume = true
+		r, err := dial(ctx, spare.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.close()
+		if _, err := r.connectWith(resumed); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second); err != nil {
+			t.Errorf("session resumed on %s after %s died: %v", spare.name, home.name, err)
+		}
+	})
+}
+
+// TestClusterDrainOnSIGTERM shuts a node down with SIGTERM while the others
+// publish on its topics: it leaves the cluster first, so every publish is
+// acknowledged, and quickly, with no failure detection to wait for; a
+// subscription it held for another node's client moves without the client
+// subscribing again; and a client of it resumes its session elsewhere with
+// its pending messages.
+func TestClusterDrainOnSIGTERM(t *testing.T) {
+	for _, role := range []string{"follower", "leader"} {
+		t.Run("drain "+role, func(t *testing.T) {
+			c := startCluster(t, names...)
+			leader, err := c.waitLeader(c.nodes, 10*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			victim := leader
+			if role == "follower" {
+				victim = followerOf(leader)
+			}
+			draining := c.node(victim)
+			var live []*clusterNode
+			for _, n := range c.nodes {
+				if n != draining {
+					live = append(live, n)
+				}
+			}
+			ctx := context.Background()
+			contract := uint32(0x0c360000)
+			cid := newClientID(contract)
+			pubTopic := topicOwnedBy(victim, contract, "groups.drain.pub", names...)
+			subTopic := topicOwnedBy(victim, contract, "groups.drain.sub", names...)
+			sessTopic := "groups.drain.session"
+			connect := func(node *clusterNode, opts connectOpts) *client {
+				t.Helper()
+				cl, err := dial(ctx, node.tcpAddr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := cl.connectWith(opts); err != nil {
+					t.Fatal(err)
+				}
+				return cl
+			}
+
+			// A client of another node, subscribed to a topic of the node.
+			s := connect(live[1], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"})
+			defer s.close()
+			if sid, _ := s.subscribe(0, subTopic); !s.waitAck(sid, 3*time.Second) {
+				t.Fatal("no subscribe ack")
+			}
+			// A client of the node, with reliable messages pending.
+			sessOpts := connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "session@e2e.test"}
+			held, err := dial(ctx, draining.tcpAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.close()
+			held.holdNotify.Store(true)
+			if _, err := held.connectWith(sessOpts); err != nil {
+				t.Fatal(err)
+			}
+			if sid, _ := held.subscribe(1, sessTopic); !held.waitAck(sid, 3*time.Second) {
+				t.Fatal("no subscribe ack")
+			}
+			time.Sleep(150 * time.Millisecond) // let the forwarded subscriptions settle
+			p := connect(live[0], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"})
+			defer p.close()
+			pending := 3
+			for i := 0; i < pending; i++ {
+				if id, _ := p.publish(1, sessTopic, encodePayload(i, fmt.Sprintf("p%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
+					t.Fatalf("no publish ack for pending message %d", i)
+				}
+			}
+			deadline := time.After(5 * time.Second)
+			for notified := 0; notified < pending; {
+				select {
+				case m := <-held.ctrl:
+					if m.FlowControl == utp.NOTIFY {
+						notified++
+					}
+				case <-deadline:
+					t.Fatalf("client of %s was notified of %d of %d messages", victim, notified, pending)
+				}
+			}
+
+			stopped := make(chan struct{})
+			go func() {
+				draining.shutdown()
+				close(stopped)
+			}()
+			// Publish through the drain and after it.
+			n := 40
+			var slowest time.Duration
+			unacked := 0
+			for i := 0; i < n; i++ {
+				start := time.Now()
+				if id, _ := p.publish(1, pubTopic, encodePayload(i, fmt.Sprintf("d%d", i)), "1h"); !p.waitAck(id, 5*time.Second) {
+					unacked++
+				} else if d := time.Since(start); d > slowest {
+					slowest = d
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			<-stopped
+			t.Logf("slowest publish acknowledged in %v", slowest.Round(time.Millisecond))
+			if unacked > 0 {
+				t.Errorf("%d of %d publishes on %s not acknowledged while %s shut down", unacked, n, pubTopic, victim)
+			}
+			if slowest > time.Second {
+				t.Errorf("a publish on %s took %v while %s shut down: waited for failure detection", pubTopic, slowest.Round(time.Millisecond), victim)
+			}
+
+			// The subscription held on the node moved.
+			if !publishReaches(t, s, live[0], cid, subTopic) {
+				t.Errorf("publish on %s did not reach the subscriber on %s after %s left", subTopic, live[1].name, victim)
+			}
+			// Every acknowledged publish is stored.
+			r := connect(live[1], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"})
+			defer r.close()
+			r.relay(pubTopic, "1h")
+			if _, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second); err != nil {
+				t.Errorf("relay of %s after %s left: %v", pubTopic, victim, err)
+			}
+			// The node's client resumes elsewhere with its pending messages.
+			resumed := sessOpts
+			resumed.resume = true
+			rs := connect(live[0], resumed)
+			defer rs.close()
+			if _, _, err := collectUnique(rs, pending, 10*time.Second, 3*time.Second); err != nil {
+				t.Errorf("session of a client of %s, resumed on %s: %v", victim, live[0].name, err)
+			}
+			c.assertAlive(t, live, "after a node drained")
+		})
+	}
+}
+
+var ringVersionIs = regexp.MustCompile(`cluster: ring version (\d+)`)
+
+// ringVersionSeen returns the ring version a node last logged, or "".
+func (c *cluster) ringVersionSeen(n *clusterNode) string {
+	version := ""
+	for _, line := range strings.Split(n.logs.String(), "\n") {
+		if m := ringVersionIs.FindStringSubmatch(line); m != nil {
+			version = m[1]
+		}
+	}
+	return version
+}
+
+// waitRingVersion waits until every node routes by ring version v.
+func (c *cluster) waitRingVersion(t *testing.T, v string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		seen := map[string]string{}
+		all := true
+		for _, n := range c.nodes {
+			seen[n.name] = c.ringVersionSeen(n)
+			all = all && seen[n.name] == v
+		}
+		if all {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("nodes did not all route by ring version %s: %v", v, seen)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// TestClusterRingVersionSwitch runs a cluster with a node that supports only
+// ring version 1, then upgrades it: the leader switches the cluster to
+// version 2 once every node supports it, the topics' owners change, and a
+// subscription moves to its topic's new owner without the client subscribing
+// again.
+func TestClusterRingVersionSwitch(t *testing.T) {
+	old := "three"
+	c := startClusterWith(t, clusterOpts{env: map[string][]string{old: {"UNITDB_RING_VERSIONS=1"}}}, names...)
+	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	c.waitRingVersion(t, "1", 10*time.Second)
+
+	contract := uint32(0x0c370000)
+	cid := newClientID(contract)
+	v1 := rh.NewRing(20, rh.FNV32a)
+	v1.Add(names...)
+	v2 := rh.NewRing(clusterHashReplicas, nil)
+	v2.Add(names...)
+	// A topic whose owner changes with the switch, and a subscriber on the
+	// third node, which is not the one upgraded.
+	var topic, ownerV1, ownerV2, third string
+	for i := 0; topic == ""; i++ {
+		t0 := fmt.Sprintf("groups.ringswitch.t%d", i)
+		key := fmt.Sprintf("%d/%s", contract, t0)
+		o1, o2 := v1.Get(key), v2.Get(key)
+		if o1 == o2 {
+			continue
+		}
+		for _, n := range names {
+			if n != o1 && n != o2 && n != old {
+				topic, ownerV1, ownerV2, third = t0, o1, o2, n
+			}
+		}
+	}
+
+	s, err := dial(context.Background(), c.node(third).tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {
+		t.Fatal("no subscribe ack")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if !publishReaches(t, s, c.node(ownerV1), cid, topic) {
+		t.Fatalf("on ring version 1, publish on %s did not reach the subscriber on %s", topic, third)
+	}
+
+	// Upgrade the old node.
+	up := c.node(old)
+	up.stop()
+	up.env = nil
+	if err := up.start(); err != nil {
+		t.Fatalf("restart %s: %v", old, err)
+	}
+	c.waitRingVersion(t, "2", 15*time.Second)
+	time.Sleep(time.Second) // the rebalance moves the subscription
+
+	// The owner in version 2 does not forward the publish: it reaches the
+	// subscriber only if the subscription moved there.
+	if !publishReaches(t, s, c.node(ownerV2), cid, topic) {
+		t.Errorf("on ring version 2, publish on %s at its owner %s (was %s) did not reach the subscriber on %s", topic, ownerV2, ownerV1, third)
+	}
+	// New subscriptions, on version 2.
+	for _, own := range names {
+		for _, sub := range c.nodes {
+			r := route{sub: sub, pub: c.node(own), username: "subscriber@e2e.test", pubUsername: "publisher@e2e.test", contract: contract,
+				topic: topicOwnedBy(own, contract, "groups.ringswitch.new."+sub.name, names...)}
+			if !deliversRoute(t, r) {
+				t.Errorf("on ring version 2: owner %s, sub on %s: not delivered", own, sub.name)
+			}
+		}
+	}
+	c.assertAlive(t, c.nodes, "through a ring switch")
+}
+
+// TestClusterRingSwitchMovesHistory stores messages on a topic whose owner
+// after a switch of the ring from version 1 to 2 held none of them before,
+// switches, and checks a relay from every node then returns every message
+// exactly once: the topic's first holder before the switch handed them to its
+// new holders.
+func TestClusterRingSwitchMovesHistory(t *testing.T) {
+	old := "three"
+	c := startClusterWith(t, clusterOpts{env: map[string][]string{old: {"UNITDB_RING_VERSIONS=1"}}}, names...)
+	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	c.waitRingVersion(t, "1", 10*time.Second)
+
+	ctx := context.Background()
+	contract := uint32(0x0c380000)
+	cid := newClientID(contract)
+	v1 := rh.NewRing(20, rh.FNV32a)
+	v1.Add(names...)
+	v2 := rh.NewRing(clusterHashReplicas, nil)
+	v2.Add(names...)
+	var topic string
+	for i := 0; topic == ""; i++ {
+		t0 := fmt.Sprintf("groups.ringmove.t%d", i)
+		key := fmt.Sprintf("%d/%s", contract, t0)
+		was := v1.GetN(key, 2)
+		if owner := v2.Get(key); owner != was[0] && owner != was[1] {
+			topic = t0
+		}
+	}
+
+	p, err := dial(ctx, c.nodes[0].tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+		t.Fatal(err)
+	}
+	n := 20
+	for i := 0; i < n; i++ {
+		if id, _ := p.publish(1, topic, encodePayload(i, fmt.Sprintf("h%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
+			t.Fatalf("no publish ack for message %d", i)
+		}
+	}
+	p.close()
+	time.Sleep(500 * time.Millisecond) // replication is asynchronous
+
+	up := c.node(old)
+	up.stop()
+	up.env = nil
+	if err := up.start(); err != nil {
+		t.Fatalf("restart %s: %v", old, err)
+	}
+	c.waitRingVersion(t, "2", 15*time.Second)
+	// Every node moved what it had to.
+	deadline := time.Now().Add(10 * time.Second)
+	for _, node := range c.nodes {
+		for !strings.Contains(node.logs.String(), "cluster: moved history for ring version 2") {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s did not move history for ring version 2", node.name)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	for _, rel := range c.nodes {
+		r, err := dial(ctx, rel.tcpAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+			t.Fatal(err)
+		}
+		r.relay(topic, "1h")
+		got, dups, err := collectUnique(r, n, 10*time.Second, 3*time.Second)
+		for {
+			more, ok := r.waitPub(500 * time.Millisecond)
+			if !ok {
+				break
+			}
+			dups += len(more.Messages)
+		}
+		r.close()
+		if err != nil {
+			t.Errorf("relay on %s after the switch: %v (%d of %d)", rel.name, err, len(got), n)
+		}
+		if dups > 0 {
+			t.Errorf("relay on %s after the switch: %d duplicate(s)", rel.name, dups)
+		}
+	}
+}
+
+// OldCluster answers as a node of unitdb v0.3.0 does: Ping, with a bool answer,
+// and none of the calls added since.
+type OldCluster struct{}
+
+// OldPing is v0.3.0's ping.
+type OldPing struct {
+	Leader    string
+	Term      int
+	Signature string
+	Nodes     []string
+}
+
+func (OldCluster) Ping(ping *OldPing, unused *bool) error { return nil }
+
+// TestClusterRefusesOldPeer starts a node whose cluster has a node of
+// v0.3.0 up: the node refuses to start, rather than run in a cluster with
+// it, and says why.
+func TestClusterRefusesOldPeer(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	srv := rpc.NewServer()
+	if err := srv.RegisterName("Cluster", OldCluster{}); err != nil {
+		t.Fatal(err)
+	}
+	go srv.Accept(l)
+
+	conf, _ := json.Marshal(map[string]interface{}{
+		"self": "",
+		"nodes": []map[string]string{
+			{"name": "one", "addr": fmt.Sprintf("127.0.0.1:%d", freePort(t))},
+			{"name": "old", "addr": l.Addr().String()},
+		},
+	})
+	s := startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", "one"}, expectExit: true})
+	select {
+	case <-s.exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the node started next to a v0.3.0 node")
+	}
+	if logs := s.logs.String(); !strings.Contains(logs, "runs a version from before replication") {
+		t.Errorf("the node exited without saying why:\n%s", logs)
 	}
 }
 

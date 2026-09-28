@@ -20,6 +20,7 @@ import (
 	"log"
 	"math/rand"
 	"net/rpc"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,6 +52,13 @@ type clusterFailover struct {
 	electionVote chan *ClusterVote
 	// Channel for stopping the failover runner
 	done chan bool
+
+	// Channel for leaving the cluster: the runner takes this node out of
+	// its ring, and answers whether it was the leader.
+	leave chan chan bool
+	// Pings received from the leader, while leaving, without this node in
+	// their nodes: two after the first, the other nodes have rehashed too.
+	pingsWithoutSelf atomic.Int32
 }
 
 type clusterFailoverConfig struct {
@@ -74,6 +82,23 @@ type ClusterPing struct {
 	Signature string
 	// Names of nodes currently active in the cluster
 	Nodes []string
+	// Each node's protocol version and what it can do, the leader's
+	// included, as far as the leader knows
+	Members map[string]NodeCapabilities
+	// Version of the ring the cluster routes by; 0 from a leader built
+	// before rings were versioned
+	RingVersion int
+}
+
+// ClusterPong is a follower's answer to a ping: its protocol version and what
+// it can do.
+type ClusterPong struct {
+	// Name of the node answering
+	Node string
+	NodeCapabilities
+	// Leaving is set by a node shutting down: the leader takes it out of the
+	// ring at once, and does not put it back while it is set.
+	Leaving bool
 }
 
 // ClusterVoteRequest is a request from a leader candidate to a node to vote for the candidate.
@@ -128,7 +153,8 @@ func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
 		nodeFailCountLimit: config.NodeFailAfter,
 		leaderPing:         make(chan *ClusterPing, config.VoteAfter),
 		electionVote:       make(chan *ClusterVote, len(c.nodes)),
-		done:               make(chan bool, 1)}
+		done:               make(chan bool, 1),
+		leave:              make(chan chan bool, 1)}
 
 	log.Println("cluster: failover mode enabled")
 
@@ -136,8 +162,15 @@ func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
 }
 
 // Ping is called by the leader node to assert leadership and check status
-// of the followers.
-func (c *Cluster) Ping(ping *ClusterPing, unused *bool) error {
+// of the followers. It records what the nodes can do, as the leader tells,
+// and answers what this one can.
+func (c *Cluster) Ping(ping *ClusterPing, pong *ClusterPong) error {
+	for name, nc := range ping.Members {
+		if n := c.nodes[name]; n != nil {
+			n.setCapabilities(nc)
+		}
+	}
+	*pong = ClusterPong{Node: c.thisNodeName, NodeCapabilities: ownNodeCapabilities(), Leaving: c.leaving.Load()}
 	select {
 	case c.fo.leaderPing <- ping:
 	default:
@@ -161,18 +194,35 @@ func (c *Cluster) Vote(vreq *ClusterVoteRequest, response *ClusterVoteResponse) 
 func (c *Cluster) sendPings() {
 	rehash := false
 
+	members := map[string]NodeCapabilities{c.thisNodeName: ownNodeCapabilities()}
 	for _, node := range c.nodes {
-		unused := false
+		if nc, ok := node.capabilities(); ok {
+			members[node.name] = nc
+		}
+	}
+	for _, node := range c.nodes {
+		var pong ClusterPong
 		// A node that stalls without its connection failing does not answer:
 		// wait a heartbeat at most, so that it fails the ping, and does not
 		// hold up the pings to the others.
 		err := node.callTimeout("Cluster.Ping", &ClusterPing{
-			Leader:    c.thisNodeName,
-			Term:      c.fo.term,
-			Signature: c.getRing().Signature(),
-			Nodes:     c.fo.activeNodes}, &unused, c.fo.heartBeat)
+			Leader:      c.thisNodeName,
+			Term:        c.fo.term,
+			Signature:   c.getRing().Signature(),
+			Nodes:       c.fo.activeNodes,
+			Members:     members,
+			RingVersion: c.getRingVersion()}, &pong, c.fo.heartBeat)
+		if err == nil {
+			node.setCapabilities(pong.NodeCapabilities)
+		}
 
-		if err != nil {
+		if err == nil && pong.Leaving {
+			// Out of the ring at once, and not back while it leaves.
+			if node.failCount < c.fo.nodeFailCountLimit {
+				node.failCount = c.fo.nodeFailCountLimit
+				rehash = true
+			}
+		} else if err != nil {
 			node.failCount++
 			if node.failCount == c.fo.nodeFailCountLimit {
 				// Node failed too many times
@@ -187,14 +237,31 @@ func (c *Cluster) sendPings() {
 		}
 	}
 
+	// The ring version every live node supports: a switch is a rehash.
+	var live []*ClusterNode
+	for _, node := range c.nodes {
+		if node.failCount < c.fo.nodeFailCountLimit {
+			live = append(live, node)
+		}
+	}
+	current := c.getRingVersion()
+	if c.clusterRing.Load() == 0 {
+		c.clusterRing.Store(int32(current))
+	}
+	if v := c.chooseRingVersion(live); v != current {
+		log.Printf("cluster: switching the ring from version %d to %d", current, v)
+		c.adoptRingVersion(v)
+		rehash = true
+	}
+
 	if rehash {
 		var activeNodes []string
-		for _, node := range c.nodes {
-			if node.failCount < c.fo.nodeFailCountLimit {
-				activeNodes = append(activeNodes, node.name)
-			}
+		for _, node := range live {
+			activeNodes = append(activeNodes, node.name)
 		}
-		activeNodes = append(activeNodes, c.thisNodeName)
+		if !c.leaving.Load() {
+			activeNodes = append(activeNodes, c.thisNodeName)
+		}
 
 		c.fo.activeNodes = activeNodes
 		c.rehashAndRebalance(activeNodes)
@@ -278,9 +345,11 @@ func (c *Cluster) run() {
 			} else {
 				missed++
 				if missed >= c.fo.voteTimeout {
-					// Elect the leader
+					// Elect the leader, unless this node is leaving
 					missed = 0
-					c.electLeader()
+					if !c.leaving.Load() {
+						c.electLeader()
+					}
 				}
 			}
 		case ping := <-c.fo.leaderPing:
@@ -308,10 +377,30 @@ func (c *Cluster) run() {
 			}
 
 			missed = 0
-			if ping.Signature != c.getRing().Signature() {
+			if c.leaving.Load() && !containsNode(ping.Nodes, c.thisNodeName) {
+				c.fo.pingsWithoutSelf.Add(1)
+			}
+			v := ping.RingVersion
+			if v != 0 && !supportsRingVersion(v) {
+				log.Printf("cluster: leader '%s' routes by ring version %d, which this node does not support", ping.Leader, v)
+				v = 0
+			}
+			if v != 0 && v != c.getRingVersion() {
+				// The leader switched the ring, or this node just joined:
+				// at once, not after a second ping.
+				c.adoptRingVersion(v)
+				c.fo.activeNodes = ping.Nodes
+				c.rehashAndRebalance(ping.Nodes)
+				rehashSkipped = false
+			} else if v != 0 && int(c.clusterRing.Load()) != v {
+				c.adoptRingVersion(v)
+			} else if ping.Signature != c.getRing().Signature() {
 				if rehashSkipped {
 					log.Println("cluster: rehashing at a request of",
 						ping.Leader, ping.Nodes, ping.Signature, c.getRing().Signature())
+					// Kept, so that this node pings with them if it is
+					// elected: not the nodes it started with.
+					c.fo.activeNodes = ping.Nodes
 					c.rehashAndRebalance(ping.Nodes)
 					rehashSkipped = false
 
@@ -334,8 +423,37 @@ func (c *Cluster) run() {
 				log.Printf("Voting NO for %s, my term %d, vote term %d", vreq.req.Node, c.fo.term, vreq.req.Term)
 				vreq.resp <- ClusterVoteResponse{Result: false, Term: c.fo.term}
 			}
+		case leader := <-c.fo.leave:
+			// Out of this node's ring: it takes no more requests for topics,
+			// and forwards its clients' to the topics' new owners. A leader
+			// also pings with the nodes without it.
+			wasLeader := c.fo.leader == c.thisNodeName
+			if wasLeader {
+				c.fo.activeNodes = withoutNode(c.fo.activeNodes, c.thisNodeName)
+			}
+			c.rehashAndRebalance(withoutNode(c.getRingNodes(), c.thisNodeName))
+			leader <- wasLeader
 		case <-c.fo.done:
 			return
 		}
 	}
+}
+
+func containsNode(nodes []string, name string) bool {
+	for _, n := range nodes {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutNode(nodes []string, name string) []string {
+	var out []string
+	for _, n := range nodes {
+		if n != name {
+			out = append(out, n)
+		}
+	}
+	return out
 }

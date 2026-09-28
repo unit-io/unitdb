@@ -33,6 +33,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -113,6 +114,10 @@ type server struct {
 	tcpAddr  string
 	grpcAddr string
 	logs     *syncBuffer
+	// env is added to the server's environment.
+	env []string
+	// noWait starts the server without waiting for it to be ready.
+	noWait bool
 	// exited is closed when the current process has exited.
 	exited chan struct{}
 }
@@ -160,6 +165,11 @@ type serverOpts struct {
 	args []string
 	// logLevel is the server logging level; default "Error".
 	logLevel string
+	// env is added to the server's environment, e.g. UNITDB_CLUSTER_CAPS.
+	env []string
+	// expectExit starts the server without waiting for it to be ready, for
+	// a server expected to refuse to start.
+	expectExit bool
 }
 
 func startServerWith(t *testing.T, opts serverOpts) *server {
@@ -200,6 +210,7 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 
 	logs := &syncBuffer{}
 	cmd := exec.Command(bin, append([]string{"-config", confName, "-db_path", filepath.Join(dbPath, "db")}, opts.args...)...)
+	cmd.Env = append(os.Environ(), opts.env...)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 	if err := cmd.Start(); err != nil {
@@ -213,6 +224,8 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 		tcpAddr:  fmt.Sprintf("127.0.0.1:%d", tcpPort),
 		grpcAddr: fmt.Sprintf("127.0.0.1:%d", grpcPort),
 		logs:     logs,
+		env:      opts.env,
+		noWait:   opts.expectExit,
 	}
 	s.watch()
 	t.Cleanup(func() {
@@ -226,6 +239,9 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 		}
 	})
 
+	if opts.expectExit {
+		return s
+	}
 	if err := s.waitReady(); err != nil {
 		t.Fatalf("%v\nserver logs:\n%s", err, logs.String())
 	}
@@ -258,6 +274,21 @@ func (s *server) stop() {
 	}
 }
 
+// shutdown stops the server with SIGTERM, as a deploy would, and waits for it
+// to exit, killing it if it does not within 15 seconds.
+func (s *server) shutdown() {
+	if s.cmd == nil || !s.alive() {
+		return
+	}
+	syscall.Kill(s.cmd.Process.Pid, syscall.SIGTERM)
+	select {
+	case <-s.exited:
+	case <-time.After(15 * time.Second):
+		s.t.Logf("server did not exit on SIGTERM; killing it")
+		s.stop()
+	}
+}
+
 // restart kills the current process and starts a new one on the same ports and
 // DB path, modelling a crash-and-recover. It reuses the config already on disk.
 func (s *server) restart() error {
@@ -269,6 +300,8 @@ func (s *server) restart() error {
 // the same logs, after stop.
 func (s *server) start() error {
 	cmd := exec.Command(s.cmd.Args[0], s.cmd.Args[1:]...)
+	// From env, so that a test can change the environment between starts.
+	cmd.Env = append(os.Environ(), s.env...)
 	cmd.Stdout = s.logs
 	cmd.Stderr = s.logs
 	if err := cmd.Start(); err != nil {
@@ -276,6 +309,9 @@ func (s *server) start() error {
 	}
 	s.cmd = cmd
 	s.watch()
+	if s.noWait {
+		return nil
+	}
 	return s.waitReady()
 }
 
