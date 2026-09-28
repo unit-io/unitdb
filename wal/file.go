@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"os"
 	"path"
 	"sort"
@@ -164,9 +163,15 @@ func (fs *_FileStore) all() []int64 {
 		return nil
 	}
 
-	files, err := ioutil.ReadDir(fs.dirName)
+	entries, err := os.ReadDir(fs.dirName)
 	if err != nil {
 		return nil
+	}
+	files = make(_FileInfos, 0, len(entries))
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			files = append(files, info)
+		}
 	}
 
 	// sort.Slice(files[:], func(i, j int) bool {

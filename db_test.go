@@ -175,7 +175,6 @@ func TestBatch(t *testing.T) {
 	}
 
 	err = db.Batch(func(b *Batch, completed <-chan struct{}) error {
-		var ids [][]byte
 		for i = 0; i < n; i++ {
 			messageID := db.NewID()
 			topic := append(topic, []byte("?ttl=1h")...)
@@ -183,7 +182,6 @@ func TestBatch(t *testing.T) {
 			if err := b.PutEntry(NewEntry(topic, val).WithID(messageID).WithContract(contract)); err != nil {
 				t.Fatal(err)
 			}
-			ids = append(ids, messageID)
 		}
 		return err
 	})

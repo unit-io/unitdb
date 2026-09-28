@@ -50,7 +50,7 @@ func (s *TcpServer) Serve(list net.Listener) error {
 			default:
 			}
 
-			if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
+			if isTemporary(err) {
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
@@ -69,4 +69,13 @@ func (s *TcpServer) Serve(list net.Listener) error {
 		tempDelay = 0
 		go s.Handler(conn)
 	}
+}
+
+// isTemporary reports whether an Accept error is worth retrying, such as
+// running out of file descriptors. net.Error's Temporary is deprecated as
+// ill-defined, but Accept errors still report it, and net/http retries on it
+// the same way.
+func isTemporary(err error) bool {
+	t, ok := err.(interface{ Temporary() bool })
+	return ok && t.Temporary()
 }

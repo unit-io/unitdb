@@ -142,7 +142,6 @@ func (c *Cluster) failoverInit(config *clusterFailoverConfig) bool {
 	c.rehash(activeNodes)
 
 	// Random heartbeat ticker: 0.75 * config.HeartBeat + random(0, 0.5 * config.HeartBeat)
-	rand.Seed(time.Now().UnixNano())
 	hb := time.Duration(config.Heartbeat) * time.Millisecond
 	hb = (hb >> 1) + (hb >> 2) + time.Duration(rand.Intn(int(hb>>1)))
 

@@ -18,10 +18,10 @@ package unitdb
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"sort"
 	"sync"
@@ -363,7 +363,9 @@ func (db *DB) readValue(q *Query, we _Query) ([]byte, uint32, bool, error) {
 // NewContract generates a new Contract.
 func (db *DB) NewContract() (uint32, error) {
 	raw := make([]byte, 4)
-	rand.Read(raw)
+	if _, err := rand.Read(raw); err != nil {
+		return 0, err
+	}
 
 	contract := uint32(binary.LittleEndian.Uint32(raw[:4]))
 	return contract, nil

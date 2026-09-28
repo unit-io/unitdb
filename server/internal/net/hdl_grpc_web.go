@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/unit-io/unitdb/server/common"
 	pbx "github.com/unit-io/unitdb/server/proto"
@@ -165,7 +165,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 
 		// Reset our response value for the next read and so that we
 		// don't potentially store a large response structure in memory.
-		c.InMsg.Reset()
+		proto.Reset(c.InMsg)
 
 		return n, err
 	}

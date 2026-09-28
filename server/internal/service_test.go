@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -16,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/rs/zerolog"
 	"github.com/unit-io/unitdb/server/internal/config"
 	"github.com/unit-io/unitdb/server/internal/message/security"
@@ -27,6 +25,8 @@ import (
 	pbx "github.com/unit-io/unitdb/server/proto"
 	"github.com/unit-io/unitdb/server/utp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 const waitTimeout = 5 * time.Second
@@ -59,7 +59,7 @@ func TestMain(m *testing.M) {
 func runWithService(m *testing.M) int {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 
-	dir, err := ioutil.TempDir("", "unitdb-server-test")
+	dir, err := os.MkdirTemp("", "unitdb-server-test")
 	if err != nil {
 		fmt.Println(err)
 		return 1
@@ -168,9 +168,7 @@ func dialTCP(t *testing.T) *testClient {
 
 func dialGRPC(t *testing.T) *testClient {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
-	cc, err := grpc.DialContext(ctx, grpcAddr, grpc.WithInsecure(), grpc.WithBlock())
+	cc, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +176,7 @@ func dialGRPC(t *testing.T) *testClient {
 
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	t.Cleanup(streamCancel)
-	stream, err := pbx.NewUnitdbClient(cc).Stream(streamCtx)
+	stream, err := pbx.NewUnitdbClient(cc).Stream(streamCtx, grpc.WaitForReady(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1103,7 +1101,7 @@ func TestShutdownHelper(t *testing.T) {
 	if os.Getenv(shutdownHelperEnv) == "" {
 		t.Skip("run by TestShutdownUnderLoad")
 	}
-	dir, err := ioutil.TempDir("", "unitdb-shutdown-test")
+	dir, err := os.MkdirTemp("", "unitdb-shutdown-test")
 	if err != nil {
 		t.Fatal(err)
 	}
