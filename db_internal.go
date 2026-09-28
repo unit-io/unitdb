@@ -97,6 +97,11 @@ type (
 		syncWrites bool
 		syncHandle _SyncHandle
 
+		// Deletes waiting for their entry to reach disk, by seq, with the
+		// entry's topic hash: see delete.
+		deferMu  sync.Mutex
+		deferred map[uint64]uint64
+
 		// Close.
 		closeW sync.WaitGroup
 		closeC chan struct{}
@@ -121,6 +126,11 @@ func (db *DB) writeInfo() error {
 
 // Close closes the DB.
 func (db *DB) close() error {
+	// Deletes waiting for their entries to reach disk would be lost: the
+	// entries come back from the WAL on open.
+	if !db.isClosed() {
+		db.flushDeferred()
+	}
 	if !db.setClosed() {
 		return errClosed
 	}
@@ -201,6 +211,9 @@ func (db *DB) loadTrie() error {
 }
 
 func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
+	if db.isDeferred(q.seq) {
+		return _IndexEntry{}, errMsgIDDeleted
+	}
 	data, _ := db.internal.mem.Get(q.seq)
 	if data != nil {
 		var m _Entry
@@ -331,6 +344,17 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	}
 
 	db.internal.meter.Dels.Inc(1)
+
+	// A topic's name is packed into its first entry only. An entry that
+	// carries it and isn't on disk yet is kept until a sync writes it, name
+	// and all, and is then deleted from disk (applyDeferred); reads skip it
+	// meanwhile. Dropping it from memory would leave the topic's other
+	// entries to reach disk without the name, and the DB would no longer
+	// open.
+	if db.carriesTopic(seq) && !db.onDisk(seq) {
+		db.deferDelete(topicHash, seq)
+		return nil
+	}
 	db.internal.mem.Delete(seq)
 
 	// Test filter block for the message id presence.
@@ -376,6 +400,84 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	}
 	// Persist the count so it is right after a crash.
 	return db.writeInfo()
+}
+
+// carriesTopic reports whether the entry seq is in memory and carries its
+// topic's name.
+func (db *DB) carriesTopic(seq uint64) bool {
+	data, _ := db.internal.mem.Get(seq)
+	if len(data) < entrySize {
+		return false
+	}
+	var m _Entry
+	if err := m.UnmarshalBinary(data[:entrySize]); err != nil {
+		return false
+	}
+	return m.topicSize != 0
+}
+
+// onDisk reports whether the entry seq is in the index file.
+func (db *DB) onDisk(seq uint64) bool {
+	if !db.internal.filter.Test(seq) {
+		return false
+	}
+	_, err := db.internal.reader.readEntry(seq)
+	return err == nil
+}
+
+func (db *DB) deferDelete(topicHash, seq uint64) {
+	db.internal.deferMu.Lock()
+	defer db.internal.deferMu.Unlock()
+	if db.internal.deferred == nil {
+		db.internal.deferred = make(map[uint64]uint64)
+	}
+	db.internal.deferred[seq] = topicHash
+}
+
+func (db *DB) isDeferred(seq uint64) bool {
+	db.internal.deferMu.Lock()
+	defer db.internal.deferMu.Unlock()
+	_, ok := db.internal.deferred[seq]
+	return ok
+}
+
+func (db *DB) hasDeferred() bool {
+	db.internal.deferMu.Lock()
+	defer db.internal.deferMu.Unlock()
+	return len(db.internal.deferred) > 0
+}
+
+// applyDeferred deletes, from disk, the entries whose delete waited for them
+// to reach it and that have.
+func (db *DB) applyDeferred() {
+	db.internal.deferMu.Lock()
+	due := make(map[uint64]uint64)
+	for seq, h := range db.internal.deferred {
+		if db.onDisk(seq) {
+			due[seq] = h
+			delete(db.internal.deferred, seq)
+		}
+	}
+	db.internal.deferMu.Unlock()
+	for seq, h := range due {
+		if err := db.delete(h, seq); err != nil {
+			logger.Error().Err(err).Str("context", "db.applyDeferred").Msg("unable to delete an entry")
+		}
+	}
+}
+
+// flushDeferred syncs until the deletes waiting have reached disk, up to a
+// few seconds: an entry reaches disk once its time block has passed.
+func (db *DB) flushDeferred() {
+	for deadline := time.Now().Add(3 * time.Second); db.hasDeferred() && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		if err := db.Sync(); err != nil {
+			break
+		}
+	}
+	if db.hasDeferred() {
+		logger.Error().Str("context", "db.flushDeferred").Msg("deletes of entries not yet on disk are lost")
+	}
 }
 
 // batch starts a new batch.

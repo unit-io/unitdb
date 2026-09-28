@@ -488,6 +488,15 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
+	if err := db.syncOnce(); err != nil {
+		return err
+	}
+	// Deletes that waited for their entries to reach disk.
+	db.applyDeferred()
+	return nil
+}
+
+func (db *DB) syncOnce() error {
 	// Sync happens synchronously. If a sync is in progress, wait for it and then
 	// sync whatever it did not cover; close holds the lock for good.
 	select {
