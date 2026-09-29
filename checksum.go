@@ -29,7 +29,8 @@ import (
 const (
 	checksumSize = 4
 
-	infoChecksumOff   = 28                                       // after count
+	infoChecksumOff   = 36                                       // after syncing
+	infoChecksumOffV2 = 28                                       // after count, in format 2
 	indexChecksumOff  = 8 + entriesPerIndexBlock*16 + 2          // after entryIdx
 	windowChecksumOff = entriesPerWindowBlock*12 + 8 + 8 + 8 + 2 // after entryIdx
 )

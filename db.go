@@ -110,7 +110,13 @@ func Open(path string, opts ...Options) (*DB, error) {
 		}
 	}
 
-	if err := infoFile.readUnmarshalableAt(&dbInfo, fixed, 0); err != nil {
+	// A format 2 header is shorter; it is written as format 3 on its next
+	// write.
+	infoSize := fixed
+	if infoFile.currSize() < int64(fixed) {
+		infoSize = fixedV2
+	}
+	if err := infoFile.readUnmarshalableAt(&dbInfo, infoSize, 0); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return nil, err
 	}

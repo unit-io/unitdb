@@ -40,7 +40,7 @@ const (
 	nPoolSize             = 27
 	lockPostfix           = ".lock"
 	idSize                = 9 // message ID prefix with additional encryption bit.
-	version               = 2 // file format version; 2 adds checksums.
+	version               = 3 // file format version; 2 adds checksums, 3 the block being synced.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then
@@ -119,6 +119,7 @@ func (db *DB) writeInfo() error {
 		encryption: db.internal.dbInfo.encryption,
 		sequence:   atomic.LoadUint64(&db.internal.dbInfo.sequence),
 		count:      atomic.LoadUint64(&db.internal.dbInfo.count),
+		syncing:    db.internal.dbInfo.syncing,
 	}
 
 	return db.internal.info.writeMarshalableAt(inf, 0)

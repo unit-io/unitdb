@@ -119,6 +119,25 @@ func TestCrashChild(t *testing.T) {
 		}
 		flush()
 		ack("done")
+	case "sync-count":
+		// Stop in a sync, its entries written and their count not.
+		for i := 0; i < 100; i++ {
+			put(i)
+		}
+		time.Sleep(walFlush)
+		testHookBeforeCount = func() {
+			ack("entries written")
+			select {}
+		}
+		// A sync writes the blocks older than the current one: sync until
+		// the writes' block is one of them, and the hook stops the process.
+		for {
+			if err := db.Sync(); err != nil {
+				fmt.Println("error", err)
+				os.Exit(2)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	case "writes":
 		// Put continuously, acknowledging every message once flushed.
 		for i := start; ; {
@@ -298,6 +317,20 @@ func TestCrashAfterDeletes(t *testing.T) {
 	assertEqualMsgs(t, want, msgs)
 	if count := db.Count(); count != uint64(len(want)) {
 		t.Fatalf("expected count %d; got %d", len(want), count)
+	}
+}
+
+// TestCrashBeforeCount kills a sync after it has written its entries and
+// before it has written their count: the recovery must count them. It left
+// the count short of the entries restored.
+func TestCrashBeforeCount(t *testing.T) {
+	dir := t.TempDir()
+	crashChild(t, "sync-count", dir, 0, func(string) bool { return true })
+	db, msgs := restore(t, dir)
+	defer db.Close()
+	assertEqualMsgs(t, expectMsgs(100), msgs)
+	if count := db.Count(); count != uint64(len(msgs)) {
+		t.Fatalf("count %d does not match %d restored messages", count, len(msgs))
 	}
 }
 

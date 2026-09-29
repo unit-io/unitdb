@@ -86,7 +86,9 @@ func (db *DB) startRecovery() error {
 	err = r.Iterator(func(ID int64) (ok bool, err error) {
 		log := make(map[uint64][]byte)
 		l := r.Count()
-		timeID := _TimeID(time.Unix(0, ID).UTC().Truncate(db.opts.logInterval).UnixNano())
+		// The block the log was written for: writes group by the block
+		// duration too (newTinyLog).
+		timeID := _TimeID(time.Unix(0, ID).UTC().Truncate(db.opts.timeBlockDuration).UnixNano())
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {

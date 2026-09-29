@@ -173,12 +173,31 @@ func (db *DB) sync() error {
 	return nil
 }
 
-func (db *_SyncHandle) sync(recovery bool) error {
+// testHookBeforeCount, if set, runs once a sync has written its entries and
+// before it writes their count: the crash tests stop the process there.
+var testHookBeforeCount func()
+
+// sync writes the entries appended since the last sync, of the memdb block
+// timeID (0 for none), and counts them.
+func (db *_SyncHandle) sync(recovery bool, timeID int64) error {
 	if db.syncInfo.upperSeq == 0 {
 		return nil
 	}
 	db.syncInfo.syncComplete = false
 	defer db.abort()
+
+	// Record the block before writing its entries: if the process stops
+	// before the count below is written, the recovery counts the entries of
+	// this block it finds already written.
+	if timeID != 0 && db.syncInfo.count > 0 {
+		db.internal.dbInfo.syncing = timeID
+		if err := db.writeInfo(); err != nil {
+			return err
+		}
+		if err := db.internal.info.Sync(); err != nil {
+			return err
+		}
+	}
 
 	if _, err := db.blockWriter.extend(db.syncInfo.upperSeq); err != nil {
 		logger.Error().Err(err).Str("context", "db.extendBlocks")
@@ -198,7 +217,15 @@ func (db *_SyncHandle) sync(recovery bool) error {
 		return err
 	}
 
+	// The entries reach the disk before the count that includes them.
+	if err := db.fs.sync(); err != nil {
+		return err
+	}
+	if testHookBeforeCount != nil {
+		testHookBeforeCount()
+	}
 	db.incount(uint64(db.syncInfo.count))
+	db.internal.dbInfo.syncing = 0
 	if err := db.DB.sync(); err != nil {
 		return err
 	}
@@ -285,7 +312,7 @@ func (db *_SyncHandle) Sync() error {
 			return true, err1
 		}
 
-		if err := db.sync(false); err != nil {
+		if err := db.sync(false, timeID); err != nil {
 			fmt.Println("db.sync: sync error ", err)
 			return true, err
 		}
@@ -305,7 +332,7 @@ func (db *_SyncHandle) Sync() error {
 		db.abort()
 	}
 
-	return db.sync(false)
+	return db.sync(false, 0)
 }
 
 // expireEntries run expirer to delete entries from db if ttl was set on entries and that has expired.
