@@ -22,7 +22,9 @@ import (
 
 var (
 	signature = [7]byte{'u', 'n', 'i', 't', 'd', 'b', '\x0e'}
-	fixed     = uint32(32)
+	// fixed is the size of the info header; format 2's was fixedV2.
+	fixed   = uint32(40)
+	fixedV2 = uint32(32)
 )
 
 type (
@@ -35,6 +37,10 @@ type (
 		encryption int8
 		sequence   uint64
 		count      uint64
+		// syncing is the time ID of the memdb block a sync is writing, from
+		// before it writes the block's entries until count includes them;
+		// 0 otherwise. Since format 3.
+		syncing int64
 
 		// validChecksum is set by UnmarshalBinary; only format 2 has a checksum.
 		validChecksum bool
@@ -49,6 +55,7 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf[11] = uint8(inf.encryption)
 	binary.LittleEndian.PutUint64(buf[12:20], inf.sequence)
 	binary.LittleEndian.PutUint64(buf[20:28], inf.count)
+	binary.LittleEndian.PutUint64(buf[28:36], uint64(inf.syncing))
 	putChecksum(buf, infoChecksumOff)
 
 	return buf, nil
@@ -61,6 +68,11 @@ func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
 	inf.encryption = int8(data[11])
 	inf.sequence = binary.LittleEndian.Uint64(data[12:20])
 	inf.count = binary.LittleEndian.Uint64(data[20:28])
+	if inf.header.version < 3 || len(data) < int(fixed) {
+		inf.validChecksum = validChecksum(data[:infoChecksumOffV2+checksumSize], infoChecksumOffV2)
+		return nil
+	}
+	inf.syncing = int64(binary.LittleEndian.Uint64(data[28:36]))
 	inf.validChecksum = validChecksum(data[:infoChecksumOff+checksumSize], infoChecksumOff)
 
 	return nil

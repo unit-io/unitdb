@@ -66,6 +66,9 @@ func (db *_SyncHandle) startRecovery() error {
 
 	var err1 error
 	pendingEntries := make(map[uint64]_WindowEntries)
+	// The block a sync was writing when the process stopped: the entries of
+	// it already written are not in the count yet.
+	syncing := db.internal.dbInfo.syncing
 
 	err := db.internal.mem.All(func(timeID int64, seqs []uint64) (bool, error) {
 		winEntries := make(map[uint64]_WindowEntries)
@@ -100,6 +103,9 @@ func (db *_SyncHandle) startRecovery() error {
 			}
 			if err := db.blockWriter.append(e); err != nil {
 				if err == errEntryExist {
+					if timeID == syncing {
+						db.syncInfo.count++
+					}
 					continue
 				}
 				return true, err
@@ -142,7 +148,7 @@ func (db *_SyncHandle) startRecovery() error {
 			return true, err
 		}
 		// timeRelease := db.internal.timeWindow.release()
-		if err := db.sync(true); err != nil {
+		if err := db.sync(true, timeID); err != nil {
 			return true, err
 		}
 		if db.syncInfo.syncComplete {
@@ -168,7 +174,7 @@ func (db *_SyncHandle) startRecovery() error {
 		return err
 	}
 
-	return db.sync(true)
+	return db.sync(true, 0)
 }
 
 func (db *DB) recoverLog() error {

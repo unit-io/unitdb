@@ -256,11 +256,50 @@ func downgradeToFormat1(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	info = info[:fixedV2]
 	binary.LittleEndian.PutUint32(info[7:11], 1)
-	copy(info[infoChecksumOff:], make([]byte, checksumSize))
+	copy(info[infoChecksumOffV2:], make([]byte, checksumSize))
 	if err := os.WriteFile(infoPath(dir), info, 0666); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// downgradeToFormat2 writes the info header as format 2 did: 32 bytes,
+// without the block being synced.
+func downgradeToFormat2(t *testing.T, dir string) {
+	t.Helper()
+	info, err := os.ReadFile(infoPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info = info[:fixedV2]
+	binary.LittleEndian.PutUint32(info[7:11], 2)
+	copy(info[infoChecksumOffV2:], make([]byte, checksumSize))
+	putChecksum(info, infoChecksumOffV2)
+	if err := os.WriteFile(infoPath(dir), info, 0666); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenFormat2(t *testing.T) {
+	dir := syncedDB(t)
+	downgradeToFormat2(t, dir)
+
+	db := assertRestored(t, dir)
+	if count := db.Count(); count != integrityMsgs {
+		t.Fatalf("count %d after opening format 2; want %d", count, integrityMsgs)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.ReadFile(infoPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := binary.LittleEndian.Uint32(info[7:11]); len(info) != int(fixed) || v != version {
+		t.Fatalf("info header after closing: %d bytes, format %d; want %d bytes, format %d", len(info), v, fixed, version)
+	}
+	assertRestored(t, dir)
 }
 
 func TestUpgradeFormat1(t *testing.T) {
