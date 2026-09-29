@@ -495,6 +495,18 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
+// Flush writes the entries put so far to the write-ahead log, and returns
+// once they are written. A Put is written there in the background, usually
+// within milliseconds but with no bound under load: until then, a crash
+// loses it. After Flush returns, the entries put before it are recovered
+// after a crash. Batch waits for its own write already.
+func (db *DB) Flush() error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+	return db.internal.mem.Flush()
+}
+
 // Sync syncs entries into DB. Sync happens synchronously.
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
