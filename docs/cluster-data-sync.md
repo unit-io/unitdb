@@ -86,8 +86,10 @@ disconnect─▶ ── Master{ConnGone} ─────────────
 - **Retries.** A publish or subscribe that was not processed (rejected, or not
   sent as the owner's connection is down) goes again to the owner the current
   ring gives, every 100 ms for up to 3 s: longer than failure detection and
-  the rehash. One that failed after being sent is not retried: the owner may
-  have processed it. A subscribe whose owner is still out of reach after
+  the rehash. So is one whose write failed on a connection closed meanwhile.
+  One that failed after being sent is not retried: the owner may have
+  processed it. A call the node answers with an error, such as a method it
+  lacks, leaves the connection open for the others. A subscribe whose owner is still out of reach after
   that, as when failure detection is slower, is kept: the rebalance once the
   ring drops the owner, or once the owner is back, places it.
 - **Relays** go to the topic's owner, which answers from its own messages and

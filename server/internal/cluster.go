@@ -110,7 +110,23 @@ var (
 // was not connected, its connection had already failed (rpc.ErrShutdown, for
 // a call made after that), or it rejected the request.
 func retryable(err error) bool {
-	return errors.Is(err, errNotConnected) || errors.Is(err, rpc.ErrShutdown) || errors.Is(err, errRejected)
+	return errors.Is(err, errNotConnected) || errors.Is(err, rpc.ErrShutdown) || errors.Is(err, errRejected) || notSent(err)
+}
+
+// connectionFailed reports whether a call failed by its connection, not
+// with an error the node answered, such as a method it lacks: the
+// connection is then closed, and every call on it fails.
+func connectionFailed(err error) bool {
+	var answer rpc.ServerError
+	return err != nil && !errors.As(err, &answer)
+}
+
+// notSent reports whether a call failed writing to a connection this node
+// had closed, as when another call on it failed: the node did not get it,
+// or got part of it, which it cannot decode.
+func notSent(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "write" && errors.Is(err, net.ErrClosed)
 }
 
 // handoffInterval is the time between handoffs of the hints kept for each
@@ -490,10 +506,13 @@ func (n *ClusterNode) call(proc string, reqMsg, respMsg interface{}) error {
 	}
 
 	if err := endpoint.Call(proc, reqMsg, respMsg); err != nil {
-		// A failed call means the node went away; reconnect rather than exit,
-		// or one node's failure would take down every node talking to it.
+		// A call failed by the connection means the node went away;
+		// reconnect rather than exit, or one node's failure would take down
+		// every node talking to it.
 		log.ErrLogger.Error().Err(err).Str("context", "cluster.call").Msg("call failed to " + n.name)
-		n.disconnected(endpoint)
+		if connectionFailed(err) {
+			n.disconnected(endpoint)
+		}
 		return err
 	}
 
@@ -523,7 +542,7 @@ func (n *ClusterNode) callAsync(proc string, reqMsg, respMsg interface{}, done c
 	myDone := make(chan *rpc.Call, 1)
 	go func() {
 		call := <-myDone
-		if call.Error != nil {
+		if connectionFailed(call.Error) {
 			n.disconnected(endpoint)
 		}
 

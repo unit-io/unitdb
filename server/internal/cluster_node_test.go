@@ -168,3 +168,58 @@ func TestClusterCallNotRepeated(t *testing.T) {
 		t.Fatalf("node received the call %d times; want 1", got)
 	}
 }
+
+// TestClusterErrorAnswerKeepsConnection checks that a call the node answers
+// with an error, such as a method it lacks, does not close the connection
+// and fail the calls in flight on it. A peer without a capability answered
+// "can't find method", and a publish forwarded meanwhile was lost.
+func TestClusterErrorAnswerKeepsConnection(t *testing.T) {
+	srv := startRPCNode(t)
+	n := connectedNode(t, srv.addr)
+
+	slow := make(chan error, 1)
+	go func() {
+		var r int
+		slow <- n.call("Test.Slow", 0, &r)
+	}()
+	<-srv.svc.started
+
+	var r int
+	if err := n.call("Test.Missing", 0, &r); !missingMethod(err, "") {
+		t.Fatalf("call of a missing method: %v, want can't find method", err)
+	}
+	srv.svc.release <- struct{}{}
+	if err := <-slow; err != nil {
+		t.Fatalf("a call in flight failed after another was answered with an error: %v", err)
+	}
+	if _, connected := n.client(); !connected {
+		t.Fatal("the node was disconnected by an error answer")
+	}
+	if err := n.call("Test.Fast", 0, &r); err != nil {
+		t.Fatalf("a call after the error answer: %v", err)
+	}
+}
+
+func TestCallErrorKinds(t *testing.T) {
+	closedWrite := &net.OpError{Op: "write", Net: "tcp", Err: net.ErrClosed}
+	closedRead := &net.OpError{Op: "read", Net: "tcp", Err: net.ErrClosed}
+	answer := rpc.ServerError("rpc: can't find method Cluster.Deliver")
+	for _, tc := range []struct {
+		name           string
+		err            error
+		failed, unsent bool
+	}{
+		{"answer", answer, false, false},
+		{"write on a closed connection", closedWrite, true, true},
+		{"read on a closed connection", closedRead, true, false},
+		{"shut down", rpc.ErrShutdown, true, false},
+		{"none", nil, false, false},
+	} {
+		if got := connectionFailed(tc.err); got != tc.failed {
+			t.Errorf("%s: connectionFailed = %v, want %v", tc.name, got, tc.failed)
+		}
+		if got := notSent(tc.err); got != tc.unsent {
+			t.Errorf("%s: notSent = %v, want %v", tc.name, got, tc.unsent)
+		}
+	}
+}
