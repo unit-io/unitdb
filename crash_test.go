@@ -44,7 +44,7 @@ func crashOpts() []Options {
 	return []Options{WithBufferSize(1 << 20), WithMemdbSize(1 << 24), WithMutable(), WithDefaultQueryLimit(100000)}
 }
 
-// walFlush is long enough for memdb's background WAL write (every 15ms).
+// walFlush paces the writers.
 const walFlush = 100 * time.Millisecond
 
 // TestCrashChild is the child process; it is skipped unless run by a crash test.
@@ -65,6 +65,14 @@ func TestCrashChild(t *testing.T) {
 		os.Exit(2)
 	}
 	ack := func(format string, v ...interface{}) { fmt.Printf("ack "+format+"\n", v...) }
+	// flush returns once every message put is in the WAL: an acknowledged
+	// message must then survive the kill.
+	flush := func() {
+		if err := db.Flush(); err != nil {
+			fmt.Println("error", err)
+			os.Exit(2)
+		}
+	}
 	put := func(i int) {
 		if err := db.Put(crashTopic, []byte(fmt.Sprintf("m%d", i))); err != nil {
 			fmt.Println("error", err)
@@ -89,7 +97,7 @@ func TestCrashChild(t *testing.T) {
 		if scenario == "synced" {
 			syncAllChild(500)
 		}
-		time.Sleep(walFlush)
+		flush()
 		ack("done")
 	case "deletes":
 		var ids [][]byte
@@ -109,7 +117,7 @@ func TestCrashChild(t *testing.T) {
 				os.Exit(2)
 			}
 		}
-		time.Sleep(walFlush)
+		flush()
 		ack("done")
 	case "sync-count":
 		// Stop in a sync, its entries written and their count not.
@@ -131,13 +139,14 @@ func TestCrashChild(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	case "writes":
-		// Put continuously, acknowledging every message older than a WAL flush.
+		// Put continuously, acknowledging every message once flushed.
 		for i := start; ; {
 			for end := i + 50; i < end; i++ {
 				put(i)
 			}
-			time.Sleep(walFlush)
+			flush()
 			ack("%d", i)
+			time.Sleep(walFlush)
 		}
 	case "batches":
 		// Batch returns only after its WAL write, so every returned batch is durable.

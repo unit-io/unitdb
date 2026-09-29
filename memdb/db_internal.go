@@ -260,6 +260,7 @@ func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 	defer tinyLog.abort()
 
 	if err := db.tinyWrite(tinyLog); err != nil {
+		tinyLog.err = err
 		return err
 	}
 

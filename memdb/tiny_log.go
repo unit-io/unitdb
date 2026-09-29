@@ -38,6 +38,9 @@ type _TinyLog struct {
 
 	managed  bool
 	doneChan chan struct{}
+	// err is the error of the log's write to the WAL, set before doneChan
+	// is closed.
+	err error
 }
 
 func (l *_TinyLog) ID() _TimeID {
@@ -193,6 +196,26 @@ func (p *_TinyLogManager) write() {
 	}
 }
 
+// flush rotates the current log, and waits until it is written to the WAL.
+// Logs are written in order, so every entry put before is written too.
+func (p *_TinyLogManager) flush() error {
+	p.rotateMu.Lock()
+	select {
+	case <-p.stop:
+		p.rotateMu.Unlock()
+		return errClosed
+	default:
+	}
+	p.mu.Lock()
+	tinyLog := p.tinyLog
+	p.write()
+	p.newTinyLog()
+	p.mu.Unlock()
+	p.rotateMu.Unlock()
+	<-tinyLog.doneChan
+	return tinyLog.err
+}
+
 // writeWait enqueues the log and waits for it to be executed.
 func (p *_TinyLogManager) writeWait(tinyLog *_TinyLog) {
 	if tinyLog == nil {
@@ -251,7 +274,6 @@ func (p *_TinyLogManager) writeLoop(interval time.Duration) {
 
 // dispatch handles tiny log commit for the jobs in queue.
 func (p *_TinyLogManager) dispatch(timeout time.Duration) {
-LOOP:
 	for {
 		select {
 		case tinyLog, ok := <-p.writeQueue:
@@ -262,20 +284,12 @@ LOOP:
 				return
 			}
 
-			// return tinyLog to the pool
-			select {
-			case p.logQueue <- tinyLog:
-			default:
-				// pool is full, let GC handle the buffer
-				goto WAIT
-			}
+			// Wait for room rather than drop the log: a dropped log never
+			// completes, so its writer waits forever, and its block's
+			// entries reach the WAL only with a later log of the block.
+			p.logQueue <- tinyLog
 		}
 	}
-
-WAIT:
-	// Wait for a while
-	time.Sleep(timeout)
-	goto LOOP
 }
 
 // commitLoop commits the tiny log to the WAL.
