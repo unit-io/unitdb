@@ -690,3 +690,21 @@ func TestPutAfterFreeingLiveTimeBlock(t *testing.T) {
 		t.Fatalf("Get = %q, want %q", got, testVal(2))
 	}
 }
+
+func TestFlush(t *testing.T) {
+	db, _ := openTestDB(t)
+	putN(t, db, 1, 50)
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Flushing with nothing new put returns at once.
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Flush(); err == nil {
+		t.Fatal("Flush on a closed db succeeded")
+	}
+}

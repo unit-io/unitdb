@@ -388,6 +388,15 @@ func (db *DB) Batch(fn func(*Batch, <-chan struct{}) error) error {
 	return b.Commit()
 }
 
+// Flush writes the entries put so far to the WAL, and returns once they are
+// written: until then, an entry put is lost if the process stops.
+func (db *DB) Flush() error {
+	if err := db.ok(); err != nil {
+		return err
+	}
+	return db.internal.logManager.flush()
+}
+
 // Free frees time block from DB for a provided time ID and releases block from WAL.
 func (db *DB) Free(timeID int64) error {
 	return db.releaseLog(_TimeID(timeID))
