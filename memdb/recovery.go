@@ -18,58 +18,8 @@ package memdb
 
 import (
 	"encoding/binary"
-	"sort"
 	"time"
 )
-
-// delete deletes entry from the DB.
-//
-// This method is not thread safe.
-func (db *DB) delete(key uint64) error {
-	// Get time block
-	blockKey := db.blockKey(key)
-	r, ok := db.timeFilters[blockKey]
-	if !ok {
-		return errEntryDoesNotExist
-	}
-
-	var timeIDs []_TimeID
-	r.RLock()
-	for timeID := range r.timeRecords {
-		timeIDs = append(timeIDs, timeID)
-	}
-	r.RUnlock()
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] > timeIDs[j]
-	})
-	for _, timeID := range timeIDs {
-		block, ok := db.timeBlocks[timeID]
-		if ok {
-			block.RLock()
-			_, ok := block.records[iKey(false, key)]
-			block.RUnlock()
-			if !ok {
-				// No early exit on a filter miss; see DB.Delete.
-				continue
-			}
-			block.Lock()
-			ikey := iKey(false, key)
-			delete(block.records, ikey)
-			block.count--
-			db.internal.meter.Dels.Inc(1)
-			if len(block.records) == 0 {
-				delete(db.timeBlocks, _TimeID(timeID))
-				block.free(db.internal.buffer)
-				db.removeTimeFilter(timeID)
-			}
-			block.Unlock()
-
-			return nil
-		}
-	}
-
-	return errEntryDoesNotExist
-}
 
 // startRecovery recovers pending entries from the WAL.
 func (db *DB) startRecovery() error {
@@ -82,7 +32,11 @@ func (db *DB) startRecovery() error {
 		return err
 	}
 
-	delKeys := make(map[_TimeID][]uint64)
+	// Deletes are applied in log order, to the versions recovered so far: a
+	// delete refers to the block its version is in, and the key may be put
+	// again in that block after it. Blocks a delete empties are freed once
+	// every log is read.
+	emptied := make(map[_TimeID]bool)
 	err = r.Iterator(func(ID int64) (ok bool, err error) {
 		log := make(map[uint64][]byte)
 		l := r.Count()
@@ -108,10 +62,14 @@ func (db *DB) startRecovery() error {
 				off += dataLen
 				if dBit == 1 {
 					timeRefID := _TimeID(binary.LittleEndian.Uint64(val[:8]))
-					if _, ok := delKeys[timeRefID]; ok {
-						delKeys[timeRefID] = append(delKeys[timeRefID], key)
-					} else {
-						delKeys[timeRefID] = []uint64{key}
+					if timeRefID == timeID {
+						// Put earlier in this log.
+						delete(log, key)
+					}
+					// A block that is not recovered was released: its
+					// versions are gone already.
+					if db.deleteRecovered(timeRefID, key) {
+						emptied[timeRefID] = true
 					}
 				} else {
 					log[key] = val
@@ -147,36 +105,36 @@ func (db *DB) startRecovery() error {
 		return err
 	}
 
-	for timeID, keys := range delKeys {
-		if block, exists := db.timeBlocks[timeID]; exists {
-			for _, key := range keys {
-				ikey := iKey(false, key)
-				block.RLock()
-				_, ok := block.records[ikey]
-				block.RUnlock()
-				if !ok {
-					// errEntryDoesNotExist
-					continue
-				}
-				block.Lock()
-				delete(block.records, ikey)
-				block.count--
-				db.internal.meter.Dels.Inc(1)
-				if len(block.records) == 0 {
-					delete(db.timeBlocks, _TimeID(timeID))
-					block.free(db.internal.buffer)
-					db.removeTimeFilter(timeID)
-				}
-				block.Unlock()
-			}
-		} else {
-			for _, key := range keys {
-				db.delete(key)
-			}
+	for timeID := range emptied {
+		block, ok := db.timeBlocks[timeID]
+		if !ok || len(block.records) > 0 {
+			continue
 		}
+		delete(db.timeBlocks, timeID)
+		block.free(db.internal.buffer)
+		db.removeTimeFilter(timeID)
 	}
 
 	return nil
+}
+
+// deleteRecovered deletes key from the recovered block timeID, if it holds
+// it, and reports whether the block was left empty.
+func (db *DB) deleteRecovered(timeID _TimeID, key uint64) bool {
+	block, ok := db.timeBlocks[timeID]
+	if !ok {
+		return false
+	}
+	ikey := iKey(false, key)
+	block.Lock()
+	defer block.Unlock()
+	if _, ok := block.records[ikey]; !ok {
+		return false
+	}
+	delete(block.records, ikey)
+	block.count--
+	db.internal.meter.Dels.Inc(1)
+	return len(block.records) == 0
 }
 
 // All gets all keys from DB recovered from WAL.
