@@ -106,3 +106,47 @@ func TestRecoverySkipsUnnamedTopic(t *testing.T) {
 		t.Errorf("another topic after recovery: %q (%v), want it kept", items, err)
 	}
 }
+
+// TestCloseWaitsForDeferredDelete closes the DB while a sync is applying a
+// delete that waited for its entry to reach disk. Close used to see nothing
+// waiting once the sync had taken the delete, and closed the DB under it: the
+// delete failed, and the entry came back on open.
+func TestCloseWaitsForDeferredDelete(t *testing.T) {
+	db, dir := openTestDB(t, WithMutable())
+	first, _ := putTwo(t, db)
+	if err := db.DeleteEntry(NewEntry(unsyncedTopic, nil).WithID(first)); err != nil {
+		t.Fatal(err)
+	}
+	// Until the entry is on disk, without applying the delete.
+	seq := message.ID(first).Sequence()
+	for deadline := time.Now().Add(5 * time.Second); !db.onDisk(seq); {
+		if time.Now().After(deadline) {
+			t.Fatal("the entry didn't reach disk")
+		}
+		time.Sleep(100 * time.Millisecond)
+		if err := db.syncOnce(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Hold the sync lock, so that the delete being applied waits for it
+	// while close runs.
+	db.internal.syncLockC <- struct{}{}
+	applied := make(chan struct{})
+	go func() {
+		db.applyDeferred()
+		close(applied)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	closed := make(chan error, 1)
+	go func() { closed <- db.Close() }()
+	time.Sleep(200 * time.Millisecond)
+	<-db.internal.syncLockC
+	<-applied
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+
+	db = reopenTestDB(t, dir, WithMutable())
+	wantOnlySecond(t, "after reopening", unsyncedBodies(t, db))
+}
