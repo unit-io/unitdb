@@ -386,6 +386,48 @@ func TestServiceIDsCluster(t *testing.T) {
 	c.assertAlive(t, c.nodes, "with service ids")
 }
 
+// TestServiceTrustedRightAfterStart checks that a service's subscription
+// forwarded as soon as the cluster has a leader, before the nodes have heard
+// each other's capabilities, is delivered to. The owner could not take the
+// forwarded trust yet, handled the subscription as untrusted, and its key
+// check dropped it, with no error to the client.
+func TestServiceTrustedRightAfterStart(t *testing.T) {
+	c := startCluster(t, names...)
+	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	contract := uint32(0x5e41ce03)
+	service := serviceClientID(contract)
+	topic := topicOwnedBy("two", contract, "groups.service.start", names...)
+	sub, err := connectTo(t, c.node("three").tcpAddr, connectOpts{clientID: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := connectTo(t, c.node("two").tcpAddr, connectOpts{clientID: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, _ := sub.subscribe(0, topic)
+	if !sub.waitAck(sid, 3*time.Second) {
+		t.Fatal("subscribe not acknowledged")
+	}
+	// Publish until the subscription is placed: it is sent again until the
+	// owner knows the subscriber's node's capabilities.
+	deadline := time.Now().Add(5 * time.Second)
+	for i := 0; time.Now().Before(deadline); i++ {
+		body := fmt.Sprintf("start-%d", i)
+		pub.publish(0, topic, encodePayload(i, body), "")
+		if msg, ok := sub.waitPub(200 * time.Millisecond); ok {
+			for _, m := range msg.Messages {
+				if m.Topic == topic {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("a service's subscription made right after the cluster started was never delivered to")
+}
+
 // TestClusterRefusesInsecureClients checks that every node of a cluster
 // refuses a client's insecure flag.
 func TestClusterRefusesInsecureClients(t *testing.T) {

@@ -726,6 +726,13 @@ func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
 			conn.stopRPC()
 		}
 		masterLocks.Delete(reqMsg.Conn.ConnID)
+	} else if reqMsg.Conn.Insecure && !c.knowsCapabilities(reqMsg.Node) {
+		// A trusted connection's request from a node whose capabilities this
+		// one has not heard yet, as when the cluster has just started: the
+		// trust can't be taken, nor the request handled as untrusted, which
+		// fails its key check unseen. Rejected, it is sent again, until the
+		// node's capabilities are known.
+		*rejected = true
 	} else if c.takes(reqMsg) {
 		// This cluster member received a request for a topic it holds.
 
@@ -934,6 +941,17 @@ func (c *Cluster) Deliver(req *DeliverReq, unused *bool) error {
 // the node the key hashes to, the topic's owner.
 func topicRingKey(contract uint32, topic string) string {
 	return strconv.FormatUint(uint64(contract), 10) + "/" + topic
+}
+
+// knowsCapabilities reports whether this node has heard which capabilities
+// node has.
+func (c *Cluster) knowsCapabilities(node string) bool {
+	n := c.nodes[node]
+	if n == nil {
+		return false
+	}
+	_, ok := n.capabilities()
+	return ok
 }
 
 // isWildcardTopic reports whether topic is a pattern (* or ...), which can

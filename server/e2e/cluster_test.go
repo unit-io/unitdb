@@ -335,7 +335,8 @@ func TestClusterDelivery(t *testing.T) {
 	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	waitCapabilities()
+	// No waitCapabilities: a service's request forwarded before the nodes
+	// know each other's capabilities is sent again until they do.
 	for _, mode := range []string{"secure", "service"} {
 		for i, own := range names {
 			contract := uint32(0x0c1a0000 + i)
