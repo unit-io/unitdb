@@ -370,9 +370,12 @@ If a Server sends a CONNECT ACKNOWLEDGE with Return Code other than 0x00 (Succes
 | 0x01 | unacceptable proto version |
 | 0x02 | identifier rejected |
 | 0x03 | unacceptable identifier, access not allowed |
-| 0x04 | server unavailiable |
-| 0x05 | not authorized |
-| 0x06 | bad request |
+| 0x04 | not authorized: a refused security key, or the Insecure Flag without `allow_insecure` |
+| 0x05 | server error |
+| 0x06 | authentication failed |
+| 0x07 | forbidden |
+| 0x08 | session in use by another connection |
+| 0x09 | unknown epoch |
 
 #### Epoch
 The Server must respond with CONNECT ACKNOWLEDGE containing Epoch. the Epoch value is used to cache the Session State in the Serve and in the Client if the Client request to persist multiple Sessions per Client Identifier.

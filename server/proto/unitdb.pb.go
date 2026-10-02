@@ -413,9 +413,12 @@ func (x *Connect) GetBatchCountThreshold() int32 {
 // 0x01 refused: unacceptable proto version
 // 0x02 refused: identifier rejected
 // 0x03 refused: unacceptable identifier, access not allowed
-// 0x04 refused server unavailiable
-// 0x05 not authorized
-// 0x06 bad request
+// 0x04 refused: not authorized
+// 0x05 server error
+// 0x06 refused: authentication failed
+// 0x07 refused: forbidden
+// 0x08 refused: session in use by another connection
+// 0x09 refused: unknown epoch
 type ConnectAcknowledge struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReturnCode    int32                  `protobuf:"varint,1,opt,name=ReturnCode,proto3" json:"ReturnCode,omitempty"`
