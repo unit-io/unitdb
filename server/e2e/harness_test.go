@@ -191,6 +191,9 @@ type serverOpts struct {
 	env []string
 	// key is encryption_config's key; default testKey.
 	key string
+	// allowInsecure sets allow_insecure (default false): clients that send
+	// the insecure flag are refused without it.
+	allowInsecure bool
 	// expectExit starts the server without waiting for it to be ready, for
 	// a server expected to refuse to start.
 	expectExit bool
@@ -226,10 +229,11 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
   "grpc_listen": "127.0.0.1:%d",
   "logging_level": %q,
   "accept_unsigned_keys": true,
+  "allow_insecure": %t,
   "encryption_config": {"key": %q, "identifier": "local", "sealed": false, "timestamp": 1522325758},
   "cluster_config": %s,
   "store_config": {"reset": false, "adapters": {"unitdb": {"database": "unitdb", "mem_size": 500000000}}}
-}`, tcpPort, grpcPort, opts.logLevel, opts.key, opts.cluster)
+}`, tcpPort, grpcPort, opts.logLevel, opts.allowInsecure, opts.key, opts.cluster)
 	confPath := filepath.Join(binDir, confName)
 	if err := os.WriteFile(confPath, []byte(conf), 0644); err != nil {
 		t.Fatal(err)

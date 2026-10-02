@@ -50,9 +50,14 @@ const (
 	// capResync: a node back in the ring asked for its clients'
 	// subscriptions (Resync).
 	capResync = "resync"
+	// capService: the node sets a forwarded connection's Insecure only for a
+	// trusted service's connection (a client id with uid.AllowService, or a
+	// connection one vouched for with unitdb/service), so the flag can be
+	// taken from it. An older node sends its client's own CONNECT flag.
+	capService = "service"
 )
 
-var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync}
+var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService}
 
 // ownCapabilities are what this node can do: all of them, unless the
 // UNITDB_CLUSTER_CAPS environment variable lists fewer ("none" for none), so
@@ -162,6 +167,38 @@ func (n *ClusterNode) supports(cap string) bool {
 	}
 	for _, c := range n.caps.known.Capabilities {
 		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// knownToSupport reports whether the node told it can do cap. Unlike
+// supports, a node not heard from yet is taken not to: for what a node is
+// trusted with, rather than a call that falls back.
+func (n *ClusterNode) knownToSupport(cap string) bool {
+	nc, ok := n.capabilities()
+	if !ok {
+		return false
+	}
+	for _, c := range nc.Capabilities {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// hasOlderPeers reports whether a node of the cluster is known to run a
+// version before capService, such as v0.5.0. A node not heard from yet is
+// taken not to be: what this enables (sessions found as such nodes find
+// them, see the CONNECT handler) is weaker than what replaces it.
+func (c *Cluster) hasOlderPeers() bool {
+	if c == nil {
+		return false
+	}
+	for _, n := range c.nodes {
+		if !n.supports(capService) {
 			return true
 		}
 	}

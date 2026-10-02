@@ -59,6 +59,13 @@ type Config struct {
 	// a contract, so enable it only while clients move to signed keys.
 	AcceptUnsignedKeys bool `json:"accept_unsigned_keys"`
 
+	// AllowInsecure accepts clients that connect with the insecure flag,
+	// whose requests then skip every topic key check. For development only:
+	// without it a client that sets the flag is refused, and a cluster node
+	// refuses to start with it. Trusted services need no flag: their client
+	// ids say what they are (see server/cmd/mintid).
+	AllowInsecure bool `json:"allow_insecure"`
+
 	// Configs for subsystems
 	Cluster json.RawMessage `json:"cluster_config"`
 

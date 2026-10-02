@@ -66,8 +66,19 @@ func assertHealthy(t *testing.T, s *server, after string) {
 		t.Fatal(err)
 	}
 	pub.publish(0, topic, encodePayload(0, "ok"), "1m")
-	if _, ok := sub.waitPub(5 * time.Second); !ok {
-		t.Fatalf("after %s: server no longer delivers messages\nlogs:\n%s", after, s.logs.String())
+	// Only the published message counts: the server answers a refused
+	// request with a publish on "unitdb/error/".
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		msg, ok := sub.waitPub(time.Until(deadline))
+		if !ok {
+			t.Fatalf("after %s: server no longer delivers messages\nlogs:\n%s", after, s.logs.String())
+		}
+		if m := msg.Messages[0]; m.Topic == topic {
+			if _, body, ok := decodePayload(m.Payload); ok && string(body) == "ok" {
+				return
+			}
+		}
 	}
 }
 

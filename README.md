@@ -44,6 +44,20 @@ The server signs client IDs and topic keys with a key only it knows, and refuses
 
 Up to v0.3 the sample `unitdb.conf` shipped with a key, which the server now refuses: it is public, so anyone could sign client IDs and topic keys with it. A deployment that ran with it needs a new key, and its clients new client IDs and topic keys.
 
+Clients publish and subscribe with topic keys, which a primary client generates with a `unitdb/keygen` request. The insecure flag of a client's CONNECT, which skips topic key checks, is refused unless the server's config sets `"allow_insecure": true`, which is for development only and which a cluster node refuses to start with.
+
+A trusted backend, such as an API server acting for its users, needs no topic keys either: give it a service client ID, which only the `mintid` command issues, with the same key as the server:
+
+```
+> go run ./server/cmd/mintid -config server/unitdb.conf -contract 123456789 -service
+```
+
+Without `-contract`, `mintid` mints a primary client ID of a new contract; `-service` marks the ID as a trusted service's. A service's connections skip topic key checks, in a cluster too. A connection the service opens for a user, with the user's client ID, skips them once the service vouches for it, by publishing `{"client_id": "<the service's client ID>"}` to `unitdb/service` on that connection; a connection trusted this way may also generate keys. Keep service IDs on servers, never on clients or devices.
+
+Topics whose first part starts with `$` are reserved for the server: no client may publish, subscribe, relay or generate keys for them, a service or an insecure client included.
+
+A session belongs to the client ID that started it: a client of the same contract that sends another client's session key gets a session of its own.
+
 ## Clustering
 To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended. Every node needs the same encryption key.
 

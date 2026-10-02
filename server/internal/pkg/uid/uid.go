@@ -17,9 +17,9 @@
 package uid
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"math"
-	"math/rand"
 	"time"
 )
 
@@ -28,23 +28,32 @@ const (
 )
 
 var (
-	// next is the next identifier. It is time in millsecond
-	// to avoid collisions of ids between process restarts.
-	Next = uint32(
-		time.Date(2070, 1, 1, 0, 0, 0, 0, time.UTC).Sub(TimeNow()),
-	)
+	// Next is the last local identifier handed out (see NewLID). It starts
+	// at a random value from crypto/rand, rather than at the milliseconds
+	// until 2070, so that ids do not follow from the time a process started:
+	// nodes of a cluster started close together handed out the same
+	// connection ids.
+	Next = randomUint32()
 )
+
+// randomUint32 returns a random number from crypto/rand.
+func randomUint32() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("uid: crypto/rand: " + err.Error())
+	}
+	return binary.BigEndian.Uint32(b[:])
+}
 
 func NewApoch() uint32 {
 	now := uint32(TimeNow().Unix() - Offset)
 	return math.MaxUint32 - now
 }
 
+// NewUnique returns a random number from crypto/rand. It used to come from
+// math/rand seeded with the time in seconds, which made it predictable.
 func NewUnique() uint32 {
-	b := make([]byte, 4)
-	random := rand.New(rand.NewSource(int64(NewApoch())))
-	random.Read(b)
-	return binary.BigEndian.Uint32(b)
+	return randomUint32()
 }
 
 // TimeNow returns current wall time in UTC rounded to milliseconds.

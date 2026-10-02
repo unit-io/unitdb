@@ -83,6 +83,12 @@ type KeyGenResponse struct {
 	Topic  string `json:"topic"`
 }
 
+// ServiceResponse answers a unitdb/service request that vouched for the
+// connection.
+type ServiceResponse struct {
+	Status int `json:"status"`
+}
+
 type ClientIdResponse struct {
 	Status   int    `json:"status"`
 	ClientId string `json:"key"`

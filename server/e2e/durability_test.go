@@ -80,7 +80,7 @@ func testStoredMessagesSurviveCrash(t *testing.T, mode uint8) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	for i, topic := range topics {
@@ -132,7 +132,7 @@ func testSessionSurvivesCrash(t *testing.T) {
 	cid := newClientID(contract)
 	// A topic a survivor owns, so that only the session's log is at risk.
 	topic := topicOwnedBy(live[0].name, contract, "groups.durable.session", names...)
-	opts := connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
+	opts := connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
 
 	// A subscriber of the session on the victim, notified of reliable
 	// messages it does not receive yet.
@@ -154,7 +154,7 @@ func testSessionSurvivesCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < durabilityCount; i++ {
@@ -211,7 +211,7 @@ func TestClusterAsyncReplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

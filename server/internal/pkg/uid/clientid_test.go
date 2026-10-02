@@ -101,6 +101,63 @@ func TestClientIDFields(t *testing.T) {
 	}
 }
 
+func TestServicePermission(t *testing.T) {
+	mac := newMAC(t)
+	service, err := MintClientID(0x5e41ce01, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode([]byte(service.Encode(mac)), mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.IsService() || !back.IsPrimary() || back.Contract() != 0x5e41ce01 {
+		t.Fatalf("service id decoded with permissions %d, contract %x", back.Permissions(), back.Contract())
+	}
+
+	primary, err := MintClientID(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.IsService() || !primary.IsPrimary() || primary.Contract() == 0 {
+		t.Fatalf("primary id with permissions %d, contract %x", primary.Permissions(), primary.Contract())
+	}
+	// Ids the server issues are never a service's.
+	secondary, _ := NewSecondaryClientID(service)
+	cached, _ := CachedClientID(service.Contract())
+	for _, id := range []ID{secondary, cached} {
+		if id.IsService() || id.IsPrimary() {
+			t.Fatalf("an id the server issues has permissions %d", id.Permissions())
+		}
+	}
+	if (ID(make([]byte, rawLen))).HasPermission(AllowNone) {
+		t.Fatal("HasPermission(AllowNone) is true")
+	}
+}
+
+// TestRandomIDs checks that contracts and unique numbers come from
+// crypto/rand: NewUnique was math/rand seeded with the time in seconds, so
+// calls in the same second returned the same number.
+func TestRandomIDs(t *testing.T) {
+	uniques := make(map[uint32]bool)
+	contracts := make(map[uint32]bool)
+	for i := 0; i < 1000; i++ {
+		uniques[NewUnique()] = true
+		c, err := NewContract()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c == 0 {
+			t.Fatal("contract 0")
+		}
+		contracts[c] = true
+	}
+	// 1000 draws of 32 bits repeat one with a chance of about 1 in 10^4.
+	if len(uniques) < 999 || len(contracts) < 999 {
+		t.Fatalf("%d distinct unique numbers and %d distinct contracts of 1000", len(uniques), len(contracts))
+	}
+}
+
 func TestNewLIDIsUnique(t *testing.T) {
 	seen := make(map[LID]bool)
 	for i := 0; i < 1000; i++ {

@@ -76,6 +76,9 @@ func runWithService(m *testing.M) int {
 		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
+		// Most tests connect insecure clients, which a server takes only
+		// with allow_insecure; TestInsecureFlagRefused covers the refusal.
+		AllowInsecure: true,
 	}
 
 	svc, err := NewService(cfg)
@@ -872,6 +875,24 @@ func TestSessionKey(t *testing.T) {
 	if sessionKey(idA, 0)>>48 == 0 {
 		t.Fatal("session keys must not overlap message log keys")
 	}
+
+	// A session is its owner's: clients of one contract that send the same
+	// session key get different sessions.
+	sameContract, _ := uid.NewClientID(1)
+	sameContract.SetContract(idA.Contract())
+	// Of another second: ids of one contract issued in the same second are
+	// the same bytes, and so one owner.
+	sameContract.SetEpoch(idA.Epoch() + 1)
+	if sessionKey(idA, 7) == sessionKey(sameContract, 7) {
+		t.Fatal("clients of the same contract share an explicit session key")
+	}
+	if legacySessionKey(idA, 7) != legacySessionKey(sameContract, 7) || legacySessionKey(idA, 7) == sessionKey(idA, 7) {
+		t.Fatal("the legacy session key is not the contract's and the session key's")
+	}
+	// Without a session key, the key is the one earlier versions used.
+	if sessionOwner(idA) != sessionKey(idA, 0) {
+		t.Fatal("a session's owner is not its client's default session key")
+	}
 }
 
 func TestEmptyTopicIsRejected(t *testing.T) {
@@ -1130,6 +1151,7 @@ func TestShutdownHelper(t *testing.T) {
 		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
+		AllowInsecure:    true,
 	})
 	if err != nil {
 		t.Fatal(err)

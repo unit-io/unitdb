@@ -96,6 +96,9 @@ type clusterOpts struct {
 	// nodeFailAfter is the heartbeats a node misses before it leaves the
 	// ring; 16 if 0.
 	nodeFailAfter int
+	// allowInsecure sets allow_insecure, which a cluster node refuses: the
+	// nodes are started without waiting for them to be ready.
+	allowInsecure bool
 }
 
 // startClusterWith starts a cluster of the named nodes with failover enabled.
@@ -135,7 +138,7 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 	}
 	conf, _ := json.Marshal(clusterConf)
 	for _, n := range c.nodes {
-		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name]})
+		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
 	}
 	return c
 }
@@ -218,14 +221,18 @@ type route struct {
 	pubUsername string
 	contract    uint32
 	topic       string
-	secure      bool
-	mode        uint8
-	pubMode     uint8
+	// secure sends the topic with a key the test gives; service connects
+	// with a trusted service's client id and sends it without a key;
+	// otherwise the clients key their topics (autoKey).
+	secure  bool
+	service bool
+	mode    uint8
+	pubMode uint8
 }
 
 // delivers subscribes on sub and publishes on pub, both as username, and
-// reports whether the subscriber received the published payload. Clients
-// connect insecure (no topic keys).
+// reports whether the subscriber received the published payload. Clients key
+// their topics (autoKey).
 func delivers(t *testing.T, sub, pub *clusterNode, username string, contract uint32, topic string) bool {
 	return deliversRoute(t, route{sub: sub, pub: pub, username: username, contract: contract, topic: topic})
 }
@@ -234,6 +241,10 @@ func deliversRoute(t *testing.T, r route) bool {
 	t.Helper()
 	ctx := context.Background()
 	cid := newClientID(r.contract)
+	if r.service {
+		cid = serviceClientID(r.contract)
+	}
+	autoKey := !r.secure && !r.service
 	wire := r.topic
 	if r.secure {
 		wire = keyed(topicKey(r.contract, r.topic, security.AllowReadWrite), r.topic)
@@ -243,7 +254,7 @@ func deliversRoute(t *testing.T, r route) bool {
 		t.Fatalf("dial %s: %v", r.sub.name, err)
 	}
 	defer s.close()
-	if _, err := s.connectWith(connectOpts{clientID: cid, insecure: !r.secure, sessKey: nextSess(), username: r.username}); err != nil {
+	if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: autoKey, sessKey: nextSess(), username: r.username}); err != nil {
 		t.Fatalf("connect to %s: %v", r.sub.name, err)
 	}
 	sid, _ := s.subscribe(r.mode, wire)
@@ -260,7 +271,7 @@ func deliversRoute(t *testing.T, r route) bool {
 		t.Fatalf("dial %s: %v", r.pub.name, err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: !r.secure, sessKey: nextSess(), username: pubUsername}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: autoKey, sessKey: nextSess(), username: pubUsername}); err != nil {
 		t.Fatalf("connect to %s: %v", r.pub.name, err)
 	}
 	p.publish(r.pubMode, wire, encodePayload(0, "cluster"), "1m")
@@ -293,6 +304,13 @@ func (c *cluster) assertAlive(t *testing.T, nodes []*clusterNode, after string) 
 
 var names = []string{"one", "two", "three"}
 
+// waitCapabilities waits for the leader's pings to have told every node what
+// the others can do: a node takes a forwarded service's trust only from a
+// peer it knows advertises it.
+func waitCapabilities() {
+	time.Sleep(time.Second)
+}
+
 func TestClusterElectsOneLeader(t *testing.T) {
 	c := startCluster(t, names...)
 	leader, err := c.waitLeader(c.nodes, 10*time.Second)
@@ -310,13 +328,15 @@ func TestClusterElectsOneLeader(t *testing.T) {
 
 // TestClusterDelivery checks every combination of subscriber node, publisher
 // node and the node owning the topic, for secure clients (topic keys) and
-// insecure ones. The subscriber and the publisher are different users.
+// trusted services, which send no keys. (A cluster refuses insecure
+// clients.) The subscriber and the publisher are different users.
 func TestClusterDelivery(t *testing.T) {
 	c := startCluster(t, names...)
 	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"secure", "insecure"} {
+	waitCapabilities()
+	for _, mode := range []string{"secure", "service"} {
 		for i, own := range names {
 			contract := uint32(0x0c1a0000 + i)
 			for _, sub := range c.nodes {
@@ -324,7 +344,7 @@ func TestClusterDelivery(t *testing.T) {
 					name := fmt.Sprintf("%s/owner=%s/sub=%s/pub=%s", mode, own, sub.name, pub.name)
 					t.Run(name, func(t *testing.T) {
 						topic := topicOwnedBy(own, contract, fmt.Sprintf("groups.cluster.%s.%s.%s", mode, sub.name, pub.name), names...)
-						r := route{sub: sub, pub: pub, username: "subscriber@e2e.test", pubUsername: "publisher@e2e.test", contract: contract, topic: topic, secure: mode == "secure"}
+						r := route{sub: sub, pub: pub, username: "subscriber@e2e.test", pubUsername: "publisher@e2e.test", contract: contract, topic: topic, secure: mode == "secure", service: mode == "service"}
 						if !deliversRoute(t, r) {
 							t.Errorf("message not delivered")
 						}
@@ -361,7 +381,7 @@ func TestClusterRoutesByTopic(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer s.close()
-				if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+				if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				sid, _ := s.subscribe(0, topic)
@@ -373,7 +393,7 @@ func TestClusterRoutesByTopic(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer p.close()
-				if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+				if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				p.publish(0, topic, encodePayload(0, "routed"), "1m")
@@ -545,7 +565,7 @@ func TestClusterWildcardDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.close()
-			if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+			if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			sid, _ := s.subscribe(0, prefix+".*")
@@ -561,7 +581,7 @@ func TestClusterWildcardDelivery(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer p.close()
-				if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+				if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				for _, own := range names {
@@ -614,7 +634,7 @@ func TestClusterRelay(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer p.close()
-					if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+					if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 						t.Fatal(err)
 					}
 					// The publish is acknowledged once the owner has stored it.
@@ -627,7 +647,7 @@ func TestClusterRelay(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer r.close()
-					if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+					if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 						t.Fatal(err)
 					}
 					r.relay(topic, "1m")
@@ -707,7 +727,7 @@ func TestClusterFailoverKeepsSubscriptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.close()
-			if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+			if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			for _, topic := range append(topics, "groups.keepwild.*") {
@@ -765,7 +785,7 @@ func storeOn(t *testing.T, pub *clusterNode, cid string, topics []string, body s
 		t.Fatalf("dial %s: %v", pub.name, err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatalf("connect to %s: %v", pub.name, err)
 	}
 	for _, topic := range topics {
@@ -785,7 +805,7 @@ func relayFinds(t *testing.T, n *clusterNode, cid, topic, body string) bool {
 		t.Fatalf("dial %s: %v", n.name, err)
 	}
 	defer r.close()
-	if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+	if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 		t.Fatalf("connect to %s: %v", n.name, err)
 	}
 	r.relay(topic, "1h")
@@ -812,7 +832,7 @@ func publishReaches(t *testing.T, s *client, pub *clusterNode, cid, topic string
 		t.Fatalf("dial %s: %v", pub.name, err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatalf("connect to %s: %v", pub.name, err)
 	}
 	p.publish(0, topic, encodePayload(0, topic), "1m")
@@ -868,7 +888,7 @@ func TestClusterReplicatedRelay(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer p.close()
-				if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+				if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				for i := from; i < to; i++ {
@@ -887,7 +907,7 @@ func TestClusterReplicatedRelay(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+					if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 						t.Fatal(err)
 					}
 					r.relay(topic, "1h")
@@ -968,7 +988,7 @@ func TestClusterSessionFailover(t *testing.T) {
 			cid := newClientID(contract)
 			sessKey := nextSess()
 			topic := "groups.session." + victim
-			opts := connectOpts{clientID: cid, insecure: true, sessKey: sessKey, username: "subscriber@e2e.test"}
+			opts := connectOpts{clientID: cid, autoKey: true, sessKey: sessKey, username: "subscriber@e2e.test"}
 
 			s, err := dial(ctx, dead.tcpAddr)
 			if err != nil {
@@ -989,7 +1009,7 @@ func TestClusterSessionFailover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.close()
-			if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			n := 5
@@ -1078,7 +1098,7 @@ func TestClusterReliablePublishSurvivesCrash(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			n := 100
@@ -1100,7 +1120,7 @@ func TestClusterReliablePublishSurvivesCrash(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+				if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				r.relay(topic, "1h")
@@ -1144,7 +1164,7 @@ func TestClusterReliablePublishHungReplica(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := syscall.Kill(replica.cmd.Process.Pid, syscall.SIGSTOP); err != nil {
@@ -1168,7 +1188,7 @@ func TestClusterReliablePublishHungReplica(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.close()
-	if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+	if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	r.relay(topic, "1h")
@@ -1230,7 +1250,7 @@ func TestClusterRebuildEmptyNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			published := time.Now()
@@ -1274,7 +1294,7 @@ func TestClusterRebuildEmptyNode(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer r.close()
-				if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+				if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 					t.Fatal(err)
 				}
 				r.relay(topic, "1h")
@@ -1331,7 +1351,7 @@ func TestClusterSessionHandoff(t *testing.T) {
 	cid := newClientID(contract)
 	home, replica, other := c.nodes[0], c.nodes[1], c.nodes[2]
 	topic := topicOwnedBy(home.name, contract, "groups.sessionhint", names...)
-	opts := connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
+	opts := connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
 
 	s, err := dial(ctx, home.tcpAddr)
 	if err != nil {
@@ -1353,7 +1373,7 @@ func TestClusterSessionHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	n := 5
@@ -1428,7 +1448,7 @@ func TestClusterSessionMoveForgetsStaleCopy(t *testing.T) {
 	var opts connectOpts
 	var replicas []string
 	for attempt := 0; attempt < 50 && s == nil; attempt++ {
-		opts = connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
+		opts = connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
 		cl, err := dial(ctx, home.tcpAddr)
 		if err != nil {
 			t.Fatal(err)
@@ -1459,7 +1479,7 @@ func TestClusterSessionMoveForgetsStaleCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	n := 3
@@ -1543,7 +1563,7 @@ func TestClusterRequestsDuringFailover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.close()
-			if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+			if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			p, err := dial(ctx, live[0].tcpAddr)
@@ -1551,7 +1571,7 @@ func TestClusterRequestsDuringFailover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer p.close()
-			if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+			if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1582,7 +1602,7 @@ func TestClusterRequestsDuringFailover(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.close()
-			if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+			if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			r.relay(pubTopic, "1h")
@@ -1626,7 +1646,7 @@ func TestClusterSubscribeOutlastsFailureDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.close()
-	if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+	if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	dead.stop()
@@ -1664,7 +1684,7 @@ func TestClusterDeliveryFanOut(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.close()
-		if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+		if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {
@@ -1679,7 +1699,7 @@ func TestClusterDeliveryFanOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
@@ -1731,7 +1751,7 @@ func TestClusterPartitionKeepsSubscriptions(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.close()
-			if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+			if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 				t.Fatal(err)
 			}
 			if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {
@@ -1788,7 +1808,7 @@ func TestClusterFrozenNodeIsFailedOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1828,7 +1848,7 @@ func TestClusterReplicaRestartStoresOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.close()
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	// Frozen for less than failure detection: the replica stays in the ring.
@@ -1858,7 +1878,7 @@ func TestClusterReplicaRestartStoresOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.close()
-	if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+	if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	r.relay(topic, "1h")
@@ -1956,7 +1976,7 @@ func TestClusterMixedCapabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer p.close()
-		if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+		if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		n := 10
@@ -1977,7 +1997,7 @@ func TestClusterMixedCapabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer r.close()
-		if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+		if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		r.relay(shared, "1h")
@@ -1997,7 +2017,7 @@ func TestClusterMixedCapabilities(t *testing.T) {
 		var s *client
 		var opts connectOpts
 		for attempt := 0; attempt < 50 && s == nil; attempt++ {
-			opts = connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
+			opts = connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}
 			cl, err := dial(ctx, home.tcpAddr)
 			if err != nil {
 				t.Fatal(err)
@@ -2029,7 +2049,7 @@ func TestClusterMixedCapabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer p.close()
-		if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+		if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		n := 3
@@ -2114,13 +2134,13 @@ func TestClusterDrainOnSIGTERM(t *testing.T) {
 			}
 
 			// A client of another node, subscribed to a topic of the node.
-			s := connect(live[1], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"})
+			s := connect(live[1], connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"})
 			defer s.close()
 			if sid, _ := s.subscribe(0, subTopic); !s.waitAck(sid, 3*time.Second) {
 				t.Fatal("no subscribe ack")
 			}
 			// A client of the node, with reliable messages pending.
-			sessOpts := connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "session@e2e.test"}
+			sessOpts := connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "session@e2e.test"}
 			held, err := dial(ctx, draining.tcpAddr)
 			if err != nil {
 				t.Fatal(err)
@@ -2134,7 +2154,7 @@ func TestClusterDrainOnSIGTERM(t *testing.T) {
 				t.Fatal("no subscribe ack")
 			}
 			time.Sleep(150 * time.Millisecond) // let the forwarded subscriptions settle
-			p := connect(live[0], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"})
+			p := connect(live[0], connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"})
 			defer p.close()
 			pending := 3
 			for i := 0; i < pending; i++ {
@@ -2186,7 +2206,7 @@ func TestClusterDrainOnSIGTERM(t *testing.T) {
 				t.Errorf("publish on %s did not reach the subscriber on %s after %s left", subTopic, live[1].name, victim)
 			}
 			// Every acknowledged publish is stored.
-			r := connect(live[1], connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"})
+			r := connect(live[1], connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"})
 			defer r.close()
 			r.relay(pubTopic, "1h")
 			if _, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second); err != nil {
@@ -2280,7 +2300,7 @@ func TestClusterRingVersionSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.close()
-	if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+	if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {
@@ -2353,7 +2373,7 @@ func TestClusterRingSwitchMovesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
 		t.Fatal(err)
 	}
 	n := 20
@@ -2388,7 +2408,7 @@ func TestClusterRingSwitchMovesHistory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
+		if _, err := r.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "reader@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		r.relay(topic, "1h")
@@ -2495,7 +2515,7 @@ func TestClusterRestartedOwnerKeepsSubscriptions(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.close()
-		if _, err := s.connectWith(connectOpts{clientID: cid, insecure: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
+		if _, err := s.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "subscriber@e2e.test"}); err != nil {
 			t.Fatal(err)
 		}
 		if sid, _ := s.subscribe(0, topic); !s.waitAck(sid, 3*time.Second) {

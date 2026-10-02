@@ -90,13 +90,19 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		c.service.stats.PrecisionTiming("conn_time_ns", time.Since(start), stats.IntTag("status", status))
 	}()
 
+	// Only CONNECT is served before a client id has been accepted.
+	if c.clientID == nil && inMsg.Type() != utp.CONNECT {
+		return types.ErrUnauthorized
+	}
+
 	switch inMsg.Type() {
 	// An attempt to connect.
 	case utp.CONNECT:
 		var returnCode uint8
 		m := *inMsg.(*utp.Connect)
 
-		c.insecure = m.InsecureFlag
+		c.insecure.Store(m.InsecureFlag)
+		c.serviceTrusted.Store(false)
 		c.username = string(m.Username)
 		clientID, err := c.onConnect([]byte(m.ClientID))
 		if err != nil {
@@ -105,7 +111,11 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		}
 
 		// Write the ack
-		connack := &utp.ConnectAcknowledge{ReturnCode: returnCode, Epoch: int32(clientID.Epoch()), ConnID: int32(c.connID)}
+		var epoch int32
+		if clientID != nil {
+			epoch = int32(clientID.Epoch())
+		}
+		connack := &utp.ConnectAcknowledge{ReturnCode: returnCode, Epoch: epoch, ConnID: int32(c.connID)}
 		rawAck, err1 := connack.ToBinary()
 		if err1 != nil {
 			return types.ErrServerError
@@ -121,6 +131,12 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			c.sendClientID(clientID.Encode(c.service.mac))
 			return err
 		}
+		if err != nil {
+			// Refused: no session is set up. The client disconnects on the
+			// refusal; any request but another CONNECT closes the connection.
+			c.insecure.Store(false)
+			return nil
+		}
 
 		c.clientID = clientID
 		c.MessageIds.Reset()
@@ -132,7 +148,19 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			batchCountThreshold: int(m.BatchCountThreshold),
 		})
 
+		// A session is its owner's: the client id's. Its key is derived from
+		// the client id, and its row names the owner, so no other client
+		// resumes it, whatever session key it sends.
+		owner := sessionOwner(c.clientID)
 		sessKey := sessionKey(c.clientID, m.SessKey)
+		// While the cluster has nodes older than this one, which find a
+		// session with a session key by the contract and the key alone, the
+		// session is also looked up and kept there, so that a client moving
+		// between old and new nodes keeps it.
+		var legacyKey uint64
+		if m.SessKey != 0 && Globals.Cluster.hasOlderPeers() {
+			legacyKey = legacySessionKey(c.clientID, m.SessKey)
+		}
 
 		// Other nodes may hold the session: its replicas, and the nodes the
 		// client was connected to before.
@@ -141,8 +169,21 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		}
 
 		// Take care of any messages in the store
-		if rawSess, err := store.Session.Get(sessKey); err == nil && len(rawSess) >= 4 {
-			sessID := binary.LittleEndian.Uint32(rawSess[:4])
+		sessID, found, foreign := ownedSession(sessKey, owner, true)
+		keepLegacy := false
+		if legacyKey != 0 {
+			if !found && !m.CleanSessFlag {
+				Globals.Cluster.fetchSession(legacyKey)
+			}
+			// An old node's row names no owner: it is taken, as an old node
+			// takes it, only while old nodes are in the cluster.
+			id, owned, other := ownedSession(legacyKey, owner, true)
+			if !found && owned {
+				sessID, found = id, true
+			}
+			keepLegacy = !other
+		}
+		if found {
 			if !m.CleanSessFlag {
 				c.resume(sessID)
 			} else {
@@ -150,11 +191,15 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			}
 			c.sessID = uid.LID(sessID)
 		}
-		rawSess := make([]byte, 4)
-		binary.LittleEndian.PutUint32(rawSess[0:4], uint32(c.sessID))
-		store.Session.Put(sessKey, rawSess)
+		rawSess := sessionRow(uint32(c.sessID), owner)
+		if !foreign {
+			store.Session.Put(sessKey, rawSess)
+		}
 		if m.SessKey != 0 {
-			store.Session.Put(sessionKey(c.clientID, 0), rawSess)
+			store.Session.Put(owner, rawSess)
+			if keepLegacy {
+				store.Session.Put(legacyKey, rawSess)
+			}
 		}
 	case utp.DISCONNECT:
 		go c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
@@ -321,23 +366,75 @@ func (c *_Conn) writeLoop(ctx context.Context) (err error) {
 
 // sessionKey returns the store key of a connection's session. The key is
 // derived from the client's contract, so a client can never resume the
-// session of another contract. Without a session key from the client, the key
-// is derived from the whole client id rather than its epoch, which only has
-// second resolution and is shared by every client id issued in that second.
+// session of another contract; then from the session's owner, the whole
+// client id, so that no client resumes another's session (it used to be
+// derived from the contract and the client's session key alone, which any
+// client of the contract could send); and last from the session key the
+// client sent, if any. Without a session key, the key is the one earlier
+// versions used.
 // The top bit keeps session keys apart from message log keys.
 func sessionKey(clientID uid.ID, sessKey int32) uint64 {
 	h := fnv.New64a()
 	h.Write(clientID[8:12]) // contract
+	h.Write([]byte{'c'})
+	h.Write(clientID)
 	if sessKey != 0 {
 		var b [5]byte
 		b[0] = 's'
 		binary.LittleEndian.PutUint32(b[1:], uint32(sessKey))
 		h.Write(b[:])
-	} else {
-		h.Write([]byte{'c'})
-		h.Write(clientID)
 	}
 	return h.Sum64() | 1<<63
+}
+
+// legacySessionKey is the key versions up to v0.5.0 gave a session with a
+// session key: derived from the contract and the session key only.
+func legacySessionKey(clientID uid.ID, sessKey int32) uint64 {
+	h := fnv.New64a()
+	h.Write(clientID[8:12]) // contract
+	var b [5]byte
+	b[0] = 's'
+	binary.LittleEndian.PutUint32(b[1:], uint32(sessKey))
+	h.Write(b[:])
+	return h.Sum64() | 1<<63
+}
+
+// sessionOwner identifies the owner of a session, kept in its row: the
+// client id, within its contract. It is also the key of the client's
+// session without a session key.
+func sessionOwner(clientID uid.ID) uint64 {
+	return sessionKey(clientID, 0)
+}
+
+// sessionRowLen is the length of a session row: the session id, and its
+// owner. Rows of versions up to v0.5.0 hold only the session id.
+const sessionRowLen = 12
+
+// sessionRow returns the session row of session sessID owned by owner.
+func sessionRow(sessID uint32, owner uint64) []byte {
+	row := make([]byte, sessionRowLen)
+	binary.LittleEndian.PutUint32(row[0:4], sessID)
+	binary.LittleEndian.PutUint64(row[4:12], owner)
+	return row
+}
+
+// ownedSession reads the session row under key. owned reports a row of
+// owner, or, if unowned is set, a row that names no owner, as versions up to
+// v0.5.0 wrote; foreign reports a row of another owner, which is left alone.
+func ownedSession(key, owner uint64, unowned bool) (sessID uint32, owned, foreign bool) {
+	row, err := store.Session.Get(key)
+	if err != nil || len(row) < 4 {
+		return 0, false, false
+	}
+	if len(row) < sessionRowLen {
+		if !unowned {
+			return 0, false, true
+		}
+	} else if binary.LittleEndian.Uint64(row[4:12]) != owner {
+		log.ErrLogger.Warn().Str("context", "conn.ownedSession").Msg("refused to resume a session of another owner")
+		return 0, false, true
+	}
+	return binary.LittleEndian.Uint32(row[:4]), true, false
 }
 
 // onConnect is a handler for Connect events.
@@ -358,6 +455,19 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 		return clientid, types.ErrInvalidClientID
 	}
 
+	// The insecure flag skips every topic key check, so a client's own flag
+	// is taken only by a server that allows insecure clients. A trusted
+	// service's id has the trust sealed in (uid.AllowService), with or
+	// without the flag.
+	service := clientid.IsService()
+	if c.insecure.Load() && !service && !c.service.allowInsecure.Load() {
+		return nil, types.ErrUnauthorized
+	}
+	if service {
+		c.insecure.Store(true)
+		c.serviceTrusted.Store(true)
+	}
+
 	return clientid, nil
 }
 
@@ -373,8 +483,11 @@ func (c *_Conn) onRelay(relayMsg utp.Relay, req *utp.RelayRequest) *types.Error 
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
+	if security.IsReserved(topic.Topic[:topic.Size]) {
+		return types.ErrForbidden
+	}
 
-	if !c.insecure {
+	if !c.insecure.Load() {
 		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
@@ -420,8 +533,11 @@ func (c *_Conn) onSubscribe(subMsg utp.Subscribe, sub *utp.Subscription) *types.
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
+	if security.IsReserved(topic.Topic[:topic.Size]) {
+		return types.ErrForbidden
+	}
 
-	if !c.insecure {
+	if !c.insecure.Load() {
 		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
@@ -448,8 +564,11 @@ func (c *_Conn) onUnsubscribe(unsubMsg utp.Unsubscribe, sub *utp.Subscription) *
 	if topic.TopicType == security.TopicInvalid {
 		return types.ErrBadRequest
 	}
+	if security.IsReserved(topic.Topic[:topic.Size]) {
+		return types.ErrForbidden
+	}
 
-	if !c.insecure {
+	if !c.insecure.Load() {
 		if _, err := c.onSecureRequest(topic, security.AllowRead); err != nil {
 			return err
 		}
@@ -478,11 +597,19 @@ func (c *_Conn) onPublish(pub utp.Publish) *types.Error {
 
 		// Check whether the key is 'unitdb' which means it's an API request
 		if len(topic.Key) == 6 && string(topic.Key) == "unitdb" {
-			c.onSpecialRequest(topic, pubMsg.Payload)
+			// Answered by the client's own node: a node forwards none, so
+			// one that comes forwarded is dropped, rather than vouch for a
+			// proxied connection.
+			if !pub.IsForwarded {
+				c.onSpecialRequest(topic, pubMsg.Payload)
+			}
 			continue
 		}
+		if security.IsReserved(topic.Topic[:topic.Size]) {
+			return types.ErrForbidden
+		}
 
-		if !c.insecure {
+		if !c.insecure.Load() {
 			wildcard, err := c.onSecureRequest(topic, security.AllowWrite)
 			if err != nil {
 				return err
@@ -611,6 +738,9 @@ func (c *_Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool
 	case requestKeygen:
 		resp, ok = c.onKeyGen(payload)
 		return
+	case requestService:
+		resp, ok = c.onService(payload)
+		return
 	default:
 		return
 	}
@@ -637,8 +767,12 @@ func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 // onKeyGen processes a keygen request.
 func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	// Keys grant access to the whole contract, so only its primary client
-	// may generate them.
-	if !c.clientID.IsPrimary() {
+	// may generate them, or a connection trusted as a service's (a service
+	// client id, or one a service vouched for with unitdb/service), whose
+	// requests skip key checks anyway: a service hands its users keys. Not a
+	// client that only sent the insecure flag: its keys would outlast
+	// insecure mode.
+	if !c.clientID.IsPrimary() && !c.serviceTrusted.Load() {
 		return types.ErrKeyGenForbidden, false
 	}
 
@@ -651,6 +785,9 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	var resp []*types.KeyGenResponse
 	// Use the cipher to generate the key
 	for _, m := range req {
+		if security.IsReserved(m.Topic) {
+			return types.ErrForbidden, false
+		}
 		key, err := c.service.signer.GenerateKey(c.clientID.Contract(), m.Topic, m.Access())
 		if err != nil {
 			switch err {

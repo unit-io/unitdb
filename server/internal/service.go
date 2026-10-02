@@ -18,6 +18,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/signal"
@@ -44,20 +45,23 @@ import (
 
 // _Service is a main struct
 type _Service struct {
-	pid     uint32             // The processid is unique Id for the application
-	mac     *crypto.MAC        // The MAC to use for decoding and encoding keys.
-	signer  *security.Signer   // The signer to issue and verify topic keys.
+	pid    uint32           // The processid is unique Id for the application
+	mac    *crypto.MAC      // The MAC to use for decoding and encoding keys.
+	signer *security.Signer // The signer to issue and verify topic keys.
 	// acceptUnsignedKeys is 1 when unsigned topic keys are accepted (atomic).
 	acceptUnsignedKeys uint32
-	context context.Context    // context for the service
-	config  *config.Config     // The configuration for the service.
-	cancel  context.CancelFunc // cancellation function
-	start   time.Time          // The service start time
-	http    *lp.HttpServer     // The underlying HTTP server.
-	tcp     *lp.TcpServer      // The underlying TCP server.
-	grpc    *lp.GrpcServer     // The underlying GRPC server.
-	meter   *Meter             // The metircs to measure timeseries on message events
-	stats   *stats.Stats
+	// allowInsecure accepts clients that connect with the insecure flag
+	// (allow_insecure); only ever set on a standalone server.
+	allowInsecure atomic.Bool
+	context       context.Context    // context for the service
+	config        *config.Config     // The configuration for the service.
+	cancel        context.CancelFunc // cancellation function
+	start         time.Time          // The service start time
+	http          *lp.HttpServer     // The underlying HTTP server.
+	tcp           *lp.TcpServer      // The underlying TCP server.
+	grpc          *lp.GrpcServer     // The underlying GRPC server.
+	meter         *Meter             // The metircs to measure timeseries on message events
+	stats         *stats.Stats
 
 	// Shutdown.
 	mu        sync.Mutex
@@ -107,6 +111,16 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	}
 	s.signer = security.NewSigner(encryptionKey)
 	s.setAcceptUnsignedKeys(cfg.AcceptUnsignedKeys)
+	if cfg.AllowInsecure {
+		// A cluster would honour an insecure client's flag on every node
+		// its requests are forwarded to, and an older node forwards its
+		// clients' own flag: insecure clients are for a standalone server.
+		if Globals.Cluster != nil {
+			return nil, errors.New("allow_insecure is set, but this node is part of a cluster: a cluster does not accept insecure clients, which skip every topic key check; give trusted services a service client id instead (server/cmd/mintid -service)")
+		}
+		s.allowInsecure.Store(true)
+		log.ErrLogger.Warn().Str("context", "NewService").Msg("allow_insecure is set: clients that connect with the insecure flag skip every topic key check; use it for development only")
+	}
 
 	// Open database connection
 	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).Reset)
@@ -153,7 +167,7 @@ func netListener(addr string) (net.Listener, error) {
 	return net.Listen("tcp", addr)
 }
 
-//Listen starts the service
+// Listen starts the service
 func (s *_Service) Listen() (err error) {
 	defer s.Close()
 	s.hookSignals()
@@ -164,7 +178,7 @@ func (s *_Service) Listen() (err error) {
 	select {}
 }
 
-//listen configures main listerner on specefied address
+// listen configures main listerner on specefied address
 func (s *_Service) listen(addr string) {
 	//Create a new listener
 	log.Info("service.listen", "starting the listner at "+addr)

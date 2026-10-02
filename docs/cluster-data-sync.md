@@ -64,6 +64,22 @@ it does not own to the topic's owner, one topic at a time, over net/rpc
 (`Cluster.Master`). The owner treats the forwarded client as a local session,
 an `rpcConn` keyed by the client node's connection id.
 
+The owner checks a forwarded request's topic key itself, with the client id
+the client's node sends. It skips the check only when the request says the
+connection is a trusted service's (`ClusterSess.Insecure`: a service client
+id, or a connection a service vouched for with `unitdb/service`), and only if
+the sending node advertises the `service` capability: an older node sends
+its client's own CONNECT insecure flag, which no node takes any more. The
+trust is taken per request, since a service may vouch for a connection after
+its first request. A cluster refuses insecure clients, and a node with
+`allow_insecure` refuses to start. Special requests (`unitdb/...`) are
+answered by the client's node and never forwarded; one that arrives
+forwarded is dropped.
+
+Nodes trust each other's requests: the cluster ports have no authentication
+or encryption yet, so bind them to a private network and firewall them to
+the other nodes.
+
 ```
 client ── node C (client's node) ──────────────────── node O (topic owner)
 SUBSCRIBE ─▶ ACK ◀─ (C acknowledges)

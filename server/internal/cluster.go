@@ -322,7 +322,11 @@ type ClusterSess struct {
 	SessID uid.LID
 	// Client ID
 	ClientID uid.ID
-	// Insecure is the client's insecure flag: requests are not key-checked.
+	// Insecure is set for a connection whose requests skip topic key checks.
+	// A node with capService sets it only for a trusted service's connection
+	// (a service client id, or one a service vouched for); an older node
+	// sends its client's own CONNECT flag. So a node takes it only from
+	// peers that advertise capService.
 	Insecure bool
 }
 
@@ -718,7 +722,7 @@ func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
 
 	if reqMsg.ConnGone {
 		// Original session has disconnected. Tear down the local proxied session.
-		if conn != nil {
+		if conn != nil && conn.clnode != nil {
 			conn.stopRPC()
 		}
 		masterLocks.Delete(reqMsg.Conn.ConnID)
@@ -735,10 +739,24 @@ func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
 
 			log.Info("cluster.Master", "new connection request"+fmt.Sprint(reqMsg.Conn.ConnID))
 			conn = Globals.Service.newRpcConn(node, reqMsg.Conn.ConnID, reqMsg.Conn.SessID, reqMsg.Conn.ClientID)
-			// The proxied connection checks keys as the client's own
-			// connection does.
-			conn.insecure = reqMsg.Conn.Insecure
 			go conn.rpcWriteLoop()
+		}
+		if conn.clnode == nil {
+			// The id is of one of this node's own clients, not of a
+			// connection proxied for another node: never act for the peer's
+			// client as this one.
+			log.ErrLogger.Error().Str("context", "cluster.Master").Int64("connid", int64(reqMsg.Conn.ConnID)).Msg("request from " + reqMsg.Node + " for the id of a local connection: dropped")
+			return nil
+		}
+		// The proxied connection skips key checks only for a trusted
+		// service's connection, as the client's node found it. It is taken
+		// per request, since a service may vouch for a connection after it
+		// connects, and only from a peer that advertises capService: an older
+		// node forwards its client's own insecure flag.
+		if n := c.nodes[reqMsg.Node]; n != nil && n.knownToSupport(capService) {
+			conn.insecure.Store(reqMsg.Conn.Insecure)
+		} else {
+			conn.insecure.Store(false)
 		}
 		// connID is the lookup key and clientID was set when the proxied
 		// connection was created; rewriting them per request raced with the
@@ -1003,7 +1021,7 @@ func (c *Cluster) forwardTo(n *ClusterNode, msg lp.MessagePack, conn *_Conn) err
 			ConnID:   conn.connID,
 			SessID:   conn.sessID,
 			ClientID: conn.clientID,
-			Insecure: conn.insecure}}
+			Insecure: conn.insecure.Load()}}
 	switch m := msg.(type) {
 	case *utp.Subscribe:
 		m.IsForwarded = true

@@ -174,7 +174,12 @@ Application Messages can be batched based on request size (in bytes), number of 
 ### Topic Security
 The Client may connect to the Server with a secure mode. If Client connects to the Server with secure mode then the Client must specify security key for Topic to Publish Messages or Subcribe to the Topic. A Security Key for a Topic must be prefix with Topic name using "/" separator. The Security Key must be UTF-8 Encoded String. Server must allow generating Security Key specific to the Topics when a Client makes a successful connection to the Server.
 
-The Client may connect to the Server with Insecure mode then Security Key for Topic to Publish Messages or Sucbribe to the Topic is not required.
+The Client may connect to the Server with Insecure mode then Security Key for Topic to Publish Messages or Sucbribe to the Topic is not required. A Server accepts Insecure mode only if it is configured to (`allow_insecure`, for development, and never in a cluster); otherwise it refuses the CONNECT (see Insecure Flag).
+
+A trusted service's Client ID, which the Server never issues (`server/cmd/mintid -service` does), needs no Security Key either. A Client whose connection a service opened for a user is trusted the same way once it publishes the service's Client ID to `unitdb/service` as `{"client_id": "..."}`; the Server answers `{"status": 200}`, or 403 for a Client ID that is not a service's of the connection's contract.
+
+### Reserved Topics
+A Topic whose first part starts with '$' is reserved for the Server. A Client may not publish, subscribe, unsubscribe, relay or generate a Security Key for it, whatever its mode: the request is refused with status 403.
 
 ### Topic Separator
 The dot ('.') is used to separate Topic and provide a hierarchical structure to the Topic Names. 
@@ -227,6 +232,8 @@ A Server which suported multiple versions of the uTP Protocols uses the version 
 
 #### Insecure Flag
 Insecure Flag determine if security keys are required for publishing or subscribing to Topics. If Client connects with Server using Insecure Flag then security key prefix on a Topic is not required and Client and Server can Publish or Subscribe to a Topic without requiring a secuirty key.
+
+A Server takes the Insecure Flag only if its configuration sets `allow_insecure`, which a cluster node refuses. Otherwise it responds to the CONNECT Message with a CONNACK Message using Return Code 0x04 (Unauthorized), and closes the Network Connection on any further Message but another CONNECT. A trusted service's Client ID is accepted with or without the flag.
 
 #### Client Identifier
 The ClientID identifies the Client to the Server. Each Client connecting to the Server has unique ClientID. the ClientID must be used by Clients and by Servers to identify state that they hold relating to the uTP Session between the Client and the Server.
