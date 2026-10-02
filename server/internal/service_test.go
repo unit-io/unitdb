@@ -432,8 +432,8 @@ func TestConnectAssignsClientID(t *testing.T) {
 	c.send(&utp.Connect{KeepAlive: 30})
 
 	m := c.waitFor("assigned client id", isPublishOn("unitdb/clientid/"))
-	if id := payloadOf(m); len(id) != 52 {
-		t.Fatalf("client id %q has length %d, want 52", id, len(id))
+	if id := payloadOf(m); len(id) != uid.EncodedLenV2 {
+		t.Fatalf("client id %q has length %d, want a v2 id's %d", id, len(id), uid.EncodedLenV2)
 	}
 	// The connection is refused after the client id is sent.
 	c.waitClosed()
@@ -800,11 +800,7 @@ func TestPubSubBetweenTCPAndGRPC(t *testing.T) {
 func TestSessionIsNotSharedAcrossClients(t *testing.T) {
 	// Two unrelated primary client ids issued in the same second.
 	epoch := func(id string) uint32 {
-		cid, err := uid.Decode([]byte(id), Globals.Service.mac)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return cid.Epoch()
+		return openID(t, id).Epoch()
 	}
 	var idA, idB string
 	for {
@@ -1052,12 +1048,14 @@ func TestKeyPermissions(t *testing.T) {
 	}
 }
 
+// TestSignedKeys checks the v1 signed keys keygen issued before v2 ones,
+// which are still taken.
 func TestSignedKeys(t *testing.T) {
 	ownerID := newClientID(t)
 	owner := connectedClient(t, ownerID, false)
-	readKey := owner.keygen("signed.t", "r")
-	if len(readKey) != security.SignedKeyLen {
-		t.Fatalf("keygen returned %q, want a signed key", readKey)
+	readKey, err := Globals.Service.keys.TopicKeyV1(openID(t, ownerID).Contract(), "signed.t", security.AllowRead)
+	if err != nil || len(readKey) != security.SignedKeyLen {
+		t.Fatalf("v1 key %q (%v), want a signed key", readKey, err)
 	}
 	sub := connectedClient(t, owner.secondaryClientID(), false)
 	sub.subscribe(1, readKey+"/signed.t", 0)
@@ -1078,11 +1076,7 @@ func TestSignedKeys(t *testing.T) {
 	publishRejected(2, edited, "edited key", types.ErrUnauthorized.Status)
 
 	// A key minted without the server secret, the way unsigned keys could be.
-	cid, err := uid.Decode([]byte(ownerID), Globals.Service.mac)
-	if err != nil {
-		t.Fatal(err)
-	}
-	minted, _ := security.GenerateKey(cid.Contract(), "signed.t", security.AllowReadWrite)
+	minted, _ := security.GenerateKey(openID(t, ownerID).Contract(), "signed.t", security.AllowReadWrite)
 	publishRejected(3, minted, "unsigned key", types.ErrUnauthorized.Status)
 
 	// Unsigned keys are accepted while the server is configured to.

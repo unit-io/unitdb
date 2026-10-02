@@ -174,6 +174,10 @@ Application Messages can be batched based on request size (in bytes), number of 
 ### Topic Security
 The Client may connect to the Server with a secure mode. If Client connects to the Server with secure mode then the Client must specify security key for Topic to Publish Messages or Subcribe to the Topic. A Security Key for a Topic must be prefix with Topic name using "/" separator. The Security Key must be UTF-8 Encoded String. Server must allow generating Security Key specific to the Topics when a Client makes a successful connection to the Server.
 
+A primary Client generates Security Keys by publishing to `unitdb/keygen` a list of `{"topic": "...", "type": "rw", "ttl": "24h"}`, where type holds `r` (read), `w` (write), `a` (admin) or `o` (owner), and the optional ttl how long the key lasts, as a Go duration; without it the key lasts the Server's `topic_key_ttl`, for ever by default. The Server answers with a list of `{"status": 200, "key": "...", "topic": "..."}`.
+
+The Server issues v2 Security Keys: 48 characters of base64url (`A-Z`, `a-z`, `0-9`, `-`, `_`), none of them the "/" separator. A v2 key's 128-bit tag covers the whole Topic and the contract, so the key opens exactly the Topic, or wildcard pattern, it was issued for, and a key for "..." reads every Topic of its contract. It names the key of the Server's keyring that signed it, has a random uuid, and expires at its ttl: an expired key is refused with status 401. The Server still takes the v1 keys of earlier versions: signed keys of 26 characters, and with `accept_unsigned_keys` unsigned ones of 13. In a cluster with nodes that don't read v2 keys yet, the Server issues v1 signed keys, which don't expire, and refuses a keygen request with a ttl with status 503.
+
 The Client may connect to the Server with Insecure mode then Security Key for Topic to Publish Messages or Sucbribe to the Topic is not required. A Server accepts Insecure mode only if it is configured to (`allow_insecure`, for development, and never in a cluster); otherwise it refuses the CONNECT (see Insecure Flag).
 
 A trusted service's Client ID, which the Server never issues (`server/cmd/mintid -service` does), needs no Security Key either. A Client whose connection a service opened for a user is trusted the same way once it publishes the service's Client ID to `unitdb/service` as `{"client_id": "..."}`; the Server answers `{"status": 200}`, or 403 for a Client ID that is not a service's of the connection's contract.
@@ -240,7 +244,12 @@ The ClientID identifies the Client to the Server. Each Client connecting to the 
 
 The ClientID must be UTF-8 Encoded String as defined in [proto3](https://developers.google.com/protocol-buffers/docs/proto3) doc.
 
-The ClientID is 52 UTF-8 encoded bytes in length, and that contains only the characters. If Server rejects ClientID it respond to the CONNECT Message with a CONNACK Message using Return Code 0x02 (Client Identifier not valid).
+The ClientID is an opaque string the Server issued. The Server issues v2 ClientIDs: 94 characters of base64url (`A-Z`, `a-z`, `0-9`, `-`, `_`), sealed with XChaCha20-Poly1305 under a random nonce, holding the id of the key that sealed them, the contract, the permissions, a random uuid, and when they were issued and expire (`client_id_ttl`, `primary_id_ttl`; never by default). It still takes the v1 ClientIDs of earlier versions: 52 characters of base32. If Server rejects ClientID it respond to the CONNECT Message with a CONNACK Message using Return Code 0x02 (Client Identifier not valid).
+
+A Client that connects without a ClientID, or with one the Server cannot open, is sent a new primary ClientID of a new contract as a Publish Message on `unitdb/clientid/`, after the CONNACK with Return Code 0x02, and the Network Connection is closed. An expired ClientID is refused the same way, without a new ClientID: its Client needs a new one from its primary Client, which requests one by publishing to `unitdb/clientid` and is answered `{"status": 200, "key": "<the ClientID>"}`.
+
+#### Client Identifier renewal
+After a CONNACK with Return Code 0x00, the Server sends the Client a new ClientID as a Publish Message on `unitdb/clientid/`, whose payload is the ClientID, when the Client connected with a v1 ClientID, with a v2 one sealed with a key other than the one the Server issues with (a key being retired), or with one past 80% of its lifetime. The new ClientID is the same ClientID, sealed again: the same contract, permissions and Sessions, and a new expiry. A Client should keep it, and connect with it from then on. In a cluster with nodes that don't read v2 ClientIDs yet, the Server sends none, and issues v1 ClientIDs.
 
 If ClientID sends an empty or invalid ClientID string in the CONNECT Message then the Server responds with a CONNACK Message using Return Code 0x06 (Unauthorized). 
 

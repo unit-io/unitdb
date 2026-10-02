@@ -55,9 +55,14 @@ const (
 	// connection one vouched for with unitdb/service), so the flag can be
 	// taken from it. An older node sends its client's own CONNECT flag.
 	capService = "service"
+	// capV2Keys: the node reads v2 client ids and v2 topic keys. A node
+	// checks the topic key of a request another node forwards, and a client
+	// may connect to any node, so the cluster issues v2 ones only once every
+	// node is known to read them, and v1 ones until then.
+	capV2Keys = "v2keys"
 )
 
-var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService}
+var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys}
 
 // ownCapabilities are what this node can do: all of them, unless the
 // UNITDB_CLUSTER_CAPS environment variable lists fewer ("none" for none), so
@@ -203,6 +208,20 @@ func (c *Cluster) hasOlderPeers() bool {
 		}
 	}
 	return false
+}
+
+// allKnownToSupport reports whether every other node is known to do cap: it
+// told so (see knownToSupport). It is true for a standalone server.
+func (c *Cluster) allKnownToSupport(cap string) bool {
+	if c == nil {
+		return true
+	}
+	for _, n := range c.nodes {
+		if !n.knownToSupport(cap) {
+			return false
+		}
+	}
+	return true
 }
 
 // lacks reports whether err is the node's answer that it cannot do cap, and
