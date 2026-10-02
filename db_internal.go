@@ -101,6 +101,9 @@ type (
 		// entry's topic hash: see delete.
 		deferMu  sync.Mutex
 		deferred map[uint64]uint64
+		// applyMu serializes applyDeferred, so that close's flushDeferred
+		// waits for deletes a sync is applying.
+		applyMu sync.Mutex
 
 		// Close.
 		closeW sync.WaitGroup
@@ -452,21 +455,28 @@ func (db *DB) hasDeferred() bool {
 }
 
 // applyDeferred deletes, from disk, the entries whose delete waited for them
-// to reach it and that have.
+// to reach it and that have. A delete stays waiting until it is applied: close
+// waits for the deletes waiting (flushDeferred), and would otherwise close the
+// DB under one being applied, and its entry would come back on open.
 func (db *DB) applyDeferred() {
+	db.internal.applyMu.Lock()
+	defer db.internal.applyMu.Unlock()
 	db.internal.deferMu.Lock()
 	due := make(map[uint64]uint64)
 	for seq, h := range db.internal.deferred {
 		if db.onDisk(seq) {
 			due[seq] = h
-			delete(db.internal.deferred, seq)
 		}
 	}
 	db.internal.deferMu.Unlock()
 	for seq, h := range due {
 		if err := db.delete(h, seq); err != nil {
 			logger.Error().Err(err).Str("context", "db.applyDeferred").Msg("unable to delete an entry")
+			continue
 		}
+		db.internal.deferMu.Lock()
+		delete(db.internal.deferred, seq)
+		db.internal.deferMu.Unlock()
 	}
 }
 
