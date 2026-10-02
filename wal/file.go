@@ -178,8 +178,14 @@ func (fs *_FileStore) all() []int64 {
 	// 	return files[i].Name() < files[j].Name()
 	// })
 
+	// In the order the logs were written, which recovery replays them in:
+	// a log's file is named by its time ID, for logs written at the same
+	// time.
 	sort.Slice(files[:], func(i, j int) bool {
-		return files[i].ModTime().Before(files[j].ModTime())
+		if !files[i].ModTime().Equal(files[j].ModTime()) {
+			return files[i].ModTime().Before(files[j].ModTime())
+		}
+		return files[i].Name() < files[j].Name()
 	})
 
 	for _, f := range files {

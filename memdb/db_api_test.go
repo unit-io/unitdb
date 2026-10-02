@@ -708,3 +708,64 @@ func TestFlush(t *testing.T) {
 		t.Fatal("Flush on a closed db succeeded")
 	}
 }
+
+// TestDeletesReplayInOrder checks that a reopened DB reads what it read
+// before closing, after deletes and puts of one key. Recovery applied every
+// delete after replaying the whole log, so a key deleted and put again in
+// the same time block came back missing; and a delete whose block was
+// released deleted the key's latest version instead.
+func TestDeletesReplayInOrder(t *testing.T) {
+	const block = 50 * time.Millisecond
+	next := func() { time.Sleep(2 * block) } // into the next time block
+	put := func(t *testing.T, db *DB, v string) {
+		t.Helper()
+		if _, err := db.Put(1, []byte(v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	del := func(t *testing.T, db *DB) {
+		t.Helper()
+		if err := db.Delete(1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		name string
+		ops  func(t *testing.T, db *DB)
+	}{
+		{"put again in the block", func(t *testing.T, db *DB) { put(t, db, "v1"); del(t, db); put(t, db, "v2") }},
+		{"put again in the next block", func(t *testing.T, db *DB) { put(t, db, "v1"); del(t, db); next(); put(t, db, "v2") }},
+		{"deleted in a later block, put again", func(t *testing.T, db *DB) {
+			put(t, db, "v1")
+			next()
+			del(t, db) // empties and releases v1's block
+			next()
+			put(t, db, "v2")
+		}},
+		{"deleted", func(t *testing.T, db *DB) { put(t, db, "v1"); del(t, db) }},
+		{"latest version deleted", func(t *testing.T, db *DB) { put(t, db, "v1"); next(); put(t, db, "v2"); del(t, db) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := []Options{WithLogFilePath(dir), WithTimeBlockInterval(block)}
+			db, err := Open(opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.ops(t, db)
+			want, wantErr := db.Get(1)
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = Open(opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			got, err := db.Get(1)
+			if string(got) != string(want) || (err == nil) != (wantErr == nil) {
+				t.Fatalf("after reopening: %q, %v; before closing: %q, %v", got, err, want, wantErr)
+			}
+		})
+	}
+}
