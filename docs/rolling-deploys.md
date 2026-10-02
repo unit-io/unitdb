@@ -74,6 +74,7 @@ that tests can run a node as an older one.
 | `resync` | sends its clients' subscriptions to a node back in the ring (`Resync`) | skipped |
 | `service` | sets a forwarded connection's `Insecure` only for a trusted service's connection, never for a client's own insecure flag | its `Insecure` is not taken: forwarded requests are key-checked |
 | `v2keys` | reads v2 client ids and v2 topic keys | the other nodes issue v1 ids and keys, and send no renewed ids |
+| `revocations` | holds the security state, what `unitdb/revoke` revoked, and takes it from the others (`Revocations`) | sent none of it: it refuses nothing for being revoked |
 
 ### Upgrading to service ids
 
@@ -146,6 +147,35 @@ The keyring is read once at start. Rotating keys is a rolling restart: give
 every node the new keyring, with the old key as a `read` key, before any
 node issues with the new key, or a node not yet restarted refuses what the
 new key issued; see the README.
+
+### Upgrading to revocation
+
+`unitdb/revoke` revokes a v2 client id or topic key by its uuid, or
+everything a contract issued before now. Every node with `revocations` holds
+what was revoked, and checks it where it opens a client id (CONNECT,
+`unitdb/service`) or checks a topic key; see
+[cluster-data-sync.md](cluster-data-sync.md#security-state-revocation). An
+older node lacks the `Revocations` call: it is sent nothing, answers
+`unitdb/revoke` with status 404, and refuses nothing for being revoked. So in
+a mixed cluster:
+
+- **A revoked client id still connects to an older node**, and its client is
+  served there. Ids are opened only on the client's own node: a node that
+  takes a request another node forwards checks its topic key, not its id.
+- **A revoked topic key is refused** where the client's node or the topic's
+  owner has the state: each checks the key, the client's node before it
+  forwards the request. Only a request whose client's node and topic owner
+  are both older is taken.
+- **`{"all": true}` is refused with status 503** while the cluster issues
+  v1 ids and keys (some node lacks `v2keys`): it would refuse them as soon
+  as they were issued. Revoking a v2 id or key by its uuid is taken.
+
+Nothing stored changes for older nodes: the state is kept under a namespace
+of its own. Once every node runs this version, a node that was older is sent
+the whole state when the others reconnect to it after its restart, and asks
+for it itself as it starts: nothing revoked before is lost. Rolling a node
+back to an older version stops enforcement there, as above; its store keeps
+the state for when it is upgraded again.
 
 ## The first upgrade, from v0.3.0
 

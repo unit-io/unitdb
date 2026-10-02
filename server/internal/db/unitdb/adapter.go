@@ -216,6 +216,11 @@ func (a *adapter) Keys() []uint64 {
 	return unique
 }
 
+// Flush waits for the messages put before it to reach the store's log.
+func (a *adapter) Flush() error {
+	return a.db.Flush()
+}
+
 // DeleteMessage deletes message from memdb store.
 func (a *adapter) DeleteMessage(key uint64) error {
 	return a.deleteVersions(key)

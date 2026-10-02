@@ -48,7 +48,8 @@ type ServiceRequest struct {
 
 // onService takes a service's client id as vouching for the connection,
 // whose requests then skip topic key checks. It answers 200, or 403 for an
-// id that is not a service's of the connection's contract.
+// id that is not a service's of the connection's contract, or that expired
+// or was revoked.
 func (c *_Conn) onService(payload []byte) (interface{}, bool) {
 	var req ServiceRequest
 	if err := json.Unmarshal(payload, &req); err != nil {
@@ -56,6 +57,9 @@ func (c *_Conn) onService(payload []byte) (interface{}, bool) {
 	}
 	id, claims, err := c.service.keys.OpenClientID([]byte(req.ClientID))
 	if err != nil || (claims != nil && claims.Expired(time.Now().Unix())) || !id.IsService() || id.Contract() != c.clientID.Contract() {
+		return types.ErrForbidden, false
+	}
+	if c.service.revocations.refuses(id.Contract(), id.Uuid(), claims.IssuedAtOrZero()) != "" {
 		return types.ErrForbidden, false
 	}
 	c.insecure.Store(true)

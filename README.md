@@ -70,6 +70,16 @@ Since v2 client IDs carry a uuid, two secondary IDs of a contract issued in the 
 
 In a cluster, the server issues v2 IDs and keys once every node runs a version that reads them, and v1 ones until then (see [rolling deploys](docs/rolling-deploys.md)).
 
+### Revocation
+A contract's primary client (a service ID from `mintid -service` is one) revokes its contract's client IDs and topic keys by publishing to `unitdb/revoke`:
+
+- `{"uuid": "<uuid>"}` revokes the v2 client ID or topic key with that uuid, which `unitdb/clientid` and `unitdb/keygen` answer with (`"uuid"`, in decimal); `"until": <unix seconds>` ends the revocation then, for a key or ID that expires anyway.
+- `{"all": true}` revokes everything the contract issued before now, and every v1 ID and key of the contract, which carry no issue time. Issue times are whole seconds, so what is issued in the same second as the request is still taken, and the nodes' clocks should agree.
+
+The server answers `{"status": 200}`, 403 to a client that isn't primary (a connection a service vouched for included), and 400 to a request with nothing to revoke. A revoked or not-before ID is refused at CONNECT with return code 0x02, without a new ID, and on `unitdb/service`; a revoked key is refused with status 401. Connections and subscriptions already open stay until they reconnect or subscribe again. v1 IDs and keys have no uuid: they are revoked only by `"all"`, which a cluster refuses, with status 503, while it still issues v1 ones.
+
+What was revoked is kept in each node's store, and every node of a cluster holds all of it: see [cluster data sync](docs/cluster-data-sync.md#security-state-revocation). A store reset (`"reset": true`) forgets it on that node, which takes it back from the other nodes when it joins them.
+
 Clients publish and subscribe with topic keys, which a primary client generates with a `unitdb/keygen` request. The insecure flag of a client's CONNECT, which skips topic key checks, is refused unless the server's config sets `"allow_insecure": true`, which is for development only and which a cluster node refuses to start with.
 
 A trusted backend, such as an API server acting for its users, needs no topic keys either: give it a service client ID, which only the `mintid` command issues, with the same key as the server:

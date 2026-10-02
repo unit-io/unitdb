@@ -80,4 +80,8 @@ type Adapter interface {
 
 	// Keys performs a query and attempts to fetch all keys.
 	Keys() []uint64
+
+	// Flush waits for the messages put before it to be written to the
+	// store's log, from which they are recovered after a crash.
+	Flush() error
 }

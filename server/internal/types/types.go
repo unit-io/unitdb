@@ -54,6 +54,11 @@ var (
 	// ErrKeyTTLUnavailable refuses a key with a ttl while a node of the
 	// cluster reads no v2 topic keys, the only ones that expire.
 	ErrKeyTTLUnavailable = &Error{ReturnCode: 0x16, Status: 503, Message: "Keys with a ttl are issued once every node of the cluster reads v2 topic keys."}
+	// ErrRevokeAllUnavailable refuses to revoke everything a contract
+	// issued before now while the cluster issues v1 client ids and topic
+	// keys, which carry no issue time: they would be refused as soon as
+	// they were issued.
+	ErrRevokeAllUnavailable = &Error{ReturnCode: 0x17, Status: 503, Message: "Everything a contract issued can be revoked once every node of the cluster reads v2 client ids and topic keys."}
 )
 
 type KeyGenRequest struct {
@@ -87,6 +92,24 @@ type KeyGenResponse struct {
 	Status int    `json:"status"`
 	Key    string `json:"key"`
 	Topic  string `json:"topic"`
+	// Uuid identifies a v2 key, in decimal, to revoke it (unitdb/revoke). A
+	// v1 key has none.
+	Uuid string `json:"uuid,omitempty"`
+}
+
+// RevokeRequest is a unitdb/revoke request: it revokes client ids and topic
+// keys of the requester's contract. Uuid revokes the v2 one with that uuid,
+// in decimal, until Until (unix seconds; 0 for ever). All revokes every one
+// the contract issued before now, and every v1 one.
+type RevokeRequest struct {
+	Uuid  string `json:"uuid,omitempty"`
+	Until int64  `json:"until,omitempty"`
+	All   bool   `json:"all,omitempty"`
+}
+
+// RevokeResponse answers a unitdb/revoke request that was taken.
+type RevokeResponse struct {
+	Status int `json:"status"`
 }
 
 // ServiceResponse answers a unitdb/service request that vouched for the
@@ -98,4 +121,7 @@ type ServiceResponse struct {
 type ClientIdResponse struct {
 	Status   int    `json:"status"`
 	ClientId string `json:"key"`
+	// Uuid identifies a v2 client id, in decimal, to revoke it
+	// (unitdb/revoke). A v1 id has none.
+	Uuid string `json:"uuid,omitempty"`
 }

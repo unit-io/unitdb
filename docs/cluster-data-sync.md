@@ -10,7 +10,9 @@ things in sync:
 
 - **which node owns each topic**: a ring hash every node computes;
 - **which nodes are alive**: a leader's heartbeats;
-- **where each client's subscriptions are held**, as the ring changes.
+- **where each client's subscriptions are held**, as the ring changes;
+- **what was revoked** in each contract (`unitdb/revoke`), which every node
+  holds.
 
 Stored messages and session logs are also replicated to more than one node;
 see [message-log-replication.md](message-log-replication.md).
@@ -131,6 +133,51 @@ topic's owner, or for a wildcard here and on every other node.
   partition, is asked by the others to send its clients' subscriptions again
   when it rejoins: they dropped what they held for it while it was out.
 - Nodes stop the proxied connections of nodes that left the ring.
+
+## Security state: revocation
+
+What `unitdb/revoke` revoked is, per contract, a not-before time and the
+uuids of revoked client ids and topic keys, each until a time or for ever
+(`server/internal/revocation.go`). Every node holds all of it, as it holds
+wildcard subscriptions, and checks it where it opens a client id (CONNECT,
+`unitdb/service`) or checks a topic key: its own clients' requests, and the
+ones other nodes forward to it for topics it owns.
+
+```
+client ── node A ──────────── Revocations{changes} ──────▶ every other node
+revoke  ─▶ merged, stored, answered 200            merged, stored; what changed
+                                                   is sent on to the others
+node B (re)connects to node C:
+           B ── Revocations{whole state, Full} ──▶ C   merged
+           B ◀─ C's whole state ───────────────────    merged
+```
+
+- **States merge whatever their order.** The later not-before time wins, and
+  for a uuid the later end, for ever the latest; a revocation that is over is
+  dropped. Merges commute and repeat harmlessly, so every node ends with the
+  same state however changes arrive, and a change is sent on only by a node
+  it changed, which stops once every node has it.
+- **On change** a node sends what changed to every other node, at once, and
+  each sends on what changed for it: a change reaches a node the first sender
+  could not reach in time, if another did.
+- **A node that reconnects**, or restarts, exchanges the whole state with
+  each node it connects to: the reconnecting node sends its own and is
+  answered with the other's (`Full`). So a node that was down when something
+  was revoked gets it as soon as it is back, from any node, and what it alone
+  held reaches the others. Until then it refuses only what it had stored: a
+  new node, or one whose store was reset, refuses nothing for the moment
+  between taking clients and its first exchange.
+- **Stored** in each node's store under a namespace of its own, as one record
+  of the whole state, written and flushed to the store's log before the
+  revoke is answered, so it survives a crash.
+- **Not-before times are compared with issue times,** both in whole unix
+  seconds, from the clocks of different nodes: keep them in sync.
+- **An older node,** without the `revocations` capability, is sent none of
+  it; see [rolling-deploys.md](rolling-deploys.md#upgrading-to-revocation).
+
+Like the other calls between nodes, `Revocations` is not authenticated: the
+node it names must be one of the cluster's, but anyone who can reach the
+cluster ports can revoke. Firewall them.
 
 ## Shutting down
 

@@ -46,6 +46,9 @@ import (
 type _Service struct {
 	pid  uint32    // The processid is unique Id for the application
 	keys *keys.Set // Issues and reads client ids and topic keys, with the keyring.
+	// revocations is the cluster's security state: what was revoked in each
+	// contract (unitdb/revoke).
+	revocations *revocations
 	// Lifetimes of v2 client ids that are not primary, of primary ones, and
 	// of topic keys whose keygen request gives none; 0 never expires.
 	clientIDTTL, primaryIDTTL, topicKeyTTL time.Duration
@@ -130,6 +133,7 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	if err != nil {
 		log.Fatal("service", "Failed to connect to DB:", err)
 	}
+	s.revocations = loadRevocations()
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
