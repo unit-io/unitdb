@@ -125,6 +125,16 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 		log.ErrLogger.Warn().Str("context", "NewService").Msg("allow_insecure is set: clients that connect with the insecure flag skip every topic key check; use it for development only")
 	}
 
+	// Sealed records are opened whatever encrypt_at_rest says, so that
+	// turning it off leaves the ones sealed while it was on readable. Set
+	// before Open, which reads the topic index.
+	if err := store.SetSealing(s.keys.IssueKeyID(), s.keys.StoreKeys(), cfg.EncryptAtRest); err != nil {
+		return nil, err
+	}
+	if cfg.EncryptAtRest {
+		log.ErrLogger.Info().Str("context", "NewService").Uint8("key", s.keys.IssueKeyID()).Msg("encrypt_at_rest: sealing stored records")
+	}
+
 	// Open database connection
 	err = store.Open(string(s.config.DBPath), string(s.config.StoreConfig), s.config.Store(s.config.StoreConfig).Reset)
 	if err != nil {

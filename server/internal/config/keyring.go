@@ -63,6 +63,8 @@ const (
 	SubkeyClientID = "cid/v2"
 	// SubkeyTopicKey signs v2 topic keys.
 	SubkeyTopicKey = "tkey/v2"
+	// SubkeyStore seals stored records (encrypt_at_rest).
+	SubkeyStore = "store/v1"
 )
 
 // Subkey derives the key's subkey for one use: HKDF-SHA256 with the info

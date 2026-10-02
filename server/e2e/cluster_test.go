@@ -90,6 +90,8 @@ type clusterOpts struct {
 	replicas int
 	// env is added to the environment of the named nodes.
 	env map[string][]string
+	// extra is added to the config of the named nodes, as serverOpts.extra.
+	extra map[string]string
 	// asyncReplication sets async_replication: express publishes and
 	// session changes don't wait for a replica.
 	asyncReplication bool
@@ -138,7 +140,7 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 	}
 	conf, _ := json.Marshal(clusterConf)
 	for _, n := range c.nodes {
-		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
+		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], extra: opts.extra[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
 	}
 	return c
 }
@@ -974,101 +976,108 @@ func TestClusterReplicatedRelay(t *testing.T) {
 func TestClusterSessionFailover(t *testing.T) {
 	for _, role := range []string{"follower", "leader"} {
 		t.Run("kill "+role, func(t *testing.T) {
-			c := startCluster(t, names...)
-			leader, err := c.waitLeader(c.nodes, 10*time.Second)
-			if err != nil {
-				t.Fatal(err)
-			}
-			victim := leader
-			if role == "follower" {
-				victim = followerOf(leader)
-			}
-			dead := c.node(victim)
-			var live []*clusterNode
-			for _, n := range c.nodes {
-				if n != dead {
-					live = append(live, n)
-				}
-			}
-			ctx := context.Background()
-			contract := uint32(0x0c270000)
-			cid := newClientID(contract)
-			sessKey := nextSess()
-			topic := "groups.session." + victim
-			opts := connectOpts{clientID: cid, autoKey: true, sessKey: sessKey, username: "subscriber@e2e.test"}
-
-			s, err := dial(ctx, dead.tcpAddr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.close()
-			s.holdNotify.Store(true)
-			if _, err := s.connectWith(opts); err != nil {
-				t.Fatal(err)
-			}
-			if sid, _ := s.subscribe(1, topic); !s.waitAck(sid, 3*time.Second) {
-				t.Fatal("no subscribe ack")
-			}
-			time.Sleep(150 * time.Millisecond) // let a forwarded subscription settle
-
-			p, err := dial(ctx, live[0].tcpAddr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer p.close()
-			if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
-				t.Fatal(err)
-			}
-			n := 5
-			for i := 0; i < n; i++ {
-				if id, _ := p.publish(1, topic, encodePayload(i, fmt.Sprintf("r%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
-					t.Fatalf("no publish ack for message %d", i)
-				}
-			}
-			// Each NOTIFY left unanswered is a message logged for the session.
-			deadline := time.After(5 * time.Second)
-			for notified := 0; notified < n; {
-				select {
-				case m := <-s.ctrl:
-					if m.FlowControl == utp.NOTIFY {
-						notified++
-					}
-				case <-deadline:
-					t.Fatalf("subscriber on %s was notified of %d of %d messages", victim, notified, n)
-				}
-			}
-			time.Sleep(500 * time.Millisecond) // replication is asynchronous
-
-			dead.stop()
-			s.close()
-			// Allow for failure detection (node_fail_after * heartbeat) and rehash.
-			time.Sleep(4 * time.Second)
-			if _, err := c.waitLeader(live, 10*time.Second); err != nil {
-				t.Fatalf("survivors: %v", err)
-			}
-
-			resumed := opts
-			resumed.resume = true
-			r, err := dial(ctx, live[0].tcpAddr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer r.close()
-			if _, err := r.connectWith(resumed); err != nil {
-				t.Fatal(err)
-			}
-			got, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second)
-			if err != nil {
-				t.Fatalf("session resumed on %s after %s died: %v", live[0].name, victim, err)
-			}
-			for i := 0; i < n; i++ {
-				if want := fmt.Sprintf("r%d", i); got[i] != want {
-					t.Errorf("session resumed on %s: message %d is %q, want %q", live[0].name, i, got[i], want)
-				}
-			}
-			c.assertAlive(t, live, "while resuming a session")
+			sessionFailover(t, clusterOpts{}, role)
 		})
 	}
+}
+
+// sessionFailover runs TestClusterSessionFailover on a cluster started with
+// opts, killing the leader or a follower (role).
+func sessionFailover(t *testing.T, opts clusterOpts, role string) {
+	t.Helper()
+	c := startClusterWith(t, opts, names...)
+	leader, err := c.waitLeader(c.nodes, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := leader
+	if role == "follower" {
+		victim = followerOf(leader)
+	}
+	dead := c.node(victim)
+	var live []*clusterNode
+	for _, n := range c.nodes {
+		if n != dead {
+			live = append(live, n)
+		}
+	}
+	ctx := context.Background()
+	contract := uint32(0x0c270000)
+	cid := newClientID(contract)
+	sessKey := nextSess()
+	topic := "groups.session." + victim
+	copts := connectOpts{clientID: cid, autoKey: true, sessKey: sessKey, username: "subscriber@e2e.test"}
+
+	s, err := dial(ctx, dead.tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	s.holdNotify.Store(true)
+	if _, err := s.connectWith(copts); err != nil {
+		t.Fatal(err)
+	}
+	if sid, _ := s.subscribe(1, topic); !s.waitAck(sid, 3*time.Second) {
+		t.Fatal("no subscribe ack")
+	}
+	time.Sleep(150 * time.Millisecond) // let a forwarded subscription settle
+
+	p, err := dial(ctx, live[0].tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.close()
+	if _, err := p.connectWith(connectOpts{clientID: cid, autoKey: true, sessKey: nextSess(), username: "publisher@e2e.test"}); err != nil {
+		t.Fatal(err)
+	}
+	n := 5
+	for i := 0; i < n; i++ {
+		if id, _ := p.publish(1, topic, encodePayload(i, fmt.Sprintf("r%d", i)), "1h"); !p.waitAck(id, 3*time.Second) {
+			t.Fatalf("no publish ack for message %d", i)
+		}
+	}
+	// Each NOTIFY left unanswered is a message logged for the session.
+	deadline := time.After(5 * time.Second)
+	for notified := 0; notified < n; {
+		select {
+		case m := <-s.ctrl:
+			if m.FlowControl == utp.NOTIFY {
+				notified++
+			}
+		case <-deadline:
+			t.Fatalf("subscriber on %s was notified of %d of %d messages", victim, notified, n)
+		}
+	}
+	time.Sleep(500 * time.Millisecond) // replication is asynchronous
+
+	dead.stop()
+	s.close()
+	// Allow for failure detection (node_fail_after * heartbeat) and rehash.
+	time.Sleep(4 * time.Second)
+	if _, err := c.waitLeader(live, 10*time.Second); err != nil {
+		t.Fatalf("survivors: %v", err)
+	}
+
+	resumed := copts
+	resumed.resume = true
+	r, err := dial(ctx, live[0].tcpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	if _, err := r.connectWith(resumed); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := collectUnique(r, n, 10*time.Second, 3*time.Second)
+	if err != nil {
+		t.Fatalf("session resumed on %s after %s died: %v", live[0].name, victim, err)
+	}
+	for i := 0; i < n; i++ {
+		if want := fmt.Sprintf("r%d", i); got[i] != want {
+			t.Errorf("session resumed on %s: message %d is %q, want %q", live[0].name, i, got[i], want)
+		}
+	}
+	c.assertAlive(t, live, "while resuming a session")
 }
 
 // TestClusterReliablePublishSurvivesCrash publishes reliable messages to a

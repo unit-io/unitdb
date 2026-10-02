@@ -147,6 +147,26 @@ every node the new keyring, with the old key as a `read` key, before any
 node issues with the new key, or a node not yet restarted refuses what the
 new key issued; see the README.
 
+### Turning on encryption at rest
+
+`encrypt_at_rest` changes nothing on the wire, so it needs no capability:
+records are sealed at the store, below everything the cluster sends, and
+what nodes send each other (replicas, hints, session logs and rows, history
+for a rebuild) is the opened record. Each node seals what it stores as it is
+set to, and reads sealed and plain records alike, so:
+
+1. Give every node the same keyring first, as for anything else the keyring
+   does; a node opens sealed records only with keys of its own keyring.
+2. Turn `encrypt_at_rest` on node by node, with a rolling restart. A cluster
+   with it on some nodes and off on others, or with nodes of an earlier
+   version, works: an earlier node stores what it is sent as it is.
+3. Don't roll a node back to a version without `encrypt_at_rest` once it has
+   sealed records: it would read them sealed. Turning it off is not enough,
+   since what was sealed stays sealed.
+
+Rotating the keyring then works as for client ids: keep the old key as a
+`read` key while the store may hold records it sealed.
+
 ## The first upgrade, from v0.3.0
 
 Nodes of v0.3.0 cannot tell what they can do, and teaching the new code
