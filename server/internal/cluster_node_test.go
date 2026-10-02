@@ -86,11 +86,12 @@ func (n *rpcNode) stop() {
 }
 
 func connectedNode(t *testing.T, addr string) *ClusterNode {
-	endpoint, conn, err := dialNode(addr)
+	n := &ClusterNode{name: "peer", address: addr, connected: true, done: make(chan bool, 1)}
+	endpoint, conn, err := n.dial()
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &ClusterNode{name: "peer", address: addr, endpoint: endpoint, conn: conn, connected: true, done: make(chan bool, 1)}
+	n.endpoint, n.conn = endpoint, conn
 	t.Cleanup(func() { n.done <- true; endpoint.Close() })
 	return n
 }

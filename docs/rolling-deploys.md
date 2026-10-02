@@ -73,6 +73,7 @@ that tests can run a node as an older one.
 | `sessions` | takes session changes (`Replicate`'s log), and fetches and drops sessions (`FetchSession`, `ForgetSession`) | skipped |
 | `resync` | sends its clients' subscriptions to a node back in the ring (`Resync`) | skipped |
 | `service` | sets a forwarded connection's `Insecure` only for a trusted service's connection, never for a client's own insecure flag | its `Insecure` is not taken: forwarded requests are key-checked |
+| `tls` | listens for cluster connections over mutual TLS (`cluster_config.tls` is set) | nothing: no call depends on it |
 
 ### Upgrading to service ids
 
@@ -99,6 +100,37 @@ kept there, so that clients moving between old and new nodes keep their
 sessions. Once every node advertises `service`, such old copies are not
 resumed: a client that last connected to an old node with a session key
 starts a new session once.
+
+## Moving a cluster to TLS
+
+A node with `cluster_config.tls` listens on its `tls_addr` beside its plain
+`addr`, and dials a peer over TLS when its config lists the peer's
+`tls_addr`; otherwise it dials the peer's plain `addr`. A node without `tls`
+dials every peer's plain `addr`, whatever its config lists. With
+`tls.require`, a node closes its plain listener and dials only `tls_addr`s.
+So a running cluster moves to TLS in three passes, one node at a time, each
+restart as in an ordinary deploy:
+
+1. **Listen on TLS.** Issue each node a certificate from the cluster's CA,
+   with its node name as a DNS name, for both server and client use. Restart
+   each node with `tls` set (`ca_file`, `cert_file`, `key_file`), its own
+   `tls_addr`, and the `tls_addr` of the nodes moved before it. The nodes
+   not moved yet dial it on its plain `addr`, which it still takes. A node
+   refuses to start with a certificate the CA did not sign or that does not
+   name it, and before a node is restarted with `tls` its peers must not list
+   its `tls_addr`: they would dial a port it does not listen on.
+2. **Dial TLS.** Restart each node whose config lacks another node's
+   `tls_addr` (all but the last moved) with every node's `tls_addr`. Every
+   connection between nodes is then over TLS.
+3. **Require TLS.** Restart each node with `"require": true`. It no longer
+   takes plain connections; the others already dial it over TLS. Its check
+   for a v0.3.0 peer (`Cluster.checkPeers`), which dials plain addresses, is
+   skipped.
+
+Until the last pass the plain ports are open, and serve any caller as
+before: keep them firewalled to the other nodes. To go back, undo the passes
+in reverse order. A node's `tls` capability tells its peers it is on TLS
+(pass 1 done).
 
 ## The first upgrade, from v0.3.0
 

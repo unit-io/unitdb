@@ -142,6 +142,19 @@ type server struct {
 	noWait bool
 	// exited is closed when the current process has exited.
 	exited chan struct{}
+	// confPath is the server's config file, and confWith renders it with
+	// another cluster_config, for setCluster.
+	confPath string
+	confWith func(cluster string) string
+}
+
+// setCluster rewrites the server's config with cluster as its
+// cluster_config, for the next start.
+func (s *server) setCluster(cluster string) {
+	s.t.Helper()
+	if err := os.WriteFile(s.confPath, []byte(s.confWith(cluster)), 0644); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 // watch reaps the current process in the background and closes exited when
@@ -224,7 +237,8 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf := fmt.Sprintf(`{
+	confWith := func(cluster string) string {
+		return fmt.Sprintf(`{
   "listen": "127.0.0.1:%d",
   "grpc_listen": "127.0.0.1:%d",
   "logging_level": %q,
@@ -233,9 +247,10 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
   "encryption_config": {"key": %q, "identifier": "local", "sealed": false, "timestamp": 1522325758},
   "cluster_config": %s,
   "store_config": {"reset": false, "adapters": {"unitdb": {"database": "unitdb", "mem_size": 500000000}}}
-}`, tcpPort, grpcPort, opts.logLevel, opts.allowInsecure, opts.key, opts.cluster)
+}`, tcpPort, grpcPort, opts.logLevel, opts.allowInsecure, opts.key, cluster)
+	}
 	confPath := filepath.Join(binDir, confName)
-	if err := os.WriteFile(confPath, []byte(conf), 0644); err != nil {
+	if err := os.WriteFile(confPath, []byte(confWith(opts.cluster)), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -257,6 +272,8 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 		logs:     logs,
 		env:      opts.env,
 		noWait:   opts.expectExit,
+		confPath: confPath,
+		confWith: confWith,
 	}
 	s.watch()
 	t.Cleanup(func() {
