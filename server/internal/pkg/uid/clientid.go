@@ -31,6 +31,11 @@ type ID []byte
 const (
 	AllowNone   = uint32(0)      // ID has no privileges.
 	AllowMaster = uint32(1 << 0) // ID should be allowed to generate other IDs.
+	// AllowService marks a trusted service's id, such as an API server's
+	// acting for its users: its connections, and the ones it vouches for
+	// with unitdb/service, skip topic key checks. Only server/cmd/mintid
+	// issues it; the server never hands it out.
+	AllowService = uint32(1 << 1)
 
 	encodedLen = 13 // string encoded len
 	rawLen     = 12 // binary raw len
@@ -38,7 +43,17 @@ const (
 
 // IsPrimary gets whether the ID is a primary client Id.
 func (id ID) IsPrimary() bool {
-	return id.Permissions() == AllowMaster
+	return id.HasPermission(AllowMaster)
+}
+
+// HasPermission reports whether the ID has every permission in flag.
+func (id ID) HasPermission(flag uint32) bool {
+	return flag != 0 && id.Permissions()&flag == flag
+}
+
+// IsService gets whether the ID is a trusted service's (AllowService).
+func (id ID) IsService() bool {
+	return id.HasPermission(AllowService)
 }
 
 // Apoch gets the Apoch for the ID
@@ -135,12 +150,44 @@ func Decode(buffer []byte, mac *crypto.MAC) (ID, error) {
 	return ID(buffer), nil
 }
 
-// NewClientID generates a new primary client Id.
-func NewClientID(master uint16) (ID, error) {
-	raw := make([]byte, 4)
-	rand.Read(raw)
+// NewContract returns a random contract from crypto/rand, never 0.
+func NewContract() (uint32, error) {
+	var raw [4]byte
+	for {
+		if _, err := rand.Read(raw[:]); err != nil {
+			return 0, err
+		}
+		if contract := binary.BigEndian.Uint32(raw[:]); contract != 0 {
+			return contract, nil
+		}
+	}
+}
 
-	contract := uint32(binary.BigEndian.Uint32(raw[:4]))
+// MintClientID makes the primary client Id server/cmd/mintid issues: of
+// contract, or of a new contract if contract is 0, and marked as a trusted
+// service's (AllowService) if service is set.
+func MintClientID(contract uint32, service bool) (ID, error) {
+	id, err := NewClientID(1)
+	if err != nil {
+		return ID{}, err
+	}
+	if contract != 0 {
+		id.SetContract(contract)
+	}
+	if service {
+		id.SetPermissions(id.Permissions() | AllowService)
+	}
+	return id, nil
+}
+
+// NewClientID generates a new primary client Id, of a new contract. The
+// contract comes from crypto/rand; a failing source is an error, rather
+// than contract 0.
+func NewClientID(master uint16) (ID, error) {
+	contract, err := NewContract()
+	if err != nil {
+		return ID{}, err
+	}
 
 	id := ID(make([]byte, rawLen))
 	id.SetEpoch(NewApoch())

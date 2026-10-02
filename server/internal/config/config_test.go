@@ -2,9 +2,33 @@ package config
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+
+	jcr "github.com/DisposaBoy/JsonConfigReader"
 )
+
+// TestSampleConfig checks that the sample config reads as the server reads
+// it, and does not allow insecure clients.
+func TestSampleConfig(t *testing.T) {
+	f, err := os.Open("../../unitdb.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var c Config
+	if err := json.NewDecoder(jcr.New(f)).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c.AllowInsecure || c.AcceptUnsignedKeys {
+		t.Errorf("the sample config allows insecure clients (%t) or unsigned keys (%t)", c.AllowInsecure, c.AcceptUnsignedKeys)
+	}
+	var on Config
+	if err := json.Unmarshal([]byte(`{"allow_insecure": true}`), &on); err != nil || !on.AllowInsecure {
+		t.Errorf("allow_insecure is not read: %v", err)
+	}
+}
 
 func TestEncryptionKey(t *testing.T) {
 	const good = "test-only-key-do-not-use-0000000"

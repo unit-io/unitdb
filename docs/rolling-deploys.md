@@ -60,6 +60,46 @@ wait for it to rejoin and hand off its hints. unitdb does not report the
 hint backlog yet, so give it a few heartbeats before the next node. Once every node
 supports a new ring version, the leader switches to it, and the data follows.
 
+## Capabilities
+
+What each capability in a node's pings says it can do
+(`server/internal/cluster_caps.go`). `UNITDB_CLUSTER_CAPS` lists fewer, so
+that tests can run a node as an older one.
+
+| Capability | The node | A peer without it |
+| --- | --- | --- |
+| `replicate` | takes stored messages and hints (`Replicate`), and rebuilds (`RebuildTopics`, `RebuildHistory`) | keeps hints for it until it has it |
+| `deliver` | takes messages for its clients in one call (`Deliver`) | one `Proxy` call per message |
+| `sessions` | takes session changes (`Replicate`'s log), and fetches and drops sessions (`FetchSession`, `ForgetSession`) | skipped |
+| `resync` | sends its clients' subscriptions to a node back in the ring (`Resync`) | skipped |
+| `service` | sets a forwarded connection's `Insecure` only for a trusted service's connection, never for a client's own insecure flag | its `Insecure` is not taken: forwarded requests are key-checked |
+
+### Upgrading to service ids
+
+v0.5.0 nodes forward a client's own CONNECT insecure flag, and take the one
+another node forwards. A node of this version refuses insecure clients unless
+it runs standalone with `allow_insecure`, takes a forwarded connection's trust
+only from peers that advertise `service`, and refuses to start with
+`allow_insecure` in a cluster. So, before the upgrade:
+
+1. Give the clients that connected insecure, such as backends, a service
+   client id (`server/cmd/mintid -service`), or topic keys. Clients that
+   send the insecure flag are refused by every upgraded node.
+2. Upgrade node by node as usual. Delivery between old and new nodes goes on;
+   only a service's request without keys can be refused until both nodes on
+   its path are upgraded: one through an old node, for a topic a new node
+   owns, is key-checked there; and an old node owning the topic takes a
+   connection's trust only from its first forwarded request, so a connection
+   vouched for after that stays key-checked there.
+
+Sessions are now bound to the client id that started them. While a node
+knows of a peer without `service`, it also keeps a session with a client
+session key under the key old nodes find it by, and resumes one an old node
+kept there, so that clients moving between old and new nodes keep their
+sessions. Once every node advertises `service`, such old copies are not
+resumed: a client that last connected to an old node with a session key
+starts a new session once.
+
 ## The first upgrade, from v0.3.0
 
 Nodes of v0.3.0 cannot tell what they can do, and teaching the new code

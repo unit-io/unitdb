@@ -21,17 +21,18 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/proto"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lpnet "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	pbx "github.com/unit-io/unitdb/server/proto"
 	"github.com/unit-io/unitdb/server/utp"
+	"google.golang.org/protobuf/proto"
 )
 
 // mac builds the server's MAC from the shared test key, so the helpers below
@@ -57,6 +58,49 @@ func newClientID(contract uint32) string {
 	// A non-primary id is cached by the server and usable for pub/sub.
 	id.SetPermissions(0)
 	return id.Encode(mac())
+}
+
+// serviceClientID returns a primary client ID for contract marked as a
+// trusted service's, as `mintid -service` issues: its connections need no
+// topic keys.
+func serviceClientID(contract uint32) string {
+	id, err := uid.MintClientID(contract, true)
+	if err != nil {
+		panic(err)
+	}
+	return id.Encode(mac())
+}
+
+// primaryClientID returns a primary client ID for contract, as `mintid`
+// issues.
+func primaryClientID(contract uint32) string {
+	id, err := uid.MintClientID(contract, false)
+	if err != nil {
+		panic(err)
+	}
+	return id.Encode(mac())
+}
+
+// contractOf returns the contract of a client ID minted with the test key.
+func contractOf(clientID string) (uint32, error) {
+	id, err := uid.Decode([]byte(clientID), mac())
+	if err != nil {
+		return 0, err
+	}
+	return id.Contract(), nil
+}
+
+// signer issues signed topic keys as the test servers' keygen does.
+var signer = security.NewSigner([]byte(testKey))
+
+// signedTopicKey mints a signed topic key for contract with the given
+// permissions, as the server's keygen would.
+func signedTopicKey(contract uint32, topic string, permissions uint32) string {
+	k, err := signer.GenerateKey(contract, topic, permissions)
+	if err != nil {
+		panic(err)
+	}
+	return k
 }
 
 // topicKey mints a topic key for contract with the given permissions, as the
@@ -98,6 +142,23 @@ type client struct {
 	// holdNotify, when set, leaves NOTIFYs unanswered, so the server keeps
 	// the messages logged for the session.
 	holdNotify atomic.Bool
+
+	// autoKey and contract are set by connect (see connectOpts.autoKey).
+	autoKey  bool
+	contract uint32
+}
+
+// keyed returns topic as the client sends it: with autoKey, a topic without a
+// key gets a signed read/write key minted for it.
+func (c *client) keyed(topic string) string {
+	if !c.autoKey || strings.Contains(topic, "/") {
+		return topic
+	}
+	name := topic
+	if i := strings.IndexByte(topic, '?'); i >= 0 {
+		name = topic[:i]
+	}
+	return keyed(signedTopicKey(c.contract, name, security.AllowReadWrite), topic)
 }
 
 func dial(ctx context.Context, addr string) (*client, error) {
@@ -237,19 +298,35 @@ func (c *client) close() {
 // connectOpts are the CONNECT fields the tests vary.
 type connectOpts struct {
 	clientID string
+	// insecure sets the CONNECT insecure flag, which a server refuses
+	// unless it allows insecure clients (serverOpts.allowInsecure), and a
+	// cluster always refuses.
 	insecure bool
+	// autoKey keys every topic the client uses without a key with a
+	// read/write key minted for the client id's contract, for tests that
+	// are not about keys.
+	autoKey  bool
 	sessKey  int32
 	username string
 	resume   bool // resume the session instead of starting it clean
 }
 
-// connect sends CONNECT and waits for the acknowledgement.
-func (c *client) connect(clientID string, insecure bool, sessKey int32) (*utp.ConnectAcknowledge, error) {
-	return c.connectWith(connectOpts{clientID: clientID, insecure: insecure, sessKey: sessKey})
+// connect sends CONNECT and waits for the acknowledgement. autoKey keys the
+// topics the client uses (see connectOpts).
+func (c *client) connect(clientID string, autoKey bool, sessKey int32) (*utp.ConnectAcknowledge, error) {
+	return c.connectWith(connectOpts{clientID: clientID, autoKey: autoKey, sessKey: sessKey})
 }
 
 // connectWith sends CONNECT with o and waits for the acknowledgement.
 func (c *client) connectWith(o connectOpts) (*utp.ConnectAcknowledge, error) {
+	c.autoKey = o.autoKey
+	if o.autoKey {
+		contract, err := contractOf(o.clientID)
+		if err != nil {
+			return nil, fmt.Errorf("autoKey: %v", err)
+		}
+		c.contract = contract
+	}
 	m := &utp.Connect{
 		Version:       1,
 		InsecureFlag:  o.insecure,
@@ -286,7 +363,7 @@ func (c *client) publish(mode uint8, topic string, payload []byte, ttl string) (
 	m := &utp.Publish{
 		MessageID:    id,
 		DeliveryMode: mode,
-		Messages:     []*utp.PublishMessage{{Topic: topic, Payload: payload, Ttl: ttl}},
+		Messages:     []*utp.PublishMessage{{Topic: c.keyed(topic), Payload: payload, Ttl: ttl}},
 	}
 	buf, err := m.ToBinary()
 	if err != nil {
@@ -299,7 +376,7 @@ func (c *client) subscribe(mode uint8, topic string) (uint16, error) {
 	id := c.id()
 	m := &utp.Subscribe{
 		MessageID:     id,
-		Subscriptions: []*utp.Subscription{{DeliveryMode: mode, Topic: topic}},
+		Subscriptions: []*utp.Subscription{{DeliveryMode: mode, Topic: c.keyed(topic)}},
 	}
 	buf, err := m.ToBinary()
 	if err != nil {
@@ -312,7 +389,7 @@ func (c *client) unsubscribe(topic string) (uint16, error) {
 	id := c.id()
 	m := &utp.Unsubscribe{
 		MessageID:     id,
-		Subscriptions: []*utp.Subscription{{Topic: topic}},
+		Subscriptions: []*utp.Subscription{{Topic: c.keyed(topic)}},
 	}
 	buf, err := m.ToBinary()
 	if err != nil {
@@ -325,7 +402,7 @@ func (c *client) relay(topic, last string) (uint16, error) {
 	id := c.id()
 	m := &utp.Relay{
 		MessageID:     id,
-		RelayRequests: []*utp.RelayRequest{{Topic: topic, Last: last}},
+		RelayRequests: []*utp.RelayRequest{{Topic: c.keyed(topic), Last: last}},
 	}
 	buf, err := m.ToBinary()
 	if err != nil {

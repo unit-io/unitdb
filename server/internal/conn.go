@@ -39,12 +39,20 @@ import (
 
 type _Conn struct {
 	sync.Mutex
-	socket             net.Conn
-	send               chan lp.MessagePack
-	recv               chan lp.MessagePack
-	pub                chan *utp.Publish
-	stop               chan interface{}
-	insecure           bool           // The insecure flag provided by client will not perform key validation and permissions check on the topic.
+	socket net.Conn
+	send   chan lp.MessagePack
+	recv   chan lp.MessagePack
+	pub    chan *utp.Publish
+	stop   chan interface{}
+	// insecure is set for a connection whose requests skip topic key checks:
+	// a trusted service's, one a service vouched for, or on a standalone
+	// server with allow_insecure, one that sent the insecure flag. On a
+	// connection proxied for another node, it is what that node says, per
+	// request, if the node advertises capService.
+	insecure atomic.Bool
+	// serviceTrusted is set only by service trust (a service client id, or
+	// unitdb/service), never by the insecure flag.
+	serviceTrusted     atomic.Bool
 	username           string         // The username provided by the client during connect.
 	message.MessageIds                // local identifier of messages
 	clientID           uid.ID         // The clientid provided by client during connect or new Id assigned.
