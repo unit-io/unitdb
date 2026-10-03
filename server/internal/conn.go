@@ -260,7 +260,19 @@ func (c *_Conn) subscribe(subMsg utp.Subscribe, topic *security.Topic, sub *utp.
 	deadline := time.Now().Add(forwardRetryFor)
 	for {
 		err := c.reconcile(r, nil)
-		if err == nil || err == errPartialWildcard {
+		if err == nil {
+			break
+		}
+		if err == errPartialWildcard {
+			// Some nodes didn't take the wildcard: one dead until the ring
+			// replaces it, or one that rejected it for now, as one that hasn't
+			// heard this node's capabilities yet does a trusted connection's.
+			// They are tried again (reconcile skips the nodes holding it),
+			// then left to the rebalance.
+			if time.Now().Before(deadline) {
+				time.Sleep(forwardRetry)
+				continue
+			}
 			break
 		}
 		if retryable(err) {

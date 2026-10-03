@@ -428,6 +428,48 @@ func TestServiceTrustedRightAfterStart(t *testing.T) {
 	t.Fatal("a service's subscription made right after the cluster started was never delivered to")
 }
 
+// TestServiceWildcardRightAfterStart checks that a service's wildcard
+// subscription made as soon as the cluster has a leader is held by every
+// node. A node that hadn't heard the subscriber's node's capabilities yet
+// rejected it, and a wildcard some nodes didn't take was left for a
+// rebalance that didn't come: messages on those nodes' topics were lost.
+func TestServiceWildcardRightAfterStart(t *testing.T) {
+	c := startCluster(t, names...)
+	if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	contract := uint32(0x5e41ce04)
+	service := serviceClientID(contract)
+	sub, err := connectTo(t, c.node("three").tcpAddr, connectOpts{clientID: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, _ := sub.subscribe(0, "groups.service.wild...")
+	if !sub.waitAck(sid, 5*time.Second) {
+		t.Fatal("subscribe not acknowledged")
+	}
+	for _, own := range names {
+		topic := topicOwnedBy(own, contract, "groups.service.wild."+own, names...)
+		pub, err := connectTo(t, c.node(own).tcpAddr, connectOpts{clientID: service})
+		if err != nil {
+			t.Fatal(err)
+		}
+		delivered := false
+		deadline := time.Now().Add(5 * time.Second)
+		for i := 0; !delivered && time.Now().Before(deadline); i++ {
+			pub.publish(0, topic, encodePayload(i, fmt.Sprintf("wild-%d", i)), "")
+			if msg, ok := sub.waitPub(200 * time.Millisecond); ok {
+				for _, m := range msg.Messages {
+					delivered = delivered || m.Topic == topic
+				}
+			}
+		}
+		if !delivered {
+			t.Errorf("a wildcard subscription made right after the cluster started: nothing delivered on %s, owned by %s", topic, own)
+		}
+	}
+}
+
 // TestClusterRefusesInsecureClients checks that every node of a cluster
 // refuses a client's insecure flag.
 func TestClusterRefusesInsecureClients(t *testing.T) {
