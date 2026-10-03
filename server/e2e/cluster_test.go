@@ -137,6 +137,10 @@ type clusterOpts struct {
 	// tls is the cluster_config.tls of the named nodes. Their tls_addr is
 	// listed in every node's config.
 	tls map[string]map[string]interface{}
+	// bin is the server binary of the named nodes, as serverOpts.bin.
+	bin map[string]string
+	// logLevel is the logging level of every node, as serverOpts.logLevel.
+	logLevel string
 }
 
 // startClusterWith starts a cluster of the named nodes with failover enabled.
@@ -171,7 +175,7 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 	}
 	c.base = clusterConf
 	for _, n := range c.nodes {
-		n.server = startServerWith(t, serverOpts{cluster: c.conf(opts.tls[n.name], tlsAddrs), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], extra: opts.extra[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
+		n.server = startServerWith(t, serverOpts{cluster: c.conf(opts.tls[n.name], tlsAddrs), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], extra: opts.extra[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure, bin: opts.bin[n.name], logLevel: opts.logLevel})
 	}
 	return c
 }

@@ -56,6 +56,10 @@ type Adapter interface {
 	// last is specified by last duration argument.
 	Get(contract uint32, topic string, last string) ([][]byte, error)
 
+	// GetWithIDs gets the messages stored on contract under topic, as Get
+	// does without last, and the id of each, with which Delete deletes it.
+	GetWithIDs(contract uint32, topic string) (ids, payloads [][]byte, err error)
+
 	// NewID generate messageId that can later used to store and delete message from message store
 	NewID() ([]byte, error)
 

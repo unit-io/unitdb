@@ -195,8 +195,44 @@ set to, and reads sealed and plain records alike, so:
    sealed records: it would read them sealed. Turning it off is not enough,
    since what was sealed stays sealed.
 
+Since v0.7.0 `encrypt_at_rest` is on unless set to `false`: a node upgraded
+from v0.6.0 without it in its config starts sealing (step 2) as it is
+upgraded, so give every node the same keyring first. v0.6.0 opens sealed
+records, so a rollback to it reads them; v0.5.0 and before don't.
+
 Rotating the keyring then works as for client ids: keep the old key as a
 `read` key while the store may hold records it sealed.
+
+### Upgrading from v0.6.0
+
+v0.7.0 keeps the store's own records under `$sys` topics instead of under
+fixed ids (see
+[message-log-replication.md](message-log-replication.md#the-stores-own-records)),
+and turns `encrypt_at_rest` on by default. Neither changes the wire: nodes
+send each other contracts, topics and records, not where they store them, so
+there is no new capability, and a cluster mixing v0.6.0 and v0.7.0 nodes
+delivers, replicates, hands off hints and shares revocations as before.
+
+1. Give every node the same keyring, if it hasn't one; or set
+   `"encrypt_at_rest": false` to keep v0.6.0's behaviour.
+2. Upgrade node by node, as an ordinary deploy. Each node moves what v0.6.0
+   stored (the topic index, replicas, replicated messages' ids, hints, the
+   security state) as it starts, before it takes clients or joins the
+   cluster: the start takes longer in proportion to the replicas stored. A
+   crash during the move leaves the rest to the next start. A node that
+   fails to move them, on an error of the store, refuses to start, rather
+   than serve without them.
+3. Nothing else: the moved records are read where they are now, and the old
+   namespaces are empty.
+
+Rolling a node back to v0.6.0 after it ran v0.7.0: v0.6.0 doesn't read
+what v0.7.0 stored under `$sys` (replicas, hints, the topic index, the
+security state), and keeps no record of it, so the node lacks the replicas
+v0.7.0 stored (the owners still have their messages) and refuses nothing it
+was told was revoked until the other nodes send it the state again on
+reconnect. Rolling every node back loses what was revoked, and the replicas:
+revoke again after it. What v0.6.0 then stores under the old ids is moved
+again at the next upgrade.
 
 ## Moving a cluster to TLS
 

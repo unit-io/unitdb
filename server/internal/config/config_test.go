@@ -24,9 +24,31 @@ func TestSampleConfig(t *testing.T) {
 	if c.AllowInsecure || c.AcceptUnsignedKeys {
 		t.Errorf("the sample config allows insecure clients (%t) or unsigned keys (%t)", c.AllowInsecure, c.AcceptUnsignedKeys)
 	}
+	if !c.SealsAtRest() {
+		t.Error("the sample config does not seal stored records")
+	}
 	var on Config
 	if err := json.Unmarshal([]byte(`{"allow_insecure": true}`), &on); err != nil || !on.AllowInsecure {
 		t.Errorf("allow_insecure is not read: %v", err)
+	}
+}
+
+// TestEncryptAtRestDefault checks that encrypt_at_rest is on unless set to
+// false.
+func TestEncryptAtRestDefault(t *testing.T) {
+	for conf, want := range map[string]bool{
+		`{}`:                         true,
+		`{"encrypt_at_rest": null}`:  true,
+		`{"encrypt_at_rest": true}`:  true,
+		`{"encrypt_at_rest": false}`: false,
+	} {
+		var c Config
+		if err := json.Unmarshal([]byte(conf), &c); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.SealsAtRest(); got != want {
+			t.Errorf("%s: sealing %t, want %t", conf, got, want)
+		}
 	}
 }
 

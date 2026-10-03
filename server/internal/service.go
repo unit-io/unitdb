@@ -131,11 +131,13 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	// Sealed records are opened whatever encrypt_at_rest says, so that
 	// turning it off leaves the ones sealed while it was on readable. Set
 	// before Open, which reads the topic index.
-	if err := store.SetSealing(s.keys.IssueKeyID(), s.keys.StoreKeys(), cfg.EncryptAtRest); err != nil {
+	if err := store.SetSealing(s.keys.IssueKeyID(), s.keys.StoreKeys(), cfg.SealsAtRest()); err != nil {
 		return nil, err
 	}
-	if cfg.EncryptAtRest {
+	if cfg.SealsAtRest() {
 		log.ErrLogger.Info().Str("context", "NewService").Uint8("key", s.keys.IssueKeyID()).Msg("encrypt_at_rest: sealing stored records")
+	} else {
+		log.ErrLogger.Warn().Str("context", "NewService").Msg("encrypt_at_rest is false: stored records are written as they are")
 	}
 
 	// Open database connection
@@ -143,7 +145,13 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	if err != nil {
 		log.Fatal("service", "Failed to connect to DB:", err)
 	}
-	s.revocations = loadRevocations()
+	if s.revocations, err = loadRevocations(); err != nil {
+		return nil, err
+	}
+	// Hints a v0.6.0 node kept, before the cluster hands any off.
+	if err := moveLegacyHints(); err != nil {
+		return nil, err
+	}
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)

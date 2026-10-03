@@ -63,9 +63,10 @@ func atRestMarker(what string) string {
 	return fmt.Sprintf("at-rest-%s-%d-payload", what, time.Now().UnixNano())
 }
 
-// TestEncryptAtRest checks that with encrypt_at_rest a stored payload is not
-// in the data directory, and is still relayed after a restart; and, as a
-// control, that with it off, as by default, the payload is there.
+// TestEncryptAtRest checks that with encrypt_at_rest, set or by default
+// (since v0.7.0), a stored payload is not in the data directory, and is still
+// relayed after a restart; and, as a control, that with it set to false the
+// payload is there.
 func TestEncryptAtRest(t *testing.T) {
 	stored := func(t *testing.T, extra string) (found, relayed bool) {
 		s := startServerWith(t, serverOpts{extra: extra})
@@ -80,22 +81,22 @@ func TestEncryptAtRest(t *testing.T) {
 		}
 		return found, relayFinds(t, standalone(s), cid, topic, marker)
 	}
-	for name, extra := range map[string]string{"off": atRestOff, "by default": ""} {
+	t.Run("off", func(t *testing.T) {
+		if found, relayed := stored(t, atRestOff); !found || !relayed {
+			t.Fatalf("control: payload in the data directory %t, relayed %t; want both", found, relayed)
+		}
+	})
+	for name, extra := range map[string]string{"on": atRestOn, "by default": ""} {
 		t.Run(name, func(t *testing.T) {
-			if found, relayed := stored(t, extra); !found || !relayed {
-				t.Fatalf("control: payload in the data directory %t, relayed %t; want both", found, relayed)
+			found, relayed := stored(t, extra)
+			if found {
+				t.Error("the payload is in the data directory in the clear")
+			}
+			if !relayed {
+				t.Error("the sealed payload was not relayed after a restart")
 			}
 		})
 	}
-	t.Run("on", func(t *testing.T) {
-		found, relayed := stored(t, atRestOn)
-		if found {
-			t.Error("the payload is in the data directory in the clear")
-		}
-		if !relayed {
-			t.Error("the sealed payload was not relayed after a restart")
-		}
-	})
 }
 
 // TestEncryptAtRestTurnedOn turns encrypt_at_rest on for a server that

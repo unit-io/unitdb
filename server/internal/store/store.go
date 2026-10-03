@@ -34,20 +34,15 @@ import (
 	"github.com/unit-io/unitdb/server/utp"
 )
 
+// The store's own records are kept under "$sys" topics (namespaces.go):
+// subscriptions and replicas in their contract's namespace, and hints, the
+// topic index and the ids of replicated messages under contract 0. Messages
+// stored as a replica of their topic's owner are kept apart from the ones
+// stored as the owner, so that a relay can ask for each message from one node
+// only.
 const (
 	// Maximum number of records to return
-	maxResults         = 1024
-	connStoreId uint32 = 4105991048 // hash("connectionstore")
-	// Messages stored as a replica of their topic's owner are kept apart from
-	// the ones stored as the owner, so that a relay can ask for each message
-	// from one node only.
-	replicaStoreId uint32 = 2654435761
-	// Messages kept for a replica that could not take them, until it can.
-	hintStoreId uint32 = 2246822519
-	// The topics this node stores messages for.
-	indexStoreId uint32 = 3266489917
-	// Ids of the replicated messages this node stored as a replica.
-	seenStoreId uint32 = 2860486313
+	maxResults = 1024
 
 	seenTopic = "seen"
 	// Longest a replicated message's id is kept: it only guards against the
@@ -97,6 +92,10 @@ func Open(path, jsonconf string, reset bool) error {
 	}
 	wasEmpty = adp.Count() == 0
 	loadTopics()
+	// Before the node serves: the records a v0.6.0 store kept elsewhere.
+	if err := migrate(); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -169,12 +168,15 @@ type SubscriptionStore struct{}
 // Message is the ancor for storing/retrieving Message objects
 var Subscription SubscriptionStore
 
+// Put stores a subscription to topic, a wildcard one or not, under
+// messageId.
 func (s *SubscriptionStore) Put(contract uint32, messageId []byte, topic string, payload []byte) error {
-	return adp.PutWithID(contract^connStoreId, messageId, topic, payload, "")
+	return adp.PutWithID(contract, messageId, sysTopic(sysSubscriptions, topic), payload, "")
 }
 
+// Get gets the subscriptions that match topic.
 func (s *SubscriptionStore) Get(contract uint32, topic string) (matches [][]byte, err error) {
-	resp, err := adp.Get(contract^connStoreId, topic, "")
+	resp, err := adp.Get(contract, sysTopic(sysSubscriptions, topic), "")
 	for _, payload := range resp {
 		if payload == nil {
 			continue
@@ -190,7 +192,7 @@ func (s *SubscriptionStore) NewID() ([]byte, error) {
 }
 
 func (s *SubscriptionStore) Delete(contract uint32, messageId []byte, topic string) error {
-	return adp.Delete(contract^connStoreId, messageId, topic)
+	return adp.Delete(contract, messageId, sysTopic(sysSubscriptions, topic))
 }
 
 // A stored message starts with a header holding its expiry, as the store gives
@@ -251,7 +253,7 @@ var topics = struct {
 }{seen: make(map[TopicRef]bool)}
 
 func loadTopics() {
-	raw, err := adp.Get(indexStoreId, topicIndexTopic, strconv.Itoa(maxHistory))
+	raw, err := adp.Get(sysContract, sysTopic(sysIndex, topicIndexTopic), strconv.Itoa(maxHistory))
 	if err != nil {
 		log.ErrLogger.Err(err).Str("context", "store.loadTopics")
 		return
@@ -267,6 +269,14 @@ func loadTopics() {
 
 // indexTopic records that this node stores messages for topic.
 func indexTopic(contract uint32, topic string) {
+	if err := addToIndex(contract, topic); err != nil {
+		log.ErrLogger.Err(err).Str("context", "store.indexTopic").Str("topic", topic)
+	}
+}
+
+// addToIndex records that this node stores messages for topic, unless it is
+// recorded already.
+func addToIndex(contract uint32, topic string) error {
 	if i := strings.IndexByte(topic, '?'); i >= 0 {
 		topic = topic[:i]
 	}
@@ -274,16 +284,14 @@ func indexTopic(contract uint32, topic string) {
 	topics.Lock()
 	if topics.seen[ref] {
 		topics.Unlock()
-		return
+		return nil
 	}
 	topics.seen[ref] = true
 	topics.Unlock()
 	b := make([]byte, 4+len(topic))
 	binary.LittleEndian.PutUint32(b[:4], contract)
 	copy(b[4:], topic)
-	if err := adp.Put(indexStoreId, topicIndexTopic, b, ""); err != nil {
-		log.ErrLogger.Err(err).Str("context", "store.indexTopic").Str("topic", topic)
-	}
+	return adp.Put(sysContract, sysTopic(sysIndex, topicIndexTopic), b, "")
 }
 
 // HistoryEntry is a stored message, and its expiry if known.
@@ -319,7 +327,7 @@ func (m *MessageStore) PutReplica(contract uint32, topic string, payload []byte,
 	if expiresAt != 0 {
 		ttl = strconv.FormatInt(expiresAt-now.Unix(), 10)
 	}
-	if err := adp.Put(contract^replicaStoreId, topic, wrap(payload, expiresAt), ttl); err != nil {
+	if err := adp.Put(contract, sysTopic(sysReplicas, topic), wrap(payload, expiresAt), ttl); err != nil {
 		return err
 	}
 	indexTopic(contract, topic)
@@ -343,8 +351,8 @@ func (m *MessageStore) Topics() []TopicRef {
 func (m *MessageStore) History(contract uint32, topic string) ([]HistoryEntry, error) {
 	now := time.Now()
 	var entries []HistoryEntry
-	for _, ns := range []uint32{contract, contract ^ replicaStoreId} {
-		raw, err := adp.Get(ns, topic, strconv.Itoa(maxHistory))
+	for _, at := range storedAt(contract, topic) {
+		raw, err := adp.Get(at.contract, at.topic, strconv.Itoa(maxHistory))
 		if err != nil {
 			return entries, err
 		}
@@ -362,16 +370,26 @@ func (m *MessageStore) History(contract uint32, topic string) ([]HistoryEntry, e
 // GetAll gets the messages stored for the topic, as its owner and as a
 // replica of its owner.
 func (m *MessageStore) GetAll(contract uint32, topic string, last string) ([]*message.Message, error) {
-	matches, err := m.Get(contract, topic, last)
-	if err != nil {
-		return nil, err
+	var all []*message.Message
+	for _, at := range storedAt(contract, topic) {
+		matches, err := m.get(at.contract, at.topic, topic, last)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, matches...)
 	}
-	replicas, err := m.Get(contract^replicaStoreId, topic, last)
-	return append(matches, replicas...), err
+	return all, nil
 }
 
+// Get gets the messages stored for topic as its owner.
 func (m *MessageStore) Get(contract uint32, topic string, last string) (matches []*message.Message, err error) {
-	resp, err := adp.Get(contract, topic, last)
+	return m.get(contract, topic, topic, last)
+}
+
+// get gets the messages stored on contract under storeTopic, as messages on
+// topic.
+func (m *MessageStore) get(contract uint32, storeTopic, topic string, last string) (matches []*message.Message, err error) {
+	resp, err := adp.Get(contract, storeTopic, last)
 	now := time.Now()
 	for _, raw := range resp {
 		payload, expiresAt, known := unwrap(raw)
@@ -399,6 +417,11 @@ var Hint HintStore
 // hintTopic is the topic of the hints for node: a topic part may not hold
 // every character a node name can.
 func hintTopic(node string) string {
+	return sysTopic(sysHints, legacyHintTopic(node))
+}
+
+// legacyHintTopic is the topic v0.6.0 kept the hints for node under.
+func legacyHintTopic(node string) string {
 	return "hints.n" + strconv.FormatUint(uint64(hash.New([]byte(node))), 10)
 }
 
@@ -409,17 +432,17 @@ func (h *HintStore) NewID() ([]byte, error) {
 
 // Put stores a hint for node under id, until ttl if set.
 func (h *HintStore) Put(node string, id, payload []byte, ttl string) error {
-	return adp.PutWithID(hintStoreId, id, hintTopic(node), payload, ttl)
+	return adp.PutWithID(sysContract, id, hintTopic(node), payload, ttl)
 }
 
 // Get gets hints for node, up to the store's query limit.
 func (h *HintStore) Get(node string) ([][]byte, error) {
-	return adp.Get(hintStoreId, hintTopic(node), "")
+	return adp.Get(sysContract, hintTopic(node), "")
 }
 
 // Delete deletes the hint for node stored under id.
 func (h *HintStore) Delete(node string, id []byte) error {
-	return adp.Delete(hintStoreId, id, hintTopic(node))
+	return adp.Delete(sysContract, id, hintTopic(node))
 }
 
 // SeenStore holds the ids of the replicated messages this node stored as a
@@ -441,12 +464,12 @@ func (s *SeenStore) Put(id string, expiresAt int64) error {
 	if ttl <= 0 {
 		return nil
 	}
-	return adp.Put(seenStoreId, seenTopic, []byte(id), strconv.FormatInt(int64(ttl/time.Second)+1, 10))
+	return adp.Put(sysContract, sysTopic(sysSeen, seenTopic), []byte(id), strconv.FormatInt(int64(ttl/time.Second)+1, 10))
 }
 
 // Recent returns up to n ids recorded, newest first.
 func (s *SeenStore) Recent(n int) ([]string, error) {
-	raw, err := adp.Get(seenStoreId, seenTopic, strconv.Itoa(n))
+	raw, err := adp.Get(sysContract, sysTopic(sysSeen, seenTopic), strconv.Itoa(n))
 	ids := make([]string, 0, len(raw))
 	for _, b := range raw {
 		ids = append(ids, string(b))

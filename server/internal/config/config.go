@@ -78,10 +78,12 @@ type Config struct {
 
 	// EncryptAtRest seals every record the server stores (messages,
 	// replicas, hints, sessions and their logs, subscriptions, the topic
-	// index, replicated messages' ids) with a subkey of the keyring's issue
-	// key; off by default. Sealed records are read whether it is on or off,
+	// index, replicated messages' ids, the security state) with a subkey of
+	// the keyring's issue key; on unless set to false (since v0.7.0: off
+	// by default before). Sealed records are read whether it is on or off,
 	// with the key they name, and records stored without it stay readable.
-	EncryptAtRest bool `json:"encrypt_at_rest"`
+	// See SealsAtRest.
+	EncryptAtRest *bool `json:"encrypt_at_rest"`
 
 	// Configs for subsystems
 	Cluster json.RawMessage `json:"cluster_config"`
@@ -113,6 +115,12 @@ type EncryptionConfig struct {
 
 	// timestamp is helpful to determine the latest key in case of keyroll over.
 	Timestamp uint32 `json:"timestamp,omitempty"`
+}
+
+// SealsAtRest reports whether stored records are sealed: encrypt_at_rest,
+// on when it is not set.
+func (c *Config) SealsAtRest() bool {
+	return c.EncryptAtRest == nil || *c.EncryptAtRest
 }
 
 func (c *Config) Encryption(encrConfig json.RawMessage) EncryptionConfig {

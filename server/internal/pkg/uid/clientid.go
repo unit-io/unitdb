@@ -179,14 +179,36 @@ func Decode(buffer []byte, mac *crypto.MAC) (ID, error) {
 	return ID(buffer), nil
 }
 
-// NewContract returns a random contract from crypto/rand, never 0.
+// reservedContracts are the contracts NewContract never draws: 0, which the
+// store keeps the node's own records under; the storage engine's master
+// contract, which it stores contract 0 as; and the fixed ids under which
+// v0.6.0 and before kept the store's own records, which a newer version reads
+// only to move what they hold (store.LegacyStoreIDs).
+var reservedContracts = map[uint32]bool{
+	0:          true,
+	3376684800: true, // the engine's master contract
+	4105991048: true, // hash("connectionstore")
+	2654435761: true,
+	2246822519: true,
+	3266489917: true,
+	2860486313: true,
+	2210380056: true, // hash("securitystore")
+}
+
+// IsReservedContract reports whether contract is one NewContract never draws.
+func IsReservedContract(contract uint32) bool {
+	return reservedContracts[contract]
+}
+
+// NewContract returns a random contract from crypto/rand, never a reserved
+// one (IsReservedContract).
 func NewContract() (uint32, error) {
 	var raw [4]byte
 	for {
 		if _, err := rand.Read(raw[:]); err != nil {
 			return 0, err
 		}
-		if contract := binary.BigEndian.Uint32(raw[:]); contract != 0 {
+		if contract := binary.BigEndian.Uint32(raw[:]); !reservedContracts[contract] {
 			return contract, nil
 		}
 	}

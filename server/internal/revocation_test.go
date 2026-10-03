@@ -308,14 +308,17 @@ func TestRevocationsPersist(t *testing.T) {
 	if raw, _ := store.Security.All(); len(raw) != 2 {
 		t.Fatalf("%d records stored, want 2", len(raw))
 	}
-	r := loadRevocations()
+	r, err := loadRevocations()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r.refuses(contract, 42, uint32(now)) == "" || r.refuses(contract, 1, uint32(now-1)) == "" || r.refuses(contract+1, 43, uint32(now)) == "" {
 		t.Fatalf("read back %v", dump(r.all()))
 	}
 	if raw, _ := store.Security.All(); len(raw) != 1 {
 		t.Fatalf("%d records stored after reading them, want them merged into 1", len(raw))
 	}
-	if again := loadRevocations(); !reflect.DeepEqual(again.all(), r.all()) {
+	if again, err := loadRevocations(); err != nil || !reflect.DeepEqual(again.all(), r.all()) {
 		t.Fatalf("read back %v, want %v", dump(again.all()), dump(r.all()))
 	}
 }

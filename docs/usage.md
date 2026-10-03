@@ -137,6 +137,15 @@ Deleting a message in unitdb is rare and it require additional steps to delete m
 	db.DeleteEntry(entry)
 ```
 
+A message put without an ID is deleted by the ID DB.GetWithIDs() gives with it, as DB.Get() gives messages:
+
+```golang
+	ids, msgs, err := db.GetWithIDs(unitdb.NewQuery(topic))
+	for i := range msgs {
+		db.DeleteEntry(unitdb.NewEntry(topic, nil).WithID(ids[i]))
+	}
+```
+
 #### Topic isolation
 Topic isolation can be achieved using Contract while putting messages into unitdb or querying messages from a topic. Use DB.NewContract() to generate a new Contract and then specify Contract while putting messages using DB.PutEntry() method. Use Contract in the query to get messages from a topic specific to the contract.
 

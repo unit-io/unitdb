@@ -213,6 +213,9 @@ type serverOpts struct {
 	// extra is added to the config's top level object, such as
 	// `"client_id_ttl": "10s",`, with its trailing comma.
 	extra string
+	// bin is the server binary to run, such as an older version's
+	// (oldServerBinary); the one built from this tree if empty.
+	bin string
 }
 
 func startServerWith(t *testing.T, opts serverOpts) *server {
@@ -226,7 +229,10 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	if opts.key == "" {
 		opts.key = testKey
 	}
-	bin := serverBinary(t)
+	bin := opts.bin
+	if bin == "" {
+		bin = serverBinary(t)
+	}
 	binDir := filepath.Dir(bin)
 
 	// The server always resolves -config against the executable's directory,
@@ -282,7 +288,7 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	s.watch()
 	t.Cleanup(func() {
 		s.stop()
-		os.Remove(confPath)
+		os.Remove(s.confPath)
 		os.RemoveAll(dbPath)
 		// A race-built server prints race reports to its own output; fail the
 		// test that exercised it.
@@ -384,4 +390,80 @@ func (s *server) alive() bool {
 func dialContext(ctx context.Context, addr string) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, "tcp", addr)
+}
+
+// switchBinary has the stopped server s run bin from its next start, with
+// the same config and store: an upgrade, or a rollback.
+func (s *server) switchBinary(bin string) {
+	s.t.Helper()
+	b, err := os.ReadFile(s.confPath)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	// The server reads its config from beside its binary.
+	confPath := filepath.Join(filepath.Dir(bin), filepath.Base(s.confPath))
+	if confPath != s.confPath {
+		if err := os.WriteFile(confPath, b, 0644); err != nil {
+			s.t.Fatal(err)
+		}
+		os.Remove(s.confPath)
+		s.confPath = confPath
+	}
+	s.cmd.Args[0] = bin
+}
+
+var oldBuilds sync.Map // tag -> *oldBuild
+
+type oldBuild struct {
+	once sync.Once
+	bin  string
+	err  error
+}
+
+// oldServerBinary builds the server of an older version, tag, from this
+// repository's history, once, and returns its path. UNITDB_OLD_SERVER_BIN
+// names one built already. The test is skipped if it can't be built: no git,
+// or no such tag in a shallow clone.
+func oldServerBinary(t *testing.T, tag string) string {
+	t.Helper()
+	if bin := os.Getenv("UNITDB_OLD_SERVER_BIN"); bin != "" {
+		return bin
+	}
+	v, _ := oldBuilds.LoadOrStore(tag, &oldBuild{})
+	b := v.(*oldBuild)
+	b.once.Do(func() {
+		repo := filepath.Dir(serverSourceDir(t))
+		dir, err := os.MkdirTemp("", "unitdb-e2e-"+tag)
+		if err != nil {
+			b.err = err
+			return
+		}
+		archive := exec.Command("git", "-C", repo, "archive", "--format=tar", "-o", filepath.Join(dir, "src.tar"), tag)
+		if out, err := archive.CombinedOutput(); err != nil {
+			b.err = fmt.Errorf("git archive %s: %v\n%s", tag, err, out)
+			return
+		}
+		src := filepath.Join(dir, "src")
+		if err := os.MkdirAll(src, 0755); err != nil {
+			b.err = err
+			return
+		}
+		if out, err := exec.Command("tar", "-xf", filepath.Join(dir, "src.tar"), "-C", src).CombinedOutput(); err != nil {
+			b.err = fmt.Errorf("untar %s: %v\n%s", tag, err, out)
+			return
+		}
+		bin := filepath.Join(dir, "bin", "unitdb-server")
+		build := exec.Command("go", "build", "-o", bin, ".")
+		build.Dir = filepath.Join(src, "server")
+		build.Env = append(os.Environ(), "GOWORK=off")
+		if out, err := build.CombinedOutput(); err != nil {
+			b.err = fmt.Errorf("build %s: %v\n%s", tag, err, out)
+			return
+		}
+		b.bin = bin
+	})
+	if b.err != nil {
+		t.Skipf("no %s server to run: %v", tag, b.err)
+	}
+	return b.bin
 }
