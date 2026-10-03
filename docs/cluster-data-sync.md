@@ -38,7 +38,11 @@ its messages and delivers them.
   to `ring_version` in `cluster_config`. A switch is a rehash, so
   subscriptions move with the rebalance. Each topic's first holder under the
   old version hands its stored messages to the holders the new version adds
-  (`moveHistory`); relays during that may miss what is not copied yet.
+  (`moveHistory`); relays during that may miss what is not copied yet. A
+  node that leads before it has seen the cluster route by any version, as
+  one restarted after an upgrade can, takes the version its followers
+  report in their pongs as the one the cluster routed by, so it moves its
+  history too when its pings switch them.
 
 ## Membership: leader, heartbeats, rehash
 
