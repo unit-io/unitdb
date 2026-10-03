@@ -33,7 +33,7 @@ import (
 //	sealed: id (12), uuid (8), issued at (4), expires at (4) | tag (16)
 //
 // in base64url without padding: 94 characters of A-Z, a-z, 0-9, '-' and
-// '_', where a v1 id is 52 of base32. The version and the key id are the
+// '_', where a v1 id (refused since v0.7.0) is 52 of base32. The version and the key id are the
 // associated data; nothing else is sent in the clear. The id is the v1 id's
 // 12 bytes, so it holds the permissions (AllowMaster, AllowService) and the
 // contract; the uuid is 0 for an id sealed again from a v1 one.
@@ -60,15 +60,6 @@ type Claims struct {
 	KeyID uint8
 	// IssuedAt and ExpiresAt are unix seconds; ExpiresAt 0 is never.
 	IssuedAt, ExpiresAt uint32
-}
-
-// IssuedAtOrZero returns when the id was issued, in unix seconds, or 0 for
-// c nil: a v1 id's, which carries no issue time.
-func (c *Claims) IssuedAtOrZero() uint32 {
-	if c == nil {
-		return 0
-	}
-	return c.IssuedAt
 }
 
 // Expired reports whether the id has expired at now, in unix seconds.

@@ -54,10 +54,11 @@ type Config struct {
 
 	EncryptionConfig json.RawMessage `json:"encryption_config"`
 
-	// AcceptUnsignedKeys accepts the unsigned topic keys issued before keys
-	// were signed. Unsigned keys can be edited or minted by anyone who knows
-	// a contract, so enable it only while clients move to signed keys.
-	AcceptUnsignedKeys bool `json:"accept_unsigned_keys"`
+	// AcceptUnsignedKeys is read only to refuse it: v0.6.0 and before took
+	// unsigned topic keys with it, which anyone who knows a contract can
+	// make. Since v0.7.0 they are refused, and so is a config that sets it
+	// to true (see CheckRemoved); false is ignored, with a warning.
+	AcceptUnsignedKeys *bool `json:"accept_unsigned_keys,omitempty"`
 
 	// AllowInsecure accepts clients that connect with the insecure flag,
 	// whose requests then skip every topic key check. For development only:
@@ -115,6 +116,19 @@ type EncryptionConfig struct {
 
 	// timestamp is helpful to determine the latest key in case of keyroll over.
 	Timestamp uint32 `json:"timestamp,omitempty"`
+}
+
+// CheckRemoved checks the config for settings that are gone: it returns an
+// error for one the server can't honour any more, and a warning, or "", for
+// one it ignores.
+func (c *Config) CheckRemoved() (warning string, err error) {
+	if c.AcceptUnsignedKeys == nil {
+		return "", nil
+	}
+	if *c.AcceptUnsignedKeys {
+		return "", errors.New("accept_unsigned_keys is set, but unsigned topic keys are refused since v0.7.0, as are v1 signed keys and v1 client ids: give clients v2 keys from unitdb/keygen and v2 client ids (see docs/rolling-deploys.md), then remove accept_unsigned_keys from the config")
+	}
+	return "accept_unsigned_keys is no longer read: unsigned topic keys are refused since v0.7.0; remove it from the config", nil
 }
 
 // SealsAtRest reports whether stored records are sealed: encrypt_at_rest,

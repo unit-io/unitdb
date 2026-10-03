@@ -30,23 +30,12 @@ import (
 	"github.com/unit-io/unitdb/server/internal/keys"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lpnet "github.com/unit-io/unitdb/server/internal/net"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 	pbx "github.com/unit-io/unitdb/server/proto"
 	"github.com/unit-io/unitdb/server/utp"
 	"google.golang.org/protobuf/proto"
 )
-
-// mac builds the server's MAC from the shared test key, so the helpers below
-// mint client IDs and topic keys the server accepts. This uses only exported
-// APIs; it forges nothing the server itself would not issue via keygen.
-func mac() *crypto.MAC {
-	m, err := crypto.New([]byte(testKey))
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
 
 // testKeys are the keys of the test servers' single key, testKey, as the
 // servers have them: they seal v2 client ids and sign v2 topic keys the
@@ -87,10 +76,11 @@ func newClientID(contract uint32) string {
 	return sealV2(secondaryID(contract))
 }
 
-// newClientIDV1 returns a v1 secondary client ID bound to contract, as
-// servers issued before v2 ids.
-func newClientIDV1(contract uint32) string {
-	return secondaryID(contract).Encode(mac())
+// v1ClientID returns a v1 secondary client ID bound to contract, as servers
+// up to v0.6.0 issued them with the test key. Servers refuse it since
+// v0.7.0; mintid -from seals it again as a v2 one.
+func v1ClientID(contract uint32) string {
+	return v1test.ClientID(secondaryID(contract), []byte(testKey))
 }
 
 // serviceClientID returns a primary client ID for contract marked as a
@@ -114,9 +104,8 @@ func primaryClientID(contract uint32) string {
 	return sealV2(id)
 }
 
-// openClientID opens a client ID minted with the test key, of either
-// version; claims are nil for a v1 one.
-func openClientID(clientID string) (uid.ID, *uid.Claims, error) {
+// openClientID opens a v2 client ID minted with the test key.
+func openClientID(clientID string) (uid.ID, uid.Claims, error) {
 	return testKeys.OpenClientID([]byte(clientID))
 }
 
@@ -129,34 +118,23 @@ func contractOf(clientID string) (uint32, error) {
 	return id.Contract(), nil
 }
 
-// signer issues v1 signed topic keys as the test servers' keygen did before
-// v2 keys.
-var signer = security.NewSigner([]byte(testKey))
-
-// signedTopicKey mints a v1 signed topic key for contract with the given
-// permissions, as the server's keygen did before v2 keys.
-func signedTopicKey(contract uint32, topic string, permissions uint32) string {
-	k, err := signer.GenerateKey(contract, topic, permissions)
-	if err != nil {
-		panic(err)
-	}
-	return k
+// v1SignedTopicKey mints a v1 signed topic key for contract with the given
+// permissions, as the test servers' keygen did up to v0.6.0. Servers refuse
+// it since v0.7.0.
+func v1SignedTopicKey(contract uint32, topic string, permissions uint32) string {
+	return v1test.SignedTopicKey([]byte(testKey), contract, topic, permissions)
 }
 
-// topicKeyV2 mints a v2 topic key for contract with the given permissions,
+// unsignedTopicKey mints an unsigned topic key for contract, as servers up
+// to v0.6.0 took with accept_unsigned_keys. Servers refuse it since v0.7.0.
+func unsignedTopicKey(contract uint32, topic string, permissions uint32) string {
+	return v1test.UnsignedTopicKey(contract, topic, permissions)
+}
+
+// topicKey mints a v2 topic key for contract with the given permissions,
 // that never expires, as the server's keygen does.
-func topicKeyV2(contract uint32, topic string, permissions uint32) string {
-	k, err := testKeys.TopicKey(contract, topic, permissions, 0)
-	if err != nil {
-		panic(err)
-	}
-	return k
-}
-
-// topicKey mints an unsigned topic key for contract with the given permissions, as the
-// server's keygen would.
 func topicKey(contract uint32, topic string, permissions uint32) string {
-	k, err := security.GenerateKey(contract, topic, permissions)
+	k, err := testKeys.TopicKey(contract, topic, permissions, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -199,7 +177,7 @@ type client struct {
 }
 
 // keyed returns topic as the client sends it: with autoKey, a topic without a
-// key gets a signed read/write key minted for it.
+// key gets a v2 read/write key minted for it.
 func (c *client) keyed(topic string) string {
 	if !c.autoKey || strings.Contains(topic, "/") {
 		return topic
@@ -208,7 +186,7 @@ func (c *client) keyed(topic string) string {
 	if i := strings.IndexByte(topic, '?'); i >= 0 {
 		name = topic[:i]
 	}
-	return keyed(signedTopicKey(c.contract, name, security.AllowReadWrite), topic)
+	return keyed(topicKey(c.contract, name, security.AllowReadWrite), topic)
 }
 
 func dial(ctx context.Context, addr string) (*client, error) {

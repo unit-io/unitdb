@@ -22,6 +22,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/unit-io/unitdb/server/internal/pkg/log"
 )
 
 // Nodes of different versions can run in one cluster: each node tells the
@@ -55,10 +57,12 @@ const (
 	// connection one vouched for with unitdb/service), so the flag can be
 	// taken from it. An older node sends its client's own CONNECT flag.
 	capService = "service"
-	// capV2Keys: the node reads v2 client ids and v2 topic keys. A node
-	// checks the topic key of a request another node forwards, and a client
-	// may connect to any node, so the cluster issues v2 ones only once every
-	// node is known to read them, and v1 ones until then.
+	// capV2Keys: the node reads v2 client ids and v2 topic keys. A v0.6.0
+	// node issues v2 ones only once every other node is known to have it,
+	// and v1 ones until then, so it is still sent although no call depends
+	// on it: since v0.7.0 a node issues and reads v2 ones only. A node
+	// without it (v0.5.0 or before) can't serve a v0.7.0 node's clients, nor
+	// take its keys: it is warned of (warnV1Peer).
 	capV2Keys = "v2keys"
 	// capTLS: the node listens for cluster connections over mutual TLS. It
 	// is not in allCapabilities: a node has it when cluster_config.tls is
@@ -157,8 +161,32 @@ type peerCapabilities struct {
 func (n *ClusterNode) setCapabilities(nc NodeCapabilities) {
 	n.caps.mu.Lock()
 	defer n.caps.mu.Unlock()
+	if n.caps.known == nil || hasCap(n.caps.known.Capabilities, capV2Keys) {
+		warnV1Peer(n.name, nc)
+	}
 	n.caps.known = &nc
 	n.caps.missing = nil
+}
+
+// hasCap reports whether caps holds cap.
+func hasCap(caps []string, cap string) bool {
+	for _, c := range caps {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// warnV1Peer warns, when node first tells it can't do capV2Keys, that the
+// node reads no v2 client ids or topic keys, the only ones this node issues
+// and reads: such a node runs v0.5.0 or before, and must be upgraded to
+// v0.6.0 before the cluster moves to v0.7.0 (docs/rolling-deploys.md).
+func warnV1Peer(node string, nc NodeCapabilities) {
+	if hasCap(nc.Capabilities, capV2Keys) {
+		return
+	}
+	log.ErrLogger.Warn().Str("context", "cluster").Str("node", node).Msg("the node reads no v2 client ids or topic keys, the only ones this node issues and takes: it runs v0.5.0 or before; upgrade it to v0.6.0 first, then to v0.7.0")
 }
 
 // capabilities returns what the node told it can do, if it did.
@@ -220,20 +248,6 @@ func (c *Cluster) hasOlderPeers() bool {
 		}
 	}
 	return false
-}
-
-// allKnownToSupport reports whether every other node is known to do cap: it
-// told so (see knownToSupport). It is true for a standalone server.
-func (c *Cluster) allKnownToSupport(cap string) bool {
-	if c == nil {
-		return true
-	}
-	for _, n := range c.nodes {
-		if !n.knownToSupport(cap) {
-			return false
-		}
-	}
-	return true
 }
 
 // hasNow records that the node can do cap after all, as a call of it the

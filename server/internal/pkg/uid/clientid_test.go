@@ -5,18 +5,21 @@ import (
 	"testing"
 
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 )
+
+var testKey = []byte("test-only-key-do-not-use-0000000")
 
 func newMAC(t *testing.T) *crypto.MAC {
 	t.Helper()
-	mac, err := crypto.New([]byte("test-only-key-do-not-use-0000000"))
+	mac, err := crypto.New(testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return mac
 }
 
-func TestClientIDEncodeDecode(t *testing.T) {
+func TestClientIDEncodeDecodeV1(t *testing.T) {
 	mac := newMAC(t)
 	id, err := NewClientID(1)
 	if err != nil {
@@ -26,13 +29,13 @@ func TestClientIDEncodeDecode(t *testing.T) {
 		t.Fatal("new client id must be primary")
 	}
 
-	encoded := id.Encode(mac)
+	encoded := v1test.ClientID(id, testKey)
 	if len(encoded) != 52 {
 		t.Fatalf("encoded length %d, want 52", len(encoded))
 	}
 
 	// Decode works in place, so hand it a copy.
-	decoded, err := Decode([]byte(encoded), mac)
+	decoded, err := DecodeV1([]byte(encoded), mac)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +46,14 @@ func TestClientIDEncodeDecode(t *testing.T) {
 
 func TestClientIDDecodeInvalid(t *testing.T) {
 	mac := newMAC(t)
-	if _, err := Decode([]byte("too-short"), mac); err == nil {
+	if _, err := DecodeV1([]byte("too-short"), mac); err == nil {
 		t.Fatal("expected error for short client id")
 	}
 
 	id, _ := NewClientID(1)
-	encoded := []byte(id.Encode(mac))
+	encoded := []byte(v1test.ClientID(id, testKey))
 	encoded[20] ^= 0x01
-	if _, err := Decode(encoded, mac); err == nil {
+	if _, err := DecodeV1(encoded, mac); err == nil {
 		t.Fatal("expected error for tampered client id")
 	}
 
@@ -58,7 +61,7 @@ func TestClientIDDecodeInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Decode([]byte(id.Encode(mac)), other); err == nil {
+	if _, err := DecodeV1([]byte(v1test.ClientID(id, testKey)), other); err == nil {
 		t.Fatal("expected error for client id encoded with another key")
 	}
 }
@@ -107,7 +110,7 @@ func TestServicePermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	back, err := Decode([]byte(service.Encode(mac)), mac)
+	back, err := DecodeV1([]byte(v1test.ClientID(service, testKey)), mac)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +172,9 @@ func TestNewLIDIsUnique(t *testing.T) {
 	}
 }
 
-// TestClientIDEncodingIsStable checks that client IDs encode as they did in
-// v0.3, with the same key: IDs already issued must stay valid. The expected
-// values were produced by v0.3's code.
+// TestClientIDEncodingIsStable checks that a v1 client ID, as v0.3 sealed
+// it, still opens: mintid -from seals such ids again as v2 ones. The
+// expected values were produced by v0.3's code.
 func TestClientIDEncodingIsStable(t *testing.T) {
 	mac, err := crypto.New([]byte("test-only-key-do-not-use-0000000"))
 	if err != nil {
@@ -186,10 +189,7 @@ func TestClientIDEncodingIsStable(t *testing.T) {
 		t.Fatalf("raw ID %s", raw)
 	}
 	const encoded = "AEBAEBUTQJGYWRbOFeTVTSIZIMcfPGQGQQSbaLAHEeOOCUFXHUPQ"
-	if got := id.Encode(mac); got != encoded {
-		t.Fatalf("Encode = %s, want %s", got, encoded)
-	}
-	back, err := Decode([]byte(encoded), mac)
+	back, err := DecodeV1([]byte(encoded), mac)
 	if err != nil {
 		t.Fatal(err)
 	}

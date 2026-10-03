@@ -22,7 +22,22 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"strings"
+)
+
+// Topic key errors.
+var (
+	ErrInvalidKey       = errors.New("Key provided is invalid")
+	ErrInvalidSignature = errors.New("Key signature is invalid")
+)
+
+// V1KeyLen and UnsignedKeyLen are the lengths of a v1 signed topic key and
+// of an unsigned one, which servers up to v0.6.0 took. They are refused
+// since v0.7.0: the lengths only tell a client why.
+const (
+	V1KeyLen       = 26
+	UnsignedKeyLen = encodedLen
 )
 
 // A v2 topic key carries no hash of its topic: its tag covers the whole topic
@@ -33,12 +48,13 @@ import (
 //	issued at (4) | expires at (4) | tag (16)
 //
 // in base64url without padding: 48 characters of A-Z, a-z, 0-9, '-' and
-// '_', none of them the '/' that separates a key from its topic. A v1
-// signed key is 26 characters, an unsigned one 13. The tag is HMAC-SHA256,
+// '_', none of them the '/' that separates a key from its topic. (A v1
+// signed key was 26 characters, an unsigned one 13; neither is taken since
+// v0.7.0.) The tag is HMAC-SHA256,
 // under the signer's key, of a label, the contract, the bytes before it, and
 // the topic's length and bytes, cut to 16 bytes.
 //
-// As a v1 key for "..." does, a v2 key issued for "..." opens every topic of
+// As a v1 key for "..." did, a v2 key issued for "..." opens every topic of
 // its contract, to read: it has flagAnyTopic.
 const (
 	versionV2    = 0x02

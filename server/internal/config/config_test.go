@@ -21,8 +21,8 @@ func TestSampleConfig(t *testing.T) {
 	if err := json.NewDecoder(jcr.New(f)).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	if c.AllowInsecure || c.AcceptUnsignedKeys {
-		t.Errorf("the sample config allows insecure clients (%t) or unsigned keys (%t)", c.AllowInsecure, c.AcceptUnsignedKeys)
+	if c.AllowInsecure || c.AcceptUnsignedKeys != nil {
+		t.Errorf("the sample config allows insecure clients (%t) or sets accept_unsigned_keys", c.AllowInsecure)
 	}
 	if !c.SealsAtRest() {
 		t.Error("the sample config does not seal stored records")
@@ -30,6 +30,30 @@ func TestSampleConfig(t *testing.T) {
 	var on Config
 	if err := json.Unmarshal([]byte(`{"allow_insecure": true}`), &on); err != nil || !on.AllowInsecure {
 		t.Errorf("allow_insecure is not read: %v", err)
+	}
+}
+
+// TestAcceptUnsignedKeysRemoved checks that accept_unsigned_keys, gone
+// since v0.7.0, stops the server when set to true, and is ignored with a
+// warning when set to false.
+func TestAcceptUnsignedKeysRemoved(t *testing.T) {
+	for conf, want := range map[string]struct{ warn, err bool }{
+		`{}`:                              {false, false},
+		`{"accept_unsigned_keys": null}`:  {false, false},
+		`{"accept_unsigned_keys": false}`: {true, false},
+		`{"accept_unsigned_keys": true}`:  {false, true},
+	} {
+		var c Config
+		if err := json.Unmarshal([]byte(conf), &c); err != nil {
+			t.Fatal(err)
+		}
+		warning, err := c.CheckRemoved()
+		if (warning != "") != want.warn || (err != nil) != want.err {
+			t.Errorf("%s: warning %q, error %v", conf, warning, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "accept_unsigned_keys") {
+			t.Errorf("%s: the error does not name the setting: %v", conf, err)
+		}
 	}
 }
 

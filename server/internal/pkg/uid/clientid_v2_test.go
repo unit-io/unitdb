@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/unit-io/unitdb/server/internal/v1test"
 )
 
 func testSealers(t *testing.T) (map[uint8]*Sealer, func(uint8) *Sealer) {
@@ -64,7 +66,7 @@ func TestClientIDV2FromV1(t *testing.T) {
 	sealers, lookup := testSealers(t)
 	mac := newMAC(t)
 	id, _ := NewSecondaryClientID(ID(make([]byte, rawLen)))
-	v1, err := Decode([]byte(id.Encode(mac)), mac)
+	v1, err := DecodeV1([]byte(v1test.ClientID(id, testKey)), mac)
 	if err != nil {
 		t.Fatal(err)
 	}

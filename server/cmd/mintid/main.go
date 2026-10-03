@@ -17,7 +17,7 @@
 // Command mintid issues a primary client id, sealed with the server's issue
 // key as the server seals v2 client ids.
 //
-//	mintid [-config unitdb.conf] [-contract N] [-service] [-ttl 0] [-v1]
+//	mintid [-config unitdb.conf] [-contract N] [-service] [-ttl 0]
 //	mintid [-config unitdb.conf] -from ID [-ttl 0]
 //
 // The keyring is read as the server reads it: UNITDB_KEYRING, else the
@@ -32,13 +32,14 @@
 // The server never issues such ids: give them only to servers, never to
 // clients or devices.
 //
-// -from seals ID, a client id of either version that a key of the keyring
-// sealed, again as a v2 id with the issue key: the same id, so the same
-// contract, permissions, uuid (none for a v1 id) and sessions. Use it to
-// move a service off a v1 id, or off a key being retired.
+// -from seals ID, a client id that a key of the keyring sealed, again as a
+// v2 id with the issue key: the same id, so the same contract, permissions,
+// uuid and sessions. Use it to move a service off a key being retired, or off
+// a v1 id: the server refuses v1 ids since v0.7.0, and -from is the only
+// place one is still read. A v1 id has no uuid, nor does the v2 id sealed
+// from it; it is opened with each key of the keyring, as v1 ids name none.
 //
-// -v1 mints a v1 id, which never expires, for a cluster with nodes older
-// than v2 client ids.
+// mintid issues v2 ids only.
 package main
 
 import (
@@ -69,8 +70,7 @@ func run(args []string, out io.Writer) error {
 	contract := flags.Uint("contract", 0, "the contract; a new, random one if 0")
 	service := flags.Bool("service", false, "a trusted service's id, whose connections need no topic keys")
 	ttl := flags.Duration("ttl", 0, "how long the id lasts; 0 never expires")
-	from := flags.String("from", "", "a client id to seal again as a v2 one, with the same contract, permissions and uuid")
-	v1 := flags.Bool("v1", false, "mint a v1 id, for a cluster with nodes older than v2 client ids")
+	from := flags.String("from", "", "a client id, v2 or v1, to seal again as a v2 one, with the same contract, permissions and uuid")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -83,11 +83,8 @@ func run(args []string, out io.Writer) error {
 	if *ttl < 0 {
 		return fmt.Errorf("-ttl %s is negative", *ttl)
 	}
-	if *from != "" && (*contract != 0 || *service || *v1) {
-		return fmt.Errorf("-from keeps the id's contract and permissions: it takes neither -contract, -service nor -v1")
-	}
-	if *v1 && *ttl != 0 {
-		return fmt.Errorf("a v1 id can't expire: -v1 takes no -ttl")
+	if *from != "" && (*contract != 0 || *service) {
+		return fmt.Errorf("-from keeps the id's contract and permissions: it takes neither -contract nor -service")
 	}
 
 	var cfg config.Config
@@ -111,37 +108,36 @@ func run(args []string, out io.Writer) error {
 	}
 
 	var id uid.ID
-	if *from != "" {
-		var claims *uid.Claims
+	switch {
+	case *from == "":
+		if id, err = uid.MintClientID(uint32(*contract), *service); err != nil {
+			return err
+		}
+	case len(*from) == uid.EncodedLenV1:
+		// A v1 id names no key and carries no expiry.
+		if id, err = keys.OpenV1ClientID(kr, []byte(*from)); err != nil {
+			return fmt.Errorf("-from: the v1 id does not open with any key of the keyring")
+		}
+	default:
+		var claims uid.Claims
 		if id, claims, err = set.OpenClientID([]byte(*from)); err != nil {
 			return fmt.Errorf("-from: the id does not open with any key of the keyring")
 		}
-		if claims != nil && claims.Expired(time.Now().Unix()) {
+		if claims.Expired(time.Now().Unix()) {
 			return fmt.Errorf("-from: the id has expired")
 		}
-	} else if id, err = uid.MintClientID(uint32(*contract), *service); err != nil {
-		return err
 	}
 
-	var text string
-	var expires string
-	if *v1 {
-		text, expires = set.EncodeClientIDV1(id), "never"
-	} else {
-		issuedAt, expiresAt := keys.Times(time.Now(), *ttl)
-		if text, err = set.SealClientIDAt(id, issuedAt, expiresAt); err != nil {
-			return err
-		}
-		expires = "never"
-		if expiresAt != 0 {
-			expires = time.Unix(int64(expiresAt), 0).UTC().Format(time.RFC3339)
-		}
+	issuedAt, expiresAt := keys.Times(time.Now(), *ttl)
+	text, err := set.SealClientIDAt(id, issuedAt, expiresAt)
+	if err != nil {
+		return err
 	}
-	version, uuid := 2, id.Uuid()
-	if *v1 {
-		version, uuid = 1, 0 // a v1 id carries no uuid
+	expires := "never"
+	if expiresAt != 0 {
+		expires = time.Unix(int64(expiresAt), 0).UTC().Format(time.RFC3339)
 	}
 	_, err = fmt.Fprintf(out, "client id: %s\nversion:   %d\ncontract:  %d\nservice:   %t\nuuid:      %d\nkey id:    %d\nexpires:   %s\n",
-		text, version, id.Contract(), id.IsService(), uuid, set.IssueKeyID(), expires)
+		text, 2, id.Contract(), id.IsService(), id.Uuid(), set.IssueKeyID(), expires)
 	return err
 }

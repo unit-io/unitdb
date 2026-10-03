@@ -56,7 +56,7 @@ type _Conn struct {
 	username           string         // The username provided by the client during connect.
 	message.MessageIds                // local identifier of messages
 	clientID           uid.ID         // The clientid provided by client during connect or new Id assigned.
-	idClaims           *uid.Claims    // What a v2 client id said of itself; nil for a v1 id.
+	idClaims           uid.Claims     // What the client id said of itself.
 	connID             uid.LID        // The locally unique id of the connection.
 	sessID             uid.LID        // The locally unique session id of the connection.
 	service            *_Service      // The service for this connection.

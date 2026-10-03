@@ -51,14 +51,19 @@ var (
 	ErrTargetTooLong     = &Error{ReturnCode: 0x13, Status: 400, Message: "Topic can not have more than 23 parts."}
 	ErrNotImplemented    = &Error{ReturnCode: 0x14, Status: 501, Message: "The server does not recognize the request method."}
 	ErrKeyGenForbidden   = &Error{ReturnCode: 0x15, Status: 403, Message: "Unacceptable identifier, use the primary client Id to generate keys."}
-	// ErrKeyTTLUnavailable refuses a key with a ttl while a node of the
-	// cluster reads no v2 topic keys, the only ones that expire.
-	ErrKeyTTLUnavailable = &Error{ReturnCode: 0x16, Status: 503, Message: "Keys with a ttl are issued once every node of the cluster reads v2 topic keys."}
-	// ErrRevokeAllUnavailable refuses to revoke everything a contract
-	// issued before now while the cluster issues v1 client ids and topic
-	// keys, which carry no issue time: they would be refused as soon as
-	// they were issued.
-	ErrRevokeAllUnavailable = &Error{ReturnCode: 0x17, Status: 503, Message: "Everything a contract issued can be revoked once every node of the cluster reads v2 client ids and topic keys."}
+	// Return codes 0x16 and 0x17 were v0.6.0's refusals of a key with a ttl,
+	// and of revoking everything a contract issued, while a node of the
+	// cluster read no v2 ids and keys; since v0.7.0 the server issues v2
+	// ones only, and refuses neither.
+
+	// ErrV1ClientID refuses a v1 client id at CONNECT (the return code of
+	// ErrInvalidClientID), without sending a new id: the id's owner seals
+	// it again as a v2 id with the same contract (server/cmd/mintid -from),
+	// or the client connects once to a v0.6.0 server, which sends it one.
+	ErrV1ClientID = &Error{ReturnCode: 0x02, Status: 401, Message: "Identifier rejected. v1 client IDs are no longer accepted: use a v2 client ID."}
+	// ErrV1Key refuses a v1 signed topic key or an unsigned one: generate a
+	// v2 key with unitdb/keygen.
+	ErrV1Key = &Error{ReturnCode: 0x04, Status: 401, Message: "Security key rejected. v1 and unsigned security keys are no longer accepted: generate a v2 key with keygen."}
 )
 
 type KeyGenRequest struct {
@@ -92,15 +97,14 @@ type KeyGenResponse struct {
 	Status int    `json:"status"`
 	Key    string `json:"key"`
 	Topic  string `json:"topic"`
-	// Uuid identifies a v2 key, in decimal, to revoke it (unitdb/revoke). A
-	// v1 key has none.
+	// Uuid identifies the key, in decimal, to revoke it (unitdb/revoke).
 	Uuid string `json:"uuid,omitempty"`
 }
 
 // RevokeRequest is a unitdb/revoke request: it revokes client ids and topic
-// keys of the requester's contract. Uuid revokes the v2 one with that uuid,
-// in decimal, until Until (unix seconds; 0 for ever). All revokes every one
-// the contract issued before now, and every v1 one.
+// keys of the requester's contract. Uuid revokes the one with that uuid, in
+// decimal, until Until (unix seconds; 0 for ever). All revokes every one the
+// contract issued before now.
 type RevokeRequest struct {
 	Uuid  string `json:"uuid,omitempty"`
 	Until int64  `json:"until,omitempty"`
@@ -121,7 +125,7 @@ type ServiceResponse struct {
 type ClientIdResponse struct {
 	Status   int    `json:"status"`
 	ClientId string `json:"key"`
-	// Uuid identifies a v2 client id, in decimal, to revoke it
-	// (unitdb/revoke). A v1 id has none.
+	// Uuid identifies the client id, in decimal, to revoke it
+	// (unitdb/revoke).
 	Uuid string `json:"uuid,omitempty"`
 }

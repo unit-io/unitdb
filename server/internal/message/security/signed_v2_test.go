@@ -18,7 +18,7 @@ func TestKeyV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(text) != KeyLenV2 || len(text) == SignedKeyLen || len(text) == encodedLen {
+	if len(text) != KeyLenV2 || len(text) == V1KeyLen || len(text) == encodedLen {
 		t.Fatalf("key length %d, want %d and unlike v1 keys", len(text), KeyLenV2)
 	}
 	// The key parses off its topic as v1 keys do.
@@ -97,16 +97,6 @@ func TestKeyV2AnyTopic(t *testing.T) {
 	}
 	if _, err := DecodeKeyV2(8, all, "a", lookup); err != ErrInvalidSignature {
 		t.Error("a key for ... opened a topic of another contract")
-	}
-	// The v1 key for "..." does the same.
-	v1 := NewSigner([]byte("signer-v1-test-key-0123456789abc"))
-	text, _ := v1.GenerateKey(7, "...", AllowRead)
-	k, err := v1.DecodeKey(7, text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, wildcard := k.ValidateTopic(7, "a.b.c"); !ok || !wildcard {
-		t.Error("a v1 key for ... does not open every topic")
 	}
 	// Other wildcard keys open their pattern only.
 	ab, _ := s.GenerateKey(7, "a.b...", AllowRead, 1, 0)

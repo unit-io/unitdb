@@ -52,8 +52,6 @@ type _Service struct {
 	// Lifetimes of v2 client ids that are not primary, of primary ones, and
 	// of topic keys whose keygen request gives none; 0 never expires.
 	clientIDTTL, primaryIDTTL, topicKeyTTL time.Duration
-	// acceptUnsignedKeys is 1 when unsigned topic keys are accepted (atomic).
-	acceptUnsignedKeys uint32
 	// allowInsecure accepts clients that connect with the insecure flag
 	// (allow_insecure); only ever set on a standalone server.
 	allowInsecure atomic.Bool
@@ -77,6 +75,14 @@ type _Service struct {
 }
 
 func NewService(cfg *config.Config) (s *_Service, err error) {
+	// Settings that are gone: one the server can't honour any more stops it,
+	// before anything is set up.
+	if warning, err := cfg.CheckRemoved(); err != nil {
+		return nil, err
+	} else if warning != "" {
+		log.ErrLogger.Warn().Str("context", "NewService").Msg(warning)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	s = &_Service{
 		pid:     uid.NewUnique(),
@@ -116,7 +122,6 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	if s.clientIDTTL, s.primaryIDTTL, s.topicKeyTTL, err = cfg.TTLs(); err != nil {
 		return nil, err
 	}
-	s.setAcceptUnsignedKeys(cfg.AcceptUnsignedKeys)
 	if cfg.AllowInsecure {
 		// A cluster would honour an insecure client's flag on every node
 		// its requests are forwarded to, and an older node forwards its
@@ -166,20 +171,6 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	}()
 
 	return s, nil
-}
-
-// setAcceptUnsignedKeys sets whether unsigned topic keys are accepted.
-func (s *_Service) setAcceptUnsignedKeys(accept bool) {
-	var v uint32
-	if accept {
-		v = 1
-	}
-	atomic.StoreUint32(&s.acceptUnsignedKeys, v)
-}
-
-// acceptsUnsignedKeys reports whether unsigned topic keys are accepted.
-func (s *_Service) acceptsUnsignedKeys() bool {
-	return atomic.LoadUint32(&s.acceptUnsignedKeys) == 1
 }
 
 // netListener creates net.Listener for tcp and unix domains:

@@ -18,9 +18,10 @@
 // keyring (config.Keyring), for the server and server/cmd/mintid.
 //
 // It issues with the issue key only, and reads with any key of the keyring:
-// v2 client ids and topic keys name the key that issued them, and v1 ones,
-// which don't, are tried with each key, the issue key first. v1 ids and keys
-// are sealed and signed with a key as it is, v2 ones with its subkeys.
+// v2 client ids and topic keys name the key that issued them, and are sealed
+// and signed with its subkeys. v1 client ids and topic keys, and unsigned
+// keys, are neither issued nor read since v0.7.0; OpenV1ClientID reads a v1
+// id only for server/cmd/mintid -from, to seal it again as a v2 one.
 package keys
 
 import (
@@ -41,10 +42,6 @@ type Set struct {
 	sealers  map[uint8]*uid.Sealer
 	tsigners map[uint8]*security.SignerV2
 	stores   map[uint8][]byte
-
-	// v1 seals and signers, of each key, the issue key's first.
-	macs    []*crypto.MAC
-	signers []*security.Signer
 }
 
 // New returns the Set of keyring kr.
@@ -56,13 +53,7 @@ func New(kr *config.Keyring) (*Set, error) {
 		tsigners: make(map[uint8]*security.SignerV2),
 		stores:   make(map[uint8][]byte),
 	}
-	ordered := []config.Key{issue}
 	for _, key := range kr.Keys {
-		if key.ID != issue.ID {
-			ordered = append(ordered, key)
-		}
-	}
-	for _, key := range ordered {
 		sealer, err := uid.NewSealer(key.ID, key.Subkey(config.SubkeyClientID))
 		if err != nil {
 			return nil, err
@@ -70,12 +61,6 @@ func New(kr *config.Keyring) (*Set, error) {
 		s.sealers[key.ID] = sealer
 		s.tsigners[key.ID] = security.NewSignerV2(key.ID, key.Subkey(config.SubkeyTopicKey))
 		s.stores[key.ID] = key.Subkey(config.SubkeyStore)
-		mac, err := crypto.New(key.Key)
-		if err != nil {
-			return nil, err
-		}
-		s.macs = append(s.macs, mac)
-		s.signers = append(s.signers, security.NewSigner(key.Key))
 	}
 	return s, nil
 }
@@ -116,30 +101,47 @@ func (s *Set) SealClientIDAt(id uid.ID, issuedAt, expiresAt uint32) (string, err
 	return s.sealers[s.issue].Seal(id, issuedAt, expiresAt)
 }
 
-// EncodeClientIDV1 seals id as a v1 client id with the issue key, for a
-// cluster with nodes that don't read v2 ones. It carries no uuid and no
-// expiry.
-func (s *Set) EncodeClientIDV1(id uid.ID) string {
-	return id.Encode(s.macs[0])
+// ErrV1ClientID is the error for a v1 client id, which the server refuses
+// since v0.7.0: its owner seals it again as a v2 one (server/cmd/mintid
+// -from), or renews it through a v0.6.0 server.
+var ErrV1ClientID = errors.New("v1 client ids are no longer accepted")
+
+// OpenClientID opens a v2 client id. It returns ErrV1ClientID for text of a
+// v1 id's length, and uid.ErrInvalidID for any other id that does not open.
+// It does not check the expiry.
+func (s *Set) OpenClientID(text []byte) (uid.ID, uid.Claims, error) {
+	if len(text) == uid.EncodedLenV1 {
+		return nil, uid.Claims{}, ErrV1ClientID
+	}
+	return uid.OpenV2(text, func(keyID uint8) *uid.Sealer { return s.sealers[keyID] })
 }
 
-// OpenClientID opens a client id of either version. Claims are nil for a v1
-// id. It does not check the expiry.
-func (s *Set) OpenClientID(text []byte) (uid.ID, *uid.Claims, error) {
-	if uid.IsV2(text) {
-		id, claims, err := uid.OpenV2(text, func(keyID uint8) *uid.Sealer { return s.sealers[keyID] })
+// OpenV1ClientID opens a v1 client id with each key of kr, the issue key
+// first: v1 ids name no key, and were sealed with a key as it is. It is for
+// server/cmd/mintid -from only, which seals the id again as a v2 one with
+// the same contract and permissions; the server refuses v1 ids.
+func OpenV1ClientID(kr *config.Keyring, text []byte) (uid.ID, error) {
+	if len(text) != uid.EncodedLenV1 {
+		return nil, uid.ErrInvalidID
+	}
+	issue := kr.Issue()
+	ordered := []config.Key{issue}
+	for _, key := range kr.Keys {
+		if key.ID != issue.ID {
+			ordered = append(ordered, key)
+		}
+	}
+	for _, key := range ordered {
+		mac, err := crypto.New(key.Key)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return id, &claims, nil
-	}
-	for _, mac := range s.macs {
-		// uid.Decode decodes in place: hand it a copy each time.
-		if id, err := uid.Decode(append([]byte(nil), text...), mac); err == nil {
-			return id, nil, nil
+		// uid.DecodeV1 decodes in place: hand it a copy each time.
+		if id, err := uid.DecodeV1(append([]byte(nil), text...), mac); err == nil {
+			return id, nil
 		}
 	}
-	return nil, nil, uid.ErrInvalidID
+	return nil, uid.ErrInvalidID
 }
 
 // TopicKey issues a v2 key for topic, given without options, on contract,
@@ -154,27 +156,8 @@ func (s *Set) TopicKeyAt(contract uint32, topic string, permissions uint32, issu
 	return s.tsigners[s.issue].GenerateKey(contract, topic, permissions, issuedAt, expiresAt)
 }
 
-// TopicKeyV1 issues a v1 signed key with the issue key, for a cluster with
-// nodes that don't read v2 ones. It doesn't expire.
-func (s *Set) TopicKeyV1(contract uint32, topic string, permissions uint32) (string, error) {
-	return s.signers[0].GenerateKey(contract, topic, permissions)
-}
-
 // DecodeTopicKeyV2 checks a v2 key for topic, given without options, on
 // contract (see security.DecodeKeyV2). It does not check the expiry.
 func (s *Set) DecodeTopicKeyV2(contract uint32, text, topic string) (security.KeyV2, error) {
 	return security.DecodeKeyV2(contract, text, topic, func(keyID uint8) *security.SignerV2 { return s.tsigners[keyID] })
-}
-
-// DecodeTopicKeyV1 checks a v1 signed key issued for contract, with each key.
-// It returns security.ErrInvalidKey for text that isn't a signed key, and
-// security.ErrInvalidSignature for one no key signed for contract.
-func (s *Set) DecodeTopicKeyV1(contract uint32, text string) (security.Key, error) {
-	for _, signer := range s.signers {
-		key, err := signer.DecodeKey(contract, text)
-		if !errors.Is(err, security.ErrInvalidSignature) {
-			return key, err
-		}
-	}
-	return nil, security.ErrInvalidSignature
 }
