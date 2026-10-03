@@ -35,10 +35,14 @@ SESSION LOG
   acknowledged, up to 1 s per replica; the others get it from the queue. With
   `async_replication` set in `cluster_config`, only **reliable and batch
   publishes** wait, and express publishes are acknowledged at once.
-- **Replica copies** are stored under the replica's own id, in a separate
-  replica store (the contract salted with `replicaStoreId`). A unitdb id
-  carries the sequence of the store that made it, so writing the owner's id on
-  a replica could overwrite an unrelated message there.
+- **Replica copies** are stored under the replica's own id, apart from the
+  messages the node owns: under `$sys.replica.<topic>` in the contract's
+  namespace, a topic no client can address. A unitdb id carries the sequence
+  of the store that made it, so writing the owner's id on a replica could
+  overwrite an unrelated message there. Up to v0.6.0 they were kept under the
+  topic itself in the contract XOR a fixed id, which another contract could
+  be; v0.7.0 moves them when it opens such a store (see
+  [the store's own records](#the-stores-own-records)).
 - **Each replicated message has an id** (origin node, start time, sequence).
   A replica records the ids it stored, for the message's TTL up to 24 h, loads
   the newest 100,000 when it starts, and skips a message it stored before: a
@@ -52,7 +56,8 @@ SESSION LOG
 
 ### Hints
 
-A copy that cannot reach a node of its replica set is kept as a **hint** on
+A copy that cannot reach a node of its replica set is kept as a **hint**, under
+`$sys.hint.hints.n<hash of the node's name>` in contract 0, on
 the storing node: when the replica's queue is full, when it rejects a batch,
 when it times out, or when it should be a replica but is not live (the replica
 set here comes from every configured node). Hints are handed to the node when
@@ -90,9 +95,52 @@ since unitdb cannot list them.
 - memdb keeps a version of a key per time block it was written in; the store
   deletes every version, and lists each key once.
 
+## The store's own records
+
+The store keeps what it needs for itself under `$sys` topics, which no
+client request can address (`security.IsReserved`): a contract's
+subscriptions and replicas in the contract's namespace, under
+`$sys.sub.<topic>` and `$sys.replica.<topic>`; the node's own records in
+contract 0, which `uid.NewContract` never draws: hints
+(`$sys.hint.hints.n<hash>`), the topic index (`$sys.index.topics`), the ids of
+replicated messages (`$sys.seen.seen`) and the security state
+(`$sys.security.state`). See `server/internal/store/namespaces.go`.
+
+Up to v0.6.0 they were kept under the contract XOR a fixed id (subscriptions,
+replicas), or under a fixed id (the rest), so two contracts could share a
+namespace, and a contract could be drawn as a fixed id. A v0.7.0 node moves
+what such a store holds when it opens it, before it serves
+(`server/internal/store/migrate.go`, `server/internal/hints_migrate.go`):
+
+- the old topic index and, for each topic in it, its replicas; then the
+  replicated messages' ids. The hints for each node of the cluster, rewritten
+  with the id they are stored under now. The security state, merged into the
+  node's and written once.
+- Each record is copied, the copies flushed to the store's log, and then the
+  old record deleted (`unitdb.DB.GetWithIDs` gives each record's id). A crash
+  in between leaves both, and the next start moves the rest: a record whose
+  copy is there already, the same bytes, is deleted without being copied
+  again. An old index entry is deleted only once its topic's replicas have
+  moved.
+- A copy keeps the time in its id, so a relay of the last hour finds it as
+  before, and its expiry; one that expired is not copied. A replicated
+  message's id is kept for 24 h, the longest.
+- Where a contract B is another contract A XOR the old replica id, and B has
+  messages of its own on a topic A has replicas of, the two were kept
+  together and can't be told apart: they are left where they are, B's
+  namespace, and logged. A's owner still has A's messages; B still reads
+  what it read before, until those replicas expire.
+- Subscriptions are not moved: they are of connections the restart closed,
+  and are made again as clients and the other nodes (`Resync`) subscribe.
+- The move runs whenever an old namespace holds records: at the first start
+  of v0.7.0, and again after a rollback to v0.6.0 wrote some there.
+
+Nothing on the wire changes: nodes send each other contracts, topics and
+records, never where a node stores them.
+
 ## Encryption at rest
 
-With `encrypt_at_rest` on, a node seals each record as the store writes it
+With `encrypt_at_rest` on, the default since v0.7.0, a node seals each record as the store writes it
 and opens it as the store reads it (`server/internal/store/sealing.go`), so
 everything above the store, replication and handoff included, sees opened
 records: a replica, a hint, a session's log or row and a rebuild's history
@@ -126,3 +174,11 @@ with encryption at rest, in `server/e2e/at_rest_test.go`:
 with every node sealing and with a mixed cluster.
 Unit tests: `TestRingGetN` (`pkg/hash`), `TestLogDeleteAcrossTimeBlocks` and
 `TestHintKeptWhenStoreFails` (`server/internal`).
+
+The store's own records: `TestNewStoreLayout`, `TestMigrateFromV060`,
+`TestMigrateInterrupted`, `TestMigrateSharedNamespace` and
+`TestReservedContracts` (`server/internal/store`), `TestMoveLegacyHints`
+(`server/internal`), `TestGetWithIDs` (the engine); and in
+`server/e2e/release3_test.go`, `TestRollingUpgradeFromV060` and
+`TestClusterMixedV060`, which build the v0.6.0 server from its tag (skipped
+without git and the tag), and `TestSysTopicsOutOfReach`.

@@ -261,20 +261,34 @@ func (db *DB) Close() error {
 
 // Get return items matching the query paramater.
 func (db *DB) Get(q *Query) (items [][]byte, err error) {
+	items, _, err = db.get(q, false)
+	return items, err
+}
+
+// GetWithIDs returns the items matching the query, as Get does, and the id of
+// each, which DeleteEntry takes with the item's topic: a caller can move or
+// delete the entries it reads. A wildcard query returns entries of several
+// topics, and does not say which topic each is of.
+func (db *DB) GetWithIDs(q *Query) (ids, items [][]byte, err error) {
+	items, ids, err = db.get(q, true)
+	return ids, items, err
+}
+
+func (db *DB) get(q *Query, withIDs bool) (items, ids [][]byte, err error) {
 	if err := db.ok(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch {
 	case len(q.Topic) == 0:
-		return nil, errTopicEmpty
+		return nil, nil, errTopicEmpty
 	case len(q.Topic) > maxTopicLength:
-		return nil, errTopicTooLarge
+		return nil, nil, errTopicTooLarge
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	q.internal.opts = &_QueryOptions{defaultQueryLimit: db.opts.queryOptions.defaultQueryLimit, maxQueryLimit: db.opts.queryOptions.maxQueryLimit}
 	if err := q.parse(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mu := db.internal.mutex.getMutex(q.internal.prefix)
 	mu.RLock()
@@ -300,18 +314,25 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 		}
 		q.internal.winEntries = uniq
 
-		items, outBytes = nil, 0
+		items, ids, outBytes = nil, nil, 0
 		for _, we := range q.internal.winEntries {
 			if len(items) == q.Limit {
 				break
 			}
-			val, size, ok, err := db.readValue(q, we)
+			val, stored, size, ok, err := db.readValue(q, we)
 			if err != nil {
-				return items, err
+				return items, ids, err
 			}
 			if ok {
 				items = append(items, val)
 				outBytes += int64(size)
+				if withIDs {
+					// The stored prefix: the time the entry was put, and its
+					// contract; and its sequence.
+					id := message.NewID(we.seq)
+					copy(id[:8], stored[:8])
+					ids = append(ids, id)
+				}
 			}
 		}
 		if len(items) == q.Limit || found < fetch || fetch >= q.internal.opts.maxQueryLimit {
@@ -321,49 +342,50 @@ func (db *DB) Get(q *Query) (items [][]byte, err error) {
 	db.internal.meter.OutBytes.Inc(outBytes)
 	db.internal.meter.Gets.Inc(int64(len(items)))
 	db.internal.meter.OutMsgs.Inc(int64(len(items)))
-	return items, nil
+	return items, ids, nil
 }
 
-// readValue reads and decodes the message for a window entry. It reports false
-// for entries that are deleted or outside the query's contract or cutoff.
-func (db *DB) readValue(q *Query, we _Query) ([]byte, uint32, bool, error) {
+// readValue reads and decodes the message for a window entry, and returns
+// the stored prefix of its id. It reports false for entries that are deleted
+// or outside the query's contract or cutoff.
+func (db *DB) readValue(q *Query, we _Query) ([]byte, []byte, uint32, bool, error) {
 	if we.seq == 0 {
-		return nil, 0, false, nil
+		return nil, nil, 0, false, nil
 	}
 	s, err := db.readEntry(we)
 	if err == errMsgIDDeleted {
-		return nil, 0, false, nil
+		return nil, nil, 0, false, nil
 	}
 	if err != nil {
 		logger.Error().Err(err).Str("context", "db.readEntry")
-		return nil, 0, false, err
+		return nil, nil, 0, false, err
 	}
 	id, val, err := db.internal.reader.readMessage(s)
 	if err != nil {
 		logger.Error().Err(err).Str("context", "data.readMessage")
-		return nil, 0, false, err
+		return nil, nil, 0, false, err
 	}
 	if !message.ID(id).EvalPrefix(q.Contract, q.internal.cutoff) {
-		return nil, 0, false, nil
+		return nil, nil, 0, false, nil
 	}
 
 	// last bit of ID is an encryption flag.
 	if uint8(id[idSize-1]) == 1 {
 		if db.internal.mac == nil {
-			return nil, 0, false, ErrNoEncryptionKey
+			return nil, nil, 0, false, ErrNoEncryptionKey
 		}
 		val, err = db.internal.mac.Decrypt(nil, val)
 		if err != nil {
 			logger.Error().Err(err).Str("context", "mac.decrypt")
-			return nil, 0, false, err
+			return nil, nil, 0, false, err
 		}
 	}
 	val, err = snappy.Decode(nil, val)
 	if err != nil {
 		logger.Error().Err(err).Str("context", "snappy.Decode")
-		return nil, 0, false, err
+		return nil, nil, 0, false, err
 	}
-	return val, s.valueSize, true, nil
+	return val, id, s.valueSize, true, nil
 }
 
 // NewContract generates a new Contract.

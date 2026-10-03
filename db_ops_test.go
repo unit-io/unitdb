@@ -1162,3 +1162,50 @@ func TestOpenCloseNoGoroutineLeak(t *testing.T) {
 		t.Fatalf("goroutines: %d before, %d after 20 open/close cycles\n%s", before, got, buf[:runtime.Stack(buf, true)])
 	}
 }
+
+// TestGetWithIDs checks that GetWithIDs returns each entry's id, with which
+// it is deleted, in memory and once synced to disk.
+func TestGetWithIDs(t *testing.T) {
+	db, _ := openTestDB(t, WithMutable())
+	const contract = uint32(0x1d5)
+	topic := []byte("ids.a")
+	for i := 0; i < 4; i++ {
+		if err := db.PutEntry(NewEntry(topic, []byte(fmt.Sprintf("m%d", i))).WithContract(contract)); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			if err := db.Sync(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ids, items, err := db.GetWithIDs(NewQuery(topic).WithContract(contract))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 4 || len(items) != 4 {
+		t.Fatalf("got %d ids and %d items, want 4", len(ids), len(items))
+	}
+	// Delete the even ones, by the id given with each.
+	for i, item := range items {
+		var n int
+		fmt.Sscanf(string(item), "m%d", &n)
+		if n%2 == 0 {
+			if err := db.DeleteEntry(NewEntry(topic, nil).WithContract(contract).WithID(ids[i])); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := db.Get(NewQuery(topic).WithContract(contract))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %q after deleting two of four", got)
+	}
+	for _, item := range got {
+		if s := string(item); s != "m1" && s != "m3" {
+			t.Errorf("got %q, which was deleted", s)
+		}
+	}
+}

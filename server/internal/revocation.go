@@ -19,6 +19,7 @@ package internal
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -139,33 +140,53 @@ type securityRecord struct {
 // loadRevocations reads the security state from the store, and makes it
 // this node's. Several records, left by a crash between writing a record and
 // deleting the one before, are merged and written again as one.
-func loadRevocations() *revocations {
+//
+// The records a v0.6.0 node stored under a fixed id are merged too, the
+// state written where it is kept now, and then they are deleted: a crash in
+// between leaves them to be merged again, which changes nothing.
+func loadRevocations() (*revocations, error) {
 	r := &revocations{contracts: make(map[uint32]*ContractState)}
 	raw, err := store.Security.All()
 	if err != nil {
 		log.ErrLogger.Error().Err(err).Str("context", "revocations").Msg("unable to read the security state")
 	}
+	legacyIDs, legacy, err := store.Security.Legacy()
+	if err != nil {
+		return nil, fmt.Errorf("revocations: reading the security state of an older version: %w", err)
+	}
 	now := time.Now().Unix()
-	for _, b := range raw {
+	for i, b := range append(raw, legacy...) {
 		var rec securityRecord
 		if err := json.Unmarshal(b, &rec); err != nil {
 			log.ErrLogger.Error().Err(err).Str("context", "revocations").Msg("unreadable record of the security state: skipped")
 			continue
 		}
-		if len(rec.ID) > 0 {
+		if i < len(raw) && len(rec.ID) > 0 {
 			r.ids = append(r.ids, rec.ID)
 		}
 		r.mergeLocked(rec.Contracts, now)
 	}
-	if len(r.ids) > 1 {
+	if len(r.ids) > 1 || len(legacyIDs) > 0 {
 		r.mu.Lock()
-		if err := r.saveLocked(); err != nil {
+		err := r.saveLocked()
+		r.mu.Unlock()
+		if err != nil {
+			if len(legacyIDs) > 0 {
+				return nil, fmt.Errorf("revocations: moving the security state of an older version: %w", err)
+			}
 			log.ErrLogger.Error().Err(err).Str("context", "revocations").Msg("unable to save the security state")
 		}
-		r.mu.Unlock()
+	}
+	for _, id := range legacyIDs {
+		if err := store.Security.DeleteLegacy(id); err != nil {
+			return nil, fmt.Errorf("revocations: deleting the security state of an older version: %w", err)
+		}
+	}
+	if len(legacyIDs) > 0 {
+		log.ErrLogger.Info().Str("context", "revocations").Int("records", len(legacyIDs)).Msg("moved the security state of an older version to a $sys topic")
 	}
 	securityState.Store(r)
-	return r
+	return r, nil
 }
 
 // refuses returns why the client id or topic key of contract with uuid (0

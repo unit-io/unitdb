@@ -156,6 +156,12 @@ func (a *adapter) Get(contract uint32, topic string, last string) (matches [][]b
 	return a.db.Get(query)
 }
 
+// GetWithIDs gets the messages stored on contract under topic, and the id of
+// each, with which Delete deletes it.
+func (a *adapter) GetWithIDs(contract uint32, topic string) (ids, payloads [][]byte, err error) {
+	return a.db.GetWithIDs(unitdb.NewQuery([]byte(topic)).WithContract(contract))
+}
+
 // Count returns the number of messages in the message store.
 func (a *adapter) Count() uint64 {
 	return a.db.Count()

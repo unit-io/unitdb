@@ -187,9 +187,10 @@ node B (re)connects to node C:
   held reaches the others. Until then it refuses only what it had stored: a
   new node, or one whose store was reset, refuses nothing for the moment
   between taking clients and its first exchange.
-- **Stored** in each node's store under a namespace of its own, as one record
-  of the whole state, written and flushed to the store's log before the
-  revoke is answered, so it survives a crash.
+- **Stored** in each node's store under `$sys.security.state` in contract
+  0 (a namespace of its own until v0.6.0, moved there when v0.7.0 opens the
+  store), as one record of the whole state, written and flushed to the
+  store's log before the revoke is answered, so it survives a crash.
 - **Not-before times are compared with issue times,** both in whole unix
   seconds, from the clocks of different nodes: keep them in sync.
 - **An older node,** without the `revocations` capability, is sent none of
@@ -233,4 +234,7 @@ batch delivery, wildcards, relays, failover and rejoin, frozen nodes, requests
 during a failover, and fan-out to many subscribers.
 `server/e2e/cluster_tls_test.go` runs one over mutual TLS (delivery, failover,
 replicated relays; callers without a node's certificate and calls naming
-another sender are refused) and moves a plain one to TLS node by node.
+another sender are refused) and moves a plain one to TLS node by node;
+`server/e2e/release3_test.go` runs one with TLS required from the start, one
+mixing a v0.6.0 node with v0.7.0 ones, and upgrades a v0.6.0 one node by
+node.

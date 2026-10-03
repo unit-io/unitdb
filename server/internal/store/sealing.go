@@ -207,6 +207,34 @@ func (a *sealingAdapter) Get(contract uint32, topic string, last string) ([][]by
 	return out, nil
 }
 
+// GetWithIDs opens the records it gets, as Get does, with their ids. A
+// record that does not open is left out, with its id, and logged.
+func (a *sealingAdapter) GetWithIDs(contract uint32, topic string) ([][]byte, [][]byte, error) {
+	ids, raw, err := a.Adapter.GetWithIDs(contract, topic)
+	if err != nil {
+		return ids, raw, err
+	}
+	s := a.s.Load()
+	outIDs, out := ids[:0], raw[:0]
+	var skipped int
+	var first error
+	for i, b := range raw {
+		plain, err := s.openRecord(b, contractAD(contract))
+		if err != nil {
+			if skipped == 0 {
+				first = err
+			}
+			skipped++
+			continue
+		}
+		outIDs, out = append(outIDs, ids[i]), append(out, plain)
+	}
+	if skipped > 0 {
+		log.ErrLogger.Error().Err(first).Str("context", "store.GetWithIDs").Uint32("contract", contract).Int("skipped", skipped).Msg("skipped sealed records that do not open")
+	}
+	return outIDs, out, nil
+}
+
 func (a *sealingAdapter) PutMessage(key uint64, payload []byte) error {
 	b, err := a.s.Load().sealRecord(payload, keyAD(key))
 	if err != nil {
