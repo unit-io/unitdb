@@ -257,6 +257,8 @@ type route struct {
 	// otherwise the clients key their topics (autoKey).
 	secure  bool
 	service bool
+	// key is the key a secure route sends; an unsigned one if empty.
+	key     string
 	mode    uint8
 	pubMode uint8
 }
@@ -278,7 +280,11 @@ func deliversRoute(t *testing.T, r route) bool {
 	autoKey := !r.secure && !r.service
 	wire := r.topic
 	if r.secure {
-		wire = keyed(topicKey(r.contract, r.topic, security.AllowReadWrite), r.topic)
+		key := r.key
+		if key == "" {
+			key = topicKey(r.contract, r.topic, security.AllowReadWrite)
+		}
+		wire = keyed(key, r.topic)
 	}
 	s, err := dial(ctx, r.sub.tcpAddr)
 	if err != nil {

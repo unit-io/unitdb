@@ -44,6 +44,32 @@ The server signs client IDs and topic keys with a key only it knows, and refuses
 
 Up to v0.3 the sample `unitdb.conf` shipped with a key, which the server now refuses: it is public, so anyone could sign client IDs and topic keys with it. A deployment that ran with it needs a new key, and its clients new client IDs and topic keys.
 
+### Keyring and key rotation
+The single key is a keyring of one key. To rotate keys, give the server a keyring instead, in the `UNITDB_KEYRING` environment variable or in a file named by `encryption_config`'s `keyring_file`: a JSON list of keys, each with an id from 0 to 255, 32 random bytes in base64 (`openssl rand -base64 32`), and a use, `issue` for the one key the server issues with or `read` for keys it only reads with. The keyring takes the place of the single key, and every node of a cluster needs the same one:
+
+```
+> export UNITDB_KEYRING='[{"id": 1, "key": "<openssl rand -base64 32>", "use": "issue"},
+                          {"id": 0, "key": "<the old key, base64>", "use": "read"}]'
+```
+
+The single key is key 0, used as its 32 characters are: in a keyring it is `printf %s "$UNITDB_ENCRYPTION_KEY" | base64`. To rotate:
+
+1. Add a new key as the issue key, and keep the old one as a `read` key. Restart every node with the keyring. Client IDs and topic keys of the old key keep working; new ones are issued with the new key.
+2. Hand out new client IDs and topic keys. A client that connects with a v2 client ID of the old key, or with a v1 one, is sent the same ID sealed with the new key on `unitdb/clientid/` (see below); topic keys are requested again with `unitdb/keygen`. Service IDs are sealed again with `mintid -from <id>`.
+3. Remove the old key. What it issued is refused from then on.
+
+The server derives a subkey of each key for each use (HKDF-SHA256): one seals client IDs, another signs topic keys.
+
+### Client IDs and topic keys
+The server issues v2 client IDs and topic keys, and still takes the v1 ones of earlier versions. Both are opaque strings to clients:
+
+- A **v2 client ID** is 94 characters of base64url (`A-Z a-z 0-9 - _`), where a v1 one is 52 of base32. It is sealed with XChaCha20-Poly1305 under a random nonce, and holds the key id that sealed it, the contract, the permissions, a random uuid, and when it was issued and expires. `client_id_ttl` sets how long the IDs the server issues last (`unitdb/clientid`), and `primary_id_ttl` primary ones; they never expire by default. A client that connects with a v1 ID, with an ID of a key being retired, or past 80% of its ID's lifetime is sent a new v2 ID on `unitdb/clientid/`: the same ID, so the same contract and sessions. An expired ID is refused with return code 0x02, and is not replaced: its client needs a new one from its primary client.
+- A **v2 topic key** is 48 characters of base64url, where a v1 signed key is 26 and an unsigned one 13. Its 128-bit tag covers the whole topic and the contract, so it opens exactly the topic it was issued for (a key for `...` reads every topic of the contract, as in v1); it holds the key id, a uuid, and when it was issued and expires. A keygen request's `ttl`, such as `{"topic": "teams.alpha", "type": "rw", "ttl": "24h"}`, sets how long the key lasts; `topic_key_ttl` is the default, and keys never expire without either.
+
+Since v2 client IDs carry a uuid, two secondary IDs of a contract issued in the same second are different IDs with sessions of their own; v1 ones were the same ID.
+
+In a cluster, the server issues v2 IDs and keys once every node runs a version that reads them, and v1 ones until then (see [rolling deploys](docs/rolling-deploys.md)).
+
 Clients publish and subscribe with topic keys, which a primary client generates with a `unitdb/keygen` request. The insecure flag of a client's CONNECT, which skips topic key checks, is refused unless the server's config sets `"allow_insecure": true`, which is for development only and which a cluster node refuses to start with.
 
 A trusted backend, such as an API server acting for its users, needs no topic keys either: give it a service client ID, which only the `mintid` command issues, with the same key as the server:
@@ -52,14 +78,14 @@ A trusted backend, such as an API server acting for its users, needs no topic ke
 > go run ./server/cmd/mintid -config server/unitdb.conf -contract 123456789 -service
 ```
 
-Without `-contract`, `mintid` mints a primary client ID of a new contract; `-service` marks the ID as a trusted service's. A service's connections skip topic key checks, in a cluster too. A connection the service opens for a user, with the user's client ID, skips them once the service vouches for it, by publishing `{"client_id": "<the service's client ID>"}` to `unitdb/service` on that connection; a connection trusted this way may also generate keys. Keep service IDs on servers, never on clients or devices.
+`mintid` reads the keyring as the server does, and mints a v2 ID. Without `-contract`, it mints a primary client ID of a new contract; `-service` marks the ID as a trusted service's; `-ttl 720h` makes the ID expire; `-from <id>` seals an ID of any key of the keyring, v1 or v2, again as v2 with the issue key, with the same contract, permissions and sessions; `-v1` mints a v1 ID, for a cluster with nodes that don't read v2 ones. A service's connections skip topic key checks, in a cluster too. A connection the service opens for a user, with the user's client ID, skips them once the service vouches for it, by publishing `{"client_id": "<the service's client ID>"}` to `unitdb/service` on that connection; a connection trusted this way may also generate keys. Keep service IDs on servers, never on clients or devices.
 
 Topics whose first part starts with `$` are reserved for the server: no client may publish, subscribe, relay or generate keys for them, a service or an insecure client included.
 
 A session belongs to the client ID that started it: a client of the same contract that sends another client's session key gets a session of its own.
 
 ## Clustering
-To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended. Every node needs the same encryption key.
+To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 nodes or more are recommended. Every node needs the same encryption key, or keyring.
 
 ```
 > ./bin/unitdb -listen=:6060 -grpc_listen=:6080 -cluster_self=one -db_path=/tmp/unitdb/node1

@@ -73,6 +73,7 @@ that tests can run a node as an older one.
 | `sessions` | takes session changes (`Replicate`'s log), and fetches and drops sessions (`FetchSession`, `ForgetSession`) | skipped |
 | `resync` | sends its clients' subscriptions to a node back in the ring (`Resync`) | skipped |
 | `service` | sets a forwarded connection's `Insecure` only for a trusted service's connection, never for a client's own insecure flag | its `Insecure` is not taken: forwarded requests are key-checked |
+| `v2keys` | reads v2 client ids and v2 topic keys | the other nodes issue v1 ids and keys, and send no renewed ids |
 | `tls` | listens for cluster connections over mutual TLS (`cluster_config.tls` is set) | nothing: no call depends on it |
 
 ### Upgrading to service ids
@@ -100,6 +101,52 @@ kept there, so that clients moving between old and new nodes keep their
 sessions. Once every node advertises `service`, such old copies are not
 resumed: a client that last connected to an old node with a session key
 starts a new session once.
+
+### Upgrading to v2 client ids and topic keys
+
+This version issues v2 client ids and topic keys, and reads v1 ones too.
+Older nodes read only v1 ones, and two things cross between nodes:
+
+- **Topic keys.** A node checks the key of a request another node forwards
+  for a topic it owns, so an older owner refuses a v2 key with status 400.
+- **Clients.** A client may connect to any node, and an older one takes a v2
+  client id for an invalid one: it refuses it, and assigns the client a new
+  primary id of a new contract.
+
+Client ids are opened only on the client's own node: what nodes send each
+other is the opened id. A v2 id opens to the 12 bytes of a v1 one followed
+by its 8-byte uuid, which older nodes ignore: they read the contract and the
+permissions where they always were.
+
+So a node issues v2 ids and keys only once every other node has told it, in
+the leader's pings, that it reads them (`v2keys`), and v1 ones until then:
+keygen gives v1 signed keys, `unitdb/clientid` and assigned ids are v1, a
+keygen request with a `ttl` is refused with status 503, since v1 keys can't
+expire, and clients of v1 ids are not sent v2 ones. Right after a node
+starts, until it hears the others, it issues v1 ones too; a node that is
+down, and was never heard, holds the cluster on v1. So:
+
+1. Upgrade node by node as usual. Nothing changes for clients: every id and
+   key issued is v1, which every node reads.
+2. Once every node runs this version, and the leader's pings have gone
+   round, nodes issue v2 ids and keys, and send clients of v1 ids the same
+   id as v2 on `unitdb/clientid/`.
+3. Don't roll a node back to an older version after that: v2 ids and keys
+   don't work on it. `server/cmd/mintid -v1` mints v1 ids for such a cluster.
+
+`client_id_ttl`, `primary_id_ttl` and `topic_key_ttl` apply to v2 ids and
+keys only: ids and keys issued while the cluster is on v1 never expire.
+
+Nothing stored changes: session rows are keyed by a hash of the client id,
+as before, and a v1 id keeps its sessions once it is renewed as v2, which is
+the same id. A secondary id issued as v2 has a uuid, and so sessions of its
+own: v1 secondary ids of a contract issued in the same second were the same
+id, and shared them. Subscriptions are stored by topic, without their keys.
+
+The keyring is read once at start. Rotating keys is a rolling restart: give
+every node the new keyring, with the old key as a `read` key, before any
+node issues with the new key, or a node not yet restarted refuses what the
+new key issued; see the README.
 
 ## Moving a cluster to TLS
 

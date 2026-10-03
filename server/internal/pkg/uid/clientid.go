@@ -25,7 +25,10 @@ import (
 	"github.com/unit-io/unitdb/server/internal/pkg/encoding"
 )
 
-// ID represents a unique ID for client connection.
+// ID represents a unique ID for client connection: 12 bytes, the epoch, the
+// primary id, the permissions and the contract, followed in an id made since
+// v2 client ids by an 8-byte random uuid. A v1 client id carries no uuid:
+// opened, it is 12 bytes, and so is a v2 id sealed again from a v1 one.
 type ID []byte
 
 const (
@@ -37,9 +40,31 @@ const (
 	// issues it; the server never hands it out.
 	AllowService = uint32(1 << 1)
 
-	encodedLen = 13 // string encoded len
-	rawLen     = 12 // binary raw len
+	rawLen    = 12 // binary raw len, without the uuid
+	uuidLen   = 8
+	idLenV2   = rawLen + uuidLen
+	v1TextLen = 52 // encoded len of a v1 client id
 )
+
+// Uuid returns the id's random uuid, or 0 for an id without one: one of v1.
+func (id ID) Uuid() uint64 {
+	if len(id) < idLenV2 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(id[rawLen:idLenV2])
+}
+
+// withUuid returns id with a new random uuid, never 0.
+func (id ID) withUuid() (ID, error) {
+	out := make(ID, idLenV2)
+	copy(out, id[:rawLen])
+	for binary.BigEndian.Uint64(out[rawLen:]) == 0 {
+		if _, err := rand.Read(out[rawLen:]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
 
 // IsPrimary gets whether the ID is a primary client Id.
 func (id ID) IsPrimary() bool {
@@ -105,6 +130,8 @@ func (id ID) SetContract(value uint32) {
 	id[11] = byte(value)
 }
 
+// Encode returns the id as a v1 client id, sealed with mac. A v1 id carries
+// no uuid: the id it opens to is the first 12 bytes of id.
 func (id ID) Encode(mac *crypto.MAC) string {
 	buffer := make([]byte, rawLen)
 	buffer[0] = id[0]
@@ -118,13 +145,15 @@ func (id ID) Encode(mac *crypto.MAC) string {
 
 	// Encryption.
 	ciphertext := mac.Encrypt(nil, buffer)
-	text := make([]byte, 52)
+	text := make([]byte, v1TextLen)
 	encoding.Encode32(text, ciphertext[:])
 	return string(text)
 }
 
+// Decode opens a v1 client id sealed with mac. It decodes in place: hand it a
+// copy.
 func Decode(buffer []byte, mac *crypto.MAC) (ID, error) {
-	if len(buffer) < 52 {
+	if len(buffer) < v1TextLen {
 		return nil, errors.New("Key provided is invalid")
 	}
 
@@ -180,9 +209,9 @@ func MintClientID(contract uint32, service bool) (ID, error) {
 	return id, nil
 }
 
-// NewClientID generates a new primary client Id, of a new contract. The
-// contract comes from crypto/rand; a failing source is an error, rather
-// than contract 0.
+// NewClientID generates a new primary client Id, of a new contract, with a
+// random uuid. The contract and the uuid come from crypto/rand; a failing
+// source is an error, rather than contract 0.
 func NewClientID(master uint16) (ID, error) {
 	contract, err := NewContract()
 	if err != nil {
@@ -194,10 +223,12 @@ func NewClientID(master uint16) (ID, error) {
 	id.SetPrimary(master)
 	id.SetPermissions(AllowMaster)
 	id.SetContract(contract)
-	return id, nil
+	return id.withUuid()
 }
 
-// NewSecondaryClientID generates a secondary client Id.
+// NewSecondaryClientID generates a secondary client Id, of master's contract.
+// Its uuid tells it from the other secondary ids of the contract, which v1
+// ids issued in the same second could not be.
 func NewSecondaryClientID(master ID) (ID, error) {
 	id, err := NewClientID(1)
 	if err != nil {

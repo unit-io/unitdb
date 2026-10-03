@@ -11,14 +11,20 @@ import (
 	"github.com/unit-io/unitdb/server/utp"
 )
 
+// openID opens a client id the server issued, of either version.
+func openID(t *testing.T, clientID string) uid.ID {
+	t.Helper()
+	id, _, err := Globals.Service.keys.OpenClientID([]byte(clientID))
+	if err != nil {
+		t.Fatalf("client id %q: %v", clientID, err)
+	}
+	return id
+}
+
 // contractOf returns the contract of a client id the server issued.
 func contractOf(t *testing.T, clientID string) uint32 {
 	t.Helper()
-	id, err := uid.Decode([]byte(clientID), Globals.Service.mac)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id.Contract()
+	return openID(t, clientID).Contract()
 }
 
 // serviceClientID returns a trusted service's client id for contract, as
@@ -29,7 +35,11 @@ func serviceClientID(t *testing.T, contract uint32) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return id.Encode(Globals.Service.mac)
+	text, err := Globals.Service.keys.SealClientID(id, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text
 }
 
 // withoutInsecure runs the test with allow_insecure off.
