@@ -18,6 +18,7 @@ package internal
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
@@ -152,6 +153,9 @@ var replicationDelay, _ = time.ParseDuration(os.Getenv("UNITDB_REPLICATION_DELAY
 type clusterNodeConfig struct {
 	Name string `json:"name"`
 	Addr string `json:"addr"`
+	// TLSAddr is where the node takes cluster connections over mutual TLS,
+	// when cluster_config.tls is set.
+	TLSAddr string `json:"tls_addr,omitempty"`
 }
 
 type clusterConfig struct {
@@ -178,6 +182,8 @@ type clusterConfig struct {
 	RingVersion int `json:"ring_version"`
 	// Failover configuration
 	Failover *clusterFailoverConfig
+	// TLS, if set, has nodes talk over mutual TLS: see cluster_tls.go.
+	TLS *clusterTLSConfig `json:"tls"`
 }
 
 // ClusterNode is a client's connection to another node.
@@ -194,6 +200,8 @@ type ClusterNode struct {
 	reconnecting bool
 	// TCP address in the form host:port
 	address string
+	// TLS address, if the node takes connections over TLS
+	tlsAddress string
 	// Name of the node
 	name string
 
@@ -390,7 +398,7 @@ func (n *ClusterNode) reconnect() {
 	var count = 0
 	for {
 		// Attempt to reconnect right away
-		if endpoint, conn, err := dialNode(n.address); err == nil {
+		if endpoint, conn, err := n.dial(); err == nil {
 			if reconnTicker != nil {
 				reconnTicker.Stop()
 			}
@@ -452,15 +460,6 @@ func (c *watchedConn) isClosed() bool {
 	return atomic.LoadInt32(&c.closed) == 1
 }
 
-func dialNode(address string) (*rpc.Client, *watchedConn, error) {
-	conn, err := net.DialTimeout("tcp", address, time.Second)
-	if err != nil {
-		return nil, nil, err
-	}
-	wc := &watchedConn{Conn: conn}
-	return rpc.NewClient(wc), wc, nil
-}
-
 // client returns the node's RPC endpoint if it is connected. The endpoint is
 // replaced by reconnect, so it is only read under the node lock.
 //
@@ -472,7 +471,7 @@ func (n *ClusterNode) client() (*rpc.Client, bool) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 	if n.connected && n.conn != nil && n.conn.isClosed() {
-		if endpoint, conn, err := dialNode(n.address); err == nil {
+		if endpoint, conn, err := n.dial(); err == nil {
 			n.endpoint.Close()
 			n.endpoint, n.conn = endpoint, conn
 			n.resync()
@@ -610,6 +609,9 @@ type Cluster struct {
 
 	// Socket for inbound connections
 	inbound *net.TCPListener
+	// Listener for inbound connections over TLS, and the TLS setup, if set
+	tlsInbound net.Listener
+	tls        *clusterTLS
 	// Ring hash of every configured node, live or not: a topic's replicas in
 	// it are the nodes that should hold the topic's messages. Replaced when
 	// the ring version changes, so use getFullRing.
@@ -713,6 +715,10 @@ func (s *seenSet) remove(id string) {
 // Called by a remote node.
 func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
 	log.Info("cluster.Master", "master request received from node "+reqMsg.Node)
+	if reqMsg.Conn == nil {
+		// Every request is for a connection; a panic here would stop the node.
+		return errors.New("cluster.Master: a request without its connection")
+	}
 
 	// net/rpc serves each request on its own goroutine; handle requests for one
 	// proxied connection one at a time, as its reads would be for a direct one.
@@ -722,6 +728,12 @@ func (c *Cluster) Master(reqMsg *ClusterReq, rejected *bool) error {
 
 	// Find the local connection associated with the given remote connection.
 	conn := Globals.connCache.get(reqMsg.Conn.ConnID)
+	if conn != nil && conn.clnode != nil && conn.clnode.name != reqMsg.Node {
+		// The connection was proxied for another node: a node acts only on
+		// the connections of its own clients.
+		log.ErrLogger.Error().Str("context", "cluster.Master").Int64("connid", int64(reqMsg.Conn.ConnID)).Msg("request from " + reqMsg.Node + " for a connection of " + conn.clnode.name + ": dropped")
+		return nil
+	}
 
 	if reqMsg.ConnGone {
 		// Original session has disconnected. Tear down the local proxied session.
@@ -1883,23 +1895,39 @@ func ClusterInit(configString json.RawMessage, self *string) int {
 		replicaIDPrefix:  thisName + "/" + strconv.FormatInt(time.Now().UnixNano(), 36) + "/"}
 
 	var nodeNames []string
+	var tlsListenOn string
 	for _, host := range config.Nodes {
 		nodeNames = append(nodeNames, host.Name)
 
 		if host.Name == thisName {
 			Globals.Cluster.listenOn = host.Addr
+			tlsListenOn = host.TLSAddr
 			// Don't create a cluster member for this local instance
 			continue
 		}
 
 		n := ClusterNode{
-			address:  host.Addr,
-			name:     host.Name,
-			done:     make(chan bool, 1),
-			repl:     make(chan replicaItem, replicationQueueSize),
-			replDone: make(chan struct{})}
+			address:    host.Addr,
+			tlsAddress: host.TLSAddr,
+			name:       host.Name,
+			done:       make(chan bool, 1),
+			repl:       make(chan replicaItem, replicationQueueSize),
+			replDone:   make(chan struct{})}
 
 		Globals.Cluster.nodes[host.Name] = &n
+	}
+
+	if config.TLS != nil {
+		t, err := loadClusterTLS(config.TLS, thisName, tlsListenOn)
+		if err != nil {
+			log.Fatal("cluster.ClusterInit", "invalid cluster_config.tls", err)
+		}
+		Globals.Cluster.tls = t
+		for _, n := range Globals.Cluster.nodes {
+			if t.require && n.tlsAddress == "" {
+				log.ErrLogger.Warn().Str("context", "cluster.ClusterInit").Msg("node '" + n.name + "' has no tls_addr, and TLS is required: it cannot be reached")
+			}
+		}
 	}
 
 	if len(Globals.Cluster.nodes) == 0 {
@@ -1993,12 +2021,20 @@ func (c *_Conn) closeRPC() {
 // (docs/rolling-deploys.md). Every later version takes an empty Replicate.
 // A node that does not answer is not checked: a node of that version fails
 // the pings of a leader of this one, and leaves its ring.
+//
+// It dials the plain address, which such a node listens on; with TLS
+// required there is none, and a v0.3.0 node, which has no TLS, cannot be
+// reached anyway.
 func (c *Cluster) checkPeers() {
+	if c.tls != nil && c.tls.require {
+		return
+	}
 	for _, n := range c.nodes {
-		endpoint, _, err := dialNode(n.address)
+		conn, err := net.DialTimeout("tcp", n.address, time.Second)
 		if err != nil {
 			continue
 		}
+		endpoint := rpc.NewClient(conn)
 		var unused bool
 		call := endpoint.Go("Cluster.Replicate", &ReplicateReq{Node: c.thisNodeName}, &unused, make(chan *rpc.Call, 1))
 		select {
@@ -2017,12 +2053,23 @@ func (c *Cluster) checkPeers() {
 func (c *Cluster) Start() {
 	c.checkPeers()
 
-	l, err := listener.New(c.listenOn)
-	if err != nil {
-		panic(err)
+	// The plain listener, unless TLS is required; and the TLS one, beside it.
+	var l *listener.Listener
+	if c.tls == nil || !c.tls.require {
+		var err error
+		if l, err = listener.New(c.listenOn); err != nil {
+			panic(err)
+		}
+		l.SetReadTimeout(120 * time.Second)
 	}
-
-	l.SetReadTimeout(120 * time.Second)
+	if c.tls != nil {
+		tl, err := tls.Listen("tcp", c.tls.listenOn, c.tls.serverConfig())
+		if err != nil {
+			panic(err)
+		}
+		c.tlsInbound = tl
+		go c.serveTLS(tl)
+	}
 
 	for _, n := range c.nodes {
 		go n.reconnect()
@@ -2048,20 +2095,28 @@ func (c *Cluster) Start() {
 		go c.run()
 	}
 
-	err = rpc.Register(c)
-	if err != nil {
+	if err := rpc.Register(c); err != nil {
 		log.Fatal("cluster.Start", "error registering rpc server", err)
 	}
 
-	go rpc.Accept(l)
+	if l != nil {
+		go rpc.Accept(l)
+	}
 	//go l.Serve()
 
 	// Before the service takes clients: get back the subscriptions of the
 	// other nodes' clients this node holds, in case it restarted.
 	c.resyncOnStart()
 
+	listening := c.listenOn
+	if c.tls != nil {
+		listening = c.listenOn + ", TLS " + c.tls.listenOn
+		if c.tls.require {
+			listening = "TLS " + c.tls.listenOn + " only"
+		}
+	}
 	log.ConnLogger.Info().Str("context", "cluster.Start").Msgf("Cluster of %d nodes initialized, node '%s' listening on [%s]", len(Globals.Cluster.nodes)+1,
-		Globals.Cluster.thisNodeName, c.listenOn)
+		Globals.Cluster.thisNodeName, listening)
 }
 
 // drain has this node, shutting down, leave the cluster, before it closes its
@@ -2115,6 +2170,9 @@ func (c *Cluster) shutdown() {
 		return
 	}
 	c.inbound.Close()
+	if c.tlsInbound != nil {
+		c.tlsInbound.Close()
+	}
 
 	if c.fo != nil {
 		c.fo.done <- true
@@ -2233,7 +2291,7 @@ func (c *Cluster) resyncOnStart() {
 		wg.Add(1)
 		go func(n *ClusterNode) {
 			defer wg.Done()
-			endpoint, _, err := dialNode(n.address)
+			endpoint, _, err := n.dial()
 			if err != nil {
 				return // not up: it has no clients here
 			}

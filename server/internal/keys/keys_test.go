@@ -125,3 +125,16 @@ func TestV1IDsStillOpen(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreKeys checks that the store subkeys are each key's own, by id,
+// and the same ones whatever key issues.
+func TestStoreKeys(t *testing.T) {
+	old := config.Key{ID: 0, Key: oldKey, Use: config.KeyIssue}
+	during := set(t, config.Key{ID: 1, Key: newKey, Use: config.KeyIssue}, config.Key{ID: 0, Key: oldKey, Use: config.KeyRead}).StoreKeys()
+	if len(during) != 2 || !bytes.Equal(during[0], old.Subkey(config.SubkeyStore)) || bytes.Equal(during[0], during[1]) {
+		t.Fatal("store subkeys are not each key's own")
+	}
+	if before := set(t, old).StoreKeys(); !bytes.Equal(before[0], during[0]) {
+		t.Fatal("a key's store subkey changed with the issue key")
+	}
+}

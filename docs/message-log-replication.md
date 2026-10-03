@@ -90,6 +90,17 @@ since unitdb cannot list them.
 - memdb keeps a version of a key per time block it was written in; the store
   deletes every version, and lists each key once.
 
+## Encryption at rest
+
+With `encrypt_at_rest` on, a node seals each record as the store writes it
+and opens it as the store reads it (`server/internal/store/sealing.go`), so
+everything above the store, replication and handoff included, sees opened
+records: a replica, a hint, a session's log or row and a rebuild's history
+are sent opened, and the node that stores them seals them, or not, as it is
+set to. Nodes need no part of each other's at-rest state but the shared
+keyring, and a cluster may mix nodes with it on and off. The topic index is read at start with the sealing set, so a sealed index
+lists its topics for a rebuild.
+
 ## Limits
 
 - **A rebuilt node does not get its topics' older history** for topics that
@@ -109,6 +120,9 @@ In `server/e2e/cluster_test.go`: `TestClusterReplicatedRelay`,
 `TestClusterRelay`, `TestClusterReliablePublishSurvivesCrash`,
 `TestClusterReliablePublishHungReplica`, `TestClusterRebuildEmptyNode`,
 `TestClusterSessionFailover`, `TestClusterSessionHandoff`,
-`TestClusterSessionMoveForgetsStaleCopy`, `TestClusterReplicaRestartStoresOnce`.
+`TestClusterSessionMoveForgetsStaleCopy`, `TestClusterReplicaRestartStoresOnce`;
+with encryption at rest, in `server/e2e/at_rest_test.go`:
+`TestClusterEncryptAtRest` and `TestClusterEncryptAtRestSessionFailover`, each
+with every node sealing and with a mixed cluster.
 Unit tests: `TestRingGetN` (`pkg/hash`), `TestLogDeleteAcrossTimeBlocks` and
 `TestHintKeptWhenStoreFails` (`server/internal`).

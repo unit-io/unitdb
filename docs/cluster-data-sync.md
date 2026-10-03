@@ -78,9 +78,25 @@ its first request. A cluster refuses insecure clients, and a node with
 answered by the client's node and never forwarded; one that arrives
 forwarded is dropped.
 
-Nodes trust each other's requests: the cluster ports have no authentication
-or encryption yet, so bind them to a private network and firewall them to
-the other nodes.
+Nodes trust each other's requests, so a node must know who calls it. With
+`cluster_config.tls` set, nodes talk over mutual TLS (`cluster_tls.go`): each
+has a certificate signed by the cluster's CA naming its node name (a DNS
+name), and listens on its `tls_addr`. A node takes a TLS connection only from
+a certificate naming exactly one other configured node, and serves its calls
+as that node's: a call that names its sender (`Node` in `ClusterReq`,
+`DeliverReq`, `ReplicateReq`, `RebuildReq`, `RebuildHistoryReq`,
+`FetchSessionReq`, `ForgetSessionReq`, `ResyncReq` and `ClusterVoteRequest`;
+`Leader` in `ClusterPing`) must name it, or is refused. `Proxy` names no
+sender. `Master` also drops a request for a connection it holds for another
+node. A node dials a peer's `tls_addr` and checks that the peer's certificate
+names the peer.
+
+A node still listens on its plain `addr` beside the TLS one unless
+`tls.require` is set, so that a cluster can move to TLS node by node
+([rolling-deploys.md](rolling-deploys.md#moving-a-cluster-to-tls)). The plain
+port has no authentication or encryption: until `require` is set on every
+node, bind the cluster ports to a private network and firewall them to the
+other nodes.
 
 ```
 client ── node C (client's node) ──────────────────── node O (topic owner)
@@ -175,9 +191,11 @@ node B (re)connects to node C:
 - **An older node,** without the `revocations` capability, is sent none of
   it; see [rolling-deploys.md](rolling-deploys.md#upgrading-to-revocation).
 
-Like the other calls between nodes, `Revocations` is not authenticated: the
-node it names must be one of the cluster's, but anyone who can reach the
-cluster ports can revoke. Firewall them.
+Over cluster TLS, a `Revocations` call must name the node of the caller's
+certificate, as the other calls do. Over a plain connection it is not
+authenticated: the node it names must be one of the cluster's, but anyone
+who can reach the plain cluster ports can revoke. Firewall them, or require
+TLS.
 
 ## Shutting down
 
@@ -209,3 +227,6 @@ their sessions elsewhere. It waits `drain_timeout` (default 10s) at most.
 delivery across every subscriber/publisher/owner combination, reliable and
 batch delivery, wildcards, relays, failover and rejoin, frozen nodes, requests
 during a failover, and fan-out to many subscribers.
+`server/e2e/cluster_tls_test.go` runs one over mutual TLS (delivery, failover,
+replicated relays; callers without a node's certificate and calls naming
+another sender are refused) and moves a plain one to TLS node by node.

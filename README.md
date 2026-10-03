@@ -58,7 +58,20 @@ The single key is key 0, used as its 32 characters are: in a keyring it is `prin
 2. Hand out new client IDs and topic keys. A client that connects with a v2 client ID of the old key, or with a v1 one, is sent the same ID sealed with the new key on `unitdb/clientid/` (see below); topic keys are requested again with `unitdb/keygen`. Service IDs are sealed again with `mintid -from <id>`.
 3. Remove the old key. What it issued is refused from then on.
 
-The server derives a subkey of each key for each use (HKDF-SHA256): one seals client IDs, another signs topic keys.
+The server derives a subkey of each key for each use (HKDF-SHA256): one seals client IDs, another signs topic keys, a third seals stored records (below).
+
+### Encryption at rest
+With `"encrypt_at_rest": true` in `unitdb.conf`, every record the server stores is sealed before the storage engine sees it: messages and their replicas, hints for other nodes, the ids of replicated messages, the topic index, sessions and their logs, and subscriptions. It is off by default in this version.
+
+- A record is sealed with XChaCha20-Poly1305 under a random 24-byte nonce, with the store subkey of the keyring's issue key, and with its contract (or its key, for sessions and logs) as associated data, so a record moved elsewhere in the store fails to open. A sealed record is `magic (4) | key id (1) | nonce (24) | sealed record | tag (16)`: 45 bytes more than the record.
+- Records are opened with the key they name, whether `encrypt_at_rest` is on or off. During a rotation, records sealed with the old key open with it as a `read` key. Once a key is removed from the keyring, the records it sealed are refused: they are skipped, and logged as sealed with a key that is not in the keyring, rather than read as garbage. Messages expire, but sessions and subscriptions are only sealed again when they are written again, so keep an old key as a `read` key while the store may hold records it sealed.
+- Turning it on for an existing store leaves the records already stored as they are, readable; new ones are sealed. Turning it off again stores new records plain, and keeps reading the sealed ones while their key is in the keyring. The server doesn't seal or unseal what it stored before.
+- Topics, keys and ids are not sealed, nor are record sizes and times: only what is stored under them. Records stored before it was turned on stay plain until they expire or are written again.
+- Don't roll a server back to a version without `encrypt_at_rest` once it has sealed records: such a version reads them as they are, sealed.
+- In a cluster, nodes send each other records opened, and each node seals what it stores as it is set to, so nodes can be turned on one at a time, and a cluster can mix nodes with it on, off, or of an earlier version. Every node needs the same keyring already. Traffic between nodes is not encrypted by this.
+- Cost: sealing a record takes about 0.7 µs for 64 bytes and 1.8 µs for 1 KB on one core of an Apple M-series CPU, opening it a little less, and large records go at about 0.9 GB/s (`go test ./server/internal/store -bench Seal`).
+
+The server doesn't use the storage engine's own encryption (`unitdb.WithEncryption`): its nonce is derived from the plaintext, and repeats at message volumes.
 
 ### Client IDs and topic keys
 The server issues v2 client IDs and topic keys, and still takes the v1 ones of earlier versions. Both are opaque strings to clients:
@@ -103,6 +116,18 @@ To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 node
 ```
 
 Above example shows each Unitdb node running on the same host, so each node must listen on different ports. This would not be necessary if each node ran on a different host.
+
+Nodes talk over mutual TLS when `cluster_config.tls` names the cluster's CA and the node's certificate and key: each node needs a certificate signed by the CA, with its node name as a DNS name and for both server and client use, and a `tls_addr` beside its `addr` in `cluster_config.nodes`. A node takes a cluster connection only from a certificate naming another configured node, and refuses a call on it that names another node as its sender. It still listens on its plain `addr` too, so that a cluster can move to TLS node by node ([docs/rolling-deploys.md](docs/rolling-deploys.md#moving-a-cluster-to-tls)); set `"require": true` once every node is on TLS to close it. Until then, firewall the plain cluster ports to the other nodes.
+
+```
+"cluster_config": {
+	"nodes": [
+		{"name": "one", "addr": "10.0.0.1:12001", "tls_addr": "10.0.0.1:12011"},
+		{"name": "two", "addr": "10.0.0.2:12001", "tls_addr": "10.0.0.2:12011"}
+	],
+	"tls": {"ca_file": "/etc/unitdb/cluster-ca.crt", "cert_file": "/etc/unitdb/one.crt", "key_file": "/etc/unitdb/one.key", "require": true}
+}
+```
 
 ## Client Libraries
 Make use of officially supported client libraries to connect to unitdb server running on single node or running on a cluster.
