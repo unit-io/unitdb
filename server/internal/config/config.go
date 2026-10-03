@@ -66,6 +66,16 @@ type Config struct {
 	// ids say what they are (see server/cmd/mintid).
 	AllowInsecure bool `json:"allow_insecure"`
 
+	// ClientIDTTL is how long a v2 client id the server issues lasts, as a
+	// duration, for ids that are not primary (unitdb/clientid), and
+	// PrimaryIDTTL for primary ones; TopicKeyTTL is how long a v2 topic key
+	// lasts when its keygen request gives no ttl. Empty or "0" never
+	// expires, the default. A client is sent a new id on unitdb/clientid/
+	// when it connects past 80% of its id's lifetime.
+	ClientIDTTL  string `json:"client_id_ttl"`
+	PrimaryIDTTL string `json:"primary_id_ttl"`
+	TopicKeyTTL  string `json:"topic_key_ttl"`
+
 	// Configs for subsystems
 	Cluster json.RawMessage `json:"cluster_config"`
 
@@ -80,8 +90,13 @@ type Config struct {
 // EncryptionConfig represents the configuration for the encryption.
 type EncryptionConfig struct {
 
-	// chacha20poly1305 encryption key for client Ids and topic keys. 32 random bytes base64-encoded.
+	// Key is the key client Ids and topic keys are sealed and signed with:
+	// 32 characters, used as they are. The keyring (UNITDB_KEYRING, or
+	// KeyringFile) takes its place when set; see Config.Keyring.
 	Key string `json:"key,omitempty"`
+
+	// KeyringFile is a file holding the keyring, as UNITDB_KEYRING does.
+	KeyringFile string `json:"keyring_file,omitempty"`
 
 	// Key identifier. it is useful when you use multiple keys.
 	Identifier string `json:"identifier"`
@@ -113,9 +128,9 @@ const sampleKey = "4BWm1vZletvrCDGWsF6mex8oBSd59m6I"
 // errNoKey explains how to set a key.
 var errNoKey = errors.New("set encryption_config's key, or " + EncryptionKeyEnv + ", to 32 random characters, for example the output of `openssl rand -base64 24`")
 
-// EncryptionKey returns the key client IDs and topic keys are signed with:
-// the UNITDB_ENCRYPTION_KEY environment variable if set, otherwise
-// encryption_config's key. It refuses a missing key, one of the wrong size,
+// EncryptionKey returns the single key client IDs and topic keys are signed
+// with when there is no keyring (see Keyring): the UNITDB_ENCRYPTION_KEY
+// environment variable if set, otherwise encryption_config's key. It refuses a missing key, one of the wrong size,
 // and the old sample key.
 func (c *Config) EncryptionKey() ([]byte, error) {
 	key := os.Getenv(EncryptionKeyEnv)

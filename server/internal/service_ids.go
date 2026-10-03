@@ -18,10 +18,10 @@ package internal
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/pkg/hash"
-	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/types"
 )
 
@@ -54,9 +54,8 @@ func (c *_Conn) onService(payload []byte) (interface{}, bool) {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return types.ErrBadRequest, false
 	}
-	// uid.Decode decodes in place: hand it a copy.
-	id, err := uid.Decode([]byte(req.ClientID), c.service.mac)
-	if err != nil || !id.IsService() || id.Contract() != c.clientID.Contract() {
+	id, claims, err := c.service.keys.OpenClientID([]byte(req.ClientID))
+	if err != nil || (claims != nil && claims.Expired(time.Now().Unix())) || !id.IsService() || id.Contract() != c.clientID.Contract() {
 		return types.ErrForbidden, false
 	}
 	c.insecure.Store(true)

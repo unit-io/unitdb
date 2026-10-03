@@ -26,6 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/unit-io/unitdb/server/internal/config"
+	"github.com/unit-io/unitdb/server/internal/keys"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lpnet "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
@@ -46,18 +48,49 @@ func mac() *crypto.MAC {
 	return m
 }
 
-// newClientID returns an encoded secondary client ID bound to contract, so two
+// testKeys are the keys of the test servers' single key, testKey, as the
+// servers have them: they seal v2 client ids and sign v2 topic keys the
+// servers take.
+var testKeys = func() *keys.Set {
+	s, err := keys.New(&config.Keyring{Keys: []config.Key{{ID: 0, Key: []byte(testKey), Use: config.KeyIssue}}})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}()
+
+// secondaryID returns a secondary client ID bound to contract, so two
 // clients on the same contract share a namespace and different contracts are
 // isolated.
-func newClientID(contract uint32) string {
+func secondaryID(contract uint32) uid.ID {
 	id, err := uid.NewClientID(1)
 	if err != nil {
 		panic(err)
 	}
 	id.SetContract(contract)
-	// A non-primary id is cached by the server and usable for pub/sub.
 	id.SetPermissions(0)
-	return id.Encode(mac())
+	return id
+}
+
+// sealV2 seals id as a v2 client id that never expires, as the server
+// issues them.
+func sealV2(id uid.ID) string {
+	text, err := testKeys.SealClientID(id, 0)
+	if err != nil {
+		panic(err)
+	}
+	return text
+}
+
+// newClientID returns a v2 secondary client ID bound to contract.
+func newClientID(contract uint32) string {
+	return sealV2(secondaryID(contract))
+}
+
+// newClientIDV1 returns a v1 secondary client ID bound to contract, as
+// servers issued before v2 ids.
+func newClientIDV1(contract uint32) string {
+	return secondaryID(contract).Encode(mac())
 }
 
 // serviceClientID returns a primary client ID for contract marked as a
@@ -68,7 +101,7 @@ func serviceClientID(contract uint32) string {
 	if err != nil {
 		panic(err)
 	}
-	return id.Encode(mac())
+	return sealV2(id)
 }
 
 // primaryClientID returns a primary client ID for contract, as `mintid`
@@ -78,23 +111,30 @@ func primaryClientID(contract uint32) string {
 	if err != nil {
 		panic(err)
 	}
-	return id.Encode(mac())
+	return sealV2(id)
+}
+
+// openClientID opens a client ID minted with the test key, of either
+// version; claims are nil for a v1 one.
+func openClientID(clientID string) (uid.ID, *uid.Claims, error) {
+	return testKeys.OpenClientID([]byte(clientID))
 }
 
 // contractOf returns the contract of a client ID minted with the test key.
 func contractOf(clientID string) (uint32, error) {
-	id, err := uid.Decode([]byte(clientID), mac())
+	id, _, err := openClientID(clientID)
 	if err != nil {
 		return 0, err
 	}
 	return id.Contract(), nil
 }
 
-// signer issues signed topic keys as the test servers' keygen does.
+// signer issues v1 signed topic keys as the test servers' keygen did before
+// v2 keys.
 var signer = security.NewSigner([]byte(testKey))
 
-// signedTopicKey mints a signed topic key for contract with the given
-// permissions, as the server's keygen would.
+// signedTopicKey mints a v1 signed topic key for contract with the given
+// permissions, as the server's keygen did before v2 keys.
 func signedTopicKey(contract uint32, topic string, permissions uint32) string {
 	k, err := signer.GenerateKey(contract, topic, permissions)
 	if err != nil {
@@ -103,7 +143,17 @@ func signedTopicKey(contract uint32, topic string, permissions uint32) string {
 	return k
 }
 
-// topicKey mints a topic key for contract with the given permissions, as the
+// topicKeyV2 mints a v2 topic key for contract with the given permissions,
+// that never expires, as the server's keygen does.
+func topicKeyV2(contract uint32, topic string, permissions uint32) string {
+	k, err := testKeys.TopicKey(contract, topic, permissions, 0)
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+// topicKey mints an unsigned topic key for contract with the given permissions, as the
 // server's keygen would.
 func topicKey(contract uint32, topic string, permissions uint32) string {
 	k, err := security.GenerateKey(contract, topic, permissions)

@@ -51,11 +51,17 @@ var (
 	ErrTargetTooLong     = &Error{ReturnCode: 0x13, Status: 400, Message: "Topic can not have more than 23 parts."}
 	ErrNotImplemented    = &Error{ReturnCode: 0x14, Status: 501, Message: "The server does not recognize the request method."}
 	ErrKeyGenForbidden   = &Error{ReturnCode: 0x15, Status: 403, Message: "Unacceptable identifier, use the primary client Id to generate keys."}
+	// ErrKeyTTLUnavailable refuses a key with a ttl while a node of the
+	// cluster reads no v2 topic keys, the only ones that expire.
+	ErrKeyTTLUnavailable = &Error{ReturnCode: 0x16, Status: 503, Message: "Keys with a ttl are issued once every node of the cluster reads v2 topic keys."}
 )
 
 type KeyGenRequest struct {
 	Topic string `json:"topic"`
 	Type  string `json:"type"`
+	// Ttl is how long the key lasts, as a duration such as "24h"; empty is
+	// the server's topic_key_ttl, "0" never expires.
+	Ttl string `json:"ttl,omitempty"`
 }
 
 func (m *KeyGenRequest) Access() uint32 {

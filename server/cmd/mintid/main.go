@@ -14,20 +14,31 @@
  * limitations under the License.
  */
 
-// Command mintid issues a primary client id, encrypted with the server's
-// encryption key as the server encrypts client ids.
+// Command mintid issues a primary client id, sealed with the server's issue
+// key as the server seals v2 client ids.
 //
-//	mintid [-config unitdb.conf] [-contract N] [-service]
+//	mintid [-config unitdb.conf] [-contract N] [-service] [-ttl 0] [-v1]
+//	mintid [-config unitdb.conf] -from ID [-ttl 0]
 //
-// The key is read as the server reads it: UNITDB_ENCRYPTION_KEY, else the
-// config's encryption_config.key. Without -contract, the id is of a new,
-// random contract.
+// The keyring is read as the server reads it: UNITDB_KEYRING, else the
+// config's keyring_file, else the single key (UNITDB_ENCRYPTION_KEY, else
+// the config's encryption_config.key). Without -contract, the id is of a
+// new, random contract. -ttl sets how long the id lasts; 0, the default,
+// never expires.
 //
 // -service marks the id as a trusted service's (uid.AllowService): its
 // connections, and the ones it vouches for with unitdb/service, publish and
 // subscribe on the contract's topics without topic keys, in a cluster too.
 // The server never issues such ids: give them only to servers, never to
 // clients or devices.
+//
+// -from seals ID, a client id of either version that a key of the keyring
+// sealed, again as a v2 id with the issue key: the same id, so the same
+// contract, permissions, uuid (none for a v1 id) and sessions. Use it to
+// move a service off a v1 id, or off a key being retired.
+//
+// -v1 mints a v1 id, which never expires, for a cluster with nodes older
+// than v2 client ids.
 package main
 
 import (
@@ -36,10 +47,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	jcr "github.com/DisposaBoy/JsonConfigReader"
 	"github.com/unit-io/unitdb/server/internal/config"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
+	"github.com/unit-io/unitdb/server/internal/keys"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 )
 
@@ -53,9 +65,12 @@ func main() {
 // run mints a client id as args say, and writes it to out.
 func run(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("mintid", flag.ContinueOnError)
-	configFile := flags.String("config", "", "the server's config, for its encryption key; UNITDB_ENCRYPTION_KEY overrides it")
+	configFile := flags.String("config", "", "the server's config, for its keyring; UNITDB_KEYRING and UNITDB_ENCRYPTION_KEY override it")
 	contract := flags.Uint("contract", 0, "the contract; a new, random one if 0")
 	service := flags.Bool("service", false, "a trusted service's id, whose connections need no topic keys")
+	ttl := flags.Duration("ttl", 0, "how long the id lasts; 0 never expires")
+	from := flags.String("from", "", "a client id to seal again as a v2 one, with the same contract, permissions and uuid")
+	v1 := flags.Bool("v1", false, "mint a v1 id, for a cluster with nodes older than v2 client ids")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -64,6 +79,15 @@ func run(args []string, out io.Writer) error {
 	}
 	if *contract > 1<<32-1 {
 		return fmt.Errorf("-contract %d is more than 32 bits", *contract)
+	}
+	if *ttl < 0 {
+		return fmt.Errorf("-ttl %s is negative", *ttl)
+	}
+	if *from != "" && (*contract != 0 || *service || *v1) {
+		return fmt.Errorf("-from keeps the id's contract and permissions: it takes neither -contract, -service nor -v1")
+	}
+	if *v1 && *ttl != 0 {
+		return fmt.Errorf("a v1 id can't expire: -v1 takes no -ttl")
 	}
 
 	var cfg config.Config
@@ -77,18 +101,47 @@ func run(args []string, out io.Writer) error {
 			return fmt.Errorf("%s: %v", *configFile, err)
 		}
 	}
-	key, err := cfg.EncryptionKey()
+	kr, err := cfg.Keyring()
 	if err != nil {
 		return err
 	}
-	mac, err := crypto.New(key)
+	set, err := keys.New(kr)
 	if err != nil {
 		return err
 	}
-	id, err := uid.MintClientID(uint32(*contract), *service)
-	if err != nil {
+
+	var id uid.ID
+	if *from != "" {
+		var claims *uid.Claims
+		if id, claims, err = set.OpenClientID([]byte(*from)); err != nil {
+			return fmt.Errorf("-from: the id does not open with any key of the keyring")
+		}
+		if claims != nil && claims.Expired(time.Now().Unix()) {
+			return fmt.Errorf("-from: the id has expired")
+		}
+	} else if id, err = uid.MintClientID(uint32(*contract), *service); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "client id: %s\ncontract:  %d\nservice:   %t\n", id.Encode(mac), id.Contract(), id.IsService())
+
+	var text string
+	var expires string
+	if *v1 {
+		text, expires = set.EncodeClientIDV1(id), "never"
+	} else {
+		issuedAt, expiresAt := keys.Times(time.Now(), *ttl)
+		if text, err = set.SealClientIDAt(id, issuedAt, expiresAt); err != nil {
+			return err
+		}
+		expires = "never"
+		if expiresAt != 0 {
+			expires = time.Unix(int64(expiresAt), 0).UTC().Format(time.RFC3339)
+		}
+	}
+	version, uuid := 2, id.Uuid()
+	if *v1 {
+		version, uuid = 1, 0 // a v1 id carries no uuid
+	}
+	_, err = fmt.Fprintf(out, "client id: %s\nversion:   %d\ncontract:  %d\nservice:   %t\nuuid:      %d\nkey id:    %d\nexpires:   %s\n",
+		text, version, id.Contract(), id.IsService(), uuid, set.IssueKeyID(), expires)
 	return err
 }

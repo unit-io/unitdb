@@ -30,10 +30,9 @@ import (
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/config"
-	"github.com/unit-io/unitdb/server/internal/message/security"
+	"github.com/unit-io/unitdb/server/internal/keys"
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/net/listener"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/log"
 	"github.com/unit-io/unitdb/server/internal/pkg/stats"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
@@ -45,9 +44,11 @@ import (
 
 // _Service is a main struct
 type _Service struct {
-	pid    uint32           // The processid is unique Id for the application
-	mac    *crypto.MAC      // The MAC to use for decoding and encoding keys.
-	signer *security.Signer // The signer to issue and verify topic keys.
+	pid  uint32    // The processid is unique Id for the application
+	keys *keys.Set // Issues and reads client ids and topic keys, with the keyring.
+	// Lifetimes of v2 client ids that are not primary, of primary ones, and
+	// of topic keys whose keygen request gives none; 0 never expires.
+	clientIDTTL, primaryIDTTL, topicKeyTTL time.Duration
 	// acceptUnsignedKeys is 1 when unsigned topic keys are accepted (atomic).
 	acceptUnsignedKeys uint32
 	// allowInsecure accepts clients that connect with the insecure flag
@@ -101,15 +102,17 @@ func NewService(cfg *config.Config) (s *_Service, err error) {
 	s.http.Handler = s.onAcceptConn
 	s.tcp.Handler = s.onAcceptConn
 
-	// Create a new MAC from the key.
-	encryptionKey, err := s.config.EncryptionKey()
+	// The keyring: UNITDB_KEYRING, keyring_file, or the single key.
+	keyring, err := s.config.Keyring()
 	if err != nil {
 		return nil, err
 	}
-	if s.mac, err = crypto.New(encryptionKey); err != nil {
+	if s.keys, err = keys.New(keyring); err != nil {
 		return nil, err
 	}
-	s.signer = security.NewSigner(encryptionKey)
+	if s.clientIDTTL, s.primaryIDTTL, s.topicKeyTTL, err = cfg.TTLs(); err != nil {
+		return nil, err
+	}
 	s.setAcceptUnsignedKeys(cfg.AcceptUnsignedKeys)
 	if cfg.AllowInsecure {
 		// A cluster would honour an insecure client's flag on every node
