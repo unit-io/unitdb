@@ -152,6 +152,7 @@ func spoofable(sender string) map[string]interface{} {
 		"Cluster.ForgetSession":  req,
 		"Cluster.Replicate":      req,
 		"Cluster.Resync":         req,
+		"Cluster.Revocations":    req,
 	}
 }
 

@@ -249,6 +249,7 @@ func TestPeerRPCSenders(t *testing.T) {
 		"ForgetSession":  func() error { return p.ForgetSession(&ForgetSessionReq{Node: "three"}, &b) },
 		"Replicate":      func() error { return p.Replicate(&ReplicateReq{Node: "three"}, &b) },
 		"Resync":         func() error { return p.Resync(&ResyncReq{Node: "three"}, &b) },
+		"Revocations":    func() error { return p.Revocations(&RevocationsReq{Node: "three"}, &RevocationsResp{}) },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil || !strings.Contains(err.Error(), `names "three"`) {

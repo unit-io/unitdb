@@ -62,6 +62,15 @@ type Claims struct {
 	IssuedAt, ExpiresAt uint32
 }
 
+// IssuedAtOrZero returns when the id was issued, in unix seconds, or 0 for
+// c nil: a v1 id's, which carries no issue time.
+func (c *Claims) IssuedAtOrZero() uint32 {
+	if c == nil {
+		return 0
+	}
+	return c.IssuedAt
+}
+
 // Expired reports whether the id has expired at now, in unix seconds.
 func (c Claims) Expired(now int64) bool {
 	return c.ExpiresAt != 0 && now >= int64(c.ExpiresAt)

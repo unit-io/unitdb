@@ -64,9 +64,14 @@ const (
 	// is not in allCapabilities: a node has it when cluster_config.tls is
 	// set. No call depends on it; it tells which nodes have moved to TLS.
 	capTLS = "tls"
+	// capRevocations: the node holds the cluster's security state, what
+	// was revoked in each contract (unitdb/revoke), and takes it from the
+	// others (Revocations). An older node is sent none, and refuses no id
+	// or key for being revoked.
+	capRevocations = "revocations"
 )
 
-var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys}
+var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys, capRevocations}
 
 // ownCapabilities are what this node can do: all of them, unless the
 // UNITDB_CLUSTER_CAPS environment variable lists fewer ("none" for none), so
@@ -229,6 +234,14 @@ func (c *Cluster) allKnownToSupport(cap string) bool {
 		}
 	}
 	return true
+}
+
+// hasNow records that the node can do cap after all, as a call of it the
+// node made shows, until the node tells what it can do again.
+func (n *ClusterNode) hasNow(cap string) {
+	n.caps.mu.Lock()
+	defer n.caps.mu.Unlock()
+	delete(n.caps.missing, cap)
 }
 
 // lacks reports whether err is the node's answer that it cannot do cap, and

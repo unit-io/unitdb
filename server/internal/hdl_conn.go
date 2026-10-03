@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/fnv"
+	"strconv"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message"
@@ -471,6 +472,11 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 		// Refused without a new id: the client's owner issues it another.
 		return nil, types.ErrInvalidClientID
 	}
+	// Revoked, or issued before its contract's not-before time (a v1 id has
+	// no issue time): refused without a new id, as an expired one.
+	if c.service.revocations.refuses(clientid.Contract(), clientid.Uuid(), claims.IssuedAtOrZero()) != "" {
+		return nil, types.ErrInvalidClientID
+	}
 
 	// The insecure flag skips every topic key check, so a client's own flag
 	// is taken only by a server that allows insecure clients. A trusted
@@ -722,6 +728,11 @@ func (c *_Conn) onSecureRequest(topic *security.Topic, permission uint32) (bool,
 	if keyErr != nil {
 		return false, keyErr
 	}
+	// A v1 key has no uuid and no issue time: refused once its contract
+	// has a not-before time.
+	if c.service.revocations.refuses(c.clientID.Contract(), 0, 0) != "" {
+		return false, types.ErrUnauthorized
+	}
 
 	if !key.HasPermission(permission) {
 		return false, types.ErrUnauthorized
@@ -736,7 +747,7 @@ func (c *_Conn) onSecureRequest(topic *security.Topic, permission uint32) (bool,
 }
 
 // checkKeyV2 checks a v2 topic key, whose tag covers the whole topic, as
-// onSecureRequest does, and that it has not expired.
+// onSecureRequest does, and that it has not expired nor been revoked.
 func (c *_Conn) checkKeyV2(topic *security.Topic, permission uint32) (bool, *types.Error) {
 	key, err := c.service.keys.DecodeTopicKeyV2(c.clientID.Contract(), topic.Key, topic.Topic[:topic.Size])
 	switch err {
@@ -752,6 +763,9 @@ func (c *_Conn) checkKeyV2(topic *security.Topic, permission uint32) (bool, *typ
 		return key.Wildcard, types.ErrUnauthorized
 	}
 	if key.Expired(time.Now().Unix()) {
+		return key.Wildcard, types.ErrUnauthorized
+	}
+	if c.service.revocations.refuses(c.clientID.Contract(), key.Uuid, key.IssuedAt) != "" {
 		return key.Wildcard, types.ErrUnauthorized
 	}
 	return key.Wildcard, nil
@@ -785,6 +799,9 @@ func (c *_Conn) onSpecialRequest(topic *security.Topic, payload []byte) (ok bool
 	case requestService:
 		resp, ok = c.onService(payload)
 		return
+	case requestRevoke:
+		resp, ok = c.onRevoke(payload)
+		return
 	default:
 		return
 	}
@@ -804,10 +821,15 @@ func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 	if err != nil {
 		return types.ErrServerError, false
 	}
-	return &types.ClientIdResponse{
+	resp := &types.ClientIdResponse{
 		Status:   200,
 		ClientId: cid,
-	}, true
+	}
+	if uid.IsV2([]byte(cid)) {
+		// To revoke it; a v1 id carries none.
+		resp.Uuid = strconv.FormatUint(clientid.Uuid(), 10)
+	}
+	return resp, true
 
 }
 
@@ -868,6 +890,10 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 			Status: 200,
 			Key:    key,
 			Topic:  m.Topic,
+		}
+		if v2 {
+			// To revoke it; a v1 key carries none.
+			r.Uuid = strconv.FormatUint(security.KeyUuidV2(key), 10)
 		}
 
 		resp = append(resp, r)

@@ -483,10 +483,13 @@ func (n *ClusterNode) client() (*rpc.Client, bool) {
 // resync sends the node again every subscription this node's clients hold
 // there, once it is reachable again: it may have restarted and lost them
 // without failing for long enough to be removed from the ring.
+// It also hands the node its hints, and exchanges the whole security state
+// with it (pushRevocations), which it may have missed while away.
 func (n *ClusterNode) resync() {
 	if c := Globals.Cluster; c != nil {
 		go c.rebalance(map[string]bool{n.name: true})
 		go c.handoff(n.name)
+		go c.pushRevocations(n)
 	}
 }
 

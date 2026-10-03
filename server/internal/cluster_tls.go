@@ -318,3 +318,10 @@ func (p *peerRPC) Resync(req *ResyncReq, unused *bool) error {
 	}
 	return p.c.Resync(req, unused)
 }
+
+func (p *peerRPC) Revocations(req *RevocationsReq, resp *RevocationsResp) error {
+	if err := p.is(req.Node); err != nil {
+		return err
+	}
+	return p.c.Revocations(req, resp)
+}
