@@ -120,25 +120,6 @@ func ParseKey(text string) (topic *Topic) {
 	return topic
 }
 
-// ValidateTopic validates the topic string.
-func (k Key) ValidateTopic(contract uint32, topic string) (ok bool, wildcard bool) {
-	// var fn splitFunc
-	// Bytes 4-5-6-7 contains target hash
-	target := uint32(k[4])<<24 | uint32(k[5])<<16 | uint32(k[6])<<8 | uint32(k[7])
-	targetPath := uint32(k[1])<<16 | uint32(k[2])<<8 | uint32(k[3])
-	// If there's no depth specified then default it to a single-level validation
-
-	if targetPath == 0 {
-		if target == hash.WithSalt([]byte("..."), contract) { // Key target was "..." (1472774773 == hash("..."))
-			return true, true
-		}
-		return target == hash.WithSalt([]byte(topic), contract), true
-	}
-
-	h := hash.WithSalt([]byte(topic), contract)
-	return h == target, ((targetPath >> 23) & 1) == 0
-}
-
 // SetTarget sets the topic for the key.
 func (k Key) SetTarget(contract uint32, topic string) error {
 	var fn splitFunc
@@ -190,7 +171,11 @@ func (k Key) HasPermission(flag uint32) bool {
 	return (p & flag) == flag
 }
 
-// GenerateKey generates a new key.
+// GenerateKey generates a key for topic on contract, in the unsigned format
+// servers up to v0.6.0 took as a topic key with accept_unsigned_keys. Anyone
+// who knows the contract can make one, so it grants nothing since v0.7.0:
+// the server uses it only as the name a subscription without a topic key is
+// counted under (an insecure or a trusted service's connection).
 func GenerateKey(contract uint32, topic string, permissions uint32) (string, error) {
 	key := Key(make([]byte, rawLen))
 	key.SetPermissions(permissions)
@@ -215,23 +200,4 @@ func (k Key) Encode() string {
 	text := make([]byte, encodedLen)
 	encoding.Encode8(text, buffer[:])
 	return string(text)
-}
-
-func DecodeKey(key string) (Key, error) {
-	if len(key) != encodedLen {
-		return Key{}, errors.New("Key provided is invalid")
-	}
-
-	// Base8 decoding is done to buffer
-	buffer := make([]byte, rawLen)
-	encoding.Decode8(buffer, []byte(key))
-
-	// Then XOR the entire array with the salt.
-	for i := 2; i < rawLen; i += 2 {
-		buffer[i] = byte(buffer[i] ^ buffer[0])
-		buffer[i+1] = byte(buffer[i+1] ^ buffer[1])
-	}
-
-	// Return the key on the decrypted buffer.
-	return Key(buffer), nil
 }

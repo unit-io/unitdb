@@ -20,7 +20,6 @@ import (
 	"crypto/cipher"
 	"errors"
 
-	"github.com/unit-io/unitdb/server/internal/pkg/hash"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -29,8 +28,10 @@ const (
 	MessageOffset = EpochSize + 4
 )
 
-// MAC has the ability to encrypt and decrypt (short) messages as long as they
-// share the same key and the same epoch.
+// MAC opens what v1 client ids sealed: ChaCha20-Poly1305 under a nonce made
+// of the key's salt and the clear start of the message (finding 5 of the
+// security review). Since v0.7.0 nothing is sealed with it; it is kept only
+// for server/cmd/mintid -from, which seals a v1 id again as a v2 one.
 type MAC struct {
 	parent cipher.AEAD
 	salt   []byte
@@ -61,30 +62,6 @@ func New(key []byte) (*MAC, error) {
 // Overhead returns the maximum difference between the lengths of a
 // plaintext and its ciphertext.
 func (m *MAC) Overhead() int { return m.parent.Overhead() + EpochSize }
-
-func SignatureToUint32(sig []byte) uint32 {
-	return uint32(sig[0])<<24 | uint32(sig[1])<<16 | uint32(sig[2])<<8 | uint32(sig[3])
-}
-
-func Signature(value uint32) []byte {
-	sig := make([]byte, 4)
-	sig[0] = byte(value >> 24)
-	sig[1] = byte(value >> 16)
-	sig[2] = byte(value >> 8)
-	sig[3] = byte(value)
-	return sig
-}
-
-// Encrypt encrypts src and appends to dst, returning the
-// resulting byte slice
-func (m *MAC) Encrypt(dst, src []byte) []byte {
-	//Copy first 4 bytes epoch from source
-	dst = append(dst, src[:EpochSize]...)
-	h := hash.New(src)
-	dst = append(dst, Signature(h)...)
-	nonce := append(m.salt, dst[:MessageOffset]...)
-	return m.parent.Seal(dst, nonce, src[EpochSize:], nil)
-}
 
 // Decrypt decrypts src and appends to dst, returning the
 // resulting byte slice or an error if the input cannot be

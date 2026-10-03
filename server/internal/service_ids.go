@@ -56,10 +56,11 @@ func (c *_Conn) onService(payload []byte) (interface{}, bool) {
 		return types.ErrBadRequest, false
 	}
 	id, claims, err := c.service.keys.OpenClientID([]byte(req.ClientID))
-	if err != nil || (claims != nil && claims.Expired(time.Now().Unix())) || !id.IsService() || id.Contract() != c.clientID.Contract() {
+	if err != nil || claims.Expired(time.Now().Unix()) || !id.IsService() || id.Contract() != c.clientID.Contract() {
+		// A v1 id too: it is refused as at CONNECT.
 		return types.ErrForbidden, false
 	}
-	if c.service.revocations.refuses(id.Contract(), id.Uuid(), claims.IssuedAtOrZero()) != "" {
+	if c.service.revocations.refuses(id.Contract(), id.Uuid(), claims.IssuedAt) != "" {
 		return types.ErrForbidden, false
 	}
 	c.insecure.Store(true)

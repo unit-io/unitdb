@@ -168,10 +168,11 @@ func TestRevocation(t *testing.T) {
 	})
 
 	// Revoking everything issued before now refuses the contract's ids and
-	// keys issued before, v1 ones included; issue times are whole seconds.
+	// keys issued before, an id sealed again from a v1 one (mintid -from),
+	// which has no uuid, included; issue times are whole seconds.
 	issuedBefore := newClientID(contract)
-	keyBefore := topicKeyV2(contract, topics["three"], security.AllowReadWrite)
-	v1Key := signedTopicKey(contract, topics["three"], security.AllowReadWrite)
+	fromV1 := sealV2(secondaryID(contract)[:12])
+	keyBefore := topicKey(contract, topics["three"], security.AllowReadWrite)
 	time.Sleep(1100 * time.Millisecond)
 	revoke(t, a, types.RevokeRequest{All: true})
 	for _, n := range c.nodes {
@@ -181,23 +182,21 @@ func TestRevocation(t *testing.T) {
 		if connects(t, n.server, admin) {
 			t.Errorf("the admin's id still connects to %s after revoking all", n.name)
 		}
-		if connects(t, n.server, newClientIDV1(contract)) {
-			t.Errorf("a v1 id still connects to %s after revoking all", n.name)
+		if connects(t, n.server, fromV1) {
+			t.Errorf("an id sealed again from v1 still connects to %s after revoking all", n.name)
 		}
 	}
 	time.Sleep(1100 * time.Millisecond)
 	after := newClientID(contract)
-	for _, k := range []string{keyBefore, v1Key} {
-		if keyedDelivers(t, three.server, after, k, topics["three"]) {
-			t.Errorf("a key issued before, %q, opens its topic after revoking all", k)
-		}
+	if keyedDelivers(t, three.server, after, keyBefore, topics["three"]) {
+		t.Errorf("a key issued before, %q, opens its topic after revoking all", keyBefore)
 	}
 	for _, n := range c.nodes {
 		if !connects(t, n.server, after) {
 			t.Errorf("an id issued after revoking all was refused on %s", n.name)
 		}
 	}
-	if !keyedDelivers(t, three.server, after, topicKeyV2(contract, topics["three"], security.AllowReadWrite), topics["three"]) {
+	if !keyedDelivers(t, three.server, after, topicKey(contract, topics["three"], security.AllowReadWrite), topics["three"]) {
 		t.Error("a key issued after revoking all does not open its topic")
 	}
 	// Other contracts are not affected.
@@ -240,7 +239,7 @@ func TestRevocationSurvivesRestart(t *testing.T) {
 	if connects(t, s, issuedBefore) {
 		t.Error("an id issued before revoking all connects after a restart")
 	}
-	if !keyedDelivers(t, s, user, topicKeyV2(contract, topic, security.AllowReadWrite), topic) {
+	if !keyedDelivers(t, s, user, topicKey(contract, topic, security.AllowReadWrite), topic) {
 		t.Error("another key is refused after a restart")
 	}
 	// And after a clean one.
@@ -321,8 +320,8 @@ func TestRevocationConverges(t *testing.T) {
 // version, without the revocations capability: the others hold and enforce
 // what is revoked; the older node is sent none of it, and refuses nothing.
 // A key is refused where the client's node or the topic's owner has the
-// state. Revoking everything is refused while the cluster issues v1 ids and
-// keys.
+// state. A node said to read no v2 ids and keys changes nothing since
+// v0.7.0: v2 ones, which revoking everything covers, are issued anyway.
 func TestRevocationMixedCluster(t *testing.T) {
 	t.Run("without revocations", func(t *testing.T) {
 		older := []string{"UNITDB_CLUSTER_CAPS=replicate,deliver,sessions,resync,service,v2keys"}
@@ -377,7 +376,7 @@ func TestRevocationMixedCluster(t *testing.T) {
 		})
 	})
 
-	t.Run("v1 issued", func(t *testing.T) {
+	t.Run("a node said to read no v2", func(t *testing.T) {
 		older := []string{"UNITDB_CLUSTER_CAPS=replicate,deliver,sessions,resync,service"}
 		c := startClusterWith(t, clusterOpts{env: map[string][]string{"one": older}}, names...)
 		if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
@@ -389,20 +388,24 @@ func TestRevocationMixedCluster(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status := revokeStatus(t, a, types.RevokeRequest{All: true}); status != types.ErrRevokeAllUnavailable.Status {
-			t.Errorf("revoke all while v1 is issued: status %d, want %d", status, types.ErrRevokeAllUnavailable.Status)
-		}
-		// A v1 key and id have no uuid to revoke them by.
+		// Only v2 ids and keys are issued, which have uuids to revoke them
+		// by, and an issue time, so revoking all is taken.
 		key, keyUuid := keygenUuid(t, a, "groups.mixed.v1")
 		id, idUuid := secondaryUuid(t, a)
-		if len(key) != security.SignedKeyLen || keyUuid != "" || len(id) != uid.EncodedLenV1 || idUuid != "" {
-			t.Errorf("v1 key %q uuid %q, id %q uuid %q", key, keyUuid, id, idUuid)
+		if len(key) != security.KeyLenV2 || keyUuid == "" || len(id) != uid.EncodedLenV2 || idUuid == "" {
+			t.Errorf("key %q uuid %q, id %q uuid %q, want v2 ones", key, keyUuid, id, idUuid)
 		}
-		// A v2 id still has one.
 		v2 := newClientID(contract)
 		revoke(t, a, types.RevokeRequest{Uuid: uuidOf(t, v2)})
 		eventually(t, 5*time.Second, "the v2 id is refused on three", func() bool {
 			return !connects(t, c.node("three").server, v2)
+		})
+		time.Sleep(1100 * time.Millisecond)
+		if status := revokeStatus(t, a, types.RevokeRequest{All: true}); status != 200 {
+			t.Errorf("revoke all: status %d", status)
+		}
+		eventually(t, 5*time.Second, "an id issued before revoking all is refused on three", func() bool {
+			return !connects(t, c.node("three").server, id)
 		})
 	})
 }

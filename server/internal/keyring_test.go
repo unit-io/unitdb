@@ -2,55 +2,33 @@ package internal
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/types"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 	"github.com/unit-io/unitdb/server/utp"
 )
 
 func TestRenewsAt(t *testing.T) {
 	const issue = 2
 	for name, tc := range map[string]struct {
-		claims *uid.Claims
+		claims uid.Claims
 		now    int64
 		want   bool
 	}{
-		"a v1 id":                  {nil, 0, true},
-		"one that never expires":   {&uid.Claims{KeyID: issue, IssuedAt: 100}, 1 << 40, false},
-		"early in its lifetime":    {&uid.Claims{KeyID: issue, IssuedAt: 100, ExpiresAt: 200}, 179, false},
-		"past 80% of its lifetime": {&uid.Claims{KeyID: issue, IssuedAt: 100, ExpiresAt: 200}, 180, true},
-		"of a key being retired":   {&uid.Claims{KeyID: 1, IssuedAt: 100}, 101, true},
-		"with times out of order":  {&uid.Claims{KeyID: issue, IssuedAt: 200, ExpiresAt: 100}, 150, false},
+		"one that never expires":   {uid.Claims{KeyID: issue, IssuedAt: 100}, 1 << 40, false},
+		"early in its lifetime":    {uid.Claims{KeyID: issue, IssuedAt: 100, ExpiresAt: 200}, 179, false},
+		"past 80% of its lifetime": {uid.Claims{KeyID: issue, IssuedAt: 100, ExpiresAt: 200}, 180, true},
+		"of a key being retired":   {uid.Claims{KeyID: 1, IssuedAt: 100}, 101, true},
+		"with times out of order":  {uid.Claims{KeyID: issue, IssuedAt: 200, ExpiresAt: 100}, 150, false},
 	} {
 		if got := renewsAt(tc.claims, issue, tc.now); got != tc.want {
 			t.Errorf("%s: renewed %t, want %t", name, got, tc.want)
 		}
-	}
-}
-
-// TestIssuesV2OnlyOnceEveryNodeReadsThem checks the gate on v2 ids and keys
-// in a cluster: every other node must have told it reads them.
-func TestIssuesV2OnlyOnceEveryNodeReadsThem(t *testing.T) {
-	var standalone *Cluster
-	if !standalone.allKnownToSupport(capV2Keys) {
-		t.Fatal("a standalone server does not issue v2")
-	}
-	a, b := &ClusterNode{name: "a"}, &ClusterNode{name: "b"}
-	c := &Cluster{nodes: map[string]*ClusterNode{"a": a, "b": b}}
-	if c.allKnownToSupport(capV2Keys) {
-		t.Fatal("v2 issued before the other nodes told what they read")
-	}
-	a.setCapabilities(NodeCapabilities{Version: clusterProtocolVersion, Capabilities: allCapabilities})
-	b.setCapabilities(NodeCapabilities{Version: clusterProtocolVersion, Capabilities: []string{capReplicate, capService}})
-	if c.allKnownToSupport(capV2Keys) {
-		t.Fatal("v2 issued while a node reads no v2")
-	}
-	b.setCapabilities(NodeCapabilities{Version: clusterProtocolVersion, Capabilities: allCapabilities})
-	if !c.allKnownToSupport(capV2Keys) {
-		t.Fatal("v2 not issued once every node reads it")
 	}
 }
 
@@ -64,9 +42,9 @@ func sealedID(t *testing.T, id uid.ID, issuedAt, expiresAt uint32) string {
 	return text
 }
 
-// TestV2ClientIDs checks that the server issues v2 ids, still takes v1 ones
-// and sends their clients a v2 one, renews a v2 id near the end of its
-// lifetime, and refuses an expired one.
+// TestV2ClientIDs checks that the server issues v2 ids, refuses v1 ones
+// without sending a new id, renews a v2 id near the end of its lifetime, and
+// refuses an expired one.
 func TestV2ClientIDs(t *testing.T) {
 	primaryID := newClientID(t)
 	if len(primaryID) != uid.EncodedLenV2 {
@@ -76,24 +54,24 @@ func TestV2ClientIDs(t *testing.T) {
 	primary.expectNone("a new id for a fresh v2 id", isPublishOn("unitdb/clientid/"), 300*time.Millisecond)
 	secondaryID := primary.secondaryClientID()
 	secondary, claims, err := Globals.Service.keys.OpenClientID([]byte(secondaryID))
-	if err != nil || claims == nil || secondary.IsPrimary() || secondary.Uuid() == 0 || secondary.Contract() != contractOf(t, primaryID) {
+	if err != nil || claims.IssuedAt == 0 || secondary.IsPrimary() || secondary.Uuid() == 0 || secondary.Contract() != contractOf(t, primaryID) {
 		t.Fatalf("secondary id %x %+v %v", []byte(secondary), claims, err)
 	}
 
-	// A v1 id connects, and is sent the same id as v2.
-	v1 := Globals.Service.keys.EncodeClientIDV1(secondary)
-	c := connectedClient(t, v1, false)
-	m := c.waitFor("the v1 id renewed", isPublishOn("unitdb/clientid/"))
-	renewed, renewedClaims, err := Globals.Service.keys.OpenClientID(payloadOf(m))
-	if err != nil || renewedClaims == nil || string(renewed) != string(openID(t, v1)) {
-		t.Fatalf("renewed %x %+v %v, want %x", []byte(renewed), renewedClaims, err, []byte(openID(t, v1)))
+	// A v1 id, of the server's key: refused, without a new id, which
+	// would be of another contract.
+	v1 := dialTCP(t)
+	if ack := v1.connect(&utp.Connect{ClientID: v1test.ClientID(secondary, []byte(testServiceKey))}); ack.ReturnCode != types.ErrV1ClientID.ReturnCode {
+		t.Fatalf("a v1 id: return code %d, want %d", ack.ReturnCode, types.ErrV1ClientID.ReturnCode)
 	}
+	v1.expectNone("a new id for a v1 one", isPublishOn("unitdb/clientid/"), 300*time.Millisecond)
+	v1.waitClosed()
 
 	// Near the end of its lifetime.
 	now := uint32(time.Now().Unix())
 	old := connectedClient(t, sealedID(t, secondary, now-90, now+10), false)
-	m = old.waitFor("the old id renewed", isPublishOn("unitdb/clientid/"))
-	renewed, renewedClaims, err = Globals.Service.keys.OpenClientID(payloadOf(m))
+	m := old.waitFor("the old id renewed", isPublishOn("unitdb/clientid/"))
+	renewed, renewedClaims, err := Globals.Service.keys.OpenClientID(payloadOf(m))
 	if err != nil || string(renewed) != string(secondary) || renewedClaims.ExpiresAt != 0 {
 		t.Fatalf("renewed %x %+v %v, want %x, never expiring as client_id_ttl says", []byte(renewed), renewedClaims, err, []byte(secondary))
 	}
@@ -118,10 +96,6 @@ func TestV2SecondaryIDsOwnSessions(t *testing.T) {
 	idA, idB := openID(t, a), openID(t, b)
 	if sessionOwner(idA) == sessionOwner(idB) {
 		t.Fatal("two secondary ids own the same session")
-	}
-	// v1 ids of the same second do not.
-	if v1A, v1B := openID(t, Globals.Service.keys.EncodeClientIDV1(idA)), openID(t, Globals.Service.keys.EncodeClientIDV1(idB)); v1A.Epoch() == v1B.Epoch() && sessionOwner(v1A) != sessionOwner(v1B) {
-		t.Fatal("v1 ids of the same second own different sessions")
 	}
 	// A renewed id keeps its session.
 	again := openID(t, sealedID(t, idA, 1, 0))
@@ -148,7 +122,7 @@ func (c *testClient) keygenTTL(topic, ttl string) (string, int) {
 }
 
 // TestV2TopicKeys checks that keygen issues v2 keys, which open their topic
-// only and expire with their ttl, and that v1 keys are still taken.
+// only and expire with their ttl, and that v1 keys are refused.
 func TestV2TopicKeys(t *testing.T) {
 	ownerID := newClientID(t)
 	owner := connectedClient(t, ownerID, false)
@@ -168,10 +142,12 @@ func TestV2TopicKeys(t *testing.T) {
 		t.Fatalf("a v2 key on another topic: status %d", e.Status)
 	}
 
-	// A v1 signed key still opens its topic.
-	v1, _ := Globals.Service.keys.TopicKeyV1(contractOf(t, ownerID), topic, security.AllowReadWrite)
-	owner.publish(4, v1+"/"+topic, "v1", 0)
-	owner.waitFor("published with a v1 key", isPublishOn(topic))
+	// A v1 signed key is refused, and the error says why.
+	v1 := v1test.SignedTopicKey([]byte(testServiceKey), contractOf(t, ownerID), topic, security.AllowReadWrite)
+	owner.send(&utp.Publish{MessageID: 4, Messages: []*utp.PublishMessage{{Topic: v1 + "/" + topic, Payload: []byte("v1")}}})
+	if e := owner.serverError(4); e.Status != types.ErrV1Key.Status || !strings.Contains(e.Message, "no longer accepted") {
+		t.Fatalf("a v1 key: %+v", e)
+	}
 
 	// A key with a ttl expires.
 	short, status := owner.keygenTTL(topic, "1s")

@@ -3,7 +3,6 @@ package internal
 import (
 	"bufio"
 	"context"
-	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +23,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/store"
 	"github.com/unit-io/unitdb/server/internal/types"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 	pbx "github.com/unit-io/unitdb/server/proto"
 	"github.com/unit-io/unitdb/server/utp"
 	"google.golang.org/grpc"
@@ -58,6 +58,9 @@ func TestMain(m *testing.M) {
 	os.Exit(runWithService(m))
 }
 
+// testServiceKey is the test service's single key.
+const testServiceKey = "test-only-key-do-not-use-0000000"
+
 func runWithService(m *testing.M) int {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 
@@ -73,7 +76,7 @@ func runWithService(m *testing.M) int {
 	cfg := &config.Config{
 		Listen:           tcpAddr,
 		GrpcListen:       grpcAddr,
-		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
+		EncryptionConfig: json.RawMessage(`{"key":"` + testServiceKey + `","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
 		// Most tests connect insecure clients, which a server takes only
@@ -457,8 +460,8 @@ func TestShortFirstMessage(t *testing.T) {
 
 func TestConnectRejectsForgedClientID(t *testing.T) {
 	c := dialTCP(t)
-	// Well formed, but not signed with the server key.
-	forged := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	// Well formed, but not sealed with the server key.
+	forged := strings.Repeat("A", uid.EncodedLenV2)
 	c.send(&utp.Connect{ClientID: forged, KeepAlive: 30})
 
 	m := c.waitFor("assigned client id", isPublishOn("unitdb/clientid/"))
@@ -466,6 +469,14 @@ func TestConnectRejectsForgedClientID(t *testing.T) {
 		t.Fatal("server accepted a client id it did not sign")
 	}
 	c.waitClosed()
+
+	// Of a v1 id's length: refused as a v1 id, without a new id.
+	v1 := dialTCP(t)
+	if ack := v1.connect(&utp.Connect{ClientID: strings.Repeat("A", uid.EncodedLenV1)}); ack.ReturnCode != types.ErrV1ClientID.ReturnCode {
+		t.Fatalf("an id of a v1 id's length: return code %d", ack.ReturnCode)
+	}
+	v1.expectNone("a new id for a v1 one", isPublishOn("unitdb/clientid/"), 300*time.Millisecond)
+	v1.waitClosed()
 }
 
 func TestConnectWithClientID(t *testing.T) {
@@ -1048,42 +1059,41 @@ func TestKeyPermissions(t *testing.T) {
 	}
 }
 
-// TestSignedKeys checks the v1 signed keys keygen issued before v2 ones,
-// which are still taken.
-func TestSignedKeys(t *testing.T) {
+// TestV1AndUnsignedKeysRefused checks that v1 signed keys, which keygen
+// issued before v2 ones, and unsigned keys are refused since v0.7.0, read
+// key or edited, and that the error says why.
+func TestV1AndUnsignedKeysRefused(t *testing.T) {
 	ownerID := newClientID(t)
 	owner := connectedClient(t, ownerID, false)
-	readKey, err := Globals.Service.keys.TopicKeyV1(openID(t, ownerID).Contract(), "signed.t", security.AllowRead)
-	if err != nil || len(readKey) != security.SignedKeyLen {
-		t.Fatalf("v1 key %q (%v), want a signed key", readKey, err)
-	}
+	contract := openID(t, ownerID).Contract()
 	sub := connectedClient(t, owner.secondaryClientID(), false)
-	sub.subscribe(1, readKey+"/signed.t", 0)
+	sub.subscribe(1, owner.keygen("signed.t", "r")+"/signed.t", 0)
 
-	publishRejected := func(id uint16, key, desc string, status int) {
-		t.Helper()
-		owner.send(&utp.Publish{MessageID: id, Messages: []*utp.PublishMessage{{Topic: key + "/signed.t", Payload: []byte(desc)}}})
-		if e := owner.serverError(id); e.Status != status {
-			t.Fatalf("%s: status %d, want %d", desc, e.Status, status)
+	readKey := v1test.SignedTopicKey([]byte(testServiceKey), contract, "signed.t", security.AllowReadWrite)
+	unsigned := v1test.UnsignedTopicKey(contract, "signed.t", security.AllowReadWrite)
+	for i, k := range []string{readKey, unsigned} {
+		id := uint16(2 + i)
+		owner.send(&utp.Publish{MessageID: id, Messages: []*utp.PublishMessage{{Topic: k + "/signed.t", Payload: []byte("v1")}}})
+		if e := owner.serverError(id); e.Status != types.ErrV1Key.Status || !strings.Contains(e.Message, "no longer accepted") {
+			t.Fatalf("key %q: %+v", k, e)
 		}
-		sub.expectNone(desc, isPublishOn("signed.t"), 200*time.Millisecond)
+		sub.expectNone("a message published with a v1 or unsigned key", isPublishOn("signed.t"), 200*time.Millisecond)
 	}
+	owner.send(&utp.Subscribe{MessageID: 4, Subscriptions: []*utp.Subscription{{Topic: unsigned + "/signed.t"}}})
+	if e := owner.serverError(4); e.Status != types.ErrV1Key.Status {
+		t.Fatalf("subscribe with an unsigned key: %+v", e)
+	}
+}
 
-	// A read key whose permission byte is edited to read/write.
-	raw, _ := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(readKey)
-	raw[0] = byte(security.AllowReadWrite)
-	edited := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw)
-	publishRejected(2, edited, "edited key", types.ErrUnauthorized.Status)
-
-	// A key minted without the server secret, the way unsigned keys could be.
-	minted, _ := security.GenerateKey(openID(t, ownerID).Contract(), "signed.t", security.AllowReadWrite)
-	publishRejected(3, minted, "unsigned key", types.ErrUnauthorized.Status)
-
-	// Unsigned keys are accepted while the server is configured to.
-	Globals.Service.setAcceptUnsignedKeys(true)
-	defer Globals.Service.setAcceptUnsignedKeys(false)
-	owner.publish(4, minted+"/signed.t", "unsigned key accepted", 0)
-	sub.waitFor("message published with an unsigned key", isPublishOn("signed.t"))
+// TestAcceptUnsignedKeysRefused checks that a config that still sets
+// accept_unsigned_keys stops the server, before anything is set up: the
+// unsigned keys it asks for are refused since v0.7.0.
+func TestAcceptUnsignedKeysRefused(t *testing.T) {
+	on := true
+	_, err := NewService(&config.Config{AcceptUnsignedKeys: &on})
+	if err == nil || !strings.Contains(err.Error(), "accept_unsigned_keys") {
+		t.Fatalf("NewService with accept_unsigned_keys: %v", err)
+	}
 }
 
 func TestKeyGenRequiresPrimaryClient(t *testing.T) {
@@ -1142,7 +1152,7 @@ func TestShutdownHelper(t *testing.T) {
 	svc, err := NewService(&config.Config{
 		Listen:           tcpAddr,
 		GrpcListen:       grpcAddr,
-		EncryptionConfig: json.RawMessage(`{"key":"test-only-key-do-not-use-0000000","identifier":"local"}`),
+		EncryptionConfig: json.RawMessage(`{"key":"` + testServiceKey + `","identifier":"local"}`),
 		DBPath:           dir,
 		StoreConfig:      json.RawMessage(`{"reset":true,"adapters":{"unitdb":{"mem_size":16777216}}}`),
 		AllowInsecure:    true,

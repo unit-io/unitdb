@@ -34,8 +34,9 @@ import (
 
 // A contract's primary client revokes the contract's client ids and topic
 // keys with unitdb/revoke: one by its uuid, or everything the contract
-// issued before now (its not-before time). v1 ids and keys carry no uuid and
-// no issue time: they are refused once a contract has a not-before time.
+// issued before now (its not-before time). An id sealed again from a v1 one
+// (server/cmd/mintid -from) has no uuid: it is revoked by a not-before time,
+// as it has an issue time.
 //
 // The security state, what was revoked in each contract, is held by every
 // node, as wildcard subscriptions are: a change is sent to every other node,
@@ -59,10 +60,10 @@ const revocationsTimeout = 2 * time.Second
 // ContractState is what the cluster revoked in one contract.
 type ContractState struct {
 	// NotBefore refuses the client ids and topic keys issued before it, in
-	// unix seconds, and every v1 one, which have no issue time.
+	// unix seconds.
 	NotBefore int64 `json:"not_before,omitempty"`
-	// Revoked refuses the v2 client ids and topic keys with these uuids,
-	// until a unix time, 0 for ever.
+	// Revoked refuses the client ids and topic keys with these uuids, until
+	// a unix time, 0 for ever.
 	Revoked map[uint64]int64 `json:"revoked,omitempty"`
 }
 
@@ -190,8 +191,7 @@ func loadRevocations() (*revocations, error) {
 }
 
 // refuses returns why the client id or topic key of contract with uuid (0
-// for none), issued at issuedAt (0 for a v1 one), is refused, or "" if it
-// isn't.
+// for none), issued at issuedAt, is refused, or "" if it isn't.
 func (r *revocations) refuses(contract uint32, uuid uint64, issuedAt uint32) string {
 	if r == nil {
 		return ""
@@ -408,11 +408,6 @@ func (c *_Conn) onRevoke(payload []byte) (interface{}, bool) {
 		return types.ErrBadRequest, false
 	}
 	if req.All {
-		// What the cluster issues while some node reads no v2 is v1, which
-		// a not-before time refuses as soon as it is issued.
-		if !issuesV2() {
-			return types.ErrRevokeAllUnavailable, false
-		}
 		s.NotBefore = now
 	}
 	if _, err := c.service.revocations.apply(map[uint32]*ContractState{c.clientID.Contract(): s}, ""); err != nil {

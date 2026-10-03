@@ -16,9 +16,9 @@
 
 package e2e
 
-// v2 client ids and topic keys: issued from now on, with key ids and
-// expiries, from a keyring that rotates; v1 ones still taken; in a cluster,
-// issued only once every node reads them.
+// v2 client ids and topic keys: the only ones issued and taken, with key ids
+// and expiries, from a keyring that rotates; in a cluster too, whatever the
+// other nodes say they read. v1 ones are refused (release4_test.go).
 
 import (
 	"bytes"
@@ -37,9 +37,9 @@ import (
 	"github.com/unit-io/unitdb/server/internal/config"
 	"github.com/unit-io/unitdb/server/internal/keys"
 	"github.com/unit-io/unitdb/server/internal/message/security"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 	"github.com/unit-io/unitdb/server/internal/types"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 )
 
 // keyedDelivers connects a subscriber and a publisher with cid to s, and
@@ -109,7 +109,7 @@ func secondaryRequest(t *testing.T, c *client) string {
 }
 
 // TestV2Issued checks that the server issues v2 client ids and topic keys,
-// and still takes v1 ones, sending a client of a v1 id the same id as v2.
+// and does not renew a fresh one.
 func TestV2Issued(t *testing.T) {
 	s := startServer(t)
 
@@ -133,7 +133,7 @@ func TestV2Issued(t *testing.T) {
 	contract, _ := contractOf(assigned)
 	secondary := secondaryRequest(t, primary)
 	id, claims, err := openClientID(secondary)
-	if len(secondary) != uid.EncodedLenV2 || err != nil || claims == nil || id.Contract() != contract || id.Uuid() == 0 {
+	if len(secondary) != uid.EncodedLenV2 || err != nil || claims.IssuedAt == 0 || id.Contract() != contract || id.Uuid() == 0 {
 		t.Fatalf("secondary id %q: %x %+v %v", secondary, []byte(id), claims, err)
 	}
 	if other := secondaryRequest(t, primary); other == secondary {
@@ -152,30 +152,7 @@ func TestV2Issued(t *testing.T) {
 		t.Error("a v2 key opens another topic")
 	}
 
-	// v1 ids, and v1 and unsigned keys (accept_unsigned_keys), are taken.
-	v1 := newClientIDV1(contract)
-	if !keyedDelivers(t, s, v1, signedTopicKey(contract, topic, security.AllowReadWrite), topic) {
-		t.Error("a v1 id with a v1 signed key is not delivered to")
-	}
-	if !keyedDelivers(t, s, v1, topicKey(contract, topic, security.AllowReadWrite), topic) {
-		t.Error("a v1 id with an unsigned key is not delivered to")
-	}
-	if !keyedDelivers(t, s, v1, key, topic) {
-		t.Error("a v1 id with a v2 key is not delivered to")
-	}
-
-	// A client of a v1 id is sent it as v2.
-	old, err := connectTo(t, s.tcpAddr, connectOpts{clientID: v1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	next := renewed(old, 3*time.Second)
-	v1ID, _, _ := openClientID(v1)
-	got, claims, err := openClientID(next)
-	if err != nil || claims == nil || !bytes.Equal(got, v1ID) {
-		t.Fatalf("a v1 id renewed as %q: %x %+v %v, want %x", next, []byte(got), claims, err, []byte(v1ID))
-	}
-	// A fresh v2 id is not.
+	// A fresh v2 id is not renewed.
 	fresh, err := connectTo(t, s.tcpAddr, connectOpts{clientID: secondary})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +196,7 @@ func TestV2Expiry(t *testing.T) {
 		t.Fatalf("renewed id %x %+v (%v), want the same id for client_id_ttl, 10s", []byte(got), claims, err)
 	}
 	topic := "groups.v2.expiry"
-	if !keyedDelivers(t, s, next, topicKeyV2(contract, topic, security.AllowReadWrite), topic) {
+	if !keyedDelivers(t, s, next, topicKey(contract, topic, security.AllowReadWrite), topic) {
 		t.Error("the renewed id does not key its contract's topics")
 	}
 
@@ -307,7 +284,9 @@ func mintid(t *testing.T, env []string, args ...string) string {
 // TestKeyRotation rotates a server's key: a new issue key, the old one kept
 // to read with, and then removed. Ids and keys of the old key work until it
 // is removed; the server issues with the new one, and sends a client of an
-// old key's id the same id sealed with the new key.
+// old key's id the same id sealed with the new key. A v1 id of the old key,
+// refused by the server, is sealed again by mintid -from while the key is in
+// the keyring.
 func TestKeyRotation(t *testing.T) {
 	keyA := []byte("rotation-test-key-a-0123456789ab")
 	keyB := []byte("rotation-test-key-b-0123456789ab")
@@ -334,10 +313,8 @@ func TestKeyRotation(t *testing.T) {
 	contract := uint32(0x2e1ea5e7)
 	topic := "groups.rotation"
 	idV2A, _ := setA.SealClientID(secondaryID(contract), 0)
-	macA, _ := crypto.New(keyA)
-	idV1A := secondaryID(contract).Encode(macA)
+	idV1A := v1test.ClientID(secondaryID(contract), keyA)
 	keyV2A, _ := setA.TopicKey(contract, topic, security.AllowReadWrite, 0)
-	keyV1A, _ := setA.TopicKeyV1(contract, topic, security.AllowReadWrite)
 	// mintid reads the keyring as the server does.
 	service := mintid(t, ringA, "-contract", fmt.Sprint(contract), "-service")
 	if len(service) != uid.EncodedLenV2 {
@@ -345,13 +322,11 @@ func TestKeyRotation(t *testing.T) {
 	}
 	checkA := func(when string, want bool) {
 		t.Helper()
-		for name, tc := range map[string]struct{ id, key string }{
-			"v2 id, v2 key": {idV2A, keyV2A},
-			"v1 id, v1 key": {idV1A, keyV1A},
-		} {
-			if got := keyedDelivers(t, s, tc.id, tc.key, topic); got != want {
-				t.Errorf("%s: the old key's %s: delivered %t, want %t", when, name, got, want)
-			}
+		if got := keyedDelivers(t, s, idV2A, keyV2A, topic); got != want {
+			t.Errorf("%s: the old key's id and key: delivered %t, want %t", when, got, want)
+		}
+		if keyedDelivers(t, s, idV1A, keyV2A, topic) {
+			t.Errorf("%s: the old key's v1 id connected", when)
 		}
 	}
 	checkA("before", true)
@@ -412,14 +387,14 @@ func TestKeyRotation(t *testing.T) {
 	}
 }
 
-// TestV2GatedInMixedCluster checks that while a node of the cluster does not
-// read v2 ids and keys, the others issue v1 ones, which every node reads;
-// and that once every node does, v2 keys are issued and checked by the node
-// owning a topic.
-func TestV2GatedInMixedCluster(t *testing.T) {
+// TestV2IssuedInMixedCluster checks that the cluster issues v2 ids and keys
+// even while a node says it reads none (as v0.5.0 does, simulated here), and
+// warns of that node: since v0.7.0 nothing else is issued; and that v2 keys
+// are checked by the node owning a topic.
+func TestV2IssuedInMixedCluster(t *testing.T) {
 	t.Run("mixed", func(t *testing.T) {
 		older := []string{"UNITDB_CLUSTER_CAPS=replicate,deliver,sessions,resync,service"}
-		c := startClusterWith(t, clusterOpts{env: map[string][]string{"one": older}}, names...)
+		c := startClusterWith(t, clusterOpts{logLevel: "Info", env: map[string][]string{"one": older}}, names...)
 		if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
 			t.Fatal(err)
 		}
@@ -432,32 +407,33 @@ func TestV2GatedInMixedCluster(t *testing.T) {
 			}
 			topic := topicOwnedBy("one", contract, "groups.mixed.keys."+n.name, names...)
 			key, status := keygenAnswer(t, primary, topic, "")
-			if status != 200 || len(key) != security.SignedKeyLen {
-				t.Errorf("keygen on %s: %q, status %d, want a v1 key", n.name, key, status)
+			if status != 200 || len(key) != security.KeyLenV2 {
+				t.Errorf("keygen on %s: %q, status %d, want a v2 key", n.name, key, status)
 			}
-			if id := secondaryRequest(t, primary); len(id) != uid.EncodedLenV1 {
-				t.Errorf("client id request on %s: %q, want a v1 id", n.name, id)
+			if id := secondaryRequest(t, primary); len(id) != uid.EncodedLenV2 {
+				t.Errorf("client id request on %s: %q, want a v2 id", n.name, id)
 			}
-			if _, status := keygenAnswer(t, primary, topic, "1h"); status != types.ErrKeyTTLUnavailable.Status {
-				t.Errorf("keygen with a ttl on %s: status %d, want %d", n.name, status, types.ErrKeyTTLUnavailable.Status)
+			if _, status := keygenAnswer(t, primary, topic, "1h"); status != 200 {
+				t.Errorf("keygen with a ttl on %s: status %d", n.name, status)
 			}
-			v1, err := connectTo(t, n.tcpAddr, connectOpts{clientID: newClientIDV1(contract)})
-			if err != nil {
-				t.Fatal(err)
+			if _, err := connectTo(t, n.tcpAddr, connectOpts{clientID: v1ClientID(contract)}); err == nil {
+				t.Errorf("a v1 id connected to %s", n.name)
 			}
-			if again := renewed(v1, 500*time.Millisecond); again != "" {
-				t.Errorf("a v1 id was renewed on %s: %q", n.name, again)
-			}
-			// The v1 key opens the topic on its owner, the older node.
+			// The key opens the topic on its owner, the node said to be older.
 			from := c.nodes[(indexOf(names, n.name)+1)%3]
 			if !deliversRoute(t, route{sub: n, pub: from, username: "s@e2e.test", contract: contract, topic: topic, secure: true, key: key}) {
-				t.Errorf("a v1 key from %s, topic owned by one: not delivered", n.name)
+				t.Errorf("a v2 key from %s, topic owned by one: not delivered", n.name)
+			}
+		}
+		for _, n := range c.nodes[1:] {
+			if !strings.Contains(n.logs.String(), "reads no v2 client ids or topic keys") {
+				t.Errorf("%s did not warn of one, which reads no v2 ids:\n%s", n.name, n.logs.String())
 			}
 		}
 	})
 
 	t.Run("upgraded", func(t *testing.T) {
-		c := startCluster(t, names...)
+		c := startClusterWith(t, clusterOpts{logLevel: "Info"}, names...)
 		if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
 			t.Fatal(err)
 		}
@@ -481,6 +457,11 @@ func TestV2GatedInMixedCluster(t *testing.T) {
 		other := topicOwnedBy("three", contract, "groups.upgraded.other", names...)
 		if deliversRoute(t, route{sub: c.node("one"), pub: c.node("two"), username: "s@e2e.test", contract: contract, topic: other, secure: true, key: key}) {
 			t.Error("a v2 key opened another topic on its owner")
+		}
+		for _, n := range c.nodes {
+			if strings.Contains(n.logs.String(), "reads no v2 client ids") {
+				t.Errorf("%s warned of a node that reads v2 ids", n.name)
+			}
 		}
 	})
 }

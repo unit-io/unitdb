@@ -23,27 +23,16 @@ import (
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
 )
 
-// The server issues v2 client ids and topic keys, which expire and name the
-// key of the keyring that issued them (package keys), and still reads v1
-// ones. In a cluster it issues v2 ones only once every other node is known
-// to read them (capV2Keys): a node checks the topic key of a request another
-// node forwards to it, and a client may connect to any node. Until then it
-// issues v1 ones, which carry no uuid and never expire.
-//
-// A node run without capV2Keys (UNITDB_CLUSTER_CAPS, for tests) issues v1
-// ones too, as a node of an earlier version does; it still reads v2 ones.
+// The server issues and reads v2 client ids and topic keys, which expire and
+// name the key of the keyring that issued them (package keys). Since v0.7.0
+// it neither issues nor reads v1 ones, nor unsigned keys: a cluster is
+// upgraded to v0.7.0 from v0.6.0, whose nodes issue v2 ones once every node
+// says it reads them (capV2Keys), as every v0.6.0 and v0.7.0 node does. See
+// docs/rolling-deploys.md.
 
-// issuesV2 reports whether the server issues v2 client ids and topic keys.
-func issuesV2() bool {
-	return hasCapability(capV2Keys) && Globals.Cluster.allKnownToSupport(capV2Keys)
-}
-
-// issueClientID seals id as a client id, v2 with the lifetime of its kind
-// (primary or not) if the cluster reads v2 ones, else v1.
+// issueClientID seals id as a v2 client id, with the lifetime of its kind
+// (primary or not).
 func (s *_Service) issueClientID(id uid.ID) (string, error) {
-	if !issuesV2() {
-		return s.keys.EncodeClientIDV1(id), nil
-	}
 	ttl := s.clientIDTTL
 	if id.IsPrimary() {
 		ttl = s.primaryIDTTL
@@ -52,11 +41,11 @@ func (s *_Service) issueClientID(id uid.ID) (string, error) {
 }
 
 // renewsAt reports whether a client id with claims is renewed when its
-// client connects at now, in unix seconds: a v1 id (no claims) always, a v2
-// one sealed with another key than issueKey (one being retired) always, and
-// one that expires once past 80% of its lifetime.
-func renewsAt(claims *uid.Claims, issueKey uint8, now int64) bool {
-	if claims == nil || claims.KeyID != issueKey {
+// client connects at now, in unix seconds: one sealed with another key than
+// issueKey (one being retired) always, and one that expires once past 80% of
+// its lifetime.
+func renewsAt(claims uid.Claims, issueKey uint8, now int64) bool {
+	if claims.KeyID != issueKey {
 		return true
 	}
 	if claims.ExpiresAt == 0 || claims.ExpiresAt <= claims.IssuedAt {
@@ -66,14 +55,13 @@ func renewsAt(claims *uid.Claims, issueKey uint8, now int64) bool {
 	return now >= int64(claims.IssuedAt)+life*4/5
 }
 
-// renewClientID sends the client a new v2 client id on unitdb/clientid/,
-// when it connected with a v1 id, a v2 one of another key than the issue
-// key, or one past 80% of its lifetime, and the cluster reads v2 ids. The
-// new id is the same id: its contract, permissions and uuid, and so its
-// sessions, stay. It is sealed with the issue key, so a client that takes it
-// also moves off a key being retired.
+// renewClientID sends the client a new client id on unitdb/clientid/, when
+// it connected with one of another key than the issue key, or one past 80%
+// of its lifetime. The new id is the same id: its contract, permissions and
+// uuid, and so its sessions, stay. It is sealed with the issue key, so a
+// client that takes it also moves off a key being retired.
 func (c *_Conn) renewClientID() {
-	if !issuesV2() || !renewsAt(c.idClaims, c.service.keys.IssueKeyID(), time.Now().Unix()) {
+	if !renewsAt(c.idClaims, c.service.keys.IssueKeyID(), time.Now().Unix()) {
 		return
 	}
 	text, err := c.service.issueClientID(c.clientID)

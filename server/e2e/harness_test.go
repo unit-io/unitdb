@@ -251,7 +251,6 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
   "listen": "127.0.0.1:%d",
   "grpc_listen": "127.0.0.1:%d",
   "logging_level": %q,
-  "accept_unsigned_keys": true,
   "allow_insecure": %t,
   %s
   "encryption_config": {"key": %q, "identifier": "local", "sealed": false, "timestamp": 1522325758},

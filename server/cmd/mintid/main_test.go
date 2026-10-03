@@ -11,8 +11,8 @@ import (
 
 	"github.com/unit-io/unitdb/server/internal/config"
 	"github.com/unit-io/unitdb/server/internal/keys"
-	"github.com/unit-io/unitdb/server/internal/pkg/crypto"
 	"github.com/unit-io/unitdb/server/internal/pkg/uid"
+	"github.com/unit-io/unitdb/server/internal/v1test"
 )
 
 const testKey = "mintid-test-key-0123456789abcdef"
@@ -45,7 +45,7 @@ func mintText(t *testing.T, args ...string) string {
 
 // mint runs mintid with args and returns the id it printed, opened with
 // set, and its claims.
-func mint(t *testing.T, set *keys.Set, args ...string) (uid.ID, *uid.Claims) {
+func mint(t *testing.T, set *keys.Set, args ...string) (uid.ID, uid.Claims) {
 	t.Helper()
 	text := mintText(t, args...)
 	id, claims, err := set.OpenClientID([]byte(text))
@@ -63,7 +63,7 @@ func TestMintID(t *testing.T) {
 	if !primary.IsPrimary() || primary.IsService() || primary.Contract() == 0 {
 		t.Errorf("primary id: permissions %d, contract %d", primary.Permissions(), primary.Contract())
 	}
-	if claims == nil || claims.ExpiresAt != 0 || primary.Uuid() == 0 {
+	if claims.ExpiresAt != 0 || primary.Uuid() == 0 {
 		t.Errorf("a v2 id that never expires, with a uuid, was wanted: claims %+v, uuid %d", claims, primary.Uuid())
 	}
 	if other, _ := mint(t, set); other.Contract() == primary.Contract() || other.Uuid() == primary.Uuid() {
@@ -79,18 +79,8 @@ func TestMintID(t *testing.T) {
 	}
 
 	_, claims = mint(t, set, "-ttl", "1h")
-	if now := uint32(time.Now().Unix()); claims == nil || claims.ExpiresAt < now+3590 || claims.ExpiresAt > now+3610 {
+	if now := uint32(time.Now().Unix()); claims.ExpiresAt < now+3590 || claims.ExpiresAt > now+3610 {
 		t.Errorf("-ttl 1h: claims %+v", claims)
-	}
-
-	// A v1 id, for a cluster with older nodes.
-	text := mintText(t, "-v1", "-service")
-	if len(text) != uid.EncodedLenV1 {
-		t.Fatalf("-v1 printed %q", text)
-	}
-	mac, _ := crypto.New([]byte(testKey))
-	if v1, err := uid.Decode([]byte(text), mac); err != nil || !v1.IsService() {
-		t.Errorf("-v1 id: %v", err)
 	}
 }
 
@@ -102,14 +92,23 @@ func TestMintIDFrom(t *testing.T) {
 	t.Setenv(config.EncryptionKeyEnv, testKey)
 	set := keySet(t, testKey)
 
-	v1Text := mintText(t, "-v1", "-contract", "42", "-service")
-	v1, _, err := set.OpenClientID([]byte(v1Text))
+	// A service's v1 id, as v0.6.0 and before issued it.
+	v1, err := uid.MintClientID(42, true)
 	if err != nil {
 		t.Fatal(err)
 	}
+	v1 = v1[:12] // a v1 id carries no uuid
+	v1Text := v1test.ClientID(v1, []byte(testKey))
+	if _, _, err := set.OpenClientID([]byte(v1Text)); err != keys.ErrV1ClientID {
+		t.Fatalf("the server's keys open a v1 id: %v", err)
+	}
 	again, claims := mint(t, set, "-from", v1Text, "-ttl", "24h")
-	if !bytes.Equal(again, v1) || claims == nil || claims.ExpiresAt == 0 || again.Uuid() != 0 {
+	if !bytes.Equal(again, v1) || claims.ExpiresAt == 0 || again.Uuid() != 0 || !again.IsService() || again.Contract() != 42 {
 		t.Errorf("-from a v1 id: %x %+v, want %x as v2", again, claims, v1)
+	}
+	// One sealed with another key than the keyring's is refused.
+	if err := run([]string{"-from", v1test.ClientID(v1, []byte("mintid-other-key-0123456789abcde"))}, &bytes.Buffer{}); err == nil {
+		t.Error("-from took a v1 id of a key the keyring lacks")
 	}
 
 	// Rotation: key 1 issues, key 0 reads.
@@ -130,6 +129,10 @@ func TestMintIDFrom(t *testing.T) {
 	moved, movedClaims := mint(t, rotated, "-from", v2Text)
 	if !bytes.Equal(moved, before) || movedClaims.KeyID != 1 {
 		t.Errorf("-from an id of the read key: %x %+v, want %x with key 1", moved, movedClaims, before)
+	}
+	// A v1 id of the read key, sealed again with the issue key.
+	if fromRead, claims := mint(t, rotated, "-from", v1Text); !bytes.Equal(fromRead, v1) || claims.KeyID != 1 {
+		t.Errorf("-from a v1 id of the read key: %x %+v, want %x with key 1", fromRead, claims, v1)
 	}
 	if _, _, err := set.OpenClientID([]byte(mintText(t, "-from", v2Text))); err == nil {
 		t.Error("an id sealed with the new key opens with the old one alone")
@@ -176,7 +179,7 @@ func TestMintIDRefuses(t *testing.T) {
 		"a wide contract": {testKey, []string{"-contract", "4294967296"}},
 		"stray arguments": {testKey, []string{"service"}},
 		"a negative ttl":  {testKey, []string{"-ttl", "-1h"}},
-		"a v1 id's ttl":   {testKey, []string{"-v1", "-ttl", "1h"}},
+		"-v1, gone":       {testKey, []string{"-v1"}},
 		"garbage -from":   {testKey, []string{"-from", "not-a-client-id"}},
 		"-from -service":  {testKey, []string{"-from", "x", "-service"}},
 	} {

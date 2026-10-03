@@ -27,8 +27,9 @@ import (
 
 // ID represents a unique ID for client connection: 12 bytes, the epoch, the
 // primary id, the permissions and the contract, followed in an id made since
-// v2 client ids by an 8-byte random uuid. A v1 client id carries no uuid:
-// opened, it is 12 bytes, and so is a v2 id sealed again from a v1 one.
+// v2 client ids by an 8-byte random uuid. A v1 client id (refused since
+// v0.7.0) carried no uuid: opened, it is 12 bytes, and so is a v2 id sealed
+// again from a v1 one.
 type ID []byte
 
 const (
@@ -46,7 +47,8 @@ const (
 	v1TextLen = 52 // encoded len of a v1 client id
 )
 
-// Uuid returns the id's random uuid, or 0 for an id without one: one of v1.
+// Uuid returns the id's random uuid, or 0 for an id without one: one sealed
+// again from a v1 id.
 func (id ID) Uuid() uint64 {
 	if len(id) < idLenV2 {
 		return 0
@@ -130,29 +132,10 @@ func (id ID) SetContract(value uint32) {
 	id[11] = byte(value)
 }
 
-// Encode returns the id as a v1 client id, sealed with mac. A v1 id carries
-// no uuid: the id it opens to is the first 12 bytes of id.
-func (id ID) Encode(mac *crypto.MAC) string {
-	buffer := make([]byte, rawLen)
-	buffer[0] = id[0]
-	buffer[1] = id[1]
-
-	// First XOR the entire array with the salt
-	for i := 2; i < rawLen; i += 2 {
-		buffer[i] = byte(id[i] ^ buffer[0])
-		buffer[i+1] = byte(id[i+1] ^ buffer[1])
-	}
-
-	// Encryption.
-	ciphertext := mac.Encrypt(nil, buffer)
-	text := make([]byte, v1TextLen)
-	encoding.Encode32(text, ciphertext[:])
-	return string(text)
-}
-
-// Decode opens a v1 client id sealed with mac. It decodes in place: hand it a
-// copy.
-func Decode(buffer []byte, mac *crypto.MAC) (ID, error) {
+// DecodeV1 opens a v1 client id sealed with mac, for server/cmd/mintid
+// -from to seal it again as a v2 id. The server refuses v1 ids since v0.7.0,
+// and nothing seals them any more. It decodes in place: hand it a copy.
+func DecodeV1(buffer []byte, mac *crypto.MAC) (ID, error) {
 	if len(buffer) < v1TextLen {
 		return nil, errors.New("Key provided is invalid")
 	}

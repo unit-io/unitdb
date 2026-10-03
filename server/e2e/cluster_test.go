@@ -263,7 +263,8 @@ type route struct {
 	// otherwise the clients key their topics (autoKey).
 	secure  bool
 	service bool
-	// key is the key a secure route sends; an unsigned one if empty.
+	// key is the key a secure route sends; a v2 one minted for the topic if
+	// empty.
 	key     string
 	mode    uint8
 	pubMode uint8

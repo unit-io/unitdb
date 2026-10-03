@@ -73,7 +73,7 @@ that tests can run a node as an older one.
 | `sessions` | takes session changes (`Replicate`'s log), and fetches and drops sessions (`FetchSession`, `ForgetSession`) | skipped |
 | `resync` | sends its clients' subscriptions to a node back in the ring (`Resync`) | skipped |
 | `service` | sets a forwarded connection's `Insecure` only for a trusted service's connection, never for a client's own insecure flag | its `Insecure` is not taken: forwarded requests are key-checked |
-| `v2keys` | reads v2 client ids and v2 topic keys | the other nodes issue v1 ids and keys, and send no renewed ids |
+| `v2keys` | reads v2 client ids and v2 topic keys; since v0.7.0 a node reads and issues nothing else, and still sends it for v0.6.0 nodes | v0.6.0 nodes issue v1 ids and keys, and send no renewed ids; v0.7.0 nodes issue v2 ones anyway, and warn of the peer, which can't take them (see [upgrading to v0.7.0](#upgrading-to-v070)) |
 | `tls` | listens for cluster connections over mutual TLS (`cluster_config.tls` is set) | nothing: no call depends on it |
 | `revocations` | holds the security state, what `unitdb/revoke` revoked, and takes it from the others (`Revocations`) | sent none of it: it refuses nothing for being revoked |
 
@@ -105,7 +105,10 @@ starts a new session once.
 
 ### Upgrading to v2 client ids and topic keys
 
-This version issues v2 client ids and topic keys, and reads v1 ones too.
+This is how v0.6.0 moved a cluster to v2 ids and keys; since v0.7.0 nodes
+issue and take v2 ones only (see [upgrading to v0.7.0](#upgrading-to-v070)).
+
+v0.6.0 issues v2 client ids and topic keys, and reads v1 ones too.
 Older nodes read only v1 ones, and two things cross between nodes:
 
 - **Topic keys.** A node checks the key of a request another node forwards
@@ -133,7 +136,8 @@ down, and was never heard, holds the cluster on v1. So:
    round, nodes issue v2 ids and keys, and send clients of v1 ids the same
    id as v2 on `unitdb/clientid/`.
 3. Don't roll a node back to an older version after that: v2 ids and keys
-   don't work on it. `server/cmd/mintid -v1` mints v1 ids for such a cluster.
+   don't work on it. v0.6.0's `server/cmd/mintid -v1` minted v1 ids for
+   such a cluster; v0.7.0's mints none.
 
 `client_id_ttl`, `primary_id_ttl` and `topic_key_ttl` apply to v2 ids and
 keys only: ids and keys issued while the cluster is on v1 never expire.
@@ -167,9 +171,10 @@ a mixed cluster:
   owner has the state: each checks the key, the client's node before it
   forwards the request. Only a request whose client's node and topic owner
   are both older is taken.
-- **`{"all": true}` is refused with status 503** while the cluster issues
-  v1 ids and keys (some node lacks `v2keys`): it would refuse them as soon
-  as they were issued. Revoking a v2 id or key by its uuid is taken.
+- **`{"all": true}` is refused by v0.6.0 with status 503** while the
+  cluster issues v1 ids and keys (some node lacks `v2keys`): it would
+  refuse them as soon as they were issued. Revoking a v2 id or key by its
+  uuid is taken. v0.7.0 issues v2 ones only, and always takes it.
 
 Nothing stored changes for older nodes: the state is kept under a namespace
 of its own. Once every node runs this version, a node that was older is sent
@@ -202,6 +207,49 @@ records, so a rollback to it reads them; v0.5.0 and before don't.
 
 Rotating the keyring then works as for client ids: keep the old key as a
 `read` key while the store may hold records it sealed.
+
+### Upgrading to v0.7.0
+
+v0.7.0 refuses v1 client ids, v1 signed topic keys and unsigned topic keys
+(finding 12 of the security review), and drops `accept_unsigned_keys`. It
+issues and reads v2 ids and keys only, whatever its peers say they read.
+Every client must hold a v2 id and v2 keys before its node is upgraded, and
+the only version that hands them out to clients of v1 ones is v0.6.0. So:
+
+1. **Every node on v0.6.0 first.** A v0.5.0 node can't be upgraded straight
+   to v0.7.0, nor run beside v0.7.0 nodes: it reads no v2 ids or keys (it
+   lacks `v2keys`), and v0.7.0 nodes issue nothing else and refuse the v1
+   ones it issues. A v0.7.0 node logs a warning naming such a peer ("reads
+   no v2 client ids or topic keys"). Upgrade v0.5.0 nodes to v0.6.0 as
+   above, and let the leader's pings go round, so that every node says it
+   reads v2 ones and the cluster issues them.
+2. **Every client renewed to a v2 id: the renewal push.** On v0.6.0, a
+   client that connects with a v1 id is sent the same id as v2 on
+   `unitdb/clientid/`, with the same contract and sessions; it must keep it
+   and connect with it from then on. Have every client connect at least
+   once, with a client library that keeps the pushed id, before step 4.
+   Ids kept in configs, such as services', are sealed again with
+   `server/cmd/mintid -from <v1 id>` (v0.6.0's or v0.7.0's, with the
+   keyring holding the key that sealed it). Don't restart a v0.6.0 node
+   meanwhile without need: until it hears its peers it issues v1 ids and
+   keys again.
+3. **Every client on v2 keys from keygen.** Keys are requested again with
+   `unitdb/keygen`, which v0.6.0 answers with v2 keys once the cluster
+   issues them; v1 signed keys and unsigned keys stop working at step 4.
+   Then remove `accept_unsigned_keys` from every config: v0.7.0 refuses to
+   start while it is `true` ("accept_unsigned_keys is set, but unsigned
+   topic keys are refused since v0.7.0"), and warns while it is `false`.
+4. **Then v0.7.0, node by node**, as below ([upgrading from
+   v0.6.0](#upgrading-from-v060)). In the mixed cluster v0.6.0 nodes still
+   take v1 ids and keys from their own clients, but v0.7.0 nodes refuse
+   them: a v1 id with return code 0x02 and no new id, a v1 or unsigned key
+   with status 401 ("no longer accepted"), on a client's own node or on the
+   topic's owner a request is forwarded to. A client left on a v1 id after
+   the upgrade has its owner seal it again with `mintid -from`.
+
+Rolling a node back to v0.6.0 is safe for ids and keys: v0.6.0 reads the v2
+ones v0.7.0 issued. Clients that were refused on v1 ids or keys are still
+refused by v0.7.0 nodes once the rollback is undone.
 
 ### Upgrading from v0.6.0
 

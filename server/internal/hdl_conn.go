@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/unit-io/unitdb/server/internal/keys"
 	"github.com/unit-io/unitdb/server/internal/message"
 	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
@@ -128,9 +129,9 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 		}
 		c.queue(ack)
 
-		if err == types.ErrInvalidClientID {
+		if err == types.ErrInvalidClientID || err == types.ErrV1ClientID {
 			// A new client id, for a client that sent none or one that
-			// does not open; not for an expired one.
+			// does not open; not for an expired one, nor a v1 one.
 			if clientID != nil {
 				if text, err := c.service.issueClientID(clientID); err == nil {
 					c.sendClientID(text)
@@ -208,8 +209,8 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 				store.Session.Put(legacyKey, rawSess)
 			}
 		}
-		// A v1 id, or one near the end of its lifetime, is sent again as
-		// a new v2 one.
+		// An id near the end of its lifetime, or of a key being retired,
+		// is sent again as a new one.
 		c.renewClientID()
 	case utp.DISCONNECT:
 		go c.clientDisconnect(errors.New("client initiated disconnect")) // no harm in calling this if the connection is already down (better than stopping!)
@@ -384,7 +385,8 @@ func (c *_Conn) writeLoop(ctx context.Context) (err error) {
 // versions used. The whole client id includes the uuid of an id made since
 // v2 client ids, so that secondary ids of a contract issued in the same
 // second, identical in v1, own different sessions; an id renewed, or sealed
-// again from v1 as v2, is the same id and keeps its sessions.
+// again from v1 as v2 (server/cmd/mintid -from, or a v0.6.0 server's
+// renewal), is the same id and keeps its sessions.
 // The top bit keeps session keys apart from message log keys.
 func sessionKey(clientID uid.ID, sessKey int32) uint64 {
 	h := fnv.New64a()
@@ -457,9 +459,14 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 		log.ErrLogger.Debug().Str("context", "conn.onConnect").Int64("duration", time.Since(start).Nanoseconds()).Msg("")
 	}()
 	// Every client id is opened: its seal is what proves the server issued
-	// it. A v2 id names its key; a v1 id is tried with every key.
+	// it, with the key it names.
 	clientid, claims, err := c.service.keys.OpenClientID(clientID)
-
+	if err == keys.ErrV1ClientID {
+		// Refused without a new id, which would be of another contract: the
+		// id's owner seals it again as a v2 one, of the same contract.
+		log.ErrLogger.Info().Str("context", "conn.onConnect").Msg("refused a v1 client id")
+		return nil, types.ErrV1ClientID
+	}
 	if err != nil {
 		clientid, err = uid.NewClientID(1)
 		if err != nil {
@@ -468,13 +475,13 @@ func (c *_Conn) onConnect(clientID []byte) (uid.ID, *types.Error) {
 
 		return clientid, types.ErrInvalidClientID
 	}
-	if claims != nil && claims.Expired(time.Now().Unix()) {
+	if claims.Expired(time.Now().Unix()) {
 		// Refused without a new id: the client's owner issues it another.
 		return nil, types.ErrInvalidClientID
 	}
-	// Revoked, or issued before its contract's not-before time (a v1 id has
-	// no issue time): refused without a new id, as an expired one.
-	if c.service.revocations.refuses(clientid.Contract(), clientid.Uuid(), claims.IssuedAtOrZero()) != "" {
+	// Revoked, or issued before its contract's not-before time: refused
+	// without a new id, as an expired one.
+	if c.service.revocations.refuses(clientid.Contract(), clientid.Uuid(), claims.IssuedAt) != "" {
 		return nil, types.ErrInvalidClientID
 	}
 
@@ -692,63 +699,22 @@ func (c *_Conn) acknowledge(pub utp.Publish) *types.Error {
 	return nil
 }
 
-// decodeKey decodes a v1 signed topic key issued for the client's contract,
-// or an unsigned key when the server is configured to accept them.
-func (c *_Conn) decodeKey(text string) (security.Key, *types.Error) {
-	if len(text) == security.SignedKeyLen {
-		key, err := c.service.keys.DecodeTopicKeyV1(c.clientID.Contract(), text)
-		switch err {
-		case nil:
-			return key, nil
-		case security.ErrInvalidSignature:
-			return nil, types.ErrUnauthorized
-		default:
-			return nil, types.ErrBadRequest
-		}
-	}
-	key, err := security.DecodeKey(text)
-	if err != nil {
-		return nil, types.ErrBadRequest
-	}
-	if !c.service.acceptsUnsignedKeys() {
-		return nil, types.ErrUnauthorized
-	}
-	return key, nil
-}
-
 // onSecureRequest checks that the topic key is valid for the topic and grants
 // the permission the request needs: AllowRead to subscribe, unsubscribe or
 // relay, AllowWrite to publish. It reports whether the key is a wildcard's,
 // which is not taken to publish.
+//
+// Only v2 keys are taken, whose tag covers the whole topic, that have not
+// expired nor been revoked. A v1 signed key or an unsigned one is refused
+// since v0.7.0 (types.ErrV1Key, which says why).
 func (c *_Conn) onSecureRequest(topic *security.Topic, permission uint32) (bool, *types.Error) {
-	if len(topic.Key) == security.KeyLenV2 {
-		return c.checkKeyV2(topic, permission)
+	switch len(topic.Key) {
+	case security.KeyLenV2:
+	case security.V1KeyLen, security.UnsignedKeyLen:
+		return false, types.ErrV1Key
+	default:
+		return false, types.ErrBadRequest
 	}
-	key, keyErr := c.decodeKey(topic.Key)
-	if keyErr != nil {
-		return false, keyErr
-	}
-	// A v1 key has no uuid and no issue time: refused once its contract
-	// has a not-before time.
-	if c.service.revocations.refuses(c.clientID.Contract(), 0, 0) != "" {
-		return false, types.ErrUnauthorized
-	}
-
-	if !key.HasPermission(permission) {
-		return false, types.ErrUnauthorized
-	}
-
-	// Check if the key has the permission for the topic
-	ok, wildcard := key.ValidateTopic(c.clientID.Contract(), topic.Topic[:topic.Size])
-	if !ok {
-		return wildcard, types.ErrUnauthorized
-	}
-	return wildcard, nil
-}
-
-// checkKeyV2 checks a v2 topic key, whose tag covers the whole topic, as
-// onSecureRequest does, and that it has not expired nor been revoked.
-func (c *_Conn) checkKeyV2(topic *security.Topic, permission uint32) (bool, *types.Error) {
 	key, err := c.service.keys.DecodeTopicKeyV2(c.clientID.Contract(), topic.Key, topic.Topic[:topic.Size])
 	switch err {
 	case nil:
@@ -825,10 +791,8 @@ func (c *_Conn) onClientIDRequest() (interface{}, bool) {
 		Status:   200,
 		ClientId: cid,
 	}
-	if uid.IsV2([]byte(cid)) {
-		// To revoke it; a v1 id carries none.
-		resp.Uuid = strconv.FormatUint(clientid.Uuid(), 10)
-	}
+	// To revoke it.
+	resp.Uuid = strconv.FormatUint(clientid.Uuid(), 10)
 	return resp, true
 
 }
@@ -852,7 +816,6 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 	}
 
 	var resp []*types.KeyGenResponse
-	v2 := issuesV2()
 	// Use the cipher to generate the key
 	for _, m := range req {
 		if security.IsReserved(m.Topic) {
@@ -864,20 +827,9 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 			if err != nil || d < 0 {
 				return types.ErrBadRequest, false
 			}
-			// A v1 key can't expire: one that should is not issued until
-			// every node reads v2 keys.
-			if !v2 && d > 0 {
-				return types.ErrKeyTTLUnavailable, false
-			}
 			ttl = d
 		}
-		var key string
-		var err error
-		if v2 {
-			key, err = c.service.keys.TopicKey(c.clientID.Contract(), m.Topic, m.Access(), ttl)
-		} else {
-			key, err = c.service.keys.TopicKeyV1(c.clientID.Contract(), m.Topic, m.Access())
-		}
+		key, err := c.service.keys.TopicKey(c.clientID.Contract(), m.Topic, m.Access(), ttl)
 		if err != nil {
 			switch err {
 			case security.ErrTargetTooLong:
@@ -890,10 +842,8 @@ func (c *_Conn) onKeyGen(payload []byte) (interface{}, bool) {
 			Status: 200,
 			Key:    key,
 			Topic:  m.Topic,
-		}
-		if v2 {
-			// To revoke it; a v1 key carries none.
-			r.Uuid = strconv.FormatUint(security.KeyUuidV2(key), 10)
+			// To revoke it.
+			Uuid: strconv.FormatUint(security.KeyUuidV2(key), 10),
 		}
 
 		resp = append(resp, r)

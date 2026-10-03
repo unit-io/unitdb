@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/unit-io/unitdb/server/internal/message/security"
 	lp "github.com/unit-io/unitdb/server/internal/net"
 	"github.com/unit-io/unitdb/server/internal/store"
 	"github.com/unit-io/unitdb/server/internal/types"
@@ -220,12 +219,12 @@ func TestRevoke(t *testing.T) {
 		t.Error("the key is refused once its revocation is over")
 	}
 
-	// Everything issued before now, v1 included. Issue times are whole
+	// Everything issued before now, an id sealed again from a v1 one
+	// (mintid -from), which has no uuid, included. Issue times are whole
 	// seconds.
-	v1Key, _ := Globals.Service.keys.TopicKeyV1(contract, topic, security.AllowReadWrite)
-	v1ID := Globals.Service.keys.EncodeClientIDV1(openID(t, bystander))
-	if secondary.keyRefused(6, v1Key, topic) || connectCode(t, v1ID) != utp.Accepted {
-		t.Fatal("control: a v1 key or id is refused")
+	fromV1 := sealedID(t, openID(t, bystander)[:12], uint32(time.Now().Unix()), 0)
+	if connectCode(t, fromV1) != utp.Accepted {
+		t.Fatal("control: an id sealed again from a v1 one is refused")
 	}
 	time.Sleep(1100 * time.Millisecond)
 	if s := secondary.revoke(types.RevokeRequest{All: true}); s != types.ErrForbidden.Status {
@@ -237,10 +236,7 @@ func TestRevoke(t *testing.T) {
 	if !secondary.keyRefused(7, other, topic) {
 		t.Error("a key issued before is taken")
 	}
-	if !secondary.keyRefused(8, v1Key, topic) {
-		t.Error("a v1 key is taken")
-	}
-	for name, id := range map[string]string{"an id issued before": bystander, "the primary id": primaryID, "a v1 id": v1ID} {
+	for name, id := range map[string]string{"an id issued before": bystander, "the primary id": primaryID, "an id sealed again from v1": fromV1} {
 		if code := connectCode(t, id); code != types.ErrInvalidClientID.ReturnCode {
 			t.Errorf("%s: return code %d", name, code)
 		}

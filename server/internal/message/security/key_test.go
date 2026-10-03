@@ -7,74 +7,20 @@ import (
 
 const testContract = uint32(3376684800)
 
-func TestGenerateAndDecodeKey(t *testing.T) {
+// TestGenerateKey checks that a key generated for a topic is the same each
+// time: subscriptions without a topic key are counted under it.
+func TestGenerateKey(t *testing.T) {
 	key, err := GenerateKey(testContract, "teams.alpha.ch1", AllowReadWrite)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(key) != encodedLen {
-		t.Fatalf("key length %d, want %d", len(key), encodedLen)
+	if len(key) != UnsignedKeyLen {
+		t.Fatalf("key length %d, want %d", len(key), UnsignedKeyLen)
 	}
-
-	k, err := DecodeKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if k.Permissions() != AllowReadWrite {
-		t.Fatalf("permissions %d, want %d", k.Permissions(), AllowReadWrite)
-	}
-	if !k.HasPermission(AllowRead) || !k.HasPermission(AllowWrite) {
-		t.Fatal("expected read and write permissions")
-	}
-	if k.HasPermission(AllowAdmin) {
-		t.Fatal("unexpected admin permission")
-	}
-	if k.Encode() != key {
-		t.Fatalf("re-encoded key %q, want %q", k.Encode(), key)
-	}
-}
-
-func TestDecodeKeyInvalidLength(t *testing.T) {
-	for _, key := range []string{"", "short", strings.Repeat("a", encodedLen+1)} {
-		if _, err := DecodeKey(key); err == nil {
-			t.Errorf("DecodeKey(%q): expected error", key)
-		}
-	}
-}
-
-func TestValidateTopic(t *testing.T) {
-	tests := []struct {
-		name     string
-		keyTopic string
-		contract uint32
-		topic    string
-		wantOK   bool
-		wantWild bool
-	}{
-		{"static match", "teams.alpha.ch1", testContract, "teams.alpha.ch1", true, false},
-		{"static mismatch", "teams.alpha.ch1", testContract, "teams.alpha.ch2", false, false},
-		{"other contract", "teams.alpha.ch1", testContract + 1, "teams.alpha.ch1", false, false},
-		{"multi wildcard key", "teams...", testContract, "teams...", true, true},
-		{"wildcard key", "teams.*", testContract, "teams.*", true, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			key, err := GenerateKey(testContract, tt.keyTopic, AllowRead)
-			if err != nil {
-				t.Fatal(err)
-			}
-			k, err := DecodeKey(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ok, wildcard := k.ValidateTopic(tt.contract, tt.topic)
-			if ok != tt.wantOK {
-				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
-			}
-			if ok && wildcard != tt.wantWild {
-				t.Fatalf("wildcard = %v, want %v", wildcard, tt.wantWild)
-			}
-		})
+	again, _ := GenerateKey(testContract, "teams.alpha.ch1", AllowReadWrite)
+	other, _ := GenerateKey(testContract, "teams.alpha.ch2", AllowReadWrite)
+	if again != key || other == key {
+		t.Fatalf("keys %q, %q for the same topic and %q for another", key, again, other)
 	}
 }
 

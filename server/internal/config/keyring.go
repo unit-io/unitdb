@@ -29,8 +29,9 @@ import (
 
 // The server's keys are a keyring: each key has an id, and is used to issue
 // (seal client ids and sign topic keys) or only to read what an older key
-// issued. v2 client ids and topic keys name the key that issued them; v1
-// ones don't, and are read with every key. Rotating the key is adding a new
+// issued. v2 client ids and topic keys name the key that issued them (v1
+// ones, refused since v0.7.0, didn't: server/cmd/mintid -from reads one with
+// every key, to seal it again as v2). Rotating the key is adding a new
 // issue key, keeping the old one to read with until what it issued has been
 // replaced, then removing it.
 
@@ -51,8 +52,8 @@ const (
 // Key is one key of the keyring.
 type Key struct {
 	ID uint8
-	// Key is the key's 32 bytes. v1 client ids and topic keys were sealed
-	// and signed with it as it is; v2 ones with subkeys of it.
+	// Key is the key's 32 bytes. v2 client ids and topic keys are sealed
+	// and signed with subkeys of it; v1 ones were, with it as it is.
 	Key []byte
 	Use string
 }
