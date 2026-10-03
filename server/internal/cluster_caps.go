@@ -60,6 +60,10 @@ const (
 	// may connect to any node, so the cluster issues v2 ones only once every
 	// node is known to read them, and v1 ones until then.
 	capV2Keys = "v2keys"
+	// capTLS: the node listens for cluster connections over mutual TLS. It
+	// is not in allCapabilities: a node has it when cluster_config.tls is
+	// set. No call depends on it; it tells which nodes have moved to TLS.
+	capTLS = "tls"
 )
 
 var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys}
@@ -105,6 +109,9 @@ func ownNodeCapabilities() NodeCapabilities {
 		if ownCapabilities[c] {
 			nc.Capabilities = append(nc.Capabilities, c)
 		}
+	}
+	if c := Globals.Cluster; c != nil && c.tls != nil {
+		nc.Capabilities = append(nc.Capabilities, capTLS)
 	}
 	return nc
 }

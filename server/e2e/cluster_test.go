@@ -49,14 +49,47 @@ import (
 const clusterHashReplicas = 160
 
 type clusterNode struct {
-	name string
-	addr string // cluster RPC address
+	name    string
+	addr    string // cluster RPC address
+	tlsAddr string // cluster RPC address over TLS, if the node has one
 	*server
 }
 
 type cluster struct {
 	t     *testing.T
 	nodes []*clusterNode
+	// base is the cluster_config every node starts from (see conf).
+	base map[string]interface{}
+}
+
+// nodeConf is a node in cluster_config.nodes.
+type nodeConf struct {
+	Name    string `json:"name"`
+	Addr    string `json:"addr"`
+	TLSAddr string `json:"tls_addr,omitempty"`
+}
+
+// conf returns a node's cluster_config: the cluster's, with tlsConf as its
+// tls if set, and listing the tls_addr of the nodes in tlsAddrs.
+func (c *cluster) conf(tlsConf map[string]interface{}, tlsAddrs map[string]bool) string {
+	conf := map[string]interface{}{}
+	for k, v := range c.base {
+		conf[k] = v
+	}
+	var nodes []nodeConf
+	for _, n := range c.nodes {
+		nc := nodeConf{Name: n.name, Addr: n.addr}
+		if tlsAddrs[n.name] {
+			nc.TLSAddr = n.tlsAddr
+		}
+		nodes = append(nodes, nc)
+	}
+	conf["nodes"] = nodes
+	if tlsConf != nil {
+		conf["tls"] = tlsConf
+	}
+	b, _ := json.Marshal(conf)
+	return string(b)
 }
 
 func (c *cluster) node(name string) *clusterNode {
@@ -101,30 +134,28 @@ type clusterOpts struct {
 	// allowInsecure sets allow_insecure, which a cluster node refuses: the
 	// nodes are started without waiting for them to be ready.
 	allowInsecure bool
+	// tls is the cluster_config.tls of the named nodes. Their tls_addr is
+	// listed in every node's config.
+	tls map[string]map[string]interface{}
 }
 
 // startClusterWith starts a cluster of the named nodes with failover enabled.
 func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster {
 	t.Helper()
 	replicas := opts.replicas
-	type nodeConf struct {
-		Name string `json:"name"`
-		Addr string `json:"addr"`
-	}
 	c := &cluster{t: t}
 	nodeFailAfter := opts.nodeFailAfter
 	if nodeFailAfter == 0 {
 		nodeFailAfter = 16
 	}
-	var confNodes []nodeConf
+	tlsAddrs := map[string]bool{}
 	for _, name := range names {
-		n := &clusterNode{name: name, addr: fmt.Sprintf("127.0.0.1:%d", freePort(t))}
+		n := &clusterNode{name: name, addr: fmt.Sprintf("127.0.0.1:%d", freePort(t)), tlsAddr: fmt.Sprintf("127.0.0.1:%d", freePort(t))}
 		c.nodes = append(c.nodes, n)
-		confNodes = append(confNodes, nodeConf{name, n.addr})
+		tlsAddrs[name] = opts.tls[name] != nil
 	}
 	clusterConf := map[string]interface{}{
-		"self":  "", // set per process with -cluster_self
-		"nodes": confNodes,
+		"self": "", // set per process with -cluster_self
 		"failover": map[string]interface{}{
 			"enabled":         true,
 			"heartbeat":       100,
@@ -138,9 +169,9 @@ func startClusterWith(t *testing.T, opts clusterOpts, names ...string) *cluster 
 	if opts.asyncReplication {
 		clusterConf["async_replication"] = true
 	}
-	conf, _ := json.Marshal(clusterConf)
+	c.base = clusterConf
 	for _, n := range c.nodes {
-		n.server = startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], extra: opts.extra[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
+		n.server = startServerWith(t, serverOpts{cluster: c.conf(opts.tls[n.name], tlsAddrs), args: []string{"-cluster_self", n.name}, env: opts.env[n.name], extra: opts.extra[n.name], allowInsecure: opts.allowInsecure, expectExit: opts.allowInsecure})
 	}
 	return c
 }
