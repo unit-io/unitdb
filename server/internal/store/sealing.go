@@ -125,7 +125,7 @@ func (s *sealer) sealRecord(b, ad []byte) ([]byte, error) {
 	if !s.seal {
 		return b, nil
 	}
-	out := make([]byte, sealHeaderLen, sealHeaderLen+len(b)+chacha20poly1305.Overhead)
+	out := make([]byte, sealHeaderLen)
 	copy(out, sealMagic[:])
 	out[len(sealMagic)] = s.issue
 	nonce := out[len(sealMagic)+1:]
