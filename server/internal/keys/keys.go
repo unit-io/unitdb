@@ -40,6 +40,7 @@ type Set struct {
 	// By key id: subkeys derived per use.
 	sealers  map[uint8]*uid.Sealer
 	tsigners map[uint8]*security.SignerV2
+	stores   map[uint8][]byte
 
 	// v1 seals and signers, of each key, the issue key's first.
 	macs    []*crypto.MAC
@@ -53,6 +54,7 @@ func New(kr *config.Keyring) (*Set, error) {
 		issue:    issue.ID,
 		sealers:  make(map[uint8]*uid.Sealer),
 		tsigners: make(map[uint8]*security.SignerV2),
+		stores:   make(map[uint8][]byte),
 	}
 	ordered := []config.Key{issue}
 	for _, key := range kr.Keys {
@@ -67,6 +69,7 @@ func New(kr *config.Keyring) (*Set, error) {
 		}
 		s.sealers[key.ID] = sealer
 		s.tsigners[key.ID] = security.NewSignerV2(key.ID, key.Subkey(config.SubkeyTopicKey))
+		s.stores[key.ID] = key.Subkey(config.SubkeyStore)
 		mac, err := crypto.New(key.Key)
 		if err != nil {
 			return nil, err
@@ -79,6 +82,17 @@ func New(kr *config.Keyring) (*Set, error) {
 
 // IssueKeyID returns the id of the key the set issues with.
 func (s *Set) IssueKeyID() uint8 { return s.issue }
+
+// StoreKeys returns the subkeys stored records are sealed with
+// (encrypt_at_rest), by key id: the issue key's seals, and every key's
+// opens.
+func (s *Set) StoreKeys() map[uint8][]byte {
+	out := make(map[uint8][]byte, len(s.stores))
+	for id, key := range s.stores {
+		out[id] = key
+	}
+	return out
+}
 
 // Times returns the unix times an id or key issued at now with ttl is issued
 // at and expires at; ttl 0 never expires.

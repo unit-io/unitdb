@@ -76,6 +76,13 @@ type Config struct {
 	PrimaryIDTTL string `json:"primary_id_ttl"`
 	TopicKeyTTL  string `json:"topic_key_ttl"`
 
+	// EncryptAtRest seals every record the server stores (messages,
+	// replicas, hints, sessions and their logs, subscriptions, the topic
+	// index, replicated messages' ids) with a subkey of the keyring's issue
+	// key; off by default. Sealed records are read whether it is on or off,
+	// with the key they name, and records stored without it stay readable.
+	EncryptAtRest bool `json:"encrypt_at_rest"`
+
 	// Configs for subsystems
 	Cluster json.RawMessage `json:"cluster_config"`
 

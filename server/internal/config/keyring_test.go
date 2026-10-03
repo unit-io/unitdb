@@ -91,8 +91,8 @@ func TestKeyringFile(t *testing.T) {
 
 func TestSubkeys(t *testing.T) {
 	k := Key{ID: 0, Key: []byte("subkey-test-key-0123456789abcdef")}
-	a, b := k.Subkey(SubkeyClientID), k.Subkey(SubkeyTopicKey)
-	if len(a) != KeyLen || len(b) != KeyLen || bytes.Equal(a, b) || bytes.Equal(a, k.Key) {
+	a, b, c := k.Subkey(SubkeyClientID), k.Subkey(SubkeyTopicKey), k.Subkey(SubkeyStore)
+	if len(a) != KeyLen || len(b) != KeyLen || len(c) != KeyLen || bytes.Equal(a, b) || bytes.Equal(a, c) || bytes.Equal(b, c) || bytes.Equal(a, k.Key) || bytes.Equal(c, k.Key) {
 		t.Fatal("subkeys are not distinct 32-byte keys")
 	}
 	if !bytes.Equal(a, k.Subkey(SubkeyClientID)) {
