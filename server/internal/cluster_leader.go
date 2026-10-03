@@ -99,6 +99,10 @@ type ClusterPong struct {
 	// Leaving is set by a node shutting down: the leader takes it out of the
 	// ring at once, and does not put it back while it is set.
 	Leaving bool
+	// RingVersion is the ring version the node saw the cluster route by
+	// before this ping; 0 if it has seen none, or from a node built before
+	// it told.
+	RingVersion int
 }
 
 // ClusterVoteRequest is a request from a leader candidate to a node to vote for the candidate.
@@ -169,7 +173,7 @@ func (c *Cluster) Ping(ping *ClusterPing, pong *ClusterPong) error {
 			n.setCapabilities(nc)
 		}
 	}
-	*pong = ClusterPong{Node: c.thisNodeName, NodeCapabilities: ownNodeCapabilities(), Leaving: c.leaving.Load()}
+	*pong = ClusterPong{Node: c.thisNodeName, NodeCapabilities: ownNodeCapabilities(), Leaving: c.leaving.Load(), RingVersion: int(c.clusterRing.Load())}
 	select {
 	case c.fo.leaderPing <- ping:
 	default:
@@ -199,6 +203,9 @@ func (c *Cluster) sendPings() {
 			members[node.name] = nc
 		}
 	}
+	// The ring version the followers saw the cluster route by: the lowest,
+	// as a switch only ever goes up.
+	routed := 0
 	for _, node := range c.nodes {
 		var pong ClusterPong
 		// A node that stalls without its connection failing does not answer:
@@ -213,6 +220,9 @@ func (c *Cluster) sendPings() {
 			RingVersion: c.getRingVersion()}, &pong, c.fo.heartBeat)
 		if err == nil {
 			node.setCapabilities(pong.NodeCapabilities)
+			if v := pong.RingVersion; v != 0 && (routed == 0 || v < routed) {
+				routed = v
+			}
 		}
 
 		if err == nil && pong.Leaving {
@@ -245,12 +255,25 @@ func (c *Cluster) sendPings() {
 	}
 	current := c.getRingVersion()
 	if c.clusterRing.Load() == 0 {
-		c.clusterRing.Store(int32(current))
+		// The first round this node leads before it saw the cluster route
+		// by any version, as when it just started: the cluster routes by
+		// what its followers saw, which need not be the version this node
+		// started with. Only with none seen is it this node's own.
+		if routed == 0 {
+			routed = current
+		}
+		c.clusterRing.Store(int32(routed))
 	}
 	if v := c.chooseRingVersion(live); v != current {
 		log.Printf("cluster: switching the ring from version %d to %d", current, v)
 		c.adoptRingVersion(v)
 		rehash = true
+	} else if seen := int(c.clusterRing.Load()); seen != v {
+		// This node started with the version its pings name, and the
+		// followers switch to it as they get them: it moves the messages
+		// it stores by the version the cluster routed by before, as they do.
+		log.Printf("cluster: switching the ring from version %d to %d", seen, v)
+		c.adoptRingVersion(v)
 	}
 
 	if rehash {
