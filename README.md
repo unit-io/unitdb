@@ -94,6 +94,18 @@ To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 node
 
 Above example shows each Unitdb node running on the same host, so each node must listen on different ports. This would not be necessary if each node ran on a different host.
 
+Nodes talk over mutual TLS when `cluster_config.tls` names the cluster's CA and the node's certificate and key: each node needs a certificate signed by the CA, with its node name as a DNS name and for both server and client use, and a `tls_addr` beside its `addr` in `cluster_config.nodes`. A node takes a cluster connection only from a certificate naming another configured node, and refuses a call on it that names another node as its sender. It still listens on its plain `addr` too, so that a cluster can move to TLS node by node ([docs/rolling-deploys.md](docs/rolling-deploys.md#moving-a-cluster-to-tls)); set `"require": true` once every node is on TLS to close it. Until then, firewall the plain cluster ports to the other nodes.
+
+```
+"cluster_config": {
+	"nodes": [
+		{"name": "one", "addr": "10.0.0.1:12001", "tls_addr": "10.0.0.1:12011"},
+		{"name": "two", "addr": "10.0.0.2:12001", "tls_addr": "10.0.0.2:12011"}
+	],
+	"tls": {"ca_file": "/etc/unitdb/cluster-ca.crt", "cert_file": "/etc/unitdb/one.crt", "key_file": "/etc/unitdb/one.key", "require": true}
+}
+```
+
 ## Client Libraries
 Make use of officially supported client libraries to connect to unitdb server running on single node or running on a cluster.
 - [unitdb-go](https://github.com/unit-io/unitdb-go) Lightweight and high performance unitdb Go client library.
