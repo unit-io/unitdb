@@ -271,13 +271,29 @@ func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 	return nil
 }
 
+// releaseLog releases a time block whose entries were written out or
+// deleted: its logs are marked applied, and its buffer goes back to the pool.
+// A delete that empties a block and a sync that wrote it can release it at
+// once: the one that takes it out of timeBlocks releases it, and the other
+// finds it gone.
 func (db *DB) releaseLog(timeID _TimeID) error {
-	db.mu.RLock()
+	// The live tiny log can share the time ID: after a reopen in the second
+	// the last writes were made, it writes to the block recovered for them.
+	// It then gets an empty block, which writes need until the next rotation.
+	current := db.timeID()
+	db.mu.Lock()
 	block, ok := db.timeBlocks[timeID]
-	db.mu.RUnlock()
 	if !ok {
+		db.mu.Unlock()
 		return errEntryDoesNotExist
 	}
+	if timeID == current {
+		db.timeBlocks[timeID] = db.newBlock()
+	} else {
+		delete(db.timeBlocks, _TimeID(timeID))
+	}
+	db.internal.timeMark.timeUnref(timeID)
+	db.mu.Unlock()
 
 	block.RLock()
 	timeRefs := block.timeRefs
@@ -287,19 +303,6 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 			return err
 		}
 	}
-
-	// The live tiny log can share the time ID: after a reopen in the second
-	// the last writes were made, it writes to the block recovered for them.
-	// It then gets an empty block, which writes need until the next rotation.
-	current := db.timeID()
-	db.mu.Lock()
-	if timeID == current {
-		db.timeBlocks[timeID] = db.newBlock()
-	} else {
-		delete(db.timeBlocks, _TimeID(timeID))
-	}
-	db.internal.timeMark.timeUnref(timeID)
-	db.mu.Unlock()
 
 	// Free under the block's write lock so it waits for readers of the buffer.
 	block.Lock()
