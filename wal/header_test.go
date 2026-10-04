@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/unit-io/bpool"
@@ -98,5 +99,23 @@ func TestLogHeaderLayout(t *testing.T) {
 	got.UnmarshalBinary(v1)
 	if got.version != 1 || got.timeID != info.timeID || got.count != 5 || got.size != 300 || got.checksum != 0 || got.blockID != 0 {
 		t.Fatalf("version 1 decoded %+v", got)
+	}
+}
+
+// TestLogSizePastFile reads a log whose header says its data is 4GB, in a
+// file of a few bytes: reading it extended a buffer to 4GB first.
+func TestLogSizePastFile(t *testing.T) {
+	dir := t.TempDir()
+	info := _LogInfo{version: version, timeID: 1, count: 1, size: 1<<32 - 1}
+	hdr, _ := info.MarshalBinary()
+	if err := os.WriteFile(logPath(dir, 1), append(hdr, 1, 2, 3), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	readAll(t, dir)
+	runtime.ReadMemStats(&after)
+	if got := after.TotalAlloc - before.TotalAlloc; got > 64<<20 {
+		t.Fatalf("reading the log allocated %d MB", got>>20)
 	}
 }
