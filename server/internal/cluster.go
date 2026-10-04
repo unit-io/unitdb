@@ -650,6 +650,8 @@ type Cluster struct {
 	leaving atomic.Bool
 	// Set once the cluster is shut down.
 	stopped atomic.Bool
+	// When this node last heard from a leader, for its readiness.
+	health clusterHealth
 	// Time it waits at most for that.
 	drainTimeout time.Duration
 

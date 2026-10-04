@@ -25,6 +25,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"google.golang.org/grpc"
 )
 
 const (
@@ -106,6 +108,9 @@ type server struct {
 	opts    *options
 	stop    func() // stops serving, if the server supports it
 	Handler Handler //The handler to invoke when a connection is accepted
+	// Register, for a gRPC server, registers more services on it before it
+	// serves, such as grpc.health.v1.
+	Register func(*grpc.Server)
 }
 
 func signalHandler() <-chan bool {

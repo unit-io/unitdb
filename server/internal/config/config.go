@@ -45,6 +45,10 @@ type Config struct {
 	// Can be overridden from the command line, see option --listen.
 	GrpcListen string `json:"grpc_listen"`
 
+	// MonitorListen is where the health checks are served: /_healthz,
+	// /_readyz and /_status. Off when empty.
+	MonitorListen string `json:"monitor_listen"`
+
 	// Default logging level is "InfoLevel" so to enable the debug log set the "LogLevel" to "DebugLevel".
 	LoggingLevel string `json:"logging_level"`
 

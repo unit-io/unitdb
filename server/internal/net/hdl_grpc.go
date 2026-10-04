@@ -92,6 +92,9 @@ func (s *GrpcServer) Serve(list net.Listener) error {
 
 	srv := grpc.NewServer(opts...)
 	pbx.RegisterUnitdbServer(srv, unitdbService{s: s})
+	if s.Register != nil {
+		s.Register(srv)
+	}
 	s.Lock()
 	s.stop = srv.Stop
 	s.Unlock()
