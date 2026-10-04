@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {"ID": "daily", "Status": "Enabled", "Filter": {"Tag": {"Key": "tier", "Value": "daily"}},
+     "Expiration": {"Days": 8}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "weekly", "Status": "Enabled", "Filter": {"Tag": {"Key": "tier", "Value": "weekly"}},
+     "Expiration": {"Days": 29}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "monthly", "Status": "Enabled", "Filter": {"Tag": {"Key": "tier", "Value": "monthly"}},
+     "Expiration": {"Days": 396}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "journal", "Status": "Enabled", "Filter": {"Tag": {"Key": "tier", "Value": "journal"}},
+     "Expiration": {"Days": 396}, "NoncurrentVersionExpiration": {"NoncurrentDays": 1}},
+    {"ID": "delete-markers", "Status": "Enabled", "Filter": {},
+     "Expiration": {"ExpiredObjectDeleteMarker": true},
+     "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 2}}
+  ]
+}

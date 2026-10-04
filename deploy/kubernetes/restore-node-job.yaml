@@ -1,0 +1,60 @@
+# One node's part of a whole-cluster restore (docs/backup-restore.md,
+# runbook B): on the node's new, empty claim, its checkpoint of the run,
+# decrypted, where the node's store is (/var/udb/data/unitdb), and the
+# security journal since the run (/var/udb/data/restore-journal). Then the
+# node starts with -restored and -journal (runbook B, step 6).
+#
+# Per node: replace NODE (unitdb-0, unitdb-1, unitdb-2) and RUN (the run's
+# id, from `backup` runs listed in the bucket), and apply:
+#   sed -e s/NODE/unitdb-0/g -e s/RUN/20261004T213000Z/g restore-node-job.yaml | kubectl apply -f -
+#
+# It runs as the user unitdb runs as: the files it writes are the node's
+# store. If unitdb runs as another user than root, give the Job the same
+# securityContext.
+#
+# It reads the bucket and the backup key, so it needs the reader's identity
+# in the unitdb namespace for the restore only: the unitdb-backup-reader
+# Secret, made at runbook B's step 3 and deleted at its end.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unitdb-restore-NODE
+  namespace: unitdb
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      initContainers:
+        - name: checkpoint
+          image: unitdb:latest
+          command: ["/backup"]
+          args: ["fetch", "-run=RUN", "-node=NODE", "-out=/var/udb/data/unitdb"]
+          envFrom:
+            - secretRef:
+                name: unitdb-backup-reader
+          env: &restoreEnv
+            - name: BACKUP_S3_BUCKET
+              value: unitdb-backups-production
+            - name: BACKUP_S3_REGION
+              value: <your region>
+            - name: BACKUP_CLUSTER
+              value: production
+          volumeMounts: &restoreMounts
+            - name: data
+              mountPath: /var/udb/data
+      containers:
+        - name: journal
+          image: unitdb:latest
+          command: ["/backup"]
+          args: ["fetch-journal", "-since=RUN", "-out=/var/udb/data/restore-journal"]
+          envFrom:
+            - secretRef:
+                name: unitdb-backup-reader
+          env: *restoreEnv
+          volumeMounts: *restoreMounts
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data-NODE

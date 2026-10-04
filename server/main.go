@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -40,9 +41,12 @@ func main() {
 	var configfile = flag.String("config", "unitdb.conf", "Path to config file.")
 	var listenOn = flag.String("listen", "", "Override address and port to listen on for HTTP(S) clients.")
 	var listenGrpcOn = flag.String("grpc_listen", "", "Override address and port to listen on for GRPC clients.")
+	var monitorOn = flag.String("monitor_listen", "", "Override address and port to serve the health checks on (/_healthz, /_readyz, /_status).")
 	var clusterSelf = flag.String("cluster_self", "", "Override the name of the current cluster node")
 	var dbPath = flag.String("db_path", "/tmp/unitdb", "Override the db path.")
 	var varzPath = flag.String("varz", "/varz", "Expose runtime stats at the given endpoint, e.g. /varz. Disabled if not set")
+	var journalDir = flag.String("journal", "", "With -restored: a directory of the security journal since the backup run (the backup command's fetch-journal), replayed before the node takes clients.")
+	var restored = flag.Bool("restored", false, "Start a node at its checkpoint of a backup run (-db_path), and reconcile it with the other nodes before it takes clients (docs/backup-restore.md).")
 	flag.Parse()
 
 	// Default level for is fatal, unless debug flag is present
@@ -73,6 +77,10 @@ func main() {
 		cfg.GrpcListen = *listenGrpcOn
 	}
 
+	if *monitorOn != "" {
+		cfg.MonitorListen = *monitorOn
+	}
+
 	if *dbPath != "" {
 		cfg.DBPath = *dbPath
 	}
@@ -85,6 +93,19 @@ func main() {
 	// Cluster won't be started here yet.
 	internal.ClusterInit(cfg.Cluster, clusterSelf)
 
+	// Before the store opens: a node at a checkpoint doesn't start into a
+	// cluster that runs without it.
+	if err := internal.CheckStart(string(cfg.DBPath), *restored); err != nil {
+		log.Fatal("main", "Refusing to start", err)
+	}
+	if *journalDir != "" && !*restored {
+		log.Fatal("main", "Refusing to start", errors.New("-journal is replayed by a node started with -restored"))
+	}
+	// Before the service: the security changes it makes are journalled.
+	if err := internal.InitOffsite(); err != nil {
+		log.Fatal("main", "Failed to start the backups' uploads", err)
+	}
+
 	svc, err := internal.NewService(cfg)
 	if err != nil {
 		log.Fatal("main", "Failed to start the service", err)
@@ -94,6 +115,14 @@ func main() {
 	// subscriptions other nodes resend to a node that starts, are handled on
 	// connections of the service.
 	internal.Globals.Service = svc
+
+	// Restored: what was revoked since the backup run is revoked again,
+	// before the cluster and the clients see this node.
+	if *journalDir != "" {
+		if err := internal.ReplayJournal(*journalDir); err != nil {
+			log.Fatal("main", "Refusing to start", err)
+		}
+	}
 
 	// Start accepting cluster traffic.
 	if internal.Globals.Cluster != nil {

@@ -1,0 +1,68 @@
+# Alerts on unitdb's backups (docs/backup-restore.md), for the Prometheus
+# Operator. The metrics: each node's /_metrics on its monitor
+# port (checkpoints, uploads, the security journal), the Pushgateway (the
+# weekly restore test), and kube-state-metrics (the backup job).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: unitdb-backups
+  namespace: unitdb
+spec:
+  groups:
+    - name: unitdb-backups
+      rules:
+        # A node's last checkpoint is more than a day old: the daily run
+        # (backups.yaml) didn't reach it.
+        - alert: UnitdbCheckpointStale
+          expr: time() - min by (pod) (unitdb_checkpoint_last_success_timestamp_seconds) > 26 * 3600
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.pod }}: no checkpoint for over 26 h"
+        - alert: UnitdbCheckpointFailing
+          expr: increase(unitdb_checkpoint_failures_total[2h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.pod }}: a checkpoint failed (see its logs, context checkpoint)"
+        # A node's last upload to the bucket is more than a day old.
+        - alert: UnitdbBackupUploadStale
+          expr: time() - min by (pod) (unitdb_backup_upload_last_success_timestamp_seconds) > 26 * 3600
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.pod }}: no backup uploaded for over 26 h"
+        - alert: UnitdbBackupJobFailed
+          expr: kube_job_status_failed{namespace="unitdb", job_name=~"unitdb-backup-.*"} > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "the backup run {{ $labels.job_name }} failed: a node's checkpoint or upload (see the Job's output, its manifest)"
+        # Security changes not in the bucket: a whole-cluster restore now
+        # would bring back what they revoked.
+        - alert: UnitdbSecurityJournalLagging
+          expr: max by (pod) (unitdb_security_journal_lag_seconds) > 300
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.pod }}: security changes over 5 min old aren't in the bucket"
+        - alert: UnitdbSecurityJournalNotRecording
+          expr: increase(unitdb_security_journal_record_errors_total[10m]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.pod }}: a security change couldn't be written to the journal"
+        # The weekly restore test hasn't passed for over 8 days, or never
+        # has: this fires from deployment until its first pass.
+        - alert: UnitdbRestoreTestStale
+          expr: |
+            (time() - max by (cluster) (unitdb_backup_restore_verified_timestamp_seconds) > 8 * 86400)
+              or absent(unitdb_backup_restore_verified_timestamp_seconds)
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "no backup has been proven to restore for over 8 days (restore-test.yaml)"

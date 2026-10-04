@@ -16,6 +16,16 @@
 
 package store
 
+import (
+	"bytes"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"hash/fnv"
+
+	adapter "github.com/unit-io/unitdb/server/internal/db"
+)
+
 // securityTopic is the topic the cluster's security state is kept under, in
 // the node's own namespace (namespaces.go).
 var securityTopic = sysTopic(sysSecurity, "state")
@@ -67,4 +77,76 @@ func (SecurityStore) Legacy() (ids, records [][]byte, err error) {
 // as Legacy returns it.
 func (SecurityStore) DeleteLegacy(id []byte) error {
 	return adp.Delete(legacySecurityStoreId, id, legacySecurityTopic)
+}
+
+// probeKey is the memdb key the health probe writes: a hash of a string no
+// other record's key comes from.
+var probeKey = func() uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("\x00unitdb-health-probe"))
+	return h.Sum64()
+}()
+
+// Probe writes a record and reads it back, for health checks. It writes this
+// node's store only, through the adapter, so nothing replicates it, and under
+// a key of its own, so it can't clash with a real one. Sealing applies, as
+// to every record.
+func Probe() error {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return err
+	}
+	adp.DeleteMessage(probeKey)
+	if err := adp.PutMessage(probeKey, b[:]); err != nil {
+		return fmt.Errorf("store probe: write: %v", err)
+	}
+	got, err := adp.GetMessage(probeKey)
+	if err != nil {
+		return fmt.Errorf("store probe: read: %v", err)
+	}
+	if !bytes.Equal(got, b[:]) {
+		return errors.New("store probe: read back something else than it wrote")
+	}
+	return nil
+}
+
+// Stats is the size of the store.
+type Stats = adapter.Stats
+
+// CheckpointInfo describes a checkpoint (CheckpointInfoFile in it).
+type CheckpointInfo = adapter.CheckpointInfo
+
+// CheckpointInfoFile is the file in a checkpoint that describes it.
+const CheckpointInfoFile = adapter.CheckpointInfoFile
+
+// ManifestFile is the file in a checkpoint of a backup run that lists the
+// run's checkpoints.
+const ManifestFile = adapter.ManifestFile
+
+// Checkpoint writes a copy of the store into dst, a directory that doesn't
+// exist or is empty, that opens as the store was at one moment (db_path set
+// to dst). Writes wait while it runs. Records sealed at rest stay sealed: the
+// copy opens with the same keyring only. Last it writes info, with the
+// copy's stats and the engine's version, into the copy as
+// CheckpointInfoFile, and returns what it wrote. Errors start
+// "store checkpoint: ".
+func Checkpoint(dst string, info CheckpointInfo) (CheckpointInfo, error) {
+	return adp.Checkpoint(dst, info)
+}
+
+// WriteManifest writes a backup run's manifest into dir, this node's
+// checkpoint of the run.
+func WriteManifest(dir string, manifest []byte) error {
+	return adapter.WriteManifest(dir, manifest)
+}
+
+// ReadCheckpointInfo returns the description of the checkpoint in dir, or
+// nil if dir isn't one.
+func ReadCheckpointInfo(dir string) (*CheckpointInfo, error) {
+	return adapter.ReadCheckpointInfo(dir)
+}
+
+// StoreStats returns the size of the store, cheaply: for metrics.
+func StoreStats() Stats {
+	return adp.Stats()
 }

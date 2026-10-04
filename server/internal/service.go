@@ -29,6 +29,9 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/unit-io/unitdb/server/internal/config"
 	"github.com/unit-io/unitdb/server/internal/keys"
 	lp "github.com/unit-io/unitdb/server/internal/net"
@@ -63,6 +66,7 @@ type _Service struct {
 	tcp           *lp.TcpServer      // The underlying TCP server.
 	grpc          *lp.GrpcServer     // The underlying GRPC server.
 	meter         *Meter             // The metircs to measure timeseries on message events
+	health        *healthMonitor     // The health checks, on their own port
 	stats         *stats.Stats
 
 	// Shutdown.
@@ -206,6 +210,20 @@ func (s *_Service) listen(addr string) {
 
 	l.SetReadTimeout(120 * time.Second)
 
+	// The health checks, and grpc.health.v1 on the gRPC server.
+	s.health = newHealthMonitor(s.start)
+	s.health.addServiceChecks()
+	s.health.metrics = s.writeMetrics
+	s.grpc.Register = func(g *grpc.Server) {
+		healthpb.RegisterHealthServer(g, s.health.grpc)
+	}
+	if s.config.MonitorListen != "" {
+		if err := s.health.serve(s.config.MonitorListen); err != nil {
+			panic(err)
+		}
+	}
+	go s.health.run(s.context)
+
 	// Configure the protos
 	if s.config.GrpcListen != "" {
 		grpcList, err := netListener(s.config.GrpcListen)
@@ -274,6 +292,12 @@ func (s *_Service) Close() {
 }
 
 func (s *_Service) close() {
+	// Not ready from now on: the load balancer moves away.
+	if s.health != nil {
+		s.health.drain()
+		defer s.health.close()
+	}
+
 	// Leave the cluster first, while this node's clients are still served:
 	// the others take over what it holds, and its clients' subscriptions.
 	Globals.Cluster.drain()

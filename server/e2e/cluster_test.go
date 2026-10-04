@@ -2590,3 +2590,29 @@ func TestClusterRestartedOwnerKeepsSubscriptions(t *testing.T) {
 	}
 	c.assertAlive(t, c.nodes, "after the restart")
 }
+
+// TestClusterGracefulRestartRejoins restarts the leader gracefully, then a
+// follower: each is back in the ring, and ready, soon after. A leader that
+// shuts down takes itself out of the ring; the next leader inherited that
+// ring, and never saw the node fail, so it never set the ring again when
+// the node came back.
+func TestClusterGracefulRestartRejoins(t *testing.T) {
+	c := startCluster(t, names...)
+	leader, err := c.waitLeader(c.nodes, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{leader, followerOf(leader)} {
+		n := c.node(name)
+		n.shutdown()
+		if err := n.start(); err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range c.nodes {
+			waitReadyz(t, m, 30*time.Second)
+		}
+		if _, err := c.waitLeader(c.nodes, 10*time.Second); err != nil {
+			t.Fatalf("after %s's restart: %v", name, err)
+		}
+	}
+}

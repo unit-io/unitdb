@@ -21,6 +21,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/unit-io/unitdb"
 	"github.com/unit-io/unitdb/memdb"
@@ -56,6 +59,13 @@ type adapter struct {
 	mem     *memdb.DB  // The underlying memdb to store messages.
 	config  *configType
 	version int
+	// path is the directory the store is in.
+	path string
+	// wmu is held for reading by every write, and for writing by Checkpoint,
+	// so that a checkpoint copies the store between writes, and by Close.
+	wmu sync.RWMutex
+	// lastWrite is when the DB was last written to, in unix nanoseconds.
+	lastWrite atomic.Int64
 
 	// close
 	closer io.Closer
@@ -96,12 +106,15 @@ func (a *adapter) Open(path, jsonconfig string, reset bool) error {
 	}
 
 	a.config = &config
+	a.path = path
 
 	return nil
 }
 
 // Close closes the underlying database connection
 func (a *adapter) Close() error {
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
 	var err error
 	if a.db != nil {
 		err = a.db.Close()
@@ -134,9 +147,12 @@ func (a *adapter) GetName() string {
 
 // Put appends the messages to the store.
 func (a *adapter) Put(contract uint32, topic string, payload []byte, ttl string) error {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
 	if a.db == nil {
 		return errClosed
 	}
+	defer a.lastWrite.Store(time.Now().UnixNano())
 	entry := unitdb.NewEntry([]byte(topic), payload).WithContract(contract)
 	if ttl != "" {
 		entry.WithTTL(ttl)
@@ -146,9 +162,12 @@ func (a *adapter) Put(contract uint32, topic string, payload []byte, ttl string)
 
 // PutWithID appends the messages to the store using a pre generated messageId.
 func (a *adapter) PutWithID(contract uint32, messageId []byte, topic string, payload []byte, ttl string) error {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
 	if a.db == nil {
 		return errClosed
 	}
+	defer a.lastWrite.Store(time.Now().UnixNano())
 	entry := unitdb.NewEntry([]byte(topic), payload).WithContract(contract).WithID(messageId)
 	if ttl != "" {
 		entry.WithTTL(ttl)
@@ -202,9 +221,12 @@ func (a *adapter) NewID() ([]byte, error) {
 
 // Put appends the messages to the store.
 func (a *adapter) Delete(contract uint32, messageId []byte, topic string) error {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
 	if a.db == nil {
 		return errClosed
 	}
+	defer a.lastWrite.Store(time.Now().UnixNano())
 	entry := unitdb.NewEntry([]byte(topic), nil)
 	entry.WithContract(contract)
 	return a.db.DeleteEntry(entry.WithID(messageId))
@@ -212,6 +234,8 @@ func (a *adapter) Delete(contract uint32, messageId []byte, topic string) error 
 
 // PutMessage puts payload as the key's value, in place of its last.
 func (a *adapter) PutMessage(key uint64, payload []byte) error {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
 	if a.mem == nil {
 		return errClosed
 	}
@@ -249,6 +273,8 @@ func (a *adapter) Flush() error {
 
 // DeleteMessage deletes the key's value; a key with none is deleted.
 func (a *adapter) DeleteMessage(key uint64) error {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
 	if a.mem == nil {
 		return errClosed
 	}

@@ -8,5 +8,8 @@
   changes.
 - [Message log replication](message-log-replication.md): replicas of stored
   messages and session logs, hints, and rebuilding a node that lost its disk.
+- [Backup and restore](backup-restore.md): checkpoints, the backup run, copies
+  off the cluster, the security journal, reconciliation after a restore, the
+  weekly restore test, and the runbooks.
 - [Rolling deploys](rolling-deploys.md): upgrading a cluster node by node, and
   the maintenance-window upgrade from v0.3.0.

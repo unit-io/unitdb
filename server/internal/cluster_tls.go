@@ -325,3 +325,31 @@ func (p *peerRPC) Revocations(req *RevocationsReq, resp *RevocationsResp) error 
 	}
 	return p.c.Revocations(req, resp)
 }
+
+func (p *peerRPC) StartedFrom(req *StartedFromReq, resp *StartedFromResp) error {
+	if err := p.is(req.Node); err != nil {
+		return err
+	}
+	return p.c.StartedFrom(req, resp)
+}
+
+func (p *peerRPC) ReconcileTopics(req *ReconcileTopicsReq, resp *ReconcileTopicsResp) error {
+	if err := p.is(req.Node); err != nil {
+		return err
+	}
+	return p.c.ReconcileTopics(req, resp)
+}
+
+func (p *peerRPC) Digests(req *DigestsReq, resp *DigestsResp) error {
+	if err := p.is(req.Node); err != nil {
+		return err
+	}
+	return p.c.Digests(req, resp)
+}
+
+func (p *peerRPC) Reconcile(req *ReconcileReq, resp *ReconcileResp) error {
+	if err := p.is(req.Node); err != nil {
+		return err
+	}
+	return p.c.Reconcile(req, resp)
+}

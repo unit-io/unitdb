@@ -213,8 +213,12 @@ func (r *revocations) refuses(contract uint32, uuid uint64, issuedAt uint32) str
 
 // apply merges changes into the state and saves it, and sends what changed
 // to every other node but from, if set: the node changes came from. It
-// returns what changed, as it is now.
+// returns what changed, as it is now. A change this node makes (from unset)
+// goes in the security journal first (offsite.go), for a restore to replay.
 func (r *revocations) apply(changes map[uint32]*ContractState, from string) (map[uint32]*ContractState, error) {
+	if from == "" {
+		journalSecurity(changes)
+	}
 	r.mu.Lock()
 	changed := r.mergeLocked(changes, time.Now().Unix())
 	var err error
@@ -228,6 +232,19 @@ func (r *revocations) apply(changes map[uint32]*ContractState, from string) (map
 		}
 	}
 	return changed, err
+}
+
+// replay merges changes from the security journal into the state and saves
+// it, without sending them: every node of a restore replays the journal.
+// It returns what changed.
+func (r *revocations) replay(changes map[uint32]*ContractState) (map[uint32]*ContractState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	changed := r.mergeLocked(changes, time.Now().Unix())
+	if len(changed) == 0 {
+		return changed, nil
+	}
+	return changed, r.saveLocked()
 }
 
 // mergeLocked merges changes into the state, and returns the contracts that
