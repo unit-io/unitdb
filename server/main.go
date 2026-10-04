@@ -40,6 +40,7 @@ func main() {
 	var configfile = flag.String("config", "unitdb.conf", "Path to config file.")
 	var listenOn = flag.String("listen", "", "Override address and port to listen on for HTTP(S) clients.")
 	var listenGrpcOn = flag.String("grpc_listen", "", "Override address and port to listen on for GRPC clients.")
+	var monitorOn = flag.String("monitor_listen", "", "Override address and port to serve the health checks on (/_healthz, /_readyz, /_status).")
 	var clusterSelf = flag.String("cluster_self", "", "Override the name of the current cluster node")
 	var dbPath = flag.String("db_path", "/tmp/unitdb", "Override the db path.")
 	var varzPath = flag.String("varz", "/varz", "Expose runtime stats at the given endpoint, e.g. /varz. Disabled if not set")
@@ -71,6 +72,10 @@ func main() {
 	// Set up gRPC server, if one is configured
 	if *listenGrpcOn != "" {
 		cfg.GrpcListen = *listenGrpcOn
+	}
+
+	if *monitorOn != "" {
+		cfg.MonitorListen = *monitorOn
 	}
 
 	if *dbPath != "" {

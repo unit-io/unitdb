@@ -135,7 +135,9 @@ type server struct {
 	dbPath   string
 	tcpAddr  string
 	grpcAddr string
-	logs     *syncBuffer
+	// monitorAddr serves the health checks: /_healthz, /_readyz, /_status.
+	monitorAddr string
+	logs        *syncBuffer
 	// env is added to the server's environment.
 	env []string
 	// noWait starts the server without waiting for it to be ready.
@@ -242,6 +244,7 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	confName := fmt.Sprintf("e2e-%d.conf", freePort(t))
 	tcpPort := freePort(t)
 	grpcPort := freePort(t)
+	monitorPort := freePort(t)
 	dbPath, err := os.MkdirTemp("", "unitdb-e2e-db")
 	if err != nil {
 		t.Fatal(err)
@@ -250,13 +253,14 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 		return fmt.Sprintf(`{
   "listen": "127.0.0.1:%d",
   "grpc_listen": "127.0.0.1:%d",
+  "monitor_listen": "127.0.0.1:%d",
   "logging_level": %q,
   "allow_insecure": %t,
   %s
   "encryption_config": {"key": %q, "identifier": "local", "sealed": false, "timestamp": 1522325758},
   "cluster_config": %s,
   "store_config": {"reset": false, "adapters": {"unitdb": {"database": "unitdb", "mem_size": 500000000}}}
-}`, tcpPort, grpcPort, opts.logLevel, opts.allowInsecure, opts.extra, opts.key, cluster)
+}`, tcpPort, grpcPort, monitorPort, opts.logLevel, opts.allowInsecure, opts.extra, opts.key, cluster)
 	}
 	confPath := filepath.Join(binDir, confName)
 	if err := os.WriteFile(confPath, []byte(confWith(opts.cluster)), 0644); err != nil {
@@ -273,16 +277,17 @@ func startServerWith(t *testing.T, opts serverOpts) *server {
 	}
 
 	s := &server{
-		t:        t,
-		cmd:      cmd,
-		dbPath:   dbPath,
-		tcpAddr:  fmt.Sprintf("127.0.0.1:%d", tcpPort),
-		grpcAddr: fmt.Sprintf("127.0.0.1:%d", grpcPort),
-		logs:     logs,
-		env:      opts.env,
-		noWait:   opts.expectExit,
-		confPath: confPath,
-		confWith: confWith,
+		t:           t,
+		cmd:         cmd,
+		dbPath:      dbPath,
+		tcpAddr:     fmt.Sprintf("127.0.0.1:%d", tcpPort),
+		grpcAddr:    fmt.Sprintf("127.0.0.1:%d", grpcPort),
+		monitorAddr: fmt.Sprintf("127.0.0.1:%d", monitorPort),
+		logs:        logs,
+		env:         opts.env,
+		noWait:      opts.expectExit,
+		confPath:    confPath,
+		confWith:    confWith,
 	}
 	s.watch()
 	t.Cleanup(func() {

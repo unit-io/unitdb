@@ -364,6 +364,7 @@ func (c *Cluster) run() {
 			if c.fo.leader == c.thisNodeName {
 				// I'm the leader, send pings
 				c.sendPings()
+				c.health.leaderSeen(c.thisNodeName)
 			} else {
 				missed++
 				if missed >= c.fo.voteTimeout {
@@ -399,6 +400,7 @@ func (c *Cluster) run() {
 			}
 
 			missed = 0
+			c.health.leaderSeen(ping.Leader)
 			if c.leaving.Load() && !containsNode(ping.Nodes, c.thisNodeName) {
 				c.fo.pingsWithoutSelf.Add(1)
 			}
