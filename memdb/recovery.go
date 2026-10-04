@@ -125,7 +125,7 @@ func (db *DB) startRecovery() error {
 		block.Lock()
 		block.lastOffset = block.size()
 		block.Unlock()
-		block.timeRefs = append(block.timeRefs, _TimeID(ID))
+		block.timeRefs = append(block.timeRefs, db.nextLogRef(_TimeID(ID)))
 		db.internal.timeMark.release(timeID)
 		db.internal.meter.Recovers.Inc(puts)
 		return false, nil

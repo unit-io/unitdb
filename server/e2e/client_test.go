@@ -371,19 +371,27 @@ func (c *client) connectWith(o connectOpts) (*utp.ConnectAcknowledge, error) {
 	if err := c.writeRaw(buf.Bytes()); err != nil {
 		return nil, err
 	}
+	var p *utp.ControlMessage
 	select {
 	case <-c.closed:
-		return nil, fmt.Errorf("connection closed during connect: %v", c.readErr)
-	case p := <-c.connack:
-		ack := &utp.ConnectAcknowledge{}
-		ack.FromBinary(utp.FixedHeader{}, p.Message)
-		if ack.ReturnCode != utp.Accepted {
-			return ack, fmt.Errorf("connect refused, return code %d", ack.ReturnCode)
+		// A refusal is written and the connection closed at once: the
+		// CONNACK can be waiting when the close is seen, and select took
+		// either.
+		select {
+		case p = <-c.connack:
+		default:
+			return nil, fmt.Errorf("connection closed during connect: %v", c.readErr)
 		}
-		return ack, nil
+	case p = <-c.connack:
 	case <-time.After(3 * time.Second):
 		return nil, fmt.Errorf("connect timeout")
 	}
+	ack := &utp.ConnectAcknowledge{}
+	ack.FromBinary(utp.FixedHeader{}, p.Message)
+	if ack.ReturnCode != utp.Accepted {
+		return ack, fmt.Errorf("connect refused, return code %d", ack.ReturnCode)
+	}
+	return ack, nil
 }
 
 func (c *client) publish(mode uint8, topic string, payload []byte, ttl string) (uint16, error) {
