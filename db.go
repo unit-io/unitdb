@@ -192,6 +192,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.checkFiles")
 		return abort(err)
 	}
+	if err := db.recount(); err != nil {
+		logger.Error().Err(err).Str("context", "db.recount")
+		return abort(err)
+	}
 
 	// Create a new MAC from the key. Without one, the database neither
 	// encrypts nor decrypts.

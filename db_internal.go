@@ -86,6 +86,9 @@ type (
 
 		timeWindow *_TimeWindowBucket
 
+		// recounted is set when Open counted the entries on disk (recount).
+		recounted bool
+
 		// Trie
 		trie *_Trie
 		// unnamed holds the newest window block of each topic stored with
@@ -172,6 +175,42 @@ func (db *DB) close() error {
 	db.internal.meter.UnregisterAll()
 
 	return err
+}
+
+// recount sets Count to the entries on disk, from the index: the count kept
+// with them is written apart from them, and a crash between a delete's
+// tombstone and its count left it one high. The recovery then counts only
+// the entries it writes. With background expiry, which uncounts the entries
+// it frees and leaves them in the index, the count kept is kept.
+func (db *DB) recount() error {
+	if db.opts.flags.backgroundKeyExpiry {
+		return nil
+	}
+	_, indexFile, _, _, err := db.files()
+	if err != nil {
+		return err
+	}
+	var live uint64
+	if err := forEachBlock(indexFile, func(off int64, buf []byte) error {
+		var b _IndexBlock
+		if err := b.unmarshalBinary(buf); err != nil {
+			return err
+		}
+		for _, e := range b.entries {
+			if e.seq != 0 && !e.deleted() {
+				live++
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if stored := atomic.LoadUint64(&db.internal.dbInfo.count); stored != live {
+		logger.Info().Uint64("stored", stored).Uint64("entries", live).Str("context", "db.recount").Msg("count set to the entries on disk")
+	}
+	atomic.StoreUint64(&db.internal.dbInfo.count, live)
+	db.internal.recounted = true
+	return nil
 }
 
 // loadTrie loads the topics of the window blocks on disk, with the offset of
@@ -440,6 +479,9 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	// Persist the tombstone before releasing the entry's data block.
 	if err := w.write(); err != nil {
 		return err
+	}
+	if testHookBeforeDecount != nil {
+		testHookBeforeDecount()
 	}
 	// The data block of an entry holding its topic is kept so the trie can be loaded on open.
 	if e.topicSize == 0 {

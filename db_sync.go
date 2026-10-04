@@ -173,6 +173,10 @@ func (db *DB) sync() error {
 	return nil
 }
 
+// testHookBeforeDecount, if set, runs once a delete has written its
+// tombstone and before it writes the count without the entry.
+var testHookBeforeDecount func()
+
 // testHookBeforeCount, if set, runs once a sync has written its entries and
 // before it writes their count: the crash tests stop the process there.
 var testHookBeforeCount func()

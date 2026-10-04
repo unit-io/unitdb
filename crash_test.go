@@ -136,6 +136,27 @@ func TestCrashChild(t *testing.T) {
 		}
 		flush()
 		ack("done")
+	case "delete-count":
+		// Stop in a delete of an entry on disk, its tombstone written and
+		// the count not.
+		var ids [][]byte
+		for i := 0; i < 20; i++ {
+			id := db.NewID()
+			if err := db.PutEntry(NewEntry(crashTopic, []byte(fmt.Sprintf("m%d", i))).WithID(id)); err != nil {
+				fmt.Println("error", err)
+				os.Exit(2)
+			}
+			ids = append(ids, id)
+		}
+		syncAllChild(20)
+		testHookBeforeDecount = func() {
+			ack("tombstone written")
+			select {}
+		}
+		if err := db.Delete(ids[5], crashTopic); err != nil {
+			fmt.Println("error", err)
+			os.Exit(2)
+		}
 	case "sync-count":
 		// Stop in a sync, its entries written and their count not.
 		for i := 0; i < 100; i++ {
@@ -354,6 +375,25 @@ func TestCrashAfterDeleteFirst(t *testing.T) {
 	db, msgs := restore(t, dir)
 	defer db.Close()
 	assertEqualMsgs(t, []string{"m1"}, msgs)
+	if err := db.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCrashBeforeDecount kills a delete after it has written its tombstone
+// and before it has written the count without the entry: the count was one
+// high after the reopen.
+func TestCrashBeforeDecount(t *testing.T) {
+	dir := t.TempDir()
+	crashChild(t, "delete-count", dir, 0, func(string) bool { return true })
+	db, msgs := restore(t, dir)
+	defer db.Close()
+	if len(msgs) != 19 {
+		t.Fatalf("%d messages restored; want 19", len(msgs))
+	}
+	if count := db.Count(); count != uint64(len(msgs)) {
+		t.Fatalf("count %d does not match %d restored messages", count, len(msgs))
+	}
 	if err := db.Verify(); err != nil {
 		t.Fatal(err)
 	}

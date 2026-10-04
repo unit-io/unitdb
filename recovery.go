@@ -103,7 +103,8 @@ func (db *_SyncHandle) startRecovery() error {
 			}
 			if err := db.blockWriter.append(e); err != nil {
 				if err == errEntryExist {
-					if timeID == syncing && m.valueSize != 0 {
+					// Counted by recount, if Open recounted.
+					if timeID == syncing && m.valueSize != 0 && !db.internal.recounted {
 						db.syncInfo.count++
 					}
 					continue
