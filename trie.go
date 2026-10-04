@@ -183,6 +183,17 @@ func (t *_Trie) ilookup(query []message.Part, depth, topicType uint8, tops *_Top
 	}
 }
 
+// hashes returns the hashes of the topics in the trie.
+func (t *_Trie) hashes() []uint64 {
+	t.RLock()
+	defer t.RUnlock()
+	hs := make([]uint64, 0, len(t.topicTrie.summary))
+	for h := range t.topicTrie.summary {
+		hs = append(hs, h)
+	}
+	return hs
+}
+
 func (t *_Trie) getOffset(topicHash uint64) (off int64, ok bool) {
 	t.RLock()
 	defer t.RUnlock()

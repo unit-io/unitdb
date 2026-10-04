@@ -8,3 +8,6 @@ cmd/benchmark/**
 *.lock
 *.exe
 *.out
+
+# DBs saved by older formats, which the tests open.
+!testdata/compat/**

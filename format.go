@@ -96,13 +96,17 @@ const (
 //	0   8  the message ID's prefix
 //	8   1  encryption: 1 if the value is encrypted
 //	9   t  the topic's name (topic size bytes; see Topic.Marshal), in the
-//	       first entry of a topic, and of each topic in a batch
+//	       first entry of a topic, before format 4 and its topics file;
+//	       none since
 //	9+t v  value: snappy, then encrypted if so
 //
 // Checksum file: the CRC32C of the message of sequence s at s*4.
 //
 // Free list (lease file): a count n, 4 bytes; n free blocks of an offset, 8
 // bytes, and a size, 4; and the CRC32C of what precedes.
+//
+// Topics file (unitdb.topics), since format 4: a record per topic, appended
+// and synced before the topic's first entry is put; see _TopicNames.
 //
 // Filter file: the bloom filter of the sequences in the index, then its
 // CRC32C.

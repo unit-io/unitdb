@@ -131,6 +131,27 @@ func TestFormat(t *testing.T) {
 			t.Errorf("decoded %+v, %v", got, err)
 		}
 	})
+	t.Run("topic-record", func(t *testing.T) {
+		dir := t.TempDir()
+		f, err := newFile(dir, 1, _FileDesc{fileType: typeTopics})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		ts := newTopicNames(f)
+		name := []byte{1, 0, 4, 3, 2, 1}
+		if err := ts.name(0x0102030405060708, name, true); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filePath(dir, _FileDesc{fileType: typeTopics}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = golden(t, "topic-record", raw)
+		if len(raw) != 4+8+6+4 || u32(raw, 0) != 14 || u64(raw, 4) != 0x0102030405060708 || !bytes.Equal(raw[12:18], name) || !matchesChecksum(raw, 18) {
+			t.Errorf("topic record fields not at their offsets: % x", raw)
+		}
+	})
 	t.Run("free-list", func(t *testing.T) {
 		fb := _FreeBlocks{fb: []_FreeBlock{{offset: 4096, size: 64}, {offset: 10000, size: 300}}}
 		raw := golden(t, "free-blocks", fb.MarshalBinary())

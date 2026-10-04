@@ -18,6 +18,7 @@ package unitdb
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"sort"
@@ -40,7 +41,7 @@ const (
 	nPoolSize             = 27
 	lockPostfix           = ".lock"
 	idSize                = 9 // message ID prefix with additional encryption bit.
-	version               = 3 // file format version; 2 adds checksums, 3 the block being synced.
+	version               = 4 // file format version; 2 adds checksums, 3 the block being synced, 4 the topics file.
 
 	// maxExpDur expired keys are deleted from DB after durType*maxExpDur.
 	// For example if durType is Minute and maxExpDur then
@@ -91,6 +92,8 @@ type (
 
 		// Trie
 		trie *_Trie
+		// topics names the topics: see _TopicNames.
+		topics *_TopicNames
 		// unnamed holds the newest window block of each topic stored with
 		// no entry on disk holding its name: a topic's name is in its first
 		// entry, which can reach disk after others of the topic. The topic
@@ -220,9 +223,19 @@ func (db *DB) recount() error {
 func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
 	err := r.blockIterator(func(startSeq, topicHash uint64, off int64) (bool, error) {
-		rawtopic, err := db.storedTopic(r.winFile, startSeq, off)
-		if err != nil {
-			return true, err
+		// The topics file names it, or else, written before the file, an
+		// entry of it does; the file then records it.
+		rawtopic, named := db.internal.topics.get(topicHash)
+		if !named {
+			var err error
+			if rawtopic, err = db.storedTopic(r.winFile, startSeq, off); err != nil {
+				return true, err
+			}
+			if rawtopic != nil {
+				if err := db.internal.topics.name(topicHash, rawtopic, false); err != nil {
+					return true, err
+				}
+			}
 		}
 		if rawtopic == nil {
 			if db.internal.unnamed == nil {
@@ -240,7 +253,22 @@ func (db *DB) loadTrie() error {
 		}
 		return false, nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// Topics named with no window block yet: their entries are in the WAL,
+	// or were deleted.
+	for hash, raw := range db.internal.topics.all() {
+		if _, ok := db.internal.trie.getOffset(hash); ok {
+			continue
+		}
+		t := new(message.Topic)
+		if err := t.Unmarshal(raw); err != nil {
+			return fmt.Errorf("%w: topic %d: %v", errCorrupted, hash, err)
+		}
+		db.internal.trie.add(newTopic(hash, db.internal.unnamed[hash]), t.Parts, t.Depth)
+	}
+	return nil
 }
 
 // storedTopic returns the name of the topic whose newest window block is at
@@ -282,10 +310,16 @@ func (db *DB) storedTopic(winFile *_File, startSeq uint64, head int64) ([]byte, 
 	return nil, nil
 }
 
-// addTopic adds a topic named by an entry to the trie, at its newest window
-// block if it has blocks on disk already.
+// addTopic adds a topic named by an entry, written before the topics file,
+// to the trie, at its newest window block if it has blocks on disk already,
+// and records its name, for the topics file to name every topic; Open
+// syncs the records.
 func (db *DB) addTopic(topicHash uint64, parts []message.Part, depth uint8) {
 	db.internal.trie.add(newTopic(topicHash, db.internal.unnamed[topicHash]), parts, depth)
+	t := message.Topic{Parts: parts, Depth: depth}
+	if err := db.internal.topics.name(topicHash, t.Marshal(), false); err != nil {
+		logger.Error().Err(err).Uint64("topic", topicHash).Str("context", "db.addTopic").Msg("unable to record a topic")
+	}
 }
 
 func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
@@ -350,18 +384,14 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 	return t, 0, nil
 }
 
-// setEntry packs the entry. The topic's name is packed into the first
-// entry of a topic, in the DB, or in a batch if named is not nil: a batch
-// is written to the WAL as it commits, before the Puts made earlier may
-// be, and a crash can lose the entry of a Put that named the topic.
-func (db *DB) setEntry(e *Entry, named map[uint64]bool) error {
+// setEntry packs the entry, naming its topic first if it is new.
+func (db *DB) setEntry(e *Entry) error {
 	if (db.internal.dbInfo.encryption == 1 || e.Encryption) && db.internal.mac == nil {
 		return ErrNoEncryptionKey
 	}
 	var id message.ID
 	var eBit uint8
 	var seq uint64
-	var rawTopic []byte
 	if !e.entry.parsed {
 		if e.Contract == 0 {
 			e.Contract = message.MasterContract
@@ -375,15 +405,10 @@ func (db *DB) setEntry(e *Entry, named map[uint64]bool) error {
 		}
 		t.AddContract(e.Contract)
 		e.entry.topicHash = t.GetHash(e.Contract)
-		// topic is packed if it is new topic entry
-		_, known := db.internal.trie.getOffset(e.entry.topicHash)
-		if named != nil {
-			known = named[e.entry.topicHash]
-			named[e.entry.topicHash] = true
-		}
-		if !known {
-			rawTopic = t.Marshal()
-			e.entry.topicSize = uint16(len(rawTopic))
+		// The topic is named in the topics file before an entry of it is
+		// put; entries no longer hold it.
+		if err := db.nameTopic(e.entry.topicHash, t); err != nil {
+			return err
 		}
 		e.entry.parsed = true
 	}
@@ -416,11 +441,8 @@ func (db *DB) setEntry(e *Entry, named map[uint64]bool) error {
 	copy(e.entry.cache, entryData)
 	copy(e.entry.cache[entrySize:], id.Prefix())
 	e.entry.cache[entrySize+idSize-1] = byte(eBit)
-	// topic data is added on first entry for the topic.
-	if e.entry.topicSize != 0 {
-		copy(e.entry.cache[entrySize+idSize:], rawTopic)
-	}
-	copy(e.entry.cache[entrySize+idSize+uint32(e.entry.topicSize):], val)
+	// An entry holds no topic name: the topics file has it.
+	copy(e.entry.cache[entrySize+idSize:], val)
 	return nil
 }
 

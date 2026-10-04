@@ -33,6 +33,7 @@ import (
 //   - each topic's window blocks link to older blocks of the topic, the trie
 //     knows the topic and points at its newest block, and every entry in the
 //     index not deleted is in a window block, or no query finds it;
+//   - every topic in the trie is named in the topics file;
 //   - the memdb passes its own Verify.
 //
 // It waits for a sync in progress, and holds off the next one. The tests run
@@ -137,6 +138,11 @@ func (db *DB) Verify() error {
 	}
 	for s := range live {
 		return fmt.Errorf("unitdb: entry %d is in the index and in no window block", s)
+	}
+	for _, h := range db.internal.trie.hashes() {
+		if _, ok := db.internal.topics.get(h); !ok {
+			return fmt.Errorf("unitdb: topic %d is in the trie and not named in the topics file", h)
+		}
 	}
 
 	return db.internal.mem.Verify()

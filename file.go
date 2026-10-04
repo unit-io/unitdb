@@ -38,6 +38,7 @@ const (
 	typeLease
 	typeFilter
 	typeChecksum
+	typeTopics
 
 	typeAll = typeInfo | typeTimeWindow | typeIndex | typeData | typeLease | typeFilter | typeChecksum
 
@@ -86,6 +87,9 @@ func filePath(dirName string, fd _FileDesc) string {
 		return path.Join(dirName, suffix)
 	case typeChecksum:
 		suffix := fmt.Sprintf("%s.sum", prefix)
+		return path.Join(dirName, suffix)
+	case typeTopics:
+		suffix := fmt.Sprintf("%s.topics", prefix)
 		return path.Join(dirName, suffix)
 	default:
 		return fmt.Sprintf("%#x-%d", fd.fileType, fd.num)

@@ -22,7 +22,6 @@ import (
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/memdb"
-	"github.com/unit-io/unitdb/message"
 )
 
 // SetOptions sets batch options.
@@ -51,9 +50,6 @@ type (
 		index  []_BatchIndex
 		buffer *bpool.Buffer
 		size   int64
-		// named holds the topics the batch's entries name so far: its
-		// first entry of each topic holds the topic's name.
-		named map[uint64]bool
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 		commitComplete chan struct{}
@@ -83,10 +79,7 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	e.Encryption = e.Encryption || b.opts.batchOptions.encryption
-	if b.named == nil {
-		b.named = make(map[uint64]bool)
-	}
-	if err := b.db.setEntry(e, b.named); err != nil {
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
 
@@ -130,7 +123,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 
-	if err := b.db.setEntry(e, nil); err != nil {
+	if err := b.db.setEntry(e); err != nil {
 		return err
 	}
 
@@ -206,22 +199,11 @@ func (b *Batch) Write() error {
 	if b.len() == 0 {
 		return nil
 	}
-	topics := make(map[uint64]*message.Topic)
 	timeID := b.mem.TimeID()
 	var seqs []uint64
 	// On an error, Commit returns it and Abort drops the entries put so far
 	// in memory; deletes the batch applied stay applied.
 	if err := b.writeInternal(func(i int, e _Entry, data []byte) error {
-		if e.topicSize != 0 {
-			t, ok := topics[e.topicHash]
-			if !ok {
-				t = new(message.Topic)
-				rawTopic := data[entrySize+idSize : entrySize+idSize+e.topicSize]
-				t.Unmarshal(rawTopic)
-				topics[e.topicHash] = t
-			}
-			b.db.addTopic(e.topicHash, t.Parts, t.Depth)
-		}
 		if err := b.mem.Put(e.seq, data); err != nil {
 			return err
 		}
@@ -266,7 +248,6 @@ func (b *Batch) Commit() error {
 }
 
 func (b *Batch) reset() {
-	b.named = nil
 	b.index = b.index[:0]
 	b.size = 0
 	b.buffer.Reset()

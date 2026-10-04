@@ -67,6 +67,13 @@ func FuzzDecode(f *testing.F) {
 		e.UnmarshalBinary(block[:entrySize])
 		var top message.Topic
 		top.Unmarshal(data)
+		for off := 0; off < len(data); {
+			_, _, next, ok := topicRecord(data, off)
+			if !ok || next <= off {
+				break
+			}
+			off = next
+		}
 	})
 }
 

@@ -153,7 +153,12 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile, sumFile}}
+	topicsFile, err := newFile(path, 1, _FileDesc{fileType: typeTopics})
+	if err != nil {
+		return nil, err
+	}
+
+	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile, sumFile, topicsFile}}
 	internal := &_DB{
 		mutex: newMutex(),
 		start: time.Now(),
@@ -170,7 +175,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		timeWindow: newTimeWindowBucket(timeOptions),
 
 		// Trie
-		trie: newTrie(),
+		trie:   newTrie(),
+		topics: newTopicNames(topicsFile),
 
 		// Block reader
 		reader: newBlockReader(fileset),
@@ -236,6 +242,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 	internal.mem = memdb
 
+	if err := db.internal.topics.load(); err != nil {
+		logger.Error().Err(err).Str("context", "topics.load")
+		return abort(err)
+	}
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 		return abort(err)
@@ -258,6 +268,11 @@ func Open(path string, opts ...Options) (*DB, error) {
 
 	if err := db.recoverLog(); err != nil {
 		logger.Error().Err(err).Str("context", "db.recoverLog")
+		return abort(err)
+	}
+	// The topics named by their entries, in a DB from before the topics
+	// file, are recorded now (addTopic).
+	if err := db.internal.topics.sync(); err != nil {
 		return abort(err)
 	}
 
@@ -452,7 +467,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	if err := db.setEntry(e, nil); err != nil {
+	if err := db.setEntry(e); err != nil {
 		return err
 	}
 
@@ -463,13 +478,6 @@ func (db *DB) PutEntry(e *Entry) error {
 
 	if ok := db.internal.timeWindow.add(timeID, e.entry.topicHash, newWinEntry(e.entry.seq, e.entry.expiresAt)); !ok {
 		return errForbidden
-	}
-
-	if e.entry.topicSize != 0 {
-		t := new(message.Topic)
-		rawTopic := e.entry.cache[entrySize+idSize : entrySize+idSize+e.entry.topicSize]
-		t.Unmarshal(rawTopic)
-		db.addTopic(e.entry.topicHash, t.Parts, t.Depth)
 	}
 
 	db.internal.meter.Puts.Inc(1)
