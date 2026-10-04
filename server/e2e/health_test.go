@@ -95,6 +95,17 @@ func TestHealthStandalone(t *testing.T) {
 	if got := grpcHealth(t, s); got != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("grpc health: %v", got)
 	}
+
+	// The metrics, with the connection just made.
+	code, metrics := monitorGet(t, s, "/_metrics")
+	if code != 200 {
+		t.Fatalf("/_metrics: %d %s", code, metrics)
+	}
+	for _, want := range []string{"unitdb_build_info{", "unitdb_up_seconds ", `unitdb_dependency_up{dep="store"} 1`, "unitdb_connections "} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("/_metrics has no %q:\n%s", want, metrics)
+		}
+	}
 }
 
 func TestHealthCluster(t *testing.T) {
