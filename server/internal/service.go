@@ -213,6 +213,7 @@ func (s *_Service) listen(addr string) {
 	// The health checks, and grpc.health.v1 on the gRPC server.
 	s.health = newHealthMonitor(s.start)
 	s.health.addServiceChecks()
+	s.health.metrics = s.writeMetrics
 	s.grpc.Register = func(g *grpc.Server) {
 		healthpb.RegisterHealthServer(g, s.health.grpc)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -27,7 +28,8 @@ import (
 //     reads the results the checks left, and never waits on them.
 //   - /_status: the same, as JSON, with each check's detail.
 //
-// The gRPC server also answers grpc.health.v1, SERVING while ready.
+// The gRPC server also answers grpc.health.v1, SERVING while ready, and
+// /_metrics has the server's metrics (metrics.go).
 //
 // Each check runs every healthInterval in the background, with a
 // healthTimeout, and keeps its last result.
@@ -57,6 +59,8 @@ type healthMonitor struct {
 	draining atomic.Bool
 	grpc     *health.Server
 	srv      *http.Server
+	// metrics writes /_metrics, when set.
+	metrics func(io.Writer)
 }
 
 func newHealthMonitor(started time.Time) *healthMonitor {
@@ -169,6 +173,14 @@ func (h *healthMonitor) handler() http.Handler {
 			return
 		}
 		w.Write([]byte("ready"))
+	})
+	mux.HandleFunc("/_metrics", func(w http.ResponseWriter, r *http.Request) {
+		if h.metrics == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("content-type", "text/plain; version=0.0.4")
+		h.metrics(w)
 	})
 	mux.HandleFunc("/_status", func(w http.ResponseWriter, r *http.Request) {
 		why := h.notReady()

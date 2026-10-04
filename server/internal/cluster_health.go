@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -56,4 +57,44 @@ func (c *Cluster) readiness() (bool, string) {
 	leader, _ := c.health.leader.Load().(string)
 	return true, fmt.Sprintf("in the ring: %d of %d nodes; leader %s, %s ago",
 		len(ring), configured, leader, age.Round(time.Millisecond))
+}
+
+// writeMetrics writes this node's view of the cluster: only what is cheap
+// and safe to read per scrape. Peers are labelled by their node names, a
+// fixed set.
+func (c *Cluster) writeMetrics(m *metricsWriter) {
+	b := func(v bool) float64 {
+		if v {
+			return 1
+		}
+		return 0
+	}
+	m.one("unitdb_cluster_nodes", "gauge", "Nodes in the cluster's configuration, this one included.", float64(len(c.nodes)+1))
+	m.one("unitdb_cluster_members", "gauge", "Nodes in the ring this node routes by.", float64(len(c.getRingNodes())))
+	m.one("unitdb_cluster_ring_version", "gauge", "The ring version last seen from the leader; 0 before any.", float64(c.clusterRing.Load()))
+	m.one("unitdb_cluster_rebuilding", "gauge", "Whether this node is copying its topics from the others.", b(c.rebuilding.Load()))
+	m.one("unitdb_cluster_leaving", "gauge", "Whether this node is leaving the cluster.", b(c.leaving.Load()))
+	if last := c.health.lastLeader.Load(); last != 0 {
+		m.one("unitdb_cluster_leader_age_seconds", "gauge", "Seconds since this node last heard from a leader, or was one.", time.Since(time.Unix(0, last)).Seconds())
+	}
+	c.pendingMu.Lock()
+	pending := len(c.pending)
+	c.pendingMu.Unlock()
+	m.one("unitdb_cluster_pending_hints", "gauge", "Replicas waiting in memory for a peer to take them.", float64(pending))
+
+	names := make([]string, 0, len(c.nodes))
+	for name := range c.nodes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	m.head("unitdb_replication_queue", "gauge", "Replicas queued for a peer.")
+	withoutTLS := 0
+	for _, name := range names {
+		n := c.nodes[name]
+		m.value("unitdb_replication_queue", "peer="+quote(name), float64(len(n.repl)))
+		if caps, ok := n.capabilities(); !ok || !containsNode(caps.Capabilities, capTLS) {
+			withoutTLS++
+		}
+	}
+	m.one("unitdb_cluster_peers_without_tls", "gauge", "Peers that don't advertise TLS for cluster traffic.", float64(withoutTLS))
 }
