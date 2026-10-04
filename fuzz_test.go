@@ -218,7 +218,6 @@ func restamp(ft _FileType, raw []byte) {
 	}
 }
 
-
 // TestMain removes the fuzz template, which outlives the tests that use it.
 func TestMain(m *testing.M) {
 	code := m.Run()

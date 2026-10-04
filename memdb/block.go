@@ -93,6 +93,14 @@ func (b *_Block) get(off int64) ([]byte, error) {
 	return val, nil
 }
 
+// put appends an entry to the block's data, which is what its logs write to
+// the WAL, and which recovery reads (nextEntry):
+//
+//	0   4  the entry's length, these 13 bytes and the value
+//	4   1  1 for a delete, 0 for a put
+//	5   8  key
+//	13  -  value; for a delete, the time ID of the block, 8 bytes, of the
+//	       version deleted
 func (b *_Block) put(ikey _Key, data []byte) error {
 	if b.data == nil {
 		return errForbidden // freed

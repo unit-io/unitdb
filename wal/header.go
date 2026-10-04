@@ -31,6 +31,15 @@ var (
 	crcTable = crc32.MakeTable(crc32.Castagnoli)
 )
 
+// _LogInfo is a log's header, then its data, as records of a length, 4
+// bytes counting itself, and the bytes appended:
+//
+//	0   2  version
+//	2   8  time ID: the log's, which names its file
+//	10  4  records
+//	14  4  data size
+//	18  4  CRC32C of the data, since version 2
+//	22  8  block ID, since version 3; 0 for none
 type _LogInfo struct {
 	version  uint16
 	timeID   int64

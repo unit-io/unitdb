@@ -75,14 +75,13 @@ func (b _WinBlock) marshalBinary() []byte {
 	data := buf
 	for i := 0; i < entriesPerWindowBlock; i++ {
 		e := b.entries[i]
-		binary.LittleEndian.PutUint64(buf[:8], e.sequence)
-		binary.LittleEndian.PutUint32(buf[8:12], e.expiresAt)
-		buf = buf[12:]
+		binary.LittleEndian.PutUint64(buf[i*winEntrySize:], e.sequence)
+		binary.LittleEndian.PutUint32(buf[i*winEntrySize+8:], e.expiresAt)
 	}
-	binary.LittleEndian.PutUint64(buf[:8], uint64(b.cutoffTime))
-	binary.LittleEndian.PutUint64(buf[8:16], b.topicHash)
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(b.next))
-	binary.LittleEndian.PutUint16(buf[24:26], b.entryIdx)
+	binary.LittleEndian.PutUint64(buf[winCutoffOff:], uint64(b.cutoffTime))
+	binary.LittleEndian.PutUint64(buf[winTopicHashOff:], b.topicHash)
+	binary.LittleEndian.PutUint64(buf[winNextOff:], uint64(b.next))
+	binary.LittleEndian.PutUint16(buf[winEntryIdxOff:], b.entryIdx)
 	putChecksum(data, windowChecksumOff)
 	return data
 }
@@ -90,15 +89,14 @@ func (b _WinBlock) marshalBinary() []byte {
 // unmarshalBinary de-serialized window block from binary data.
 func (b *_WinBlock) unmarshalBinary(data []byte) error {
 	for i := 0; i < entriesPerWindowBlock; i++ {
-		_ = data[12] // bounds check hint to compiler; see golang.org/issue/14808.
-		b.entries[i].sequence = binary.LittleEndian.Uint64(data[:8])
-		b.entries[i].expiresAt = binary.LittleEndian.Uint32(data[8:12])
-		data = data[12:]
+		e := data[i*winEntrySize : (i+1)*winEntrySize]
+		b.entries[i].sequence = binary.LittleEndian.Uint64(e[:8])
+		b.entries[i].expiresAt = binary.LittleEndian.Uint32(e[8:12])
 	}
-	b.cutoffTime = int64(binary.LittleEndian.Uint64(data[:8]))
-	b.topicHash = binary.LittleEndian.Uint64(data[8:16])
-	b.next = int64(binary.LittleEndian.Uint64(data[16:24]))
-	b.entryIdx = binary.LittleEndian.Uint16(data[24:26])
+	b.cutoffTime = int64(binary.LittleEndian.Uint64(data[winCutoffOff:]))
+	b.topicHash = binary.LittleEndian.Uint64(data[winTopicHashOff:])
+	b.next = int64(binary.LittleEndian.Uint64(data[winNextOff:]))
+	b.entryIdx = binary.LittleEndian.Uint16(data[winEntryIdxOff:])
 	return nil
 }
 

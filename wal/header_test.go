@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"encoding/binary"
 	"hash/crc32"
 	"os"
 	"testing"
@@ -72,5 +73,30 @@ func TestLogBlockID(t *testing.T) {
 	}
 	if b, ok := got[2]; !ok || b != 0 || vals[2] != "older" {
 		t.Errorf("version 2 log: read %v, block %d, entry %q; want block 0, \"older\"", ok, b, vals[2])
+	}
+}
+
+// TestLogHeaderLayout checks the fields of a version 3 header at their
+// offsets: version, 2 bytes; time ID, 8; entries, 4; data size, 4; CRC32C
+// of the data, 4; block, 8.
+func TestLogHeaderLayout(t *testing.T) {
+	info := _LogInfo{version: 3, timeID: 0x0102030405060708, count: 5, size: 300, checksum: 0xdeadbeef, blockID: 1_700_000_000_000_000_000}
+	raw, _ := info.MarshalBinary()
+	le := binary.LittleEndian
+	if len(raw) != 30 || le.Uint16(raw[0:]) != 3 || le.Uint64(raw[2:]) != 0x0102030405060708 || le.Uint32(raw[10:]) != 5 || le.Uint32(raw[14:]) != 300 || le.Uint32(raw[18:]) != 0xdeadbeef || le.Uint64(raw[22:]) != 1_700_000_000_000_000_000 {
+		t.Fatalf("header fields not at their offsets: % x", raw)
+	}
+	var got _LogInfo
+	got.UnmarshalBinary(raw)
+	if got != info {
+		t.Fatalf("decoded %+v; want %+v", got, info)
+	}
+	// Version 1, with no checksum and no block.
+	v1 := raw[:18]
+	le.PutUint16(v1, 1)
+	got = _LogInfo{}
+	got.UnmarshalBinary(v1)
+	if got.version != 1 || got.timeID != info.timeID || got.count != 5 || got.size != 300 || got.checksum != 0 || got.blockID != 0 {
+		t.Fatalf("version 1 decoded %+v", got)
 	}
 }
