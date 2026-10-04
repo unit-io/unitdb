@@ -127,18 +127,24 @@ func (c *_Conn) handler(inMsg lp.MessagePack) error {
 			FlowControl: utp.ACKNOWLEDGE,
 			Message:     rawAck.Bytes(),
 		}
-		c.queue(ack)
-
 		if err == types.ErrInvalidClientID || err == types.ErrV1ClientID {
-			// A new client id, for a client that sent none or one that
-			// does not open; not for an expired one, nor a v1 one.
+			// The connection closes once this returns: the refusal, and a
+			// new client id, for a client that sent none or one that does
+			// not open (not for an expired one, nor a v1 one), are written
+			// now. Queued, the close could stop the write loop first.
+			msgs := []lp.MessagePack{ack}
 			if clientID != nil {
 				if text, err := c.service.issueClientID(clientID); err == nil {
-					c.sendClientID(text)
+					msgs = append(msgs, &utp.Publish{
+						MessageID: uint16(c.MessageIds.NextID(utp.PUBLISH)),
+						Messages:  []*utp.PublishMessage{{Topic: "unitdb/clientid/", Payload: []byte(text)}},
+					})
 				}
 			}
+			c.writeNow(msgs...)
 			return err
 		}
+		c.queue(ack)
 		if err != nil {
 			// Refused: no session is set up. The client disconnects on the
 			// refusal; any request but another CONNECT closes the connection.
@@ -360,7 +366,9 @@ func (c *_Conn) writeLoop(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
+			c.wmu.Lock()
 			c.socket.Write(buf.Bytes())
+			c.wmu.Unlock()
 		case outMsg, ok := <-c.send:
 			if !ok {
 				// Channel closed.
@@ -370,7 +378,9 @@ func (c *_Conn) writeLoop(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
+			c.wmu.Lock()
 			c.socket.Write(buf.Bytes())
+			c.wmu.Unlock()
 		}
 	}
 }
