@@ -19,6 +19,7 @@ package memdb
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/unit-io/unitdb/wal"
@@ -151,6 +152,10 @@ func (db *DB) startRecovery() error {
 		block.free(db.internal.buffer)
 		db.removeTimeFilter(timeID)
 	}
+	for timeID := range db.timeBlocks {
+		db.recovered = append(db.recovered, timeID)
+	}
+	sort.Slice(db.recovered, func(i, j int) bool { return db.recovered[i] < db.recovered[j] })
 	db.internal.logMu.Lock()
 	defer db.internal.logMu.Unlock()
 	for _, block := range released {
@@ -201,9 +206,9 @@ func (db *DB) deleteRecovered(timeID _TimeID, key uint64) {
 
 // All gets all keys from DB recovered from WAL.
 func (db *DB) All(f func(timeID int64, keys []uint64) (bool, error)) (err error) {
-	// Get timeIDs of timeBlock successfully committed to WAL.
-	timeIDs := db.internal.timeMark.allRefs()
-	for _, timeID := range timeIDs {
+	// The blocks recovered: the live tiny log may be writing to one, as
+	// after a reopen within its block duration, which Free leaves to it.
+	for _, timeID := range db.recovered {
 		db.mu.RLock()
 		block, ok := db.timeBlocks[timeID]
 		db.mu.RUnlock()

@@ -38,13 +38,18 @@ func newTimeMark() *_TimeMark {
 	return &_TimeMark{records: make(map[_TimeID]_TimeRecord), releasedRecords: make(map[_TimeID]_TimeRecord)}
 }
 
+// add counts a log of the block timeID not yet written; release counts it
+// written. The block is synced once none is left. add set the count to one
+// whatever it was: a block written in two logs, as after a Flush, counted
+// as written with the first.
 func (tm *_TimeMark) add(timeID _TimeID) {
 	tm.Lock()
 	defer tm.Unlock()
-	if r, ok := tm.records[timeID]; ok {
-		r.refs++
-	}
-	tm.records[timeID] = _TimeRecord{refs: 1}
+	r := tm.records[timeID]
+	r.refs++
+	tm.records[timeID] = r
+	// Not done until this log is too.
+	delete(tm.releasedRecords, timeID)
 }
 
 func (tm *_TimeMark) release(timeID _TimeID) {
@@ -72,19 +77,6 @@ func (tm *_TimeMark) timeRefs(timeRef _TimeID) (timeIDs []_TimeID) {
 		if r.lastUnref > 0 && r.lastUnref < timeRef {
 			timeIDs = append(timeIDs, timeID)
 		}
-	}
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] < timeIDs[j]
-	})
-
-	return timeIDs
-}
-
-func (tm *_TimeMark) allRefs() (timeIDs []_TimeID) {
-	tm.RLock()
-	defer tm.RUnlock()
-	for timeID, _ := range tm.releasedRecords {
-		timeIDs = append(timeIDs, timeID)
 	}
 	sort.Slice(timeIDs[:], func(i, j int) bool {
 		return timeIDs[i] < timeIDs[j]

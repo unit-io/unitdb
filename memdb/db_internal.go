@@ -331,17 +331,19 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 	defer tinyLog.abort()
 
-	if err := db.tinyWrite(tinyLog); err != nil {
+	err := db.tinyWrite(tinyLog)
+	if tinyLog.managed {
 		tinyLog.err = err
 		return err
 	}
-
-	if !tinyLog.managed {
-		db.internal.timeMark.release(tinyLog.timeID())
-		return db.releaseEmpty(tinyLog.timeID())
+	// The log is done with, written or not: a block whose log is never
+	// counted done is never synced. Its entries are in memory either way.
+	db.internal.timeMark.release(tinyLog.timeID())
+	if err != nil {
+		tinyLog.err = err
+		return err
 	}
-
-	return nil
+	return db.releaseEmpty(tinyLog.timeID())
 }
 
 // releaseEmpty releases a block writes no longer go to once it holds no

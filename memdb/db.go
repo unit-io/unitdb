@@ -40,6 +40,8 @@ type DB struct {
 	consistent  *hash.Consistent
 	timeBlocks  _TimeBlocks
 	timeFilters map[_BlockKey]*_TimeFilter
+	// recovered holds the blocks recovered on open, oldest first, for All.
+	recovered []_TimeID
 }
 
 // Open initializes database.
