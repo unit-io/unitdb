@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/unit-io/unitdb/memdb"
@@ -45,34 +46,36 @@ func TestMessageRewrittenSurvivesReopen(t *testing.T) {
 	}
 }
 
-// TestDeleteManyVersions deletes a key put in more blocks than
-// deleteVersions deletes: it returned nil, and the key read on.
-func TestDeleteManyVersions(t *testing.T) {
+// TestPutReplacesValue puts a key in many blocks, a batch each, and
+// deletes it once: memdb kept a version of it in each, which a delete
+// deleted one of, and the adapter deleted up to 64 before each put.
+func TestPutReplacesValue(t *testing.T) {
 	a := &adapter{}
 	if err := a.Open(t.TempDir(), `{}`, false); err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
 	const key = 7
-	// A batch puts in a block of its own: a version each.
-	for i := 0; i < maxKeyVersions+1; i++ {
+	for i := 0; i < 65; i++ {
 		if err := a.mem.Batch(func(b *memdb.Batch, _ <-chan struct{}) error {
-			return b.Put(key, []byte("v"))
+			return b.Put(key, []byte(fmt.Sprintf("v%d", i)))
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := a.DeleteMessage(key); err == nil {
-		t.Fatal("deleted a key of more versions than it deletes, and reported no error")
+	if got, err := a.GetMessage(key); err != nil || string(got) != "v64" {
+		t.Fatalf("GetMessage = %q, %v; want \"v64\"", got, err)
 	}
-	// The rest go on the next delete.
+	if keys := a.Keys(); len(keys) != 1 {
+		t.Fatalf("Keys = %v; want one", keys)
+	}
 	if err := a.DeleteMessage(key); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := a.GetMessage(key); err == nil {
-		t.Fatalf("the key reads %q after its deletes", got)
+		t.Fatalf("the key reads %q after its delete", got)
 	}
-	// A key with no version is deleted.
+	// A key with no value is deleted.
 	if err := a.DeleteMessage(key); err != nil {
 		t.Fatal(err)
 	}

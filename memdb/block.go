@@ -25,12 +25,7 @@ import (
 
 // To avoid lock bottlenecks block cache is divided into several (nShards) shards.
 type (
-	_TimeID int64
-	// _TimeFilter indexes the live time blocks that hold keys of a block key.
-	_TimeFilter struct {
-		timeRecords         map[_TimeID]struct{}
-		rwMutex[filterRank] // guards timeRecords.
-	}
+	_TimeID     int64
 	_TimeBlocks map[_TimeID]*_Block
 )
 
@@ -40,8 +35,7 @@ type (
 		delFlag uint8 // deleted flag
 		key     uint64
 	}
-	_BlockKey uint16
-	_Block    struct {
+	_Block struct {
 		rwMutex[blockRank] // guards the block but its logs (logMu).
 		count              int64
 		data               *bpool.Buffer

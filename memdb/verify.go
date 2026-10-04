@@ -24,17 +24,28 @@ import (
 // Verify checks that the state the DB keeps besides its records agrees with
 // them, and returns the first disagreement found:
 //
-//   - a time block in use has not been freed;
+//   - a time block in use is live, and has not been freed;
 //   - each record points at an entry of the block's data holding its key
 //     and its deleted flag;
 //   - a block's count is the number of its records not deleted;
-//   - the time filter of each key's block key names the time block, or Get
-//     and Delete would not look in it.
+//   - each value in a block in use is its key's value in the index, so a
+//     key has one value; and each in the index is in a block in use.
 //
-// It may run alongside writes; the tests run it after every operation.
+// The index is read before the blocks, as the lock order has it: the DB
+// agrees with it only if nothing writes meanwhile. The tests run it after
+// every operation.
 func (db *DB) Verify() error {
 	if err := db.ok(); err != nil {
 		return err
+	}
+	index := make(map[uint64]_Loc)
+	for i := range db.index.shards {
+		sh := &db.index.shards[i]
+		sh.RLock()
+		for k, loc := range sh.keys {
+			index[k] = loc
+		}
+		sh.RUnlock()
 	}
 	db.mu.RLock()
 	blocks := make(map[_TimeID]*_Block, len(db.timeBlocks))
@@ -43,15 +54,24 @@ func (db *DB) Verify() error {
 	}
 	db.mu.RUnlock()
 
+	indexed := 0
 	for timeID, b := range blocks {
-		if err := db.verifyBlock(timeID, b); err != nil {
+		if err := db.verifyBlock(timeID, b, index, &indexed); err != nil {
 			return err
 		}
+	}
+	if indexed != len(index) {
+		for k, loc := range index {
+			if b, ok := blocks[loc.timeID]; !ok || b != loc.block {
+				return fmt.Errorf("memdb: the index gives key %d a value in time block %d, which is not in use", k, loc.timeID)
+			}
+		}
+		return fmt.Errorf("memdb: the index holds %d keys; the blocks hold values of %d", len(index), indexed)
 	}
 	return nil
 }
 
-func (db *DB) verifyBlock(timeID _TimeID, b *_Block) error {
+func (db *DB) verifyBlock(timeID _TimeID, b *_Block, index map[uint64]_Loc, indexed *int) error {
 	b.RLock()
 	defer b.RUnlock()
 	if b.data == nil {
@@ -81,16 +101,10 @@ func (db *DB) verifyBlock(timeID _TimeID, b *_Block) error {
 		if ikey.delFlag != 0 {
 			continue
 		}
-		r, ok := db.timeFilters[db.blockKey(ikey.key)]
-		if !ok {
-			return fmt.Errorf("memdb: key %d has no time filter", ikey.key)
+		if loc, ok := index[ikey.key]; !ok || loc.block != b || loc.timeID != timeID {
+			return fmt.Errorf("memdb: key %d has a value in time block %d the index doesn't give: it gives %d (indexed %v)", ikey.key, timeID, loc.timeID, ok)
 		}
-		r.RLock()
-		_, ok = r.timeRecords[timeID]
-		r.RUnlock()
-		if !ok {
-			return fmt.Errorf("memdb: time filter of key %d misses time block %d holding it", ikey.key, timeID)
-		}
+		*indexed++
 	}
 	if live != b.count {
 		return fmt.Errorf("memdb: time block %d counts %d entries; it holds %d", timeID, b.count, live)

@@ -87,7 +87,7 @@ func (db *DB) startRecovery() error {
 				off = next
 				switch {
 				case dBit == 0:
-					if err := db.putEntry(block, timeID, key, val); err != nil {
+					if err := db.recoverPut(block, timeID, key, val); err != nil {
 						return false, err
 					}
 					puts++
@@ -112,6 +112,10 @@ func (db *DB) startRecovery() error {
 					}
 					if err != nil {
 						return false, err
+					}
+					sh := db.index.shard(key)
+					if loc, ok := sh.keys[key]; ok && loc.block == from {
+						delete(sh.keys, key)
 					}
 				}
 			}
@@ -142,7 +146,6 @@ func (db *DB) startRecovery() error {
 		block.setState(blockReleased)
 		released = append(released, block)
 		block.free(db.internal.buffer)
-		db.removeTimeFilter(timeID)
 	}
 	for timeID := range db.timeBlocks {
 		db.recovered = append(db.recovered, timeID)
@@ -173,6 +176,31 @@ func nextEntry(data []byte, off int) (dBit byte, key uint64, val []byte, next in
 	}
 	e := data[off : off+n : off+n]
 	return e[4], binary.LittleEndian.Uint64(e[5:head]), e[head:], off + n, nil
+}
+
+// recoverPut replays a put of key in block. A value of key in another block
+// was deleted before the put, and the delete written before it: but a WAL
+// written when keys had a value in each block they were put in has none,
+// and the value is deleted here, the block linked to keep the other's logs
+// as long as its own. Recovery runs alone: it takes no shard lock.
+func (db *DB) recoverPut(block *_Block, timeID _TimeID, key uint64, val []byte) error {
+	sh := db.index.shard(key)
+	if loc, ok := sh.keys[key]; ok && loc.block != block {
+		loc.block.Lock()
+		err := loc.block.delete(key)
+		loc.block.Unlock()
+		if err != nil && err != errEntryDoesNotExist {
+			return err
+		}
+		db.internal.logMu.Lock()
+		block.deleteFrom(loc.block)
+		db.internal.logMu.Unlock()
+	}
+	if err := db.putEntry(block, key, val); err != nil {
+		return err
+	}
+	sh.keys[key] = _Loc{timeID: timeID, block: block}
+	return nil
 }
 
 // legacyBlock returns the block recovery puts a log of time ID in when the

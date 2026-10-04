@@ -232,13 +232,24 @@ func (p *_TinyLogManager) flush() error {
 	return tinyLog.err
 }
 
-// writeWait enqueues the log and waits for it to be executed.
-func (p *_TinyLogManager) writeWait(tinyLog *_TinyLog) {
-	if tinyLog == nil {
-		return
+// writeBatch writes a batch's log, after take makes its values its keys'.
+// Recovery replays the WAL in the order logs are written, and the last
+// write of a key wins: the current tiny log, which may hold writes of the
+// batch's keys from before, is written first, and no put or delete comes
+// between, holding rotateMu. The batch's log is waited for without it.
+func (p *_TinyLogManager) writeBatch(tinyLog *_TinyLog, take func() error) error {
+	p.rotateMu.Lock()
+	p.mu.Lock()
+	p.rotate()
+	p.mu.Unlock()
+	if err := take(); err != nil {
+		p.rotateMu.Unlock()
+		return err
 	}
 	p.writeQueue <- tinyLog
+	p.rotateMu.Unlock()
 	<-tinyLog.doneChan
+	return tinyLog.err
 }
 
 // writeLoop enqueue the tiny log to the log pool.

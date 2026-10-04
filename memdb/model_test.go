@@ -2,9 +2,8 @@ package memdb
 
 // The model tests run random operations on the DB and on a model of it, and
 // check after each that the DB agrees with the model and passes Verify. The
-// model is the DB's design kept simple: a key has a version in each time
-// block it was put in, put again in a block replaces that block's version,
-// Get returns the newest block's version, and Delete removes it.
+// model is a map: a key has one value, which Put and a batch written
+// replace, and Delete deletes.
 //
 // A failing run prints its seed; run it again with
 //
@@ -15,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
-	"sort"
 	"testing"
 	"time"
 )
@@ -44,28 +42,14 @@ type model struct {
 func newModel() *model { return &model{versions: make(map[uint64][]modelVersion)} }
 
 func (m *model) put(timeID int64, key uint64, val []byte) {
-	vs := m.versions[key]
-	for i := range vs {
-		if vs[i].timeID == timeID {
-			vs[i].val = val
-			return
-		}
-	}
-	vs = append(vs, modelVersion{timeID: timeID, val: val})
-	sort.Slice(vs, func(i, j int) bool { return vs[i].timeID < vs[j].timeID })
-	m.versions[key] = vs
+	m.versions[key] = []modelVersion{{timeID: timeID, val: val}}
 }
 
 func (m *model) delete(key uint64) bool {
-	vs := m.versions[key]
-	if len(vs) == 0 {
+	if _, ok := m.versions[key]; !ok {
 		return false
 	}
-	if len(vs) == 1 {
-		delete(m.versions, key)
-	} else {
-		m.versions[key] = vs[:len(vs)-1]
-	}
+	delete(m.versions, key)
 	return true
 }
 

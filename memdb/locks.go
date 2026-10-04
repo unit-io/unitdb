@@ -24,15 +24,16 @@ import (
 
 // Lock order. A goroutine holding a lock takes only locks below it here:
 //
-//  1. _TinyLogManager.rotateMu: held by Put, for reading, from reading the
-//     time ID until its entry is in the block.
-//  2. the time lock of a time ID (_TimeLock): held by Delete, for reading,
-//     and by the commit loop writing the block's log.
-//  3. _TinyLogManager.mu: the current tiny log.
-//  4. a _Block's lock: one block at a time.
-//  5. _DB.logMu: the blocks' logs, and what keeps them in the WAL.
-//  6. DB.mu: the map of time blocks.
-//  7. a _TimeFilter's lock: one filter at a time.
+//  1. _TinyLogManager.rotateMu: held by Put and Delete, for reading, from
+//     reading the time ID until their entries are in the block.
+//  2. an index shard's lock (_IndexShard): one shard at a time, across a
+//     put, delete or get of its keys.
+//  3. the time lock of a time ID (_TimeLock): held by Put and Delete, for
+//     reading, and by the commit loop writing the block's log.
+//  4. _TinyLogManager.mu: the current tiny log.
+//  5. a _Block's lock: one block at a time.
+//  6. _DB.logMu: the blocks' logs, and what keeps them in the WAL.
+//  7. DB.mu: the map of time blocks.
 //  8. _TimeMark's lock.
 //  9. a _TinyLog's lock.
 //
@@ -45,12 +46,12 @@ import (
 // the current time ID without a lock (timeID).
 const (
 	rankRotate = iota + 1
+	rankIndex
 	rankTimeLock
 	rankManager
 	rankBlock
 	rankLog
 	rankDB
-	rankFilter
 	rankTimeMark
 	rankTinyLog
 )
@@ -67,7 +68,7 @@ type (
 	blockRank    struct{}
 	logRank      struct{}
 	dbRank       struct{}
-	filterRank   struct{}
+	indexRank    struct{}
 	timeMarkRank struct{}
 	tinyLogRank  struct{}
 )
@@ -78,7 +79,7 @@ func (managerRank) rank() (int, string)  { return rankManager, "log manager" }
 func (blockRank) rank() (int, string)    { return rankBlock, "block" }
 func (logRank) rank() (int, string)      { return rankLog, "logMu" }
 func (dbRank) rank() (int, string)       { return rankDB, "db.mu" }
-func (filterRank) rank() (int, string)   { return rankFilter, "time filter" }
+func (indexRank) rank() (int, string)    { return rankIndex, "index shard" }
 func (timeMarkRank) rank() (int, string) { return rankTimeMark, "time mark" }
 func (tinyLogRank) rank() (int, string)  { return rankTinyLog, "tiny log" }
 

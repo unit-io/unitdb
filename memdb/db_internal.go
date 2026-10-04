@@ -33,8 +33,6 @@ const (
 
 	nPoolSize = 27
 
-	nBlocks = 27
-
 	// nLocks sets maximum concurent timeLocks.
 	nLocks = 100000
 
@@ -139,11 +137,6 @@ func (db *DB) newLogID() _TimeID {
 	}
 }
 
-// blockKey gets blockKey for the Key using consistent hashing.
-func (db *DB) blockKey(key uint64) _BlockKey {
-	return _BlockKey(db.consistent.FindBlock(key))
-}
-
 func (db *DB) cap() float64 {
 	return db.internal.buffer.Capacity()
 }
@@ -185,31 +178,6 @@ func (db *DB) blocks() []*_Block {
 	}
 
 	return blocks
-}
-
-// addTimeFilter records that the time block holds keys of the key's block key.
-func (db *DB) addTimeFilter(timeID _TimeID, key uint64) error {
-	db.mu.RLock()
-	r, ok := db.timeFilters[db.blockKey(key)]
-	db.mu.RUnlock()
-	if !ok {
-		return nil
-	}
-	r.Lock()
-	r.timeRecords[timeID] = struct{}{}
-	r.Unlock()
-
-	return nil
-}
-
-// removeTimeFilter forgets a released time block, so lookups don't keep
-// visiting blocks that are gone.
-func (db *DB) removeTimeFilter(timeID _TimeID) {
-	for _, r := range db.timeFilters {
-		r.Lock()
-		delete(r.timeRecords, timeID)
-		r.Unlock()
-	}
 }
 
 // deleteFrom records that b holds deletes of versions in from: b's logs
@@ -380,12 +348,13 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 
 	// Free under the block's write lock so it waits for readers of the buffer.
 	block.Lock()
+	keys := block.liveKeys()
 	block.free(db.internal.buffer)
 	block.Unlock()
 
-	// Prune after the block is gone, and without db.mu: addTimeFilter takes the
-	// filter lock after db.mu is released, so holding both here could deadlock.
-	db.removeTimeFilter(timeID)
+	// Its keys have no value here any more: synced by the engine, or a
+	// batch aborted. Without the block's lock: shards come before it.
+	db.index.forget(block, keys)
 
 	return nil
 }

@@ -2,6 +2,7 @@ package memdb
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -134,4 +135,46 @@ func TestLogIDsAreUnique(t *testing.T) {
 		}
 		seen[id] = true
 	}
+}
+
+// TestRewritesFreeBlocks rewrites and deletes a few keys over and over,
+// across many blocks, as a store of message logs does: the blocks and the
+// WAL's logs must stay few. With a version of a key in each block it was
+// put in, a store that never deleted every version kept every block, and
+// every log, until it jammed.
+func TestRewritesFreeBlocks(t *testing.T) {
+	const d = 10 * time.Millisecond
+	dir := t.TempDir()
+	db, err := Open(WithLogFilePath(dir), WithTimeBlockInterval(d), WithLogInterval(2*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for i := 0; i < 3000; i++ {
+		k := uint64(i % 20)
+		if _, err := db.Put(k, []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+		if i%3 == 2 {
+			if err := db.Delete(k); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i%100 == 0 {
+			time.Sleep(d)
+		}
+	}
+	time.Sleep(5 * d)
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * d)
+	logs, _ := filepath.Glob(filepath.Join(dir, logDir, "*.log"))
+	if n := timeBlockCount(db); n > 10 || len(logs) > 60 {
+		t.Fatalf("%d time blocks and %d logs after 3000 rewrites of 20 keys", n, len(logs))
+	}
+	if err := db.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d time blocks, %d logs, %d keys", timeBlockCount(db), len(logs), db.Size())
 }

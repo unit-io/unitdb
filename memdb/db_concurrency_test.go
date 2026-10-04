@@ -195,12 +195,7 @@ func TestConcurrentBatches(t *testing.T) {
 func TestInterleavedBatches(t *testing.T) {
 	db, _ := openTestDB(t)
 
-	// Pick two keys in the same block so they share a time filter.
-	k1 := uint64(1)
-	k2 := k1 + 1
-	for db.blockKey(k2) != db.blockKey(k1) {
-		k2++
-	}
+	k1, k2 := uint64(1), uint64(2)
 
 	older := db.NewBatch()
 	time.Sleep(time.Millisecond) // ensure distinct batch time IDs
@@ -389,7 +384,7 @@ func TestCloseDuringWrites(t *testing.T) {
 }
 
 // TestReleasedBlocksPruned checks that time blocks freed after syncing are
-// dropped from the lookup index, so it doesn't grow with every time block.
+// dropped from the index, so it doesn't grow with every time block.
 func TestReleasedBlocksPruned(t *testing.T) {
 	db, _ := openTestDB(t, WithTimeBlockInterval(10*time.Millisecond), WithLogInterval(2*time.Millisecond))
 	k := uint64(0)
@@ -409,14 +404,15 @@ func TestReleasedBlocksPruned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for bk, r := range db.timeFilters {
-		r.RLock()
-		for timeID := range r.timeRecords {
-			if _, ok := db.timeBlock(timeID); !ok {
-				t.Errorf("block key %d still indexes released time block %d", bk, timeID)
+	for i := range db.index.shards {
+		sh := &db.index.shards[i]
+		sh.RLock()
+		for key, loc := range sh.keys {
+			if b, ok := db.timeBlock(loc.timeID); !ok || b != loc.block {
+				t.Errorf("the index still gives key %d a value in released time block %d", key, loc.timeID)
 			}
 		}
-		r.RUnlock()
+		sh.RUnlock()
 	}
 }
 

@@ -62,7 +62,9 @@ func (b *Batch) TimeID() int64 {
 	return int64(b.tinyLog.timeID())
 }
 
-// Put adds a new key-value pair to the batch.
+// Put adds a new key-value pair to the batch. It is the key's value once
+// the batch is written (Write, Commit), and not before: an aborted batch
+// leaves the values it would have replaced.
 func (b *Batch) Put(key uint64, data []byte) error {
 	if err := b.db.ok(); err != nil {
 		return err
@@ -73,7 +75,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 		return errForbidden
 	}
 
-	return b.db.putEntry(block, b.tinyLog.timeID(), key, data)
+	return b.db.putEntry(block, key, data)
 }
 
 // Write starts writing entries into DB.
@@ -82,10 +84,50 @@ func (b *Batch) Write() error {
 	defer func() {
 		<-b.writeLockC
 	}()
+	if err := b.db.internal.logManager.writeBatch(b.tinyLog, func() error {
+		return b.db.takeKeys(b.tinyLog.timeID())
+	}); err != nil {
+		return err
+	}
 	b.batchGroup = append(b.batchGroup, b.tinyLog.timeID())
-	b.db.internal.logManager.writeWait(b.tinyLog)
 	b.newTinyLog()
 
+	return nil
+}
+
+// takeKeys makes the values the batch block timeID holds its keys' values:
+// a value in another block is deleted, and the delete appended to the
+// batch's block, so that its log writes both or neither.
+func (db *DB) takeKeys(timeID _TimeID) error {
+	block, ok := db.timeBlock(timeID)
+	if !ok {
+		return errForbidden
+	}
+	block.RLock()
+	keys := block.liveKeys()
+	block.RUnlock()
+	var emptied []_TimeID
+	for _, key := range keys {
+		sh := db.index.shard(key)
+		sh.Lock()
+		if loc, ok := sh.keys[key]; ok && loc.block != block {
+			e, err := db.deleteEntry(loc.block, loc.timeID, block, key)
+			if err != nil {
+				sh.Unlock()
+				return err
+			}
+			if e {
+				emptied = append(emptied, loc.timeID)
+			}
+		}
+		sh.keys[key] = _Loc{timeID: timeID, block: block}
+		sh.Unlock()
+	}
+	for _, id := range emptied {
+		if err := db.releaseEmptied(true, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

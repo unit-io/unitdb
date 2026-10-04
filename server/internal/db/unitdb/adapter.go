@@ -19,7 +19,6 @@ package adapter
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 
@@ -211,22 +210,13 @@ func (a *adapter) Delete(contract uint32, messageId []byte, topic string) error 
 	return a.db.DeleteEntry(entry.WithID(messageId))
 }
 
-// PutMessage appends the messages to the store.
-//
-// memdb keeps a version of a key for each time block the key was put in, and
-// a get returns the latest: the older versions are deleted first, so that a
-// later delete removes the key.
+// PutMessage puts payload as the key's value, in place of its last.
 func (a *adapter) PutMessage(key uint64, payload []byte) error {
 	if a.mem == nil {
 		return errClosed
 	}
-	if err := a.deleteVersions(key); err != nil {
-		return err
-	}
-	if _, err := a.mem.Put(key, payload); err != nil {
-		return err
-	}
-	return nil
+	_, err := a.mem.Put(key, payload)
+	return err
 }
 
 // GetMessage performs a query and attempts to fetch message for the given key
@@ -246,17 +236,7 @@ func (a *adapter) Keys() []uint64 {
 	if a.mem == nil {
 		return nil
 	}
-	// memdb lists a key once for each version of it.
-	keys := a.mem.Keys()
-	seen := make(map[uint64]bool, len(keys))
-	unique := keys[:0]
-	for _, key := range keys {
-		if !seen[key] {
-			seen[key] = true
-			unique = append(unique, key)
-		}
-	}
-	return unique
+	return a.mem.Keys()
 }
 
 // Flush waits for the messages put before it to reach the store's log.
@@ -267,37 +247,15 @@ func (a *adapter) Flush() error {
 	return a.db.Flush()
 }
 
-// DeleteMessage deletes message from memdb store.
+// DeleteMessage deletes the key's value; a key with none is deleted.
 func (a *adapter) DeleteMessage(key uint64) error {
 	if a.mem == nil {
 		return errClosed
 	}
-	return a.deleteVersions(key)
-}
-
-// maxKeyVersions bounds the versions of a key deleteVersions deletes.
-const maxKeyVersions = 64
-
-// deleteVersions deletes every version of key: memdb deletes the latest one
-// only, and a get then returns the one before. PutMessage deletes a key's
-// versions before it puts one, so a key has one, or a few put at once.
-//
-// It returned nil past maxKeyVersions, and on any error of Get, such as the
-// store closed: a delete reported done left versions a get still found.
-func (a *adapter) deleteVersions(key uint64) error {
-	for i := 0; i < maxKeyVersions; i++ {
-		err := a.mem.Delete(key)
-		if errors.Is(err, memdb.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	if err := a.mem.Delete(key); err != nil && !errors.Is(err, memdb.ErrNotFound) {
+		return err
 	}
-	if _, err := a.mem.Get(key); errors.Is(err, memdb.ErrNotFound) {
-		return nil
-	}
-	return fmt.Errorf("unitdb adapter: key %d has more than %d versions; deleted %d", key, maxKeyVersions, maxKeyVersions)
+	return nil
 }
 
 func init() {

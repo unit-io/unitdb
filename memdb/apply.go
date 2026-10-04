@@ -25,15 +25,14 @@ import "encoding/binary"
 // block's data without its deletes and marked it unwritten, and freed
 // blocks without their logs.
 
-// putEntry appends key's entry to block, of time ID timeID, replacing a
-// version of key the block holds.
-func (db *DB) putEntry(block *_Block, timeID _TimeID, key uint64, data []byte) error {
+// putEntry appends key's entry to block, replacing the value the block
+// holds of it. The index is the caller's.
+func (db *DB) putEntry(block *_Block, key uint64, data []byte) error {
 	block.Lock()
 	defer block.Unlock()
 	if err := block.put(iKey(false, key), data); err != nil {
 		return err
 	}
-	db.addTimeFilter(timeID, key)
 	db.internal.meter.Puts.Inc(1)
 	return nil
 }
