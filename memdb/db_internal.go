@@ -215,7 +215,7 @@ func (db *DB) removeTimeFilter(timeID _TimeID) {
 // deleteFrom records that b holds deletes of versions in from: b's logs
 // stay in the WAL as long as from's. The caller holds logMu.
 func (b *_Block) deleteFrom(from *_Block) {
-	if from == b || from.walGone || b.deletes[from] {
+	if from == b || from.state == blockGone || b.deletes[from] {
 		return
 	}
 	if b.deletes == nil {
@@ -231,10 +231,10 @@ func (b *_Block) deleteFrom(from *_Block) {
 // that waited for it. It returns the logs, in the order they may go. The
 // caller holds logMu.
 func (b *_Block) applyLogs() []_TimeID {
-	if !b.released || b.waitFor > 0 || b.walGone {
+	if b.state != blockReleased || b.waitFor > 0 {
 		return nil
 	}
-	b.walGone = true
+	b.setState(blockGone)
 	logs := b.timeRefs
 	for _, w := range b.waiters {
 		w.waitFor--
@@ -292,7 +292,7 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	// block's others, or at once if they have gone.
 	db.internal.logMu.Lock()
 	defer db.internal.logMu.Unlock()
-	if block.walGone {
+	if block.state == blockGone {
 		return db.internal.wal.SignalLogApplied(int64(tinyLog.ID()))
 	}
 	block.timeRefs = append(block.timeRefs, tinyLog.ID())
@@ -371,7 +371,7 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 
 	// The logs go, in order, under logMu: a block deleting from one whose
 	// logs are going must find them gone only once they are.
-	block.released = true
+	block.setState(blockReleased)
 	err := db.signalApplied(block.applyLogs())
 	db.internal.logMu.Unlock()
 	if err != nil {

@@ -18,6 +18,7 @@ package memdb
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/unit-io/bpool"
 )
@@ -55,13 +56,45 @@ type (
 		// logs go once the block is released and the logs of every block
 		// it deletes versions from have gone.
 		timeRefs []_TimeID
-		released bool             // out of timeBlocks
-		walGone  bool             // its logs are applied
+		state    blockState
 		deletes  map[*_Block]bool // blocks it deletes versions from
 		waitFor  int              // blocks in deletes whose logs are in the WAL
 		waiters  []*_Block        // blocks deleting versions from this one
 	}
 )
+
+// blockState is where a block is in its life, which goes one way:
+//
+//	blockLive      in timeBlocks: written to while its time ID is current,
+//	               then synced, deleted from, or its batch aborted
+//	blockReleased  out of timeBlocks, its buffer back in the pool: by the
+//	               one that took it out (releaseLog, or recovery); its
+//	               logs stay in the WAL while a block deleting from it
+//	               holds its own there (applyLogs)
+//	blockGone      its logs applied
+//
+// It is guarded by logMu. setState panics on any other step: a block
+// released twice returned its buffer to the pool twice, and two blocks
+// then shared it.
+type blockState uint8
+
+const (
+	blockLive blockState = iota
+	blockReleased
+	blockGone
+)
+
+func (s blockState) String() string {
+	return [...]string{"live", "released", "gone"}[s]
+}
+
+// setState moves the block to its next state. The caller holds logMu.
+func (b *_Block) setState(to blockState) {
+	if to != b.state+1 {
+		panic(fmt.Sprintf("memdb: a %s block made %s", b.state, to))
+	}
+	b.state = to
+}
 
 // iKey an internal key includes deleted flag.
 func iKey(delFlag bool, k uint64) _Key {
@@ -139,6 +172,9 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 // reader or writer still holding the block finds nothing rather than a buffer
 // reused by another block. The caller holds the block's write lock.
 func (b *_Block) free(pool *bpool.BufferPool) {
+	if b.data == nil {
+		panic("memdb: a block freed twice")
+	}
 	pool.Put(b.data)
 	b.data = nil
 	b.records = nil

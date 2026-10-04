@@ -139,7 +139,7 @@ func (db *DB) startRecovery() error {
 		}
 		delete(db.timeBlocks, timeID)
 		db.internal.timeMark.timeUnref(timeID)
-		block.released = true
+		block.setState(blockReleased)
 		released = append(released, block)
 		block.free(db.internal.buffer)
 		db.removeTimeFilter(timeID)

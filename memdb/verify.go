@@ -62,6 +62,14 @@ func (db *DB) verifyBlock(timeID _TimeID, b *_Block) error {
 		}
 		return nil
 	}
+	db.internal.logMu.Lock()
+	state := b.state
+	db.internal.logMu.Unlock()
+	if state != blockLive {
+		if cur, ok := db.timeBlock(timeID); ok && cur == b {
+			return fmt.Errorf("memdb: time block %d is in use and %s", timeID, state)
+		}
+	}
 	var live int64
 	for ikey, off := range b.records {
 		if ikey.delFlag == 0 {
