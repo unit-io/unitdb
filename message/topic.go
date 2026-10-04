@@ -19,6 +19,8 @@ package message
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 	"unsafe"
@@ -328,8 +330,15 @@ func (t *Topic) Marshal() []byte {
 	return buf
 }
 
-// Unmarshal de-serializes topic from binary data.
+// Unmarshal de-serializes topic from binary data: its depth, then each part,
+// its wildchars and its hash. Data that ends in a part is not a topic.
 func (t *Topic) Unmarshal(data []byte) error {
+	if len(data) == 0 {
+		return errors.New("topic: no data")
+	}
+	if (len(data)-1)%5 != 0 {
+		return fmt.Errorf("topic: %d bytes is not a depth and whole parts", len(data))
+	}
 	buf := bytes.NewBuffer(data)
 
 	var parts []Part

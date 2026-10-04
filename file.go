@@ -20,6 +20,7 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sync"
@@ -169,8 +170,17 @@ func (f *_File) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-// slice provide the data for start and end offset.
+// slice provide the data for start and end offset. Offsets and sizes come
+// from disk, and a corrupt one asked for gigabytes: a large range is checked
+// against the file before it is allocated. A small one past the end fails
+// reading.
 func (f *_File) slice(start int64, end int64) ([]byte, error) {
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("%s: bad range %d to %d", f.Name(), start, end)
+	}
+	if end-start > 1<<20 && end > f.Size() {
+		return nil, io.EOF
+	}
 	buf := make([]byte, end-start)
 	_, err := f.ReadAt(buf, start)
 	return buf, err

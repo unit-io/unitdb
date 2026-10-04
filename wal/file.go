@@ -141,6 +141,10 @@ func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) (_LogInfo, error) {
 		return info, corrupted(log, fmt.Sprintf("bad header version %d", info.version))
 	}
 
+	if info.size == 0 {
+		// Nothing to read: the pool's buffers don't extend by nothing.
+		return info, nil
+	}
 	if _, err := data.Extend(int64(info.size)); err != nil {
 		return info, err
 	}

@@ -261,3 +261,76 @@ func (l *_Lease) write() error {
 
 	return nil
 }
+
+// retain keeps the free blocks keep returns true for, and drops the others.
+func (l *_Lease) retain(keep func(off int64, size uint32) bool) (dropped int) {
+	for _, fbs := range l.blocks {
+		fbs.Lock()
+		kept := fbs.fb[:0]
+		for _, b := range fbs.fb {
+			if keep(b.offset, b.size) {
+				kept = append(kept, b)
+				continue
+			}
+			delete(fbs.cache, b.offset)
+			l.size -= int64(b.size)
+			dropped++
+		}
+		fbs.fb = kept
+		fbs.Unlock()
+	}
+	return dropped
+}
+
+// checkFreeList drops the free blocks that overlap a message stored, or
+// run past the data file: a free list holding them, checksum and all, as a
+// bug freeing the wrong block leaves it, gave new messages the space of
+// stored ones, which overwrote them. The free list only tracks space to
+// reuse, so dropping blocks loses nothing stored.
+func (db *DB) checkFreeList() error {
+	_, indexFile, dataFile, _, err := db.files()
+	if err != nil {
+		return err
+	}
+	type span struct{ start, end int64 }
+	var stored []span
+	if err := forEachBlock(indexFile, func(off int64, buf []byte) error {
+		var b _IndexBlock
+		if err := b.unmarshalBinary(buf); err != nil {
+			return err
+		}
+		for _, e := range b.entries {
+			// A deleted entry holding its topic keeps its data.
+			if e.seq != 0 && e.msgOffset >= 0 {
+				stored = append(stored, span{e.msgOffset, e.msgOffset + int64(e.mSize())})
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	sort.Slice(stored, func(i, j int) bool { return stored[i].start < stored[j].start })
+	// The furthest end of the spans up to each: spans may nest.
+	reach := make([]int64, len(stored))
+	for i, s := range stored {
+		reach[i] = s.end
+		if i > 0 && reach[i-1] > s.end {
+			reach[i] = reach[i-1]
+		}
+	}
+	size := dataFile.Size()
+	dropped := db.internal.freeList.retain(func(off int64, n uint32) bool {
+		end := off + int64(n)
+		if off < 0 || n == 0 || end > size {
+			return false
+		}
+		// The spans starting before end; the last of them reaching past
+		// off overlaps.
+		i := sort.Search(len(stored), func(i int) bool { return stored[i].start >= end })
+		return i == 0 || reach[i-1] <= off
+	})
+	if dropped > 0 {
+		logger.Error().Int("blocks", dropped).Str("context", "db.checkFreeList").Msg("dropped free blocks over stored messages or past the data file")
+	}
+	return nil
+}

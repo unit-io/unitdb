@@ -39,6 +39,28 @@ jobs:
           go-version: stable
       - run: go test -race -timeout 20m $(go list ./... | grep -v /server/e2e)
 
+  # Each fuzz target for half a minute: the on-disk formats and recovery, on
+  # bytes a bug or a bad disk could leave. Inputs that fail are kept under
+  # testdata/fuzz, which go test runs.
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./wal, target: FuzzReadLog }
+          - { pkg: ./memdb, target: FuzzRecovery }
+          - { pkg: ., target: FuzzDecode }
+          - { pkg: ., target: FuzzOpenCorrupt }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go test ${{ matrix.pkg }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 30s
+
   staticcheck:
     runs-on: ubuntu-latest
     steps:

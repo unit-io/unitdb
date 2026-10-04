@@ -234,6 +234,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return abort(err)
 	}
+	if err := db.checkFreeList(); err != nil {
+		logger.Error().Err(err).Str("context", "db.checkFreeList")
+		return abort(err)
+	}
 
 	if err := db.recoverLog(); err != nil {
 		logger.Error().Err(err).Str("context", "db.recoverLog")

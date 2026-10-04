@@ -18,7 +18,10 @@ package memdb
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
+
+	"github.com/unit-io/unitdb/wal"
 )
 
 // startRecovery recovers pending entries from the WAL.
@@ -69,14 +72,15 @@ func (db *DB) startRecovery() error {
 				break
 			}
 
-			var off int
-			for off < len(logData) {
-				dataLen := int(binary.LittleEndian.Uint32(logData[off : off+4]))
-				data := logData[off+4 : off+dataLen]
-				dBit := data[0]
-				key := binary.LittleEndian.Uint64(data[1:9])
-				val := data[9:]
-				off += dataLen
+			for off := 0; off < len(logData); {
+				dBit, key, val, next, err := nextEntry(logData, off)
+				if err != nil {
+					return false, fmt.Errorf("%w: log %d: %v", wal.ErrCorrupted, ID, err)
+				}
+				if dBit > 1 {
+					return false, fmt.Errorf("%w: log %d: entry at %d has flag %d", wal.ErrCorrupted, ID, off, dBit)
+				}
+				off = next
 				if dBit == 1 && len(val) != 8 {
 					// A put marked deleted, as older versions wrote one
 					// deleted before it reached the WAL: the delete
@@ -156,6 +160,22 @@ func (db *DB) startRecovery() error {
 	}
 
 	return nil
+}
+
+// nextEntry returns the entry at off of a block's data, as put writes it:
+// its length, its deleted flag, its key, and its value; and the offset of
+// the next.
+func nextEntry(data []byte, off int) (dBit byte, key uint64, val []byte, next int, err error) {
+	const head = 4 + 1 + 8
+	if off+4 > len(data) {
+		return 0, 0, nil, 0, fmt.Errorf("entry at %d: past the end of %d bytes", off, len(data))
+	}
+	n := int(binary.LittleEndian.Uint32(data[off : off+4]))
+	if n < head || n > len(data)-off {
+		return 0, 0, nil, 0, fmt.Errorf("entry at %d: length %d in %d bytes", off, n, len(data))
+	}
+	e := data[off : off+n : off+n]
+	return e[4], binary.LittleEndian.Uint64(e[5:head]), e[head:], off + n, nil
 }
 
 // legacyBlock returns the block recovery puts a log of time ID in when the

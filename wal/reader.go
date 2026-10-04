@@ -18,7 +18,7 @@ package wal
 
 import (
 	"encoding/binary"
-	"errors"
+	"fmt"
 
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/uid"
@@ -93,12 +93,23 @@ func (r *Reader) Next() ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	r.entryCount--
-	scratch, _ := r.buffer.Slice(r.offset, r.offset+4)
-	dataLen := binary.LittleEndian.Uint32(scratch)
-	data, err := r.buffer.Slice(r.offset+4, r.offset+int64(dataLen))
-	if err != nil {
-		return nil, false, errors.New("error reading log")
+	// A record is its length, 4 bytes, then its data, within the log: a log
+	// that says otherwise is corrupt, even with a valid checksum.
+	if r.offset+4 > r.buffer.Size() {
+		return nil, false, fmt.Errorf("%w: record %d past the end of the log", ErrCorrupted, r.offset)
 	}
-	r.offset += int64(dataLen)
+	scratch, err := r.buffer.Slice(r.offset, r.offset+4)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %v", ErrCorrupted, err)
+	}
+	dataLen := int64(binary.LittleEndian.Uint32(scratch))
+	if dataLen < 4 || r.offset+dataLen > r.buffer.Size() {
+		return nil, false, fmt.Errorf("%w: record at %d of length %d in a log of %d bytes", ErrCorrupted, r.offset, dataLen, r.buffer.Size())
+	}
+	data, err := r.buffer.Slice(r.offset+4, r.offset+dataLen)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %v", ErrCorrupted, err)
+	}
+	r.offset += dataLen
 	return data, true, nil
 }
