@@ -17,7 +17,6 @@
 package memdb
 
 import (
-	"encoding/binary"
 	"errors"
 	"io"
 	"sync/atomic"
@@ -211,31 +210,6 @@ func (db *DB) removeTimeFilter(timeID _TimeID) {
 		delete(r.timeRecords, timeID)
 		r.Unlock()
 	}
-}
-
-// move writes the delete of key's version in the block from, of time ID
-// timeID, to the current block, for the WAL.
-func (db *DB) move(from *_Block, timeID _TimeID, key uint64) error {
-	newTimeID := db.timeID()
-	// add deleted key to new time block to persist deleted entry to the WAL.
-	dkey := iKey(true, key)
-	newBlock, ok := db.timeBlock(newTimeID)
-	if !ok {
-		return errForbidden
-	}
-	newBlock.Lock()
-	defer newBlock.Unlock()
-
-	rawTimeID := make([]byte, 8)
-	binary.LittleEndian.PutUint64(rawTimeID[:8], uint64(timeID))
-
-	if err := newBlock.put(dkey, rawTimeID); err != nil {
-		return err
-	}
-	db.internal.logMu.Lock()
-	newBlock.deleteFrom(from)
-	db.internal.logMu.Unlock()
-	return nil
 }
 
 // deleteFrom records that b holds deletes of versions in from: b's logs

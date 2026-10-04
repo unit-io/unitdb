@@ -18,11 +18,12 @@ package unitdb
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 	"time"
 
 	"github.com/unit-io/bpool"
+	"github.com/unit-io/unitdb/memdb"
+	"github.com/unit-io/unitdb/message"
 )
 
 type (
@@ -34,6 +35,8 @@ type (
 		inBytes        int64
 		count          int64
 		entriesInvalid uint64
+		// counted is set once count is added to the DB's.
+		counted bool
 	}
 	_SyncHandle struct {
 		syncInfo _SyncInfo
@@ -92,6 +95,7 @@ func (db *_SyncHandle) finish() error {
 func (db *_SyncHandle) reset() error {
 	db.syncInfo.lastSyncSeq = db.syncInfo.upperSeq
 	db.syncInfo.count = 0
+	db.syncInfo.counted = false
 	db.syncInfo.inBytes = 0
 	db.syncInfo.upperSeq = 0
 
@@ -119,27 +123,34 @@ func (db *_SyncHandle) abort() error {
 		return err
 	}
 
-	db.decount(uint64(db.syncInfo.count))
+	// Uncount the entries only if they were counted: a sync that fails
+	// before writing them counts none.
+	if db.syncInfo.counted {
+		db.decount(uint64(db.syncInfo.count))
+	}
 
 	return nil
 }
 
+// startSyncer syncs every interval until the DB closes. A sync that fails
+// is logged and tried again: it panicked, taking the process down, and a
+// tick racing Close fails with errClosed. Close waits for the syncer: it
+// was counted done as it started.
 func (db *DB) startSyncer(interval time.Duration) {
 	db.internal.closeW.Add(1)
-	defer db.internal.closeW.Done()
 	syncTicker := time.NewTicker(interval)
 	go func() {
-		defer func() {
-			syncTicker.Stop()
-		}()
+		defer db.internal.closeW.Done()
+		defer syncTicker.Stop()
 		for {
 			select {
 			case <-db.internal.closeC:
 				return
 			case <-syncTicker.C:
-				if err := db.Sync(); err != nil {
+				if err := db.Sync(); errors.Is(err, errClosed) {
+					return
+				} else if err != nil {
 					logger.Error().Err(err).Str("context", "startSyncer").Msg("Error syncing to db")
-					panic(err)
 				}
 			}
 		}
@@ -229,6 +240,7 @@ func (db *_SyncHandle) sync(recovery bool, timeID int64) error {
 		testHookBeforeCount()
 	}
 	db.incount(uint64(db.syncInfo.count))
+	db.syncInfo.counted = true
 	db.internal.dbInfo.syncing = 0
 	if err := db.DB.sync(); err != nil {
 		return err
@@ -249,93 +261,15 @@ func (db *_SyncHandle) sync(recovery bool, timeID int64) error {
 func (db *_SyncHandle) Sync() error {
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
-	var err1 error
 	timeRelease := db.internal.timeWindow.release()
+	pending := make(map[uint64]_WindowEntries)
 	err := db.internal.mem.BlockIterator(func(timeID int64, seqs []uint64) (bool, error) {
-		winEntries := make(map[uint64]_WindowEntries)
-		sort.Slice(seqs[:], func(i, j int) bool {
-			return seqs[i] < seqs[j]
-		})
-		if seqs[len(seqs)-1] > db.syncInfo.upperSeq {
-			db.syncInfo.upperSeq = seqs[len(seqs)-1]
-		}
-		for _, seq := range seqs {
-			memdata, err := db.internal.mem.Lookup(timeID, seq)
-			if err != nil || memdata == nil {
-				db.syncInfo.entriesInvalid++
-				logger.Error().Err(err).Str("context", "mem.Get")
-				err1 = err
-				continue
-			}
-			var m _Entry
-			if err = m.UnmarshalBinary(memdata[:entrySize]); err != nil {
-				db.syncInfo.entriesInvalid++
-				err1 = err
-				continue
-			}
-			e := _IndexEntry{
-				seq:       m.seq,
-				topicSize: m.topicSize,
-				valueSize: m.valueSize,
-
-				cache: memdata[entrySize:],
-			}
-			if err := db.blockWriter.append(e); err != nil {
-				if err == errEntryExist {
-					continue
-				}
-				return true, err
-			}
-
-			we := newWinEntry(seq, m.expiresAt)
-			if _, ok := winEntries[m.topicHash]; ok {
-				winEntries[m.topicHash] = append(winEntries[m.topicHash], we)
-			} else {
-				winEntries[m.topicHash] = _WindowEntries{we}
-			}
-
-			db.internal.filter.Append(we.seq())
-			// A tombstone (see delete) is written for its topic, and is
-			// not counted.
-			if m.valueSize != 0 {
-				db.syncInfo.count++
-			}
-			db.syncInfo.inBytes += int64(e.valueSize)
-		}
-		for h := range winEntries {
-			topicOff, ok := db.internal.trie.getOffset(h)
-			if !ok {
-				return true, errors.New("db.Sync: timeWindow sync error: unable to get topic offset from trie")
-			}
-			wOff, err := db.windowWriter.append(h, topicOff, winEntries[h])
-			if err != nil {
-				return true, err
-			}
-			if ok := db.internal.trie.setOffset(_Topic{hash: h, offset: wOff}); !ok {
-				return true, errors.New("db:Sync: timeWindow sync error: unable to set topic offset in trie")
-			}
-		}
-		if err1 != nil {
-			fmt.Println("db.sync: error ", err1)
-			return true, err1
-		}
-
-		if err := db.sync(false, timeID); err != nil {
-			fmt.Println("db.sync: sync error ", err)
-			return true, err
-		}
-		if db.syncInfo.syncComplete {
-			if err := timeRelease(timeID); err != nil {
-				return false, err
-			}
-			if err := db.internal.mem.Free(timeID); err != nil {
-				return true, err
-			}
-		}
-
-		return false, nil
+		return db.syncBlock(timeID, seqs, false, pending, timeRelease)
 	})
-	if err != nil || err1 != nil {
+	if err == nil {
+		err = db.writePending(pending)
+	}
+	if err != nil {
 		db.syncInfo.syncComplete = false
 		db.abort()
 	}
@@ -375,4 +309,110 @@ func (db *DB) expireEntries() error {
 	}
 
 	return nil
+}
+
+// syncBlock writes the entries seqs of the memdb block timeID to disk, and
+// frees the block once they are. Sync and recovery both write blocks with
+// it: recovery kept a copy of it, which differed.
+//
+// The window entries of a topic not in the trie are held in pending, for
+// writePending once a later block names the topic: in recovery, a topic is
+// named by its first entry, which may be in a later block. A recovered
+// entry naming its topic adds it to the trie, and its sequence is the DB's
+// at least.
+func (db *_SyncHandle) syncBlock(timeID int64, seqs []uint64, recovery bool, pending map[uint64]_WindowEntries, timeRelease func(int64) error) (bool, error) {
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	if seqs[len(seqs)-1] > db.syncInfo.upperSeq {
+		db.syncInfo.upperSeq = seqs[len(seqs)-1]
+	}
+	// New entries must not reuse the sequences of recovered ones.
+	db.advanceSeq(seqs[len(seqs)-1])
+	// The block a sync was writing when the process stopped: the entries
+	// of it already written are not in the count kept, if Open didn't
+	// recount.
+	countWritten := recovery && !db.internal.recounted && timeID == db.internal.dbInfo.syncing
+
+	winEntries := make(map[uint64]_WindowEntries)
+	var err1 error
+	for _, seq := range seqs {
+		memdata, err := db.internal.mem.Lookup(timeID, seq)
+		if errors.Is(err, memdb.ErrNotFound) {
+			// Deleted since the block's keys were listed. It failed the
+			// sync, which then uncounted entries it had not counted.
+			continue
+		}
+		if err != nil || memdata == nil {
+			db.syncInfo.entriesInvalid++
+			logger.Error().Err(err).Str("context", "mem.Lookup")
+			err1 = err
+			continue
+		}
+		var m _Entry
+		if err = m.UnmarshalBinary(memdata[:entrySize]); err != nil {
+			db.syncInfo.entriesInvalid++
+			err1 = err
+			continue
+		}
+		e := _IndexEntry{
+			seq:       m.seq,
+			topicSize: m.topicSize,
+			valueSize: m.valueSize,
+
+			cache: memdata[entrySize:],
+		}
+		if err := db.blockWriter.append(e); err != nil {
+			if err == errEntryExist {
+				if countWritten && m.valueSize != 0 {
+					db.syncInfo.count++
+				}
+				continue
+			}
+			return true, err
+		}
+		if m.topicSize != 0 {
+			rawtopic, err := db.internal.reader.readTopic(e)
+			if err != nil {
+				return true, err
+			}
+			t := new(message.Topic)
+			if err := t.Unmarshal(rawtopic); err != nil {
+				return true, err
+			}
+			db.addTopic(m.topicHash, t.Parts, t.Depth)
+		}
+		winEntries[m.topicHash] = append(winEntries[m.topicHash], newWinEntry(seq, m.expiresAt))
+		db.internal.filter.Append(seq)
+		// A tombstone (see delete) is written for its topic, and is not
+		// counted.
+		if m.valueSize != 0 {
+			db.syncInfo.count++
+		}
+		db.syncInfo.inBytes += int64(e.valueSize)
+	}
+	if err1 != nil {
+		return true, err1
+	}
+
+	for h, wEntries := range winEntries {
+		if _, ok := db.internal.trie.getOffset(h); !ok {
+			pending[h] = append(pending[h], wEntries...)
+			delete(winEntries, h)
+		}
+	}
+	if err := db.writePending(winEntries); err != nil {
+		return true, err
+	}
+
+	if err := db.sync(recovery, timeID); err != nil {
+		return true, err
+	}
+	if db.syncInfo.syncComplete {
+		if err := timeRelease(timeID); err != nil {
+			return false, err
+		}
+		if err := db.internal.mem.Free(timeID); err != nil {
+			return true, err
+		}
+	}
+	return false, nil
 }

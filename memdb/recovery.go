@@ -49,7 +49,6 @@ func (db *DB) startRecovery() error {
 		if ID > db.internal.lastLogID {
 			db.internal.lastLogID = ID
 		}
-		log := make(map[uint64][]byte)
 		l := r.Count()
 		// The block the log was written for. A log from before the WAL
 		// recorded it is put in the block of its time truncated to the
@@ -65,6 +64,8 @@ func (db *DB) startRecovery() error {
 			block = &_Block{data: db.internal.buffer.Get(), records: make(map[_Key]int64)}
 			db.timeBlocks[timeID] = block
 		}
+		db.internal.timeMark.add(timeID)
+		puts := int64(0)
 		for i := uint32(0); i < l; i++ {
 			logData, ok, err := r.Next()
 			if err != nil {
@@ -74,6 +75,7 @@ func (db *DB) startRecovery() error {
 				break
 			}
 
+			// Each entry is applied as written, by the code that wrote it.
 			for off := 0; off < len(logData); {
 				dBit, key, val, next, err := nextEntry(logData, off)
 				if err != nil {
@@ -83,56 +85,45 @@ func (db *DB) startRecovery() error {
 					return false, fmt.Errorf("%w: log %d: entry at %d has flag %d", wal.ErrCorrupted, ID, off, dBit)
 				}
 				off = next
-				if dBit == 1 && len(val) != 8 {
+				switch {
+				case dBit == 0:
+					if err := db.putEntry(block, timeID, key, val); err != nil {
+						return false, err
+					}
+					puts++
+				case len(val) != 8:
 					// A put marked deleted, as older versions wrote one
 					// deleted before it reached the WAL: the delete
 					// follows it.
-					continue
-				}
-				if dBit == 1 {
-					timeRefID := _TimeID(binary.LittleEndian.Uint64(val[:8]))
-					if timeRefID == timeID {
-						// Put earlier in this log.
-						delete(log, key)
-					}
+				default:
+					fromID := _TimeID(binary.LittleEndian.Uint64(val))
 					// A batch's block is named by the time of the batch; a
 					// log that doesn't record its block recovers it into
 					// the block of its time truncated.
-					if _, ok := db.timeBlocks[timeRefID]; !ok && legacy[db.legacyBlock(timeRefID)] {
-						timeRefID = db.legacyBlock(timeRefID)
+					if _, ok := db.timeBlocks[fromID]; !ok && legacy[db.legacyBlock(fromID)] {
+						fromID = db.legacyBlock(fromID)
 					}
 					// A block that is not recovered was released: its
 					// versions are gone already.
-					if from, ok := db.timeBlocks[timeRefID]; ok {
-						db.deleteRecovered(timeRefID, key)
-						block.deleteFrom(from)
+					from := db.timeBlocks[fromID]
+					_, err := db.deleteEntry(from, fromID, block, key)
+					if err == errEntryDoesNotExist {
+						_, err = db.deleteEntry(nil, fromID, block, key)
 					}
-				} else {
-					log[key] = val
+					if err != nil {
+						return false, err
+					}
 				}
 			}
-			db.internal.timeMark.add(timeID)
-			block.Lock()
-			for key, val := range log {
-				ikey := iKey(false, key)
-				if err := block.put(ikey, val); err != nil {
-					return false, err
-				}
-				blockKey := db.blockKey(key)
-				r, ok := db.timeFilters[blockKey]
-				if ok {
-					r.timeRecords[timeID] = struct{}{}
-				}
-				db.internal.meter.Puts.Inc(1)
-			}
-			// The block's data is in the WAL: a tiny log writing to the
-			// block after the reopen writes only what follows.
-			block.lastOffset = block.size()
-			block.timeRefs = append(block.timeRefs, _TimeID(ID))
-			block.Unlock()
-			db.internal.timeMark.release(timeID)
-			db.internal.meter.Recovers.Inc(int64(len(log)))
 		}
+		// The block's data is in the WAL: a tiny log writing to the block
+		// after the reopen writes only what follows.
+		block.Lock()
+		block.lastOffset = block.size()
+		block.Unlock()
+		block.timeRefs = append(block.timeRefs, _TimeID(ID))
+		db.internal.timeMark.release(timeID)
+		db.internal.meter.Recovers.Inc(puts)
 		return false, nil
 	})
 	if err != nil {
@@ -189,20 +180,6 @@ func nextEntry(data []byte, off int) (dBit byte, key uint64, val []byte, next in
 // (newTinyLog).
 func (db *DB) legacyBlock(timeID _TimeID) _TimeID {
 	return _TimeID(time.Unix(0, int64(timeID)).UTC().Truncate(db.opts.timeBlockDuration).UnixNano())
-}
-
-// deleteRecovered deletes key from the recovered block timeID, if it holds
-// it.
-func (db *DB) deleteRecovered(timeID _TimeID, key uint64) {
-	block, ok := db.timeBlocks[timeID]
-	if !ok {
-		return
-	}
-	block.Lock()
-	defer block.Unlock()
-	if block.delete(key) == nil {
-		db.internal.meter.Dels.Inc(1)
-	}
 }
 
 // All gets all keys from DB recovered from WAL.

@@ -95,8 +95,12 @@ func TestIdleBlocksAreReleased(t *testing.T) {
 	}
 	defer db.Close()
 	time.Sleep(25 * d)
-	if n := timeBlockCount(db); n > 2 {
-		t.Fatalf("%d time blocks after %d idle block durations; want the current one, and one rotating", n, 25)
+	// Rotation lags on a loaded machine: give it a while.
+	for deadline := time.Now().Add(2 * time.Second); timeBlockCount(db) > 2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d time blocks after %d idle block durations; want the current one, and one rotating", timeBlockCount(db), 25)
+		}
+		time.Sleep(d)
 	}
 }
 

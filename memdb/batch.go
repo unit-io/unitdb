@@ -73,17 +73,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 		return errForbidden
 	}
 
-	block.Lock()
-	defer block.Unlock()
-	ikey := iKey(false, key)
-	if err := block.put(ikey, data); err != nil {
-		return err
-	}
-	b.db.addTimeFilter(b.tinyLog.timeID(), key)
-
-	b.db.internal.meter.Puts.Inc(1)
-
-	return nil
+	return b.db.putEntry(block, b.tinyLog.timeID(), key, data)
 }
 
 // Write starts writing entries into DB.

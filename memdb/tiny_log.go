@@ -193,6 +193,19 @@ func (p *_TinyLogManager) closeWait() {
 	p.close(true)
 }
 
+// rotate makes a new tiny log current and enqueues the last to write, in
+// that order: the commit loop releases a written log's block if it is past
+// (releaseEmpty), and enqueued first, a log could be written while its
+// block was still current, and its empty block was never released. The
+// caller holds rotateMu and mu.
+func (p *_TinyLogManager) rotate() {
+	last := p.tinyLog
+	p.newTinyLog()
+	if last != nil {
+		p.writeQueue <- last
+	}
+}
+
 // write enqueues a log to write.
 func (p *_TinyLogManager) write() {
 	if p.tinyLog != nil {
@@ -212,8 +225,7 @@ func (p *_TinyLogManager) flush() error {
 	}
 	p.mu.Lock()
 	tinyLog := p.tinyLog
-	p.write()
-	p.newTinyLog()
+	p.rotate()
 	p.mu.Unlock()
 	p.rotateMu.Unlock()
 	<-tinyLog.doneChan
@@ -267,8 +279,7 @@ func (p *_TinyLogManager) writeLoop(interval time.Duration) {
 			default:
 				p.rotateMu.Lock()
 				p.mu.Lock()
-				p.write()
-				p.newTinyLog()
+				p.rotate()
 				p.mu.Unlock()
 				p.rotateMu.Unlock()
 			}

@@ -260,6 +260,15 @@ func (db *DB) Delete(key uint64) error {
 		return err
 	}
 
+	db.internal.logManager.rotateMu.RLock()
+	defer db.internal.logManager.rotateMu.RUnlock()
+	return db.deleteKey(key)
+}
+
+// deleteKey deletes the key's newest version. The caller holds the rotation
+// lock for reading, as Put does: the delete goes to the current block,
+// which rotation would otherwise leave, and releaseEmpty free, between.
+func (db *DB) deleteKey(key uint64) error {
 	db.mu.RLock()
 	// Get time block
 	blockKey := db.blockKey(key)
@@ -298,26 +307,19 @@ func (db *DB) Delete(key uint64) error {
 			timeLock.RLock()
 			defer timeLock.RUnlock()
 
-			block.Lock()
-			// Re-check under the write lock; a concurrent Delete may have removed the key.
-			if _, ok := block.records[ikey]; !ok {
-				block.Unlock()
-				return errEntryDoesNotExist
+			cur, ok := db.timeBlock(db.timeID())
+			if !ok {
+				return errForbidden
 			}
-			block.delete(key)
-			db.internal.meter.Dels.Inc(1)
-			// A block whose data is all in the WAL; one with more to write
-			// is released once it is (releaseEmpty).
-			empty := block.count == 0 && block.lastOffset == block.size()
-			block.Unlock()
-
 			// The delete goes to the WAL even if it empties the block: the
 			// block's logs stay there until the delete's go (applyLogs).
-			if err := db.move(block, timeID, key); err != nil {
+			empty, err := db.deleteEntry(block, timeID, cur, key)
+			if err != nil {
 				return err
 			}
 			// Release a block all of whose entries are deleted, unless
-			// writes may still go to it.
+			// writes may still go to it; one with more to write is released
+			// once it is (releaseEmpty).
 			if empty && timeID < db.timeID() {
 				if err := db.releaseLog(timeID); err != nil && err != errEntryDoesNotExist {
 					return err
@@ -350,7 +352,7 @@ func (db *DB) Replace(key uint64, data []byte) (int64, error) {
 
 	db.internal.logManager.rotateMu.RLock()
 	defer db.internal.logManager.rotateMu.RUnlock()
-	if err := db.Delete(key); err != nil {
+	if err := db.deleteKey(key); err != nil {
 		return 0, err
 	}
 	return db.put(key, data)
@@ -367,17 +369,7 @@ func (db *DB) put(key uint64, data []byte) (int64, error) {
 		return 0, errForbidden
 	}
 
-	block.Lock()
-	defer block.Unlock()
-	ikey := iKey(false, key)
-	if err := block.put(ikey, data); err != nil {
-		return int64(timeID), err
-	}
-	db.addTimeFilter(timeID, key)
-
-	db.internal.meter.Puts.Inc(1)
-
-	return int64(timeID), nil
+	return int64(timeID), db.putEntry(block, timeID, key, data)
 }
 
 // NewBatch returns unmanaged Batch so caller can perform Put, Write, Commit, Abort to the Batch.
