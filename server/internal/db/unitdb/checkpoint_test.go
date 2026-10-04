@@ -9,6 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	dbapi "github.com/unit-io/unitdb/server/internal/db"
 )
 
 const testConfig = `{"mem_size": 16777216}`
@@ -61,7 +64,8 @@ func TestCheckpoint(t *testing.T) {
 		}
 	}()
 	dst := filepath.Join(t.TempDir(), "checkpoint")
-	err := a.Checkpoint(dst)
+	taken := time.Date(2026, 10, 3, 21, 30, 0, 0, time.UTC)
+	wrote, err := a.Checkpoint(dst, dbapi.CheckpointInfo{Node: "unitdb-1", Time: taken, RingVersion: 2, KeyIDs: []int{1, 2}})
 	close(stop)
 	wg.Wait()
 	if err != nil {
@@ -100,8 +104,36 @@ func TestCheckpoint(t *testing.T) {
 		t.Errorf("stats of the copy: %+v", s)
 	}
 
+	// The copy describes itself: what it was given, its stats and the
+	// engine's version.
+	info, err := dbapi.ReadCheckpointInfo(dst)
+	if err != nil || info == nil {
+		t.Fatalf("checkpoint.json: %+v, %v", info, err)
+	}
+	if info.Node != "unitdb-1" || !info.Time.Equal(taken) || info.RingVersion != 2 || fmt.Sprint(info.KeyIDs) != "[1 2]" {
+		t.Errorf("checkpoint.json says %+v", info)
+	}
+	if info.Engine == "" {
+		t.Error("checkpoint.json has no engine version")
+	}
+	if info.Stats != wrote.Stats || info.Engine != wrote.Engine {
+		t.Errorf("checkpoint.json says %+v, the checkpoint returned %+v", info, wrote)
+	}
+	// Its records are the copy's keys, though one was written twice:
+	// memdb's own count takes a key put again for another record.
+	if got := int64(len(b.Keys())); info.Stats.MemEntries != got {
+		t.Errorf("checkpoint.json counts %d records; the copy holds %d", info.Stats.MemEntries, got)
+	}
+	if got := b.Stats().Messages; info.Stats.Messages != got || info.Stats.MemEntries == 0 {
+		t.Errorf("checkpoint.json counts %+v; the copy holds %d messages", info.Stats, got)
+	}
+	// The store it was taken from isn't a checkpoint.
+	if info, err := dbapi.ReadCheckpointInfo(a.path); info != nil || err != nil {
+		t.Errorf("the live store reads as a checkpoint: %+v, %v", info, err)
+	}
+
 	// A directory that isn't empty is refused.
-	if err := a.Checkpoint(dst); err == nil || !strings.HasPrefix(err.Error(), "store checkpoint: ") {
+	if _, err := a.Checkpoint(dst, dbapi.CheckpointInfo{}); err == nil || !strings.HasPrefix(err.Error(), "store checkpoint: ") {
 		t.Errorf("a checkpoint into a directory that isn't empty: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, defaultDatabase, "unitdb.lock")); err != nil {

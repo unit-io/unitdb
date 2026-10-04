@@ -36,6 +36,8 @@ func (c *Cluster) readiness() (bool, string) {
 		return false, "leaving the cluster"
 	case c.rebuilding.Load():
 		return false, "catching up: copying its topics from the other nodes"
+	case c.reconciling.Load():
+		return false, "catching up: reconciling its restored topics with the other nodes"
 	}
 	ring := c.getRingNodes()
 	configured := len(c.nodes) + 1
@@ -73,6 +75,7 @@ func (c *Cluster) writeMetrics(m *metricsWriter) {
 	m.one("unitdb_cluster_members", "gauge", "Nodes in the ring this node routes by.", float64(len(c.getRingNodes())))
 	m.one("unitdb_cluster_ring_version", "gauge", "The ring version last seen from the leader; 0 before any.", float64(c.clusterRing.Load()))
 	m.one("unitdb_cluster_rebuilding", "gauge", "Whether this node is copying its topics from the others.", b(c.rebuilding.Load()))
+	c.writeReconcileMetrics(m)
 	m.one("unitdb_cluster_leaving", "gauge", "Whether this node is leaving the cluster.", b(c.leaving.Load()))
 	if last := c.health.lastLeader.Load(); last != 0 {
 		m.one("unitdb_cluster_leader_age_seconds", "gauge", "Seconds since this node last heard from a leader, or was one.", time.Since(time.Unix(0, last)).Seconds())

@@ -178,6 +178,9 @@ func (h *healthMonitor) handler() http.Handler {
 	})
 	if h.checkpoints != nil {
 		mux.HandleFunc("/_checkpoint", h.checkpoints.handle)
+		mux.HandleFunc("/_checkpoint/manifest", h.checkpoints.handleManifest)
+		mux.HandleFunc("/_checkpoint/upload", h.checkpoints.handleUpload)
+		mux.HandleFunc("/_checkpoint/canary", h.checkpoints.handleCanary)
 	}
 	mux.HandleFunc("/_metrics", func(w http.ResponseWriter, r *http.Request) {
 		if h.metrics == nil {

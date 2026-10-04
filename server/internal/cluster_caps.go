@@ -75,7 +75,7 @@ const (
 	capRevocations = "revocations"
 )
 
-var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys, capRevocations}
+var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys, capRevocations, capReconcile}
 
 // ownCapabilities are what this node can do: all of them, unless the
 // UNITDB_CLUSTER_CAPS environment variable lists fewer ("none" for none), so

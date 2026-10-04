@@ -142,6 +142,7 @@ func (s *_Service) writeMetrics(w io.Writer) {
 	if s.health != nil && s.health.checkpoints != nil {
 		s.health.checkpoints.writeMetrics(m)
 	}
+	writeOffsiteMetrics(m)
 
 	if c := Globals.Cluster; c != nil {
 		c.writeMetrics(m)

@@ -239,17 +239,21 @@ func TestPeerRPCSenders(t *testing.T) {
 	p := &peerRPC{c: nil, peer: "two"}
 	var b bool
 	calls := map[string]func() error{
-		"Ping":           func() error { return p.Ping(&ClusterPing{Leader: "three"}, &ClusterPong{}) },
-		"Vote":           func() error { return p.Vote(&ClusterVoteRequest{Node: "three"}, &ClusterVoteResponse{}) },
-		"Master":         func() error { return p.Master(&ClusterReq{Node: "three", Conn: &ClusterSess{}}, &b) },
-		"Deliver":        func() error { return p.Deliver(&DeliverReq{Node: "three"}, &b) },
-		"RebuildTopics":  func() error { return p.RebuildTopics(&RebuildReq{Node: "three"}, &RebuildTopicsResp{}) },
-		"RebuildHistory": func() error { return p.RebuildHistory(&RebuildHistoryReq{Node: "three"}, &RebuildHistoryResp{}) },
-		"FetchSession":   func() error { return p.FetchSession(&FetchSessionReq{Node: "three"}, &FetchSessionResp{}) },
-		"ForgetSession":  func() error { return p.ForgetSession(&ForgetSessionReq{Node: "three"}, &b) },
-		"Replicate":      func() error { return p.Replicate(&ReplicateReq{Node: "three"}, &b) },
-		"Resync":         func() error { return p.Resync(&ResyncReq{Node: "three"}, &b) },
-		"Revocations":    func() error { return p.Revocations(&RevocationsReq{Node: "three"}, &RevocationsResp{}) },
+		"Ping":            func() error { return p.Ping(&ClusterPing{Leader: "three"}, &ClusterPong{}) },
+		"Vote":            func() error { return p.Vote(&ClusterVoteRequest{Node: "three"}, &ClusterVoteResponse{}) },
+		"Master":          func() error { return p.Master(&ClusterReq{Node: "three", Conn: &ClusterSess{}}, &b) },
+		"Deliver":         func() error { return p.Deliver(&DeliverReq{Node: "three"}, &b) },
+		"RebuildTopics":   func() error { return p.RebuildTopics(&RebuildReq{Node: "three"}, &RebuildTopicsResp{}) },
+		"RebuildHistory":  func() error { return p.RebuildHistory(&RebuildHistoryReq{Node: "three"}, &RebuildHistoryResp{}) },
+		"FetchSession":    func() error { return p.FetchSession(&FetchSessionReq{Node: "three"}, &FetchSessionResp{}) },
+		"ForgetSession":   func() error { return p.ForgetSession(&ForgetSessionReq{Node: "three"}, &b) },
+		"Replicate":       func() error { return p.Replicate(&ReplicateReq{Node: "three"}, &b) },
+		"Resync":          func() error { return p.Resync(&ResyncReq{Node: "three"}, &b) },
+		"Revocations":     func() error { return p.Revocations(&RevocationsReq{Node: "three"}, &RevocationsResp{}) },
+		"StartedFrom":     func() error { return p.StartedFrom(&StartedFromReq{Node: "three"}, &StartedFromResp{}) },
+		"ReconcileTopics": func() error { return p.ReconcileTopics(&ReconcileTopicsReq{Node: "three"}, &ReconcileTopicsResp{}) },
+		"Digests":         func() error { return p.Digests(&DigestsReq{Node: "three"}, &DigestsResp{}) },
+		"Reconcile":       func() error { return p.Reconcile(&ReconcileReq{Node: "three"}, &ReconcileResp{}) },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil || !strings.Contains(err.Error(), `names "three"`) {
