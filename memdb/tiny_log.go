@@ -127,11 +127,11 @@ func (src *_TinyLogOptions) withDefaultOptions() *_TinyLogOptions {
 }
 
 func (p *_TinyLogManager) newTinyLog() {
-	timeNow := time.Now().UTC()
-	timeID := _TimeID(timeNow.Truncate(p.opts.blockDuration).UnixNano())
+	id := p.db.newLogID()
+	timeID := _TimeID(time.Unix(0, int64(id)).UTC().Truncate(p.opts.blockDuration).UnixNano())
 	p.db.addTimeBlock(timeID)
 	p.db.internal.timeMark.add(timeID)
-	p.tinyLog = &_TinyLog{id: _TimeID(timeNow.UnixNano()), _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
+	p.tinyLog = &_TinyLog{id: id, _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
 }
 
 func (db *DB) newLogManager(opts *_TinyLogOptions) {
@@ -146,6 +146,8 @@ func (db *DB) newLogManager(opts *_TinyLogOptions) {
 	}
 
 	logManager.newTinyLog()
+	// The loops read it: the commit loop asks for the current block.
+	db.internal.logManager = logManager
 
 	// start the write loop
 	go logManager.writeLoop(opts.writeInterval)
@@ -159,8 +161,6 @@ func (db *DB) newLogManager(opts *_TinyLogOptions) {
 		logManager.stopWg.Add(1)
 		go logManager.dispatch(opts.timeout)
 	}
-
-	db.internal.logManager = logManager
 }
 
 // timeID returns tinyLog timeID.

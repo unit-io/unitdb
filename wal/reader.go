@@ -30,6 +30,7 @@ type Reader struct {
 	Id         uid.LID
 	offset     int64
 	entryCount uint32
+	blockID    int64
 	buffer     *bpool.Buffer
 
 	wal *WAL
@@ -66,12 +67,19 @@ func (r *Reader) Iterator(f func(timeID int64) (bool, error)) (err error) {
 			return err
 		}
 		r.entryCount = info.count
+		r.blockID = info.blockID
 		if stop, err := f(timeID); stop || err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// BlockID returns the block the current log was written for, from
+// Writer.SetBlockID; 0 for a log written without one, or before version 3.
+func (r *Reader) BlockID() int64 {
+	return r.blockID
 }
 
 // Count returns entry count for the current interation.

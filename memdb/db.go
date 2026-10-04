@@ -305,26 +305,24 @@ func (db *DB) Delete(key uint64) error {
 			}
 			block.delete(key)
 			db.internal.meter.Dels.Inc(1)
-			if block.count == 0 {
-				// all entries are deleted from the block,
-				// now check if timeIDs for deleted entries are released.
-				for ikey, timeID := range block.records {
-					db.mu.RLock()
-					if _, ok := db.timeBlocks[_TimeID(timeID)]; ok {
-						db.move(_TimeID(timeID), ikey.key)
-					}
-					db.mu.RUnlock()
-					delete(block.records, ikey)
-				}
-				// released timeblock from the WAL if all records are deleted.
-				if len(block.records) == 0 && timeID < db.timeID() {
-					block.Unlock()
-					return db.releaseLog(timeID)
-				}
-			}
+			// A block whose data is all in the WAL; one with more to write
+			// is released once it is (releaseEmpty).
+			empty := block.count == 0 && block.lastOffset == block.size()
 			block.Unlock()
 
-			return db.move(timeID, key)
+			// The delete goes to the WAL even if it empties the block: the
+			// block's logs stay there until the delete's go (applyLogs).
+			if err := db.move(block, timeID, key); err != nil {
+				return err
+			}
+			// Release a block all of whose entries are deleted, unless
+			// writes may still go to it.
+			if empty && timeID < db.timeID() {
+				if err := db.releaseLog(timeID); err != nil && err != errEntryDoesNotExist {
+					return err
+				}
+			}
+			return nil
 		}
 	}
 
@@ -339,6 +337,12 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 
 	db.internal.logManager.rotateMu.RLock()
 	defer db.internal.logManager.rotateMu.RUnlock()
+	return db.put(key, data)
+}
+
+// put puts data for the key in the current block. The caller holds the
+// rotation lock for reading.
+func (db *DB) put(key uint64, data []byte) (int64, error) {
 	timeID := db.timeID()
 	db.mu.RLock()
 	block, ok := db.timeBlocks[timeID]

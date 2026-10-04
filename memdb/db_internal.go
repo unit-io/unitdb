@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -64,12 +65,18 @@ type _DB struct {
 	// tiny Log
 	timeRef    _TimeID
 	logManager *_TinyLogManager
+	// lastLogID is the ID of the last log, read and set atomically: see
+	// newLogID.
+	lastLogID int64
 
 	// buffer pool
 	buffer *bpool.BufferPool
 
 	// Write ahead log
 	wal *wal.WAL
+	// logMu guards the blocks' logs and what keeps them in the WAL. It is
+	// taken after a block's lock and before db.mu.
+	logMu sync.Mutex
 
 	// close
 	closed uint32
@@ -115,6 +122,23 @@ func (db *DB) timeLock() _Internal {
 
 func (db *DB) timeID() _TimeID {
 	return db.internal.logManager.timeID()
+}
+
+// newLogID returns the ID of a new log: its time, made later than the last
+// log's if it isn't. A log is written to a file named by its ID, so two of
+// the same ID, as a clock that ticks in microseconds gives, wrote one file:
+// the second replaced the first.
+func (db *DB) newLogID() _TimeID {
+	for {
+		last := atomic.LoadInt64(&db.internal.lastLogID)
+		id := time.Now().UTC().UnixNano()
+		if id <= last {
+			id = last + 1
+		}
+		if atomic.CompareAndSwapInt64(&db.internal.lastLogID, last, id) {
+			return _TimeID(id)
+		}
+	}
 }
 
 // blockKey gets blockKey for the Key using consistent hashing.
@@ -190,8 +214,9 @@ func (db *DB) removeTimeFilter(timeID _TimeID) {
 	}
 }
 
-// move moves the entry to the new block
-func (db *DB) move(timeID _TimeID, key uint64) error {
+// move writes the delete of key's version in the block from, of time ID
+// timeID, to the current block, for the WAL.
+func (db *DB) move(from *_Block, timeID _TimeID, key uint64) error {
 	newTimeID := db.timeID()
 	// add deleted key to new time block to persist deleted entry to the WAL.
 	dkey := iKey(true, key)
@@ -205,8 +230,46 @@ func (db *DB) move(timeID _TimeID, key uint64) error {
 	rawTimeID := make([]byte, 8)
 	binary.LittleEndian.PutUint64(rawTimeID[:8], uint64(timeID))
 
-	newBlock.records[dkey] = int64(newTimeID)
-	return newBlock.put(dkey, rawTimeID)
+	if err := newBlock.put(dkey, rawTimeID); err != nil {
+		return err
+	}
+	db.internal.logMu.Lock()
+	newBlock.deleteFrom(from)
+	db.internal.logMu.Unlock()
+	return nil
+}
+
+// deleteFrom records that b holds deletes of versions in from: b's logs
+// stay in the WAL as long as from's. The caller holds logMu.
+func (b *_Block) deleteFrom(from *_Block) {
+	if from == b || from.walGone || b.deletes[from] {
+		return
+	}
+	if b.deletes == nil {
+		b.deletes = make(map[*_Block]bool)
+	}
+	b.deletes[from] = true
+	b.waitFor++
+	from.waiters = append(from.waiters, b)
+}
+
+// applyLogs marks the logs of a released block applied once the logs of
+// the blocks it deletes versions from are, and then those of the blocks
+// that waited for it. It returns the logs, in the order they may go. The
+// caller holds logMu.
+func (b *_Block) applyLogs() []_TimeID {
+	if !b.released || b.waitFor > 0 || b.walGone {
+		return nil
+	}
+	b.walGone = true
+	logs := b.timeRefs
+	for _, w := range b.waiters {
+		w.waitFor--
+		logs = append(logs, w.applyLogs()...)
+	}
+	b.waiters = nil
+	b.deletes = nil
+	return logs
 }
 
 // tinyWrite writes tiny log to the WAL.
@@ -243,13 +306,22 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	if err := <-logWriter.Append(log); err != nil {
 		return err
 	}
+	logWriter.SetBlockID(int64(tinyLog.timeID()))
 	if err := <-logWriter.SignalInitWrite(int64(tinyLog.ID())); err != nil {
 		return err
 	}
 
 	block.Lock()
-	defer block.Unlock()
 	block.lastOffset = blockSize
+	block.Unlock()
+
+	// A block released while its log was written: the log goes with the
+	// block's others, or at once if they have gone.
+	db.internal.logMu.Lock()
+	defer db.internal.logMu.Unlock()
+	if block.walGone {
+		return db.internal.wal.SignalLogApplied(int64(tinyLog.ID()))
+	}
 	block.timeRefs = append(block.timeRefs, tinyLog.ID())
 
 	return nil
@@ -266,8 +338,33 @@ func (db *DB) tinyCommit(tinyLog *_TinyLog) error {
 
 	if !tinyLog.managed {
 		db.internal.timeMark.release(tinyLog.timeID())
+		return db.releaseEmpty(tinyLog.timeID())
 	}
 
+	return nil
+}
+
+// releaseEmpty releases a block writes no longer go to once it holds no
+// entries and its data is all in the WAL: one whose entries were deleted
+// before its last log was written, or that holds deletes only, which
+// nothing else releases.
+func (db *DB) releaseEmpty(timeID _TimeID) error {
+	if timeID >= db.timeID() {
+		return nil
+	}
+	block, ok := db.timeBlock(timeID)
+	if !ok {
+		return nil
+	}
+	block.RLock()
+	empty := block.data != nil && block.count == 0 && block.lastOffset == block.size()
+	block.RUnlock()
+	if !empty {
+		return nil
+	}
+	if err := db.releaseLog(timeID); err != nil && err != errEntryDoesNotExist {
+		return err
+	}
 	return nil
 }
 
@@ -281,10 +378,12 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	// the last writes were made, it writes to the block recovered for them.
 	// It then gets an empty block, which writes need until the next rotation.
 	current := db.timeID()
+	db.internal.logMu.Lock()
 	db.mu.Lock()
 	block, ok := db.timeBlocks[timeID]
 	if !ok {
 		db.mu.Unlock()
+		db.internal.logMu.Unlock()
 		return errEntryDoesNotExist
 	}
 	if timeID == current {
@@ -295,13 +394,13 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	db.internal.timeMark.timeUnref(timeID)
 	db.mu.Unlock()
 
-	block.RLock()
-	timeRefs := block.timeRefs
-	block.RUnlock()
-	for _, timeRef := range timeRefs {
-		if err := db.internal.wal.SignalLogApplied(int64(timeRef)); err != nil {
-			return err
-		}
+	// The logs go, in order, under logMu: a block deleting from one whose
+	// logs are going must find them gone only once they are.
+	block.released = true
+	err := db.signalApplied(block.applyLogs())
+	db.internal.logMu.Unlock()
+	if err != nil {
+		return err
 	}
 
 	// Free under the block's write lock so it waits for readers of the buffer.
@@ -313,6 +412,16 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	// filter lock after db.mu is released, so holding both here could deadlock.
 	db.removeTimeFilter(timeID)
 
+	return nil
+}
+
+// signalApplied marks logs applied, in order.
+func (db *DB) signalApplied(logs []_TimeID) error {
+	for _, timeRef := range logs {
+		if err := db.internal.wal.SignalLogApplied(int64(timeRef)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

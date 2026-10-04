@@ -47,8 +47,20 @@ type (
 		data         *bpool.Buffer
 		records      map[_Key]int64 // map[key]offset
 
-		timeRefs   []_TimeID
 		lastOffset int64 // last offset of block data written to the log
+
+		// The block's logs in the WAL, and what keeps them there; guarded
+		// by the DB's logMu, not the block's lock. A log holding the delete
+		// of a version must stay in the WAL as long as the log holding its
+		// put, or the version comes back on the next recovery: a block's
+		// logs go once the block is released and the logs of every block
+		// it deletes versions from have gone.
+		timeRefs []_TimeID
+		released bool             // out of timeBlocks
+		walGone  bool             // its logs are applied
+		deletes  map[*_Block]bool // blocks it deletes versions from
+		waitFor  int              // blocks in deletes whose logs are in the WAL
+		waiters  []*_Block        // blocks deleting versions from this one
 	}
 )
 
@@ -134,18 +146,15 @@ func (b *_Block) size() int64 {
 	return b.data.Size()
 }
 
+// delete forgets the key's entry. The entry's data is left as written: it
+// may not be in the WAL yet, and must reach it as a put, which the delete
+// written after it (DB.move) deletes on recovery. Marking the entry deleted
+// wrote a put that recovery took for a delete, and read its value as the
+// time ID of a block.
 func (b *_Block) delete(key uint64) error {
 	ikey := iKey(false, key)
-	off, ok := b.records[ikey]
-	if !ok || b.data == nil {
+	if _, ok := b.records[ikey]; !ok || b.data == nil {
 		return errEntryDoesNotExist
-	}
-	// k with flag bit
-	var k [9]byte
-	k[0] = 1
-	binary.LittleEndian.PutUint64(k[1:], key)
-	if _, err := b.data.WriteAt(k[:], off+4); err != nil {
-		return err
 	}
 
 	delete(b.records, ikey)
