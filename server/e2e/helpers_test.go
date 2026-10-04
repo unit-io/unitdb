@@ -91,3 +91,14 @@ func collectUnique(c *client, want int, overall, quiet time.Duration) (map[int]s
 	}
 	return got, dups, nil
 }
+
+// scaled scales a load size down under -race, where the server and the test
+// both run many times slower, so the suite stays within its time budget.
+func scaled(n int) int {
+	if raceEnabled {
+		if n /= 4; n < 1 {
+			n = 1
+		}
+	}
+	return n
+}
