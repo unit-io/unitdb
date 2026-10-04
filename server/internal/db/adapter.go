@@ -88,4 +88,25 @@ type Adapter interface {
 	// Flush waits for the messages put before it to be written to the
 	// store's log, from which they are recovered after a crash.
 	Flush() error
+
+	// Checkpoint writes a copy of the store into dst, a directory that
+	// doesn't exist or is empty. The copy opens as the store was at one
+	// moment, as after a clean shutdown. Writes wait while it runs.
+	Checkpoint(dst string) error
+
+	// Stats returns the size of the store.
+	Stats() Stats
+}
+
+// Stats is the size of a store.
+type Stats struct {
+	// Messages is the number of messages in the store.
+	Messages uint64
+	// DiskBytes is the size of the store's files.
+	DiskBytes int64
+	// MemEntries is the number of records in memory (sessions, logs and the
+	// like), and MemSize the configured size of that memory (mem_size); 0
+	// if not configured.
+	MemEntries int64
+	MemSize    int64
 }

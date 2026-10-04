@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+
+	adapter "github.com/unit-io/unitdb/server/internal/db"
 )
 
 // securityTopic is the topic the cluster's security state is kept under, in
@@ -106,4 +108,20 @@ func Probe() error {
 		return errors.New("store probe: read back something else than it wrote")
 	}
 	return nil
+}
+
+// Stats is the size of the store.
+type Stats = adapter.Stats
+
+// Checkpoint writes a copy of the store into dst, a directory that doesn't
+// exist or is empty, that opens as the store was at one moment (db_path set
+// to dst). Writes wait while it runs. Records sealed at rest stay sealed: the
+// copy opens with the same keyring only. Errors start "store checkpoint: ".
+func Checkpoint(dst string) error {
+	return adp.Checkpoint(dst)
+}
+
+// StoreStats returns the size of the store, cheaply: for metrics.
+func StoreStats() Stats {
+	return adp.Stats()
 }
