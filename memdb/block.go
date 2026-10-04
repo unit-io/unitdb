@@ -107,7 +107,8 @@ func (b *_Block) put(ikey _Key, data []byte) error {
 	if _, err := b.data.WriteAt(data, off+8+1+4); err != nil {
 		return err
 	}
-	if ikey.delFlag == 0 {
+	// A key put again in the block replaces its record: one record still.
+	if _, again := b.records[ikey]; ikey.delFlag == 0 && !again {
 		b.count++
 	}
 	b.records[ikey] = off
