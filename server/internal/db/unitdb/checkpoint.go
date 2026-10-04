@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/unit-io/unitdb/memdb"
@@ -35,10 +36,11 @@ import (
 const settleTime = 1500 * time.Millisecond
 
 // Checkpoint writes a copy of the store into dst, which must not exist or be
-// empty.
-func (a *adapter) Checkpoint(dst string) error {
-	fail := func(what string, err error) error {
-		return fmt.Errorf("store checkpoint: %s: %v", what, err)
+// empty, and then info, with the copy's stats and the engine's version, as
+// dbapi.CheckpointInfoFile: a checkpoint without one is incomplete.
+func (a *adapter) Checkpoint(dst string, info dbapi.CheckpointInfo) (dbapi.CheckpointInfo, error) {
+	fail := func(what string, err error) (dbapi.CheckpointInfo, error) {
+		return info, fmt.Errorf("store checkpoint: %s: %v", what, err)
 	}
 	if a.db == nil {
 		return fail("the store", fmt.Errorf("is not open"))
@@ -62,6 +64,9 @@ func (a *adapter) Checkpoint(dst string) error {
 			return fail("sync", err)
 		}
 	}
+	// The DB as the copy has it: writes wait until the copy is done.
+	info.Stats = a.Stats()
+	info.Engine = engineVersion()
 	src := filepath.Join(a.path, defaultDatabase)
 	if err := copyTree(src, filepath.Join(dst, defaultDatabase)); err != nil {
 		return fail("copy the DB", err)
@@ -76,6 +81,7 @@ func (a *adapter) Checkpoint(dst string) error {
 	if err != nil {
 		return fail("open the copy's memdb", err)
 	}
+	copied := 0
 	for _, key := range a.Keys() {
 		b, err := a.mem.Get(key)
 		if err != nil {
@@ -85,14 +91,44 @@ func (a *adapter) Checkpoint(dst string) error {
 			mem.Close()
 			return fail("copy memdb", err)
 		}
+		copied++
 	}
+	// The records the copy holds: memdb's Size counts a key put again as
+	// another record (unitdb v0.6.0), so a live store's overstates them,
+	// and a restore would be measured against too many.
+	info.Stats.MemEntries = int64(copied)
 	if err := mem.Close(); err != nil {
 		return fail("close the copy's memdb", err)
 	}
 	if err := syncTree(dst); err != nil {
 		return fail("fsync the copy", err)
 	}
-	return nil
+	if err := dbapi.WriteCheckpointInfo(dst, info); err != nil {
+		return fail("describe the copy", err)
+	}
+	return info, nil
+}
+
+// unitdbModule is the module of the engine the adapter stores with.
+const unitdbModule = "github.com/unit-io/unitdb"
+
+// engineVersion returns the version of the unitdb module this binary was
+// built with, as go.mod requires it, or "unknown".
+func engineVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, m := range bi.Deps {
+		if m.Path != unitdbModule {
+			continue
+		}
+		if m.Replace != nil {
+			return m.Version + " => " + m.Replace.Path + " " + m.Replace.Version
+		}
+		return m.Version
+	}
+	return "unknown"
 }
 
 // Stats returns the size of the store.

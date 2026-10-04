@@ -206,6 +206,8 @@ func (c *Cluster) sendPings() {
 	// The ring version the followers saw the cluster route by: the lowest,
 	// as a switch only ever goes up.
 	routed := 0
+	// The nodes that answered this ping, and aren't leaving.
+	answered := make(map[string]bool)
 	for _, node := range c.nodes {
 		var pong ClusterPong
 		// A node that stalls without its connection failing does not answer:
@@ -220,6 +222,7 @@ func (c *Cluster) sendPings() {
 			RingVersion: c.getRingVersion()}, &pong, c.fo.heartBeat)
 		if err == nil {
 			node.setCapabilities(pong.NodeCapabilities)
+			answered[node.name] = !pong.Leaving
 			if v := pong.RingVersion; v != 0 && (routed == 0 || v < routed) {
 				routed = v
 			}
@@ -274,6 +277,24 @@ func (c *Cluster) sendPings() {
 		// it stores by the version the cluster routed by before, as they do.
 		log.Printf("cluster: switching the ring from version %d to %d", seen, v)
 		c.adoptRingVersion(v)
+	}
+
+	// The ring may lack a node that answers, which this leader never saw
+	// fail: a leader that left (shutting down) took itself out of the ring,
+	// and the next leader, inheriting that ring, sees the node answer when
+	// it is back, which is no change of its own. So a node that answers and
+	// isn't in the ring is put back. Only one that answers: one that left
+	// and is gone hasn't failed yet here, and is taken out as it fails.
+	if !rehash {
+		inRing := map[string]bool{}
+		for _, name := range c.getRingNodes() {
+			inRing[name] = true
+		}
+		for _, node := range live {
+			if answered[node.name] && !inRing[node.name] {
+				rehash = true
+			}
+		}
 	}
 
 	if rehash {

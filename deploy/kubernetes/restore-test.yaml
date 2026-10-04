@@ -1,0 +1,80 @@
+# unitdb's weekly restore test (docs/backup-restore.md): the backup
+# command's verify downloads the newest complete run from the bucket,
+# decrypts it, and opens each node's checkpoint on a scratch server in this
+# pod (no cluster, no clients), with the escrowed keyring: it must open and
+# be ready, hold what the manifest says, and hold the run's canary. It
+# pushes unitdb_backup_restore_verified_timestamp_seconds to the Pushgateway
+# only if every node passes; backup-alerts.yaml fires when that is more than
+# 8 days old.
+#
+# Its own namespace and identity: the reader's (deploy/aws/README.md, step
+# 5), the only one besides named admins that may read the bucket, the
+# backup key and the escrowed keyring. Nothing in the unitdb namespace can.
+#
+# Before applying:
+#   kubectl create namespace unitdb-restore-test
+#   kubectl -n unitdb-restore-test create secret generic unitdb-backup-reader \
+#     --from-literal=AWS_ACCESS_KEY_ID=<the reader's> \
+#     --from-literal=AWS_SECRET_ACCESS_KEY=<the reader's>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unitdb-restore-test
+  namespace: unitdb-restore-test
+spec:
+  schedule: "30 23 * * 6" # Saturdays 23:30 UTC, after that day's run
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 21600
+      template:
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          containers:
+            - name: verify
+              image: unitdb:latest
+              command: ["/backup"]
+              args:
+                - verify
+                - -run=latest
+                - -server=/unitdb
+                - -work=/scratch
+                - -pushgateway=http://pushgateway.monitoring.svc.cluster.local:9091
+              env:
+                - name: BACKUP_S3_BUCKET
+                  value: unitdb-backups-production
+                - name: BACKUP_S3_REGION
+                  value: <your region>
+                - name: BACKUP_CLUSTER
+                  value: production
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: unitdb-backup-reader
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: unitdb-backup-reader
+                      key: AWS_SECRET_ACCESS_KEY
+              # One scratch server at a time; its memory store is the
+              # nodes' (mem_size, 500 MB).
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  memory: 2Gi
+              volumeMounts:
+                - name: scratch
+                  mountPath: /scratch
+          volumes:
+            # A run, decrypted: every node's checkpoint. Size it to three
+            # nodes' stores.
+            - name: scratch
+              emptyDir:
+                sizeLimit: 150Gi

@@ -1,0 +1,57 @@
+# unitdb's daily backup run (docs/backup-restore.md): at 21:30 UTC, the
+# backup command (server/cmd/backup, in the unitdb image) has every
+# node take a checkpoint of one run, one node after another, each with up to
+# three tries, into checkpoints/ckpt-<run>-<node> on its volume, and keeps
+# the run's manifest.json (each node's checkpoint.json, or why it failed) in
+# every node's checkpoint. Then each node uploads its checkpoint, encrypted,
+# and the manifest, to the bucket (-upload; deploy/aws/README.md). A node
+# that failed either fails the job: a restore needs every node of one run.
+# A volume snapshot of the nodes' claims, if you take one, goes after it:
+# only the checkpoints in it restore, not the live store beside them.
+#
+# The job's exit status is its metric: alert on a failed Job, or on
+# kube_cronjob_status_last_successful_time older than 26 h.
+#
+# Restoring: docs/backup-restore.md. One node lost: an empty claim, not a
+# checkpoint. The whole cluster: every node at its checkpoint of one run.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unitdb-backup
+  namespace: unitdb
+spec:
+  schedule: "30 21 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # The command retries each node itself; a second Job would start a new
+      # run.
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          # No Service links in the environment: a Service named web would set
+          # WEB_PORT=tcp://..., which unitdb reads as its own port.
+          enableServiceLinks: false
+          containers:
+            - name: backup
+              image: unitdb:latest
+              command: ["/backup"]
+              args:
+                - -upload
+                - -nodes
+                - http://unitdb-0.unitdb.unitdb.svc.cluster.local:7374,http://unitdb-1.unitdb.unitdb.svc.cluster.local:7374,http://unitdb-2.unitdb.unitdb.svc.cluster.local:7374
+              env:
+                - name: CHECKPOINT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: unitdb
+                      key: CHECKPOINT_TOKEN
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi

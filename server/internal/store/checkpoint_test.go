@@ -20,10 +20,13 @@ func TestCheckpointAndStats(t *testing.T) {
 		t.Errorf("stats %+v", s)
 	}
 	dst := t.TempDir()
-	if err := store.Checkpoint(dst); err != nil {
+	if _, err := store.Checkpoint(dst, store.CheckpointInfo{Node: "n1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Checkpoint(dst); err == nil {
+	if info, err := store.ReadCheckpointInfo(dst); err != nil || info == nil || info.Node != "n1" {
+		t.Errorf("the checkpoint's description: %+v, %v", info, err)
+	}
+	if _, err := store.Checkpoint(dst, store.CheckpointInfo{}); err == nil {
 		t.Error("a checkpoint into a directory that isn't empty was taken")
 	}
 	if err := store.Probe(); err != nil {

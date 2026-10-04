@@ -646,6 +646,9 @@ type Cluster struct {
 	// Set while this node, started with an empty store, copies its topics'
 	// messages from the other nodes.
 	rebuilding atomic.Bool
+	// Set while this node, started with -restored, reconciles its topics'
+	// messages with the other nodes (cluster_reconcile.go).
+	reconciling atomic.Bool
 	// Set once this node, shutting down, leaves the cluster.
 	leaving atomic.Bool
 	// Set once the cluster is shut down.
@@ -823,7 +826,7 @@ func (c *Cluster) takes(req *ClusterReq) bool {
 			}
 		}
 	case message.RELAY:
-		if c.rebuilding.Load() {
+		if c.catchingUp() {
 			return false
 		}
 		for _, r := range req.RelayMsg.RelayRequests {
@@ -1015,11 +1018,17 @@ func (c *Cluster) routeToTopic(msg lp.MessagePack, contract uint32, topic string
 	}
 }
 
+// catchingUp reports whether this node's messages are not all here yet: it
+// rebuilds an empty store, or reconciles a restored one.
+func (c *Cluster) catchingUp() bool {
+	return c.rebuilding.Load() || c.reconciling.Load()
+}
+
 // relayFromHolder forwards a relay on topic to the first node of the topic's
 // replica set that takes it: the owner, then its replicas. It reports false if
 // this node comes first, or none takes it, for the relay to be answered here.
 func (c *Cluster) relayFromHolder(msg *utp.Relay, contract uint32, topic string, conn *_Conn) bool {
-	rebuilding := c.rebuilding.Load()
+	rebuilding := c.catchingUp()
 	for _, holder := range c.getRing().GetN(topicRingKey(contract, topic), c.replicas) {
 		n := c.nodes[holder]
 		if n == nil {
@@ -1769,9 +1778,10 @@ func (c *Cluster) Replicate(req *ReplicateReq, unused *bool) error {
 			return err
 		}
 	}
-	if req.Handoff && c.rebuilding.Load() {
-		// The node's rebuild copies these messages with the rest. It does
-		// not copy session logs: their changes are applied below.
+	if req.Handoff && c.catchingUp() {
+		// The node's rebuild, or its reconciliation, copies these messages
+		// with the rest. It does not copy session logs: their changes are
+		// applied below.
 		req.Entries = nil
 	}
 	for _, e := range req.Entries {
@@ -2091,6 +2101,19 @@ func (c *Cluster) Start() {
 	if c.replicas >= 2 && store.WasEmpty() && hasCapability(capReplicate) {
 		c.rebuilding.Store(true)
 		go c.rebuild()
+	}
+	// Restored from a backup: the hints this node kept for the others are
+	// as old as its checkpoint, and the others are reconciled with instead.
+	if restoreRequested && c.replicas >= 2 && hasCapability(capReconcile) {
+		c.reconciling.Store(true)
+		for name, n := range c.nodes {
+			n.handoffMu.Lock()
+			c.dropHints(name)
+			n.handoffMu.Unlock()
+		}
+		go c.reconcileAll()
+	} else if restoreRequested {
+		markRestored(restoredPath)
 	}
 
 	if c.fo != nil {

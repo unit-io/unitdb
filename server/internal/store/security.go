@@ -113,12 +113,37 @@ func Probe() error {
 // Stats is the size of the store.
 type Stats = adapter.Stats
 
+// CheckpointInfo describes a checkpoint (CheckpointInfoFile in it).
+type CheckpointInfo = adapter.CheckpointInfo
+
+// CheckpointInfoFile is the file in a checkpoint that describes it.
+const CheckpointInfoFile = adapter.CheckpointInfoFile
+
+// ManifestFile is the file in a checkpoint of a backup run that lists the
+// run's checkpoints.
+const ManifestFile = adapter.ManifestFile
+
 // Checkpoint writes a copy of the store into dst, a directory that doesn't
 // exist or is empty, that opens as the store was at one moment (db_path set
 // to dst). Writes wait while it runs. Records sealed at rest stay sealed: the
-// copy opens with the same keyring only. Errors start "store checkpoint: ".
-func Checkpoint(dst string) error {
-	return adp.Checkpoint(dst)
+// copy opens with the same keyring only. Last it writes info, with the
+// copy's stats and the engine's version, into the copy as
+// CheckpointInfoFile, and returns what it wrote. Errors start
+// "store checkpoint: ".
+func Checkpoint(dst string, info CheckpointInfo) (CheckpointInfo, error) {
+	return adp.Checkpoint(dst, info)
+}
+
+// WriteManifest writes a backup run's manifest into dir, this node's
+// checkpoint of the run.
+func WriteManifest(dir string, manifest []byte) error {
+	return adapter.WriteManifest(dir, manifest)
+}
+
+// ReadCheckpointInfo returns the description of the checkpoint in dir, or
+// nil if dir isn't one.
+func ReadCheckpointInfo(dir string) (*CheckpointInfo, error) {
+	return adapter.ReadCheckpointInfo(dir)
 }
 
 // StoreStats returns the size of the store, cheaply: for metrics.

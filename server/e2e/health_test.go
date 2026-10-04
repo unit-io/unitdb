@@ -131,3 +131,24 @@ func TestHealthCluster(t *testing.T) {
 		}
 	}
 }
+
+// waitReadyz waits until n's /_readyz says it's ready, and returns what it
+// said before, each answer once.
+func waitReadyz(t *testing.T, n *clusterNode, timeout time.Duration) []string {
+	t.Helper()
+	var notReady []string
+	deadline := time.Now().Add(timeout)
+	for {
+		code, body := monitorGet(t, n.server, "/_readyz")
+		if code == http.StatusOK {
+			return notReady
+		}
+		if len(notReady) == 0 || notReady[len(notReady)-1] != body {
+			notReady = append(notReady, body)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s not ready after %s: %v\nlogs:\n%s", n.name, timeout, notReady, n.logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
