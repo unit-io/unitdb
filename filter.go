@@ -21,8 +21,8 @@ import (
 )
 
 // Filter is a bloom filter of the sequences written to the index. It is kept
-// in memory and persisted by sync before index blocks are written, so the
-// saved filter never rules out an entry that is on disk.
+// in memory, made from the index when the DB opens (deriveFromIndex), and
+// added to by sync, which saves it, for older versions to read.
 type Filter struct {
 	file        _FileSet
 	filterBlock *filter.Generator
@@ -46,44 +46,4 @@ func (f *Filter) write() error {
 	putChecksum(buf, len(data))
 	_, err := f.file.WriteAt(buf, 0)
 	return err
-}
-
-// loadFilter restores the filter saved by sync. A db without a valid saved
-// filter, such as one created before the filter was persisted, has it rebuilt
-// from the index so that entries already on disk are never ruled out.
-func (db *DB) loadFilter() error {
-	f := &db.internal.filter
-	if size := f.file.currSize(); size == int64(filter.Size()+checksumSize) {
-		raw := make([]byte, size)
-		if _, err := f.file.ReadAt(raw, 0); err != nil {
-			return err
-		}
-		// Strict: an all-zero filter would rule out every entry.
-		if matchesChecksum(raw, filter.Size()) {
-			f.filterBlock = filter.NewFilterGeneratorFromBytes(raw[:filter.Size()])
-			return nil
-		}
-		// The filter is derived from the index, so rebuild it rather than refuse to open.
-		logger.Error().Err(corrupted(f.file._File, 0, "filter")).Str("context", "db.loadFilter").Msg("rebuilding filter from index")
-	}
-
-	f.filterBlock = filter.NewFilterGenerator()
-	indexFile, err := db.fs.getFile(_FileDesc{fileType: typeIndex})
-	if err != nil {
-		return err
-	}
-	r := _BlockReader{indexFile: indexFile}
-	for off := int64(0); off+int64(blockSize) <= indexFile.currSize(); off += int64(blockSize) {
-		b, err := r.readIndexBlock(off)
-		if err != nil {
-			return err
-		}
-		for _, e := range b.entries {
-			if e.seq != 0 {
-				f.Append(e.seq)
-			}
-		}
-	}
-
-	return f.write()
 }

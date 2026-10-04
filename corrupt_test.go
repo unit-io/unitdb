@@ -116,3 +116,38 @@ func TestFreeListOverLiveData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStaleSequenceIsRaised opens a DB whose info header holds a sequence
+// below the last in the index, as a crash before writing the header leaves
+// it: a new entry took the sequence of one stored.
+func TestStaleSequenceIsRaised(t *testing.T) {
+	tmpl, err := fuzzTemplateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := copyDir(t, tmpl)
+	path := filePath(dir, _FileDesc{fileType: typeInfo})
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint64(raw[infoSequenceOff:], 5)
+	putChecksum(raw[:fixed], infoChecksumOff)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, WithMutable(), WithBufferSize(1<<16), WithMemdbSize(1<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if s := db.seq(); s < 600 {
+		t.Fatalf("sequence %d after opening; the index holds sequences to 600", s)
+	}
+	if err := db.Put(fuzzTopics[0], []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}

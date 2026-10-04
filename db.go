@@ -211,8 +211,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.checkFiles")
 		return abort(err)
 	}
-	if err := db.recount(); err != nil {
-		logger.Error().Err(err).Str("context", "db.recount")
+	if err := db.deriveFromIndex(); err != nil {
+		logger.Error().Err(err).Str("context", "db.deriveFromIndex")
 		return abort(err)
 	}
 
@@ -251,10 +251,6 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return abort(err)
 	}
 
-	if err := db.loadFilter(); err != nil {
-		logger.Error().Err(err).Str("context", "db.loadFilter")
-		return abort(err)
-	}
 
 	// Read freeList.
 	if err := db.internal.freeList.read(); err != nil {

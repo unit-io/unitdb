@@ -29,6 +29,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/unit-io/bpool"
 	"github.com/unit-io/unitdb/crypto"
+	fltr "github.com/unit-io/unitdb/filter"
 	"github.com/unit-io/unitdb/memdb"
 	"github.com/unit-io/unitdb/message"
 )
@@ -87,7 +88,8 @@ type (
 
 		timeWindow *_TimeWindowBucket
 
-		// recounted is set when Open counted the entries on disk (recount).
+		// recounted is set when Open counted the entries on disk
+		// (deriveFromIndex).
 		recounted bool
 
 		// Trie
@@ -180,27 +182,40 @@ func (db *DB) close() error {
 	return err
 }
 
-// recount sets Count to the entries on disk, from the index: the count kept
-// with them is written apart from them, and a crash between a delete's
-// tombstone and its count left it one high. The recovery then counts only
-// the entries it writes. With background expiry, which uncounts the entries
-// it frees and leaves them in the index, the count kept is kept.
-func (db *DB) recount() error {
-	if db.opts.flags.backgroundKeyExpiry {
-		return nil
-	}
+// deriveFromIndex sets, from the entries in the index, what is kept
+// besides them and was kept apart from them, and so could disagree after a
+// crash:
+//
+//   - Count: a crash between a delete's tombstone and its count left it one
+//     high. The recovery then counts only the entries it writes. With
+//     background expiry, which uncounts the entries it frees and leaves them
+//     in the index, the count kept is kept.
+//   - the filter of the sequences in the index, which reads test first: one
+//     missing a sequence hides its entry. It is saved, as a sync saves it,
+//     for older versions to read.
+//   - the sequence, at least the last in the index, or a new entry would
+//     take the sequence of one stored.
+func (db *DB) deriveFromIndex() error {
 	_, indexFile, _, _, err := db.files()
 	if err != nil {
 		return err
 	}
-	var live uint64
+	f := fltr.NewFilterGenerator()
+	var live, last uint64
 	if err := forEachBlock(indexFile, func(off int64, buf []byte) error {
 		var b _IndexBlock
 		if err := b.unmarshalBinary(buf); err != nil {
 			return err
 		}
 		for _, e := range b.entries {
-			if e.seq != 0 && !e.deleted() {
+			if e.seq == 0 {
+				continue
+			}
+			f.Append(e.seq)
+			if e.seq > last {
+				last = e.seq
+			}
+			if !e.deleted() {
 				live++
 			}
 		}
@@ -208,8 +223,20 @@ func (db *DB) recount() error {
 	}); err != nil {
 		return err
 	}
+	db.internal.filter.filterBlock = f
+	// Saved for an older version to read.
+	if err := db.internal.filter.write(); err != nil {
+		return err
+	}
+	if stored := db.seq(); stored < last {
+		logger.Info().Uint64("stored", stored).Uint64("last", last).Str("context", "db.deriveFromIndex").Msg("sequence raised to the last in the index")
+	}
+	db.advanceSeq(last)
+	if db.opts.flags.backgroundKeyExpiry {
+		return nil
+	}
 	if stored := atomic.LoadUint64(&db.internal.dbInfo.count); stored != live {
-		logger.Info().Uint64("stored", stored).Uint64("entries", live).Str("context", "db.recount").Msg("count set to the entries on disk")
+		logger.Info().Uint64("stored", stored).Uint64("entries", live).Str("context", "db.deriveFromIndex").Msg("count set to the entries on disk")
 	}
 	atomic.StoreUint64(&db.internal.dbInfo.count, live)
 	db.internal.recounted = true

@@ -329,7 +329,7 @@ func (db *_SyncHandle) syncBlock(timeID int64, seqs []uint64, recovery bool, pen
 	db.advanceSeq(seqs[len(seqs)-1])
 	// The block a sync was writing when the process stopped: the entries
 	// of it already written are not in the count kept, if Open didn't
-	// recount.
+	// recount (deriveFromIndex).
 	countWritten := recovery && !db.internal.recounted && timeID == db.internal.dbInfo.syncing
 
 	winEntries := make(map[uint64]_WindowEntries)
