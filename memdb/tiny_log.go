@@ -19,6 +19,7 @@ package memdb
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,7 +33,7 @@ const (
 )
 
 type _TinyLog struct {
-	mu sync.RWMutex
+	mu rwMutex[tinyLogRank]
 	id _TimeID
 	_TimeID
 
@@ -86,11 +87,15 @@ type (
 		logCount int
 	}
 	_TinyLogManager struct {
-		mu sync.RWMutex
+		mu rwMutex[managerRank]
 		// rotateMu is held for reading by Put from reading timeID until its entry
 		// is written, and for writing while the tiny log rotates. This keeps a Put
 		// from writing into a time block after its last tiny log was queued to the WAL.
-		rotateMu   sync.RWMutex
+		rotateMu rwMutex[rotateRank]
+		// current is the time ID of the current tiny log, read without a
+		// lock: the commit loop reads it, and rotation holds mu waiting on
+		// the commit loop (see the lock order).
+		current    atomic.Int64
 		db         *DB
 		opts       *_TinyLogOptions
 		tinyLog    *_TinyLog
@@ -132,6 +137,7 @@ func (p *_TinyLogManager) newTinyLog() {
 	p.db.addTimeBlock(timeID)
 	p.db.internal.timeMark.add(timeID)
 	p.tinyLog = &_TinyLog{id: id, _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
+	p.current.Store(int64(timeID))
 }
 
 func (db *DB) newLogManager(opts *_TinyLogOptions) {
@@ -165,9 +171,7 @@ func (db *DB) newLogManager(opts *_TinyLogOptions) {
 
 // timeID returns tinyLog timeID.
 func (p *_TinyLogManager) timeID() _TimeID {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.tinyLog.timeID()
+	return _TimeID(p.current.Load())
 }
 
 // size returns maximum number of concurrent jobs.

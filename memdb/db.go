@@ -20,7 +20,6 @@ import (
 	"errors"
 	"os"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/unit-io/bpool"
@@ -30,7 +29,7 @@ import (
 
 // DB represents an SSD-optimized mem store.
 type DB struct {
-	mu sync.RWMutex
+	mu rwMutex[dbRank]
 
 	version int
 	opts    *_Options

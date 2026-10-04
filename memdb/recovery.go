@@ -25,10 +25,11 @@ import (
 	"github.com/unit-io/unitdb/wal"
 )
 
-// startRecovery recovers pending entries from the WAL.
+// startRecovery recovers pending entries from the WAL. It runs in Open,
+// before any other goroutine has the DB, and takes no db.mu: it held it for
+// reading throughout, writing the map of time blocks under it, and took the
+// locks below it in the lock order.
 func (db *DB) startRecovery() error {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
 
 	// start log recovery
 	r, err := db.internal.wal.NewReader()

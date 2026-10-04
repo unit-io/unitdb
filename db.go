@@ -37,6 +37,19 @@ import (
 	"github.com/unit-io/unitdb/wal"
 )
 
+// Lock order. A goroutine holding one takes only those below it:
+//
+//  1. syncLockC, a semaphore: held by a sync, a delete of an entry on disk,
+//     expiry, Verify, recovery, and Close for good.
+//  2. the mutex of a query's prefix (_Mutex), which Get holds for reading;
+//     nothing holds it for writing.
+//  3. memdb's locks, in its order (memdb/locks.go, which the tests check).
+//  4. the trie's; a time window bucket's, then one of its blocks'; a lease
+//     shard's; the file set's; the expiry window's: none held taking
+//     another but the bucket's.
+//
+// A sync never takes the prefix mutex, and Get never takes syncLockC.
+
 // DB represents the message storage for topic->keys-values.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {

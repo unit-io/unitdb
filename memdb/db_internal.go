@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,7 +75,7 @@ type _DB struct {
 	wal *wal.WAL
 	// logMu guards the blocks' logs and what keeps them in the WAL. It is
 	// taken after a block's lock and before db.mu.
-	logMu sync.Mutex
+	logMu mutex[logRank]
 
 	// close
 	closed uint32

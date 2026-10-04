@@ -18,7 +18,6 @@ package memdb
 
 import (
 	"encoding/binary"
-	"sync"
 
 	"github.com/unit-io/bpool"
 )
@@ -28,8 +27,8 @@ type (
 	_TimeID int64
 	// _TimeFilter indexes the live time blocks that hold keys of a block key.
 	_TimeFilter struct {
-		timeRecords  map[_TimeID]struct{}
-		sync.RWMutex // Read Write mutex, guards access to internal map.
+		timeRecords         map[_TimeID]struct{}
+		rwMutex[filterRank] // guards timeRecords.
 	}
 	_TimeBlocks map[_TimeID]*_Block
 )
@@ -42,10 +41,10 @@ type (
 	}
 	_BlockKey uint16
 	_Block    struct {
-		sync.RWMutex // Read Write mutex, guards access to internal map.
-		count        int64
-		data         *bpool.Buffer
-		records      map[_Key]int64 // map[key]offset
+		rwMutex[blockRank] // guards the block but its logs (logMu).
+		count              int64
+		data               *bpool.Buffer
+		records            map[_Key]int64 // map[key]offset
 
 		lastOffset int64 // last offset of block data written to the log
 

@@ -18,7 +18,6 @@ package memdb
 
 import (
 	"sort"
-	"sync"
 )
 
 type (
@@ -28,7 +27,7 @@ type (
 	}
 
 	_TimeMark struct {
-		sync.RWMutex
+		rwMutex[timeMarkRank]
 		records         map[_TimeID]_TimeRecord
 		releasedRecords map[_TimeID]_TimeRecord
 	}
