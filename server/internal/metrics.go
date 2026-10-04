@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/unit-io/unitdb/server/internal/store"
 )
 
 // Metrics, in the Prometheus text format, at /_metrics on the monitor port:
@@ -130,7 +132,27 @@ func (s *_Service) writeMetrics(w io.Writer) {
 		m.one("unitdb_draining", "gauge", "Whether the server is shutting down.", draining)
 	}
 
+	// The store: cheap to read per scrape.
+	if st := s.storeStats(); st != nil {
+		m.one("unitdb_store_messages", "gauge", "Messages in the store.", float64(st.Messages))
+		m.one("unitdb_store_disk_bytes", "gauge", "Bytes of the store's files.", float64(st.DiskBytes))
+		m.one("unitdb_store_mem_entries", "gauge", "Records in the memory store (memdb): entries, not bytes.", float64(st.MemEntries))
+		m.one("unitdb_store_mem_size", "gauge", "The memory store's configured mem_size; 0 if unset.", float64(st.MemSize))
+	}
+	if s.health != nil && s.health.checkpoints != nil {
+		s.health.checkpoints.writeMetrics(m)
+	}
+
 	if c := Globals.Cluster; c != nil {
 		c.writeMetrics(m)
 	}
+}
+
+// storeStats is the store's size, or nil when it isn't open.
+func (s *_Service) storeStats() *store.Stats {
+	if !store.IsOpen() {
+		return nil
+	}
+	st := store.StoreStats()
+	return &st
 }

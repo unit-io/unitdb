@@ -61,6 +61,8 @@ type healthMonitor struct {
 	srv      *http.Server
 	// metrics writes /_metrics, when set.
 	metrics func(io.Writer)
+	// checkpoints takes POST /_checkpoint, when set.
+	checkpoints *checkpointer
 }
 
 func newHealthMonitor(started time.Time) *healthMonitor {
@@ -174,6 +176,9 @@ func (h *healthMonitor) handler() http.Handler {
 		}
 		w.Write([]byte("ready"))
 	})
+	if h.checkpoints != nil {
+		mux.HandleFunc("/_checkpoint", h.checkpoints.handle)
+	}
 	mux.HandleFunc("/_metrics", func(w http.ResponseWriter, r *http.Request) {
 		if h.metrics == nil {
 			http.NotFound(w, r)
@@ -244,6 +249,9 @@ func (h *healthMonitor) close() {
 // addServiceChecks adds the server's checks: the store, and in a cluster,
 // this node's place in it.
 func (h *healthMonitor) addServiceChecks() {
+	// Checkpoints, when the environment asks for them (checkpoint.go).
+	h.checkpoints = newCheckpointerFromEnv()
+
 	h.add("store", func() (string, error) {
 		if !store.IsOpen() {
 			return "", errors.New("the store is not open")
