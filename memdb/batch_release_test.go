@@ -178,3 +178,53 @@ func TestRewritesFreeBlocks(t *testing.T) {
 	}
 	t.Logf("%d time blocks, %d logs, %d keys", timeBlockCount(db), len(logs), db.Size())
 }
+
+// TestBlocksDeletingFromEachOtherGo puts a key in the current block, then a
+// batch of it and another, then the other in the current block again: the
+// batch's block deletes from the current block, which deletes from the
+// batch's. Each waited for the other's logs to go, and both kept theirs for
+// good; a store recovered from logs of several versions of a key had
+// thousands of such blocks.
+func TestBlocksDeletingFromEachOtherGo(t *testing.T) {
+	const d = 300 * time.Millisecond
+	dir := t.TempDir()
+	db, err := Open(WithLogFilePath(dir), WithTimeBlockInterval(d), WithLogInterval(2*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Start at the beginning of a block, so the writes share one.
+	time.Sleep(time.Until(time.Now().Truncate(d).Add(d)))
+	if _, err := db.Put(1, []byte("current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Batch(func(b *Batch, _ <-chan struct{}) error {
+		if err := b.Put(1, []byte("batch")); err != nil {
+			return err
+		}
+		return b.Put(2, []byte("batch"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Put(2, []byte("current")); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []uint64{1, 2} {
+		if err := db.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		logs, _ := filepath.Glob(filepath.Join(dir, logDir, "*.log"))
+		if timeBlockCount(db) <= 1 && len(logs) <= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d time blocks and %d logs left", timeBlockCount(db), len(logs))
+		}
+		time.Sleep(d / 3)
+	}
+}

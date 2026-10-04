@@ -257,10 +257,13 @@ func (db *DB) replace(loc _Loc, key uint64) (bool, error) {
 }
 
 // releaseEmptied releases a block a delete emptied, unless writes may still
-// go to it; one with more to write is released once it is (releaseEmpty).
-// The caller holds no index shard: releasing takes them.
+// go to it, as they do to the current block; one with more to write is
+// released once it is (releaseEmpty). A batch's block, written, takes no
+// more writes, though its time ID may be past the current block's: it was
+// left, emptied, for good. The caller holds no index shard: releasing takes
+// them.
 func (db *DB) releaseEmptied(emptied bool, timeID _TimeID) error {
-	if !emptied || timeID >= db.timeID() {
+	if !emptied || timeID == db.timeID() {
 		return nil
 	}
 	if err := db.releaseLog(timeID); err != nil && err != errEntryDoesNotExist {

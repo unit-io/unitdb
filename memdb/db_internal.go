@@ -19,6 +19,7 @@ package memdb
 import (
 	"errors"
 	"io"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -73,6 +74,9 @@ type _DB struct {
 	// logMu guards the blocks' logs and what keeps them in the WAL. It is
 	// taken after a block's lock and before db.mu.
 	logMu mutex[logRank]
+	// logSeq counts the logs written to the WAL, or replayed from it.
+	// Guarded by logMu.
+	logSeq uint64
 
 	// close
 	closed uint32
@@ -181,7 +185,7 @@ func (db *DB) blocks() []*_Block {
 }
 
 // deleteFrom records that b holds deletes of versions in from: b's logs
-// stay in the WAL as long as from's. The caller holds logMu.
+// stay in the WAL as long as from's (applyLogs). The caller holds logMu.
 func (b *_Block) deleteFrom(from *_Block) {
 	if from == b || from.state == blockGone || b.deletes[from] {
 		return
@@ -190,26 +194,60 @@ func (b *_Block) deleteFrom(from *_Block) {
 		b.deletes = make(map[*_Block]bool)
 	}
 	b.deletes[from] = true
-	b.waitFor++
 	from.waiters = append(from.waiters, b)
 }
 
-// applyLogs marks the logs of a released block applied once the logs of
-// the blocks it deletes versions from are, and then those of the blocks
-// that waited for it. It returns the logs, in the order they may go. The
-// caller holds logMu.
+// applyLogs marks the logs of a released block applied, with those of the
+// blocks it deletes versions from, and from which they delete, and so on,
+// once every one of them is released; then those of the blocks that waited
+// for them. It returns the logs, in the order they may go. The caller holds
+// logMu.
+//
+// A block's logs went once the logs of the blocks it deletes from had gone.
+// Blocks can delete from each other, a batch's block and the block current
+// as it was written, or blocks a WAL of several versions of a key recovers:
+// each waited for the other, and kept its logs for good. Logs can't: a
+// delete is written after the put it deletes. The blocks go together, and
+// their logs in the order they were written, so that a put's log goes
+// before its delete's, and a crash between leaves no version back.
 func (b *_Block) applyLogs() []_TimeID {
-	if b.state != blockReleased || b.waitFor > 0 {
+	if b.state != blockReleased {
 		return nil
 	}
-	b.setState(blockGone)
-	logs := b.timeRefs
-	for _, w := range b.waiters {
-		w.waitFor--
-		logs = append(logs, w.applyLogs()...)
+	var group []*_Block
+	seen := map[*_Block]bool{b: true}
+	for stack := []*_Block{b}; len(stack) > 0; {
+		x := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if x.state == blockLive {
+			// A version it deletes is in a block in use.
+			return nil
+		}
+		group = append(group, x)
+		for d := range x.deletes {
+			if d.state != blockGone && !seen[d] {
+				seen[d] = true
+				stack = append(stack, d)
+			}
+		}
 	}
-	b.waiters = nil
-	b.deletes = nil
+	var refs []_LogRef
+	for _, x := range group {
+		x.setState(blockGone)
+		refs = append(refs, x.timeRefs...)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].seq < refs[j].seq })
+	logs := make([]_TimeID, len(refs))
+	for i, r := range refs {
+		logs[i] = r.id
+	}
+	for _, x := range group {
+		for _, w := range x.waiters {
+			logs = append(logs, w.applyLogs()...)
+		}
+		x.waiters = nil
+		x.deletes = nil
+	}
 	return logs
 }
 
@@ -263,7 +301,7 @@ func (db *DB) tinyWrite(tinyLog *_TinyLog) error {
 	if block.state == blockGone {
 		return db.internal.wal.SignalLogApplied(int64(tinyLog.ID()))
 	}
-	block.timeRefs = append(block.timeRefs, tinyLog.ID())
+	block.timeRefs = append(block.timeRefs, db.nextLogRef(tinyLog.ID()))
 
 	return nil
 }
@@ -357,6 +395,13 @@ func (db *DB) releaseLog(timeID _TimeID) error {
 	db.index.forget(block, keys)
 
 	return nil
+}
+
+// nextLogRef returns the ref of a log written to the WAL now, the next in
+// the order written. The caller holds logMu.
+func (db *DB) nextLogRef(id _TimeID) _LogRef {
+	db.internal.logSeq++
+	return _LogRef{id: id, seq: db.internal.logSeq}
 }
 
 // signalApplied marks logs applied, in order.

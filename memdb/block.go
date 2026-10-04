@@ -46,14 +46,19 @@ type (
 		// The block's logs in the WAL, and what keeps them there; guarded
 		// by the DB's logMu, not the block's lock. A log holding the delete
 		// of a version must stay in the WAL as long as the log holding its
-		// put, or the version comes back on the next recovery: a block's
-		// logs go once the block is released and the logs of every block
-		// it deletes versions from have gone.
-		timeRefs []_TimeID
+		// put, or the version comes back on the next recovery: see
+		// applyLogs.
+		timeRefs []_LogRef
 		state    blockState
 		deletes  map[*_Block]bool // blocks it deletes versions from
-		waitFor  int              // blocks in deletes whose logs are in the WAL
 		waiters  []*_Block        // blocks deleting versions from this one
+	}
+
+	// _LogRef is a log of a block, and its place in the order logs were
+	// written to the WAL, which recovery replays them in.
+	_LogRef struct {
+		id  _TimeID
+		seq uint64
 	}
 )
 
