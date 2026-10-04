@@ -291,7 +291,11 @@ func (db *_SyncHandle) Sync() error {
 			}
 
 			db.internal.filter.Append(we.seq())
-			db.syncInfo.count++
+			// A tombstone (see delete) is written for its topic, and is
+			// not counted.
+			if m.valueSize != 0 {
+				db.syncInfo.count++
+			}
 			db.syncInfo.inBytes += int64(e.valueSize)
 		}
 		for h := range winEntries {

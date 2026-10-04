@@ -103,7 +103,7 @@ func (db *_SyncHandle) startRecovery() error {
 			}
 			if err := db.blockWriter.append(e); err != nil {
 				if err == errEntryExist {
-					if timeID == syncing {
+					if timeID == syncing && m.valueSize != 0 {
 						db.syncInfo.count++
 					}
 					continue
@@ -117,7 +117,7 @@ func (db *_SyncHandle) startRecovery() error {
 				if err := t.Unmarshal(rawtopic); err != nil {
 					return false, err
 				}
-				db.internal.trie.add(newTopic(m.topicHash, 0), t.Parts, t.Depth)
+				db.addTopic(m.topicHash, t.Parts, t.Depth)
 			}
 			if _, ok := winEntries[m.topicHash]; ok {
 				winEntries[m.topicHash] = append(winEntries[m.topicHash], newWinEntry(e.seq, m.expiresAt))
@@ -125,7 +125,9 @@ func (db *_SyncHandle) startRecovery() error {
 				winEntries[m.topicHash] = _WindowEntries{newWinEntry(m.seq, m.expiresAt)}
 			}
 			db.internal.filter.Append(e.seq)
-			db.syncInfo.count++
+			if m.valueSize != 0 { // not a tombstone (see delete)
+				db.syncInfo.count++
+			}
 			db.syncInfo.inBytes += int64(e.valueSize)
 		}
 		if err1 != nil {
@@ -172,6 +174,16 @@ func (db *_SyncHandle) startRecovery() error {
 	if err := db.recoverWindowBlocks(pendingEntries); err != nil {
 		logger.Error().Err(err).Str("context", "db.recoverWindowBlocks")
 		return err
+	}
+	// sync writes nothing without an upper sequence, and each block's sync
+	// above reset it: the window entries of topics named by a later block
+	// are written here.
+	for _, wEntries := range pendingEntries {
+		for _, we := range wEntries {
+			if we.seq() > db.syncInfo.upperSeq {
+				db.syncInfo.upperSeq = we.seq()
+			}
+		}
 	}
 
 	return db.sync(true, 0)

@@ -431,7 +431,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 
-	if err := db.setEntry(e); err != nil {
+	if err := db.setEntry(e, nil); err != nil {
 		return err
 	}
 
@@ -448,7 +448,7 @@ func (db *DB) PutEntry(e *Entry) error {
 		t := new(message.Topic)
 		rawTopic := e.entry.cache[entrySize+idSize : entrySize+idSize+e.entry.topicSize]
 		t.Unmarshal(rawTopic)
-		db.internal.trie.add(newTopic(e.entry.topicHash, 0), t.Parts, t.Depth)
+		db.addTopic(e.entry.topicHash, t.Parts, t.Depth)
 	}
 
 	db.internal.meter.Puts.Inc(1)
@@ -539,12 +539,7 @@ func (db *DB) Flush() error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
-	if err := db.syncOnce(); err != nil {
-		return err
-	}
-	// Deletes that waited for their entries to reach disk.
-	db.applyDeferred()
-	return nil
+	return db.syncOnce()
 }
 
 func (db *DB) syncOnce() error {

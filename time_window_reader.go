@@ -17,6 +17,7 @@
 package unitdb
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -103,4 +104,21 @@ func (r *_WindowReader) blockIterator(f func(startSeq, topicHash uint64, off int
 		}
 	}
 	return nil
+}
+
+// readWinBlock reads and checks the window block at off.
+func (db *DB) readWinBlock(winFile *_File, off int64) (_WinBlock, error) {
+	buf, err := winFile.slice(off, off+int64(blockSize))
+	if err == io.EOF || (err == nil && len(buf) < int(blockSize)) {
+		return _WinBlock{}, fmt.Errorf("past the end of the window file")
+	}
+	if err != nil {
+		return _WinBlock{}, err
+	}
+	if !validChecksum(buf, windowChecksumOff) {
+		return _WinBlock{}, corrupted(winFile, off, "window block")
+	}
+	var b _WinBlock
+	err = b.unmarshalBinary(buf)
+	return b, err
 }

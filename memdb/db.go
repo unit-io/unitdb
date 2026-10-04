@@ -340,6 +340,21 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	return db.put(key, data)
 }
 
+// Replace deletes the key's newest version and puts data for it, in one
+// log: a crash leaves both or neither.
+func (db *DB) Replace(key uint64, data []byte) (int64, error) {
+	if err := db.ok(); err != nil {
+		return 0, err
+	}
+
+	db.internal.logManager.rotateMu.RLock()
+	defer db.internal.logManager.rotateMu.RUnlock()
+	if err := db.Delete(key); err != nil {
+		return 0, err
+	}
+	return db.put(key, data)
+}
+
 // put puts data for the key in the current block. The caller holds the
 // rotation lock for reading.
 func (db *DB) put(key uint64, data []byte) (int64, error) {

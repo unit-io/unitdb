@@ -51,6 +51,9 @@ type (
 		index  []_BatchIndex
 		buffer *bpool.Buffer
 		size   int64
+		// named holds the topics the batch's entries name so far: its
+		// first entry of each topic holds the topic's name.
+		named map[uint64]bool
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 		commitComplete chan struct{}
@@ -80,7 +83,10 @@ func (b *Batch) PutEntry(e *Entry) error {
 		return errValueTooLarge
 	}
 	e.Encryption = e.Encryption || b.opts.batchOptions.encryption
-	if err := b.db.setEntry(e); err != nil {
+	if b.named == nil {
+		b.named = make(map[uint64]bool)
+	}
+	if err := b.db.setEntry(e, b.named); err != nil {
 		return err
 	}
 
@@ -124,7 +130,7 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 
-	if err := b.db.setEntry(e); err != nil {
+	if err := b.db.setEntry(e, nil); err != nil {
 		return err
 	}
 
@@ -203,7 +209,9 @@ func (b *Batch) Write() error {
 	topics := make(map[uint64]*message.Topic)
 	timeID := b.mem.TimeID()
 	var seqs []uint64
-	b.writeInternal(func(i int, e _Entry, data []byte) error {
+	// On an error, Commit returns it and Abort drops the entries put so far
+	// in memory; deletes the batch applied stay applied.
+	if err := b.writeInternal(func(i int, e _Entry, data []byte) error {
 		if e.topicSize != 0 {
 			t, ok := topics[e.topicHash]
 			if !ok {
@@ -212,7 +220,7 @@ func (b *Batch) Write() error {
 				t.Unmarshal(rawTopic)
 				topics[e.topicHash] = t
 			}
-			b.db.internal.trie.add(newTopic(e.topicHash, 0), t.Parts, t.Depth)
+			b.db.addTopic(e.topicHash, t.Parts, t.Depth)
 		}
 		if err := b.mem.Put(e.seq, data); err != nil {
 			return err
@@ -222,7 +230,9 @@ func (b *Batch) Write() error {
 		}
 		seqs = append(seqs, e.seq)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 
 	b.mem.Write()
 	b.reset()
@@ -256,6 +266,7 @@ func (b *Batch) Commit() error {
 }
 
 func (b *Batch) reset() {
+	b.named = nil
 	b.index = b.index[:0]
 	b.size = 0
 	b.buffer.Reset()

@@ -88,6 +88,12 @@ type (
 
 		// Trie
 		trie *_Trie
+		// unnamed holds the newest window block of each topic stored with
+		// no entry on disk holding its name: a topic's name is in its first
+		// entry, which can reach disk after others of the topic. The topic
+		// joins the trie, there, once an entry put or recovered names it.
+		// Written by Open only.
+		unnamed map[uint64]int64
 
 		// Block reader
 		reader *_BlockReader
@@ -96,14 +102,6 @@ type (
 		syncLockC  chan struct{}
 		syncWrites bool
 		syncHandle _SyncHandle
-
-		// Deletes waiting for their entry to reach disk, by seq, with the
-		// entry's topic hash: see delete.
-		deferMu  sync.Mutex
-		deferred map[uint64]uint64
-		// applyMu serializes applyDeferred, so that close's flushDeferred
-		// waits for deletes a sync is applying.
-		applyMu sync.Mutex
 
 		// Close.
 		closeW sync.WaitGroup
@@ -130,11 +128,6 @@ func (db *DB) writeInfo() error {
 
 // Close closes the DB.
 func (db *DB) close() error {
-	// Deletes waiting for their entries to reach disk would be lost: the
-	// entries come back from the WAL on open.
-	if !db.isClosed() {
-		db.flushDeferred()
-	}
 	if !db.setClosed() {
 		return errClosed
 	}
@@ -181,47 +174,86 @@ func (db *DB) close() error {
 	return err
 }
 
-// loadTopicHash loads topic and offset from window blocks on stored on disk.
+// loadTrie loads the topics of the window blocks on disk, with the offset of
+// each topic's newest block. A topic's name is in the entry put first for it,
+// which a sync can write after other entries of the topic: the topic's
+// blocks are searched, oldest first, for the entry holding it.
 func (db *DB) loadTrie() error {
 	r := newWindowReader(db.fs)
 	err := r.blockIterator(func(startSeq, topicHash uint64, off int64) (bool, error) {
-		// Deleted entries that hold their topic still carry it.
-		e, err := db.internal.reader.readIndexEntry(startSeq)
-		if err == errEntryInvalid {
-			return false, nil
-		}
+		rawtopic, err := db.storedTopic(r.winFile, startSeq, off)
 		if err != nil {
 			return true, err
 		}
-		if e.topicSize == 0 {
+		if rawtopic == nil {
+			if db.internal.unnamed == nil {
+				db.internal.unnamed = make(map[uint64]int64)
+			}
+			db.internal.unnamed[topicHash] = off
 			return false, nil
-		}
-		rawtopic, err := db.internal.reader.readTopic(e)
-		if err != nil {
-			return true, err
 		}
 		t := new(message.Topic)
-		err = t.Unmarshal(rawtopic)
-		if err != nil {
+		if err := t.Unmarshal(rawtopic); err != nil {
 			return true, err
 		}
 		if ok := db.internal.trie.add(newTopic(topicHash, off), t.Parts, t.Depth); !ok {
 			logger.Info().Str("context", "db.loadTrie: topic exist in the trie")
-			return false, nil
 		}
 		return false, nil
 	})
 	return err
 }
 
-func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
-	if db.isDeferred(q.seq) {
-		return _IndexEntry{}, errMsgIDDeleted
+// storedTopic returns the name of the topic whose newest window block is at
+// head, from the first entry on disk holding it; nil if none does yet.
+// Deleted entries that hold their topic still carry it.
+func (db *DB) storedTopic(winFile *_File, startSeq uint64, head int64) ([]byte, error) {
+	topicOf := func(seq uint64) ([]byte, error) {
+		e, err := db.internal.reader.readIndexEntry(seq)
+		if err == errEntryInvalid || (err == nil && e.topicSize == 0) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return db.internal.reader.readTopic(e)
 	}
-	data, _ := db.internal.mem.Get(q.seq)
-	if data != nil {
-		var m _Entry
-		m.UnmarshalBinary(data[:entrySize])
+	if raw, err := topicOf(startSeq); raw != nil || err != nil {
+		return raw, err
+	}
+	var chain []_WinBlock
+	for off := head; ; {
+		b, err := db.readWinBlock(winFile, off)
+		if err != nil {
+			return nil, err
+		}
+		chain = append(chain, b)
+		if b.next == 0 || len(chain) > int(winFile.currSize()/int64(blockSize)) {
+			break
+		}
+		off = b.next
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		for _, we := range chain[i].entries[:chain[i].entryIdx] {
+			if raw, err := topicOf(we.seq()); raw != nil || err != nil {
+				return raw, err
+			}
+		}
+	}
+	return nil, nil
+}
+
+// addTopic adds a topic named by an entry to the trie, at its newest window
+// block if it has blocks on disk already.
+func (db *DB) addTopic(topicHash uint64, parts []message.Part, depth uint8) {
+	db.internal.trie.add(newTopic(topicHash, db.internal.unnamed[topicHash]), parts, depth)
+}
+
+func (db *DB) readEntry(q _Query) (_IndexEntry, error) {
+	if m, data, ok := db.memEntry(q.seq); ok {
+		if m.valueSize == 0 {
+			return _IndexEntry{}, errMsgIDDeleted // a tombstone
+		}
 		e := _IndexEntry{
 			seq:       m.seq,
 			topicSize: m.topicSize,
@@ -279,7 +311,11 @@ func (db *DB) parseTopic(contract uint32, topic []byte) (*message.Topic, uint32,
 	return t, 0, nil
 }
 
-func (db *DB) setEntry(e *Entry) error {
+// setEntry packs the entry. The topic's name is packed into the first
+// entry of a topic, in the DB, or in a batch if named is not nil: a batch
+// is written to the WAL as it commits, before the Puts made earlier may
+// be, and a crash can lose the entry of a Put that named the topic.
+func (db *DB) setEntry(e *Entry, named map[uint64]bool) error {
 	if (db.internal.dbInfo.encryption == 1 || e.Encryption) && db.internal.mac == nil {
 		return ErrNoEncryptionKey
 	}
@@ -301,7 +337,12 @@ func (db *DB) setEntry(e *Entry) error {
 		t.AddContract(e.Contract)
 		e.entry.topicHash = t.GetHash(e.Contract)
 		// topic is packed if it is new topic entry
-		if _, ok := db.internal.trie.getOffset(e.entry.topicHash); !ok {
+		_, known := db.internal.trie.getOffset(e.entry.topicHash)
+		if named != nil {
+			known = named[e.entry.topicHash]
+			named[e.entry.topicHash] = true
+		}
+		if !known {
 			rawTopic = t.Marshal()
 			e.entry.topicSize = uint16(len(rawTopic))
 		}
@@ -353,14 +394,17 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	db.internal.meter.Dels.Inc(1)
 
 	// A topic's name is packed into its first entry only. An entry that
-	// carries it and isn't on disk yet is kept until a sync writes it, name
-	// and all, and is then deleted from disk (applyDeferred); reads skip it
-	// meanwhile. Dropping it from memory would leave the topic's other
-	// entries to reach disk without the name, and the DB would no longer
-	// open.
-	if db.carriesTopic(seq) && !db.onDisk(seq) {
-		db.deferDelete(topicHash, seq)
-		return nil
+	// carries it and isn't on disk yet is replaced in memory by its
+	// tombstone: the entry with its topic and no value, as a delete leaves
+	// it on disk (_IndexEntry.deleted). The tombstone goes to the WAL as a
+	// put does, and a sync writes it, name and all. Dropping the entry
+	// would leave the topic's other entries to reach disk without the name.
+	if m, data, ok := db.memEntry(seq); ok && m.topicSize != 0 && !db.onDisk(seq) {
+		if m.valueSize == 0 {
+			return nil // a tombstone already
+		}
+		_, err := db.internal.mem.Replace(seq, tombstone(m, data))
+		return err
 	}
 	db.internal.mem.Delete(seq)
 
@@ -409,18 +453,25 @@ func (db *DB) delete(topicHash, seq uint64) error {
 	return db.writeInfo()
 }
 
-// carriesTopic reports whether the entry seq is in memory and carries its
-// topic's name.
-func (db *DB) carriesTopic(seq uint64) bool {
-	data, _ := db.internal.mem.Get(seq)
-	if len(data) < entrySize {
-		return false
-	}
+// memEntry returns the entry seq in memory, and its header.
+func (db *DB) memEntry(seq uint64) (_Entry, []byte, bool) {
 	var m _Entry
-	if err := m.UnmarshalBinary(data[:entrySize]); err != nil {
-		return false
+	data, _ := db.internal.mem.Get(seq)
+	if len(data) < entrySize || m.UnmarshalBinary(data[:entrySize]) != nil {
+		return m, nil, false
 	}
-	return m.topicSize != 0
+	return m, data, true
+}
+
+// tombstone returns the entry m, stored as data, with no value: deleted, and
+// holding its id and topic.
+func tombstone(m _Entry, data []byte) []byte {
+	m.valueSize = 0
+	hdr, _ := m.MarshalBinary()
+	out := make([]byte, entrySize+idSize+int(m.topicSize))
+	copy(out, hdr)
+	copy(out[entrySize:], data[entrySize:entrySize+idSize+int(m.topicSize)])
+	return out
 }
 
 // onDisk reports whether the entry seq is in the index file.
@@ -430,68 +481,6 @@ func (db *DB) onDisk(seq uint64) bool {
 	}
 	_, err := db.internal.reader.readEntry(seq)
 	return err == nil
-}
-
-func (db *DB) deferDelete(topicHash, seq uint64) {
-	db.internal.deferMu.Lock()
-	defer db.internal.deferMu.Unlock()
-	if db.internal.deferred == nil {
-		db.internal.deferred = make(map[uint64]uint64)
-	}
-	db.internal.deferred[seq] = topicHash
-}
-
-func (db *DB) isDeferred(seq uint64) bool {
-	db.internal.deferMu.Lock()
-	defer db.internal.deferMu.Unlock()
-	_, ok := db.internal.deferred[seq]
-	return ok
-}
-
-func (db *DB) hasDeferred() bool {
-	db.internal.deferMu.Lock()
-	defer db.internal.deferMu.Unlock()
-	return len(db.internal.deferred) > 0
-}
-
-// applyDeferred deletes, from disk, the entries whose delete waited for them
-// to reach it and that have. A delete stays waiting until it is applied: close
-// waits for the deletes waiting (flushDeferred), and would otherwise close the
-// DB under one being applied, and its entry would come back on open.
-func (db *DB) applyDeferred() {
-	db.internal.applyMu.Lock()
-	defer db.internal.applyMu.Unlock()
-	db.internal.deferMu.Lock()
-	due := make(map[uint64]uint64)
-	for seq, h := range db.internal.deferred {
-		if db.onDisk(seq) {
-			due[seq] = h
-		}
-	}
-	db.internal.deferMu.Unlock()
-	for seq, h := range due {
-		if err := db.delete(h, seq); err != nil {
-			logger.Error().Err(err).Str("context", "db.applyDeferred").Msg("unable to delete an entry")
-			continue
-		}
-		db.internal.deferMu.Lock()
-		delete(db.internal.deferred, seq)
-		db.internal.deferMu.Unlock()
-	}
-}
-
-// flushDeferred syncs until the deletes waiting have reached disk, up to a
-// few seconds: an entry reaches disk once its time block has passed.
-func (db *DB) flushDeferred() {
-	for deadline := time.Now().Add(3 * time.Second); db.hasDeferred() && time.Now().Before(deadline); {
-		time.Sleep(100 * time.Millisecond)
-		if err := db.Sync(); err != nil {
-			break
-		}
-	}
-	if db.hasDeferred() {
-		logger.Error().Str("context", "db.flushDeferred").Msg("deletes of entries not yet on disk are lost")
-	}
 }
 
 // batch starts a new batch.
