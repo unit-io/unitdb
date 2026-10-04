@@ -31,7 +31,8 @@ type Writer struct {
 	writeComplete   bool
 	releaseComplete bool
 
-	count uint32
+	count   uint32
+	blockID int64
 
 	buffer  *bpool.Buffer
 	logSize uint32
@@ -110,9 +111,10 @@ func (w *Writer) writeLog(timeID int64) error {
 	}
 	dataLen := w.logSize
 	info := _LogInfo{
-		timeID: timeID,
-		count:  w.count,
-		size:   dataLen,
+		timeID:  timeID,
+		count:   w.count,
+		size:    dataLen,
+		blockID: w.blockID,
 	}
 	if err := w.wal.put(info, w.buffer); err != nil {
 		return err
@@ -121,6 +123,12 @@ func (w *Writer) writeLog(timeID int64) error {
 	w.writeComplete = true
 
 	return nil
+}
+
+// SetBlockID records in the log the block of the writer's its entries are
+// of, which Reader.BlockID returns: recovery puts them back in it.
+func (w *Writer) SetBlockID(blockID int64) {
+	w.blockID = blockID
 }
 
 // SignalInitWrite will signal to the WAL that log append has

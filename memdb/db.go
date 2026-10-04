@@ -19,27 +19,26 @@ package memdb
 import (
 	"errors"
 	"os"
-	"sort"
-	"sync"
 	"time"
 
 	"github.com/unit-io/bpool"
-	"github.com/unit-io/unitdb/hash"
 	"github.com/unit-io/unitdb/wal"
 )
 
 // DB represents an SSD-optimized mem store.
 type DB struct {
-	mu sync.RWMutex
+	mu rwMutex[dbRank]
 
 	version int
 	opts    *_Options
 
 	// timeBlock
-	internal    *_DB
-	consistent  *hash.Consistent
-	timeBlocks  _TimeBlocks
-	timeFilters map[_BlockKey]*_TimeFilter
+	internal   *_DB
+	timeBlocks _TimeBlocks
+	// index gives the block holding each key's value (index.go).
+	index *_Index
+	// recovered holds the blocks recovered on open, oldest first, for All.
+	recovered []_TimeID
 }
 
 // Open initializes database.
@@ -78,15 +77,10 @@ func Open(opts ...Options) (*DB, error) {
 	internal.wal = wal
 
 	db := &DB{
-		opts:        options,
-		internal:    internal,
-		consistent:  hash.InitConsistent(nBlocks, nBlocks),
-		timeBlocks:  make(map[_TimeID]*_Block),
-		timeFilters: make(map[_BlockKey]*_TimeFilter),
-	}
-
-	for i := 0; i < nBlocks; i++ {
-		db.timeFilters[_BlockKey(i)] = &_TimeFilter{timeRecords: make(map[_TimeID]struct{})}
+		opts:       options,
+		internal:   internal,
+		timeBlocks: make(map[_TimeID]*_Block),
+		index:      newIndex(),
 	}
 
 	if !options.logResetFlag {
@@ -119,20 +113,17 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// Keys gets all keys from DB.
+// Keys returns the keys the DB holds a value of.
 func (db *DB) Keys() []uint64 {
 	var keys []uint64
-
-	for _, block := range db.blocks() {
-		block.RLock()
-		for ik := range block.records {
-			if ik.delFlag == 0 {
-				keys = append(keys, ik.key)
-			}
+	for i := range db.index.shards {
+		sh := &db.index.shards[i]
+		sh.RLock()
+		for key := range sh.keys {
+			keys = append(keys, key)
 		}
-		block.RUnlock()
+		sh.RUnlock()
 	}
-
 	return keys
 }
 
@@ -165,60 +156,28 @@ func (db *DB) Lookup(timeID int64, key uint64) ([]byte, error) {
 	return data, nil
 }
 
-// Get gets data from most recent time ID for the provided key.
+// Get returns the key's value.
 func (db *DB) Get(key uint64) ([]byte, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
 	}
 
-	// timeFilters is only written in Open, so it is read without db.mu.
-	r, ok := db.timeFilters[db.blockKey(key)]
+	sh := db.index.shard(key)
+	sh.RLock()
+	defer sh.RUnlock()
+	loc, ok := sh.keys[key]
 	if !ok {
 		return nil, errEntryDoesNotExist
 	}
-
-	// Look in the newest time block first so the latest value wins. There are
-	// only a few live time blocks, so insertion sort into a stack buffer.
-	var buf [16]_TimeID
-	timeIDs := buf[:0]
-	r.RLock()
-	for timeID := range r.timeRecords {
-		timeIDs = append(timeIDs, timeID)
-		for i := len(timeIDs) - 1; i > 0 && timeIDs[i] > timeIDs[i-1]; i-- {
-			timeIDs[i], timeIDs[i-1] = timeIDs[i-1], timeIDs[i]
-		}
+	loc.block.RLock()
+	defer loc.block.RUnlock()
+	off, ok := loc.block.records[iKey(false, key)]
+	if !ok {
+		// Released since: synced by the engine.
+		return nil, errEntryDoesNotExist
 	}
-	r.RUnlock()
-
-	// Resolve all candidate blocks under one db.mu read lock; taking it per
-	// block makes its reader count a hot spot under parallel Gets.
-	var blockBuf [16]*_Block
-	blocks := blockBuf[:0]
-	db.mu.RLock()
-	for _, timeID := range timeIDs {
-		blocks = append(blocks, db.timeBlocks[timeID])
-	}
-	db.mu.RUnlock()
-
-	ikey := iKey(false, key)
-	for _, block := range blocks {
-		if block == nil {
-			continue
-		}
-		block.RLock()
-		off, ok := block.records[ikey]
-		if !ok {
-			block.RUnlock()
-			continue
-		}
-		data, err := block.get(off)
-		block.RUnlock()
-		db.internal.meter.Gets.Inc(1)
-
-		return data, err
-	}
-
-	return nil, errEntryDoesNotExist
+	db.internal.meter.Gets.Inc(1)
+	return loc.block.get(off)
 }
 
 // BlockIterator iterates all time blocks from DB committed to the WAL.
@@ -251,87 +210,66 @@ func (db *DB) BlockIterator(f func(timeID int64, keys []uint64) (bool, error)) (
 	return nil
 }
 
-// Delete deletes entry from the DB.
-// It writes deleted key into new time block to persist record into the WAL.
-// If all entries are deleted from a time block then the time block is released from the WAL.
+// Delete deletes the key's value. The delete is written to the WAL in the
+// current block, and the block that held the value is released once it
+// holds no other.
 func (db *DB) Delete(key uint64) error {
 	if err := db.ok(); err != nil {
 		return err
 	}
 
-	db.mu.RLock()
-	// Get time block
-	blockKey := db.blockKey(key)
-	r, ok := db.timeFilters[blockKey]
-	db.mu.RUnlock()
+	db.internal.logManager.rotateMu.RLock()
+	defer db.internal.logManager.rotateMu.RUnlock()
+	sh := db.index.shard(key)
+	sh.Lock()
+	loc, ok := sh.keys[key]
 	if !ok {
+		sh.Unlock()
 		return errEntryDoesNotExist
 	}
-
-	var timeIDs []_TimeID
-	r.RLock()
-	for timeID := range r.timeRecords {
-		timeIDs = append(timeIDs, timeID)
+	emptied, err := db.replace(loc, key)
+	if err == nil {
+		delete(sh.keys, key)
 	}
-	r.RUnlock()
-	sort.Slice(timeIDs[:], func(i, j int) bool {
-		return timeIDs[i] > timeIDs[j]
-	})
-	ikey := iKey(false, key)
-	for _, timeID := range timeIDs {
-		db.mu.RLock()
-		block, ok := db.timeBlocks[timeID]
-		db.mu.RUnlock()
-		if ok {
-			block.RLock()
-			_, ok := block.records[ikey]
-			block.RUnlock()
-			if !ok {
-				// Don't stop early on a filter miss: filters are snapshots taken when a
-				// time block is first used, and older time blocks (e.g. concurrent
-				// batches) can receive writes after newer ones, so a miss is not proof.
-				continue
-			}
-
-			timeLock := db.timeLock()
-			timeLock.RLock()
-			defer timeLock.RUnlock()
-
-			block.Lock()
-			// Re-check under the write lock; a concurrent Delete may have removed the key.
-			if _, ok := block.records[ikey]; !ok {
-				block.Unlock()
-				return errEntryDoesNotExist
-			}
-			block.delete(key)
-			db.internal.meter.Dels.Inc(1)
-			if block.count == 0 {
-				// all entries are deleted from the block,
-				// now check if timeIDs for deleted entries are released.
-				for ikey, timeID := range block.records {
-					db.mu.RLock()
-					if _, ok := db.timeBlocks[_TimeID(timeID)]; ok {
-						db.move(_TimeID(timeID), ikey.key)
-					}
-					db.mu.RUnlock()
-					delete(block.records, ikey)
-				}
-				// released timeblock from the WAL if all records are deleted.
-				if len(block.records) == 0 && timeID < db.timeID() {
-					block.Unlock()
-					return db.releaseLog(timeID)
-				}
-			}
-			block.Unlock()
-
-			return db.move(timeID, key)
-		}
+	sh.Unlock()
+	if err != nil {
+		return err
 	}
-
-	return errEntryDoesNotExist
+	return db.releaseEmptied(emptied, loc.timeID)
 }
 
-// Put inserts a new key-value pair to the DB.
+// replace deletes the key's value at loc, writing the delete to the current
+// block. The caller holds the key's shard, and the rotation lock for
+// reading: the delete goes to the current block, which rotation would
+// otherwise leave, and releaseEmpty free, between. It reports whether the
+// block at loc was emptied.
+func (db *DB) replace(loc _Loc, key uint64) (bool, error) {
+	timeLock := db.timeLock()
+	timeLock.RLock()
+	defer timeLock.RUnlock()
+	cur, ok := db.timeBlock(db.timeID())
+	if !ok {
+		return false, errForbidden
+	}
+	// The delete goes to the WAL even if it empties the block: the block's
+	// logs stay there until the delete's go (applyLogs).
+	return db.deleteEntry(loc.block, loc.timeID, cur, key)
+}
+
+// releaseEmptied releases a block a delete emptied, unless writes may still
+// go to it; one with more to write is released once it is (releaseEmpty).
+// The caller holds no index shard: releasing takes them.
+func (db *DB) releaseEmptied(emptied bool, timeID _TimeID) error {
+	if !emptied || timeID >= db.timeID() {
+		return nil
+	}
+	if err := db.releaseLog(timeID); err != nil && err != errEntryDoesNotExist {
+		return err
+	}
+	return nil
+}
+
+// Put puts data as the key's value, in place of the value it had.
 func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	if err := db.ok(); err != nil {
 		return 0, err
@@ -340,24 +278,39 @@ func (db *DB) Put(key uint64, data []byte) (int64, error) {
 	db.internal.logManager.rotateMu.RLock()
 	defer db.internal.logManager.rotateMu.RUnlock()
 	timeID := db.timeID()
-	db.mu.RLock()
-	block, ok := db.timeBlocks[timeID]
-	db.mu.RUnlock()
+	block, ok := db.timeBlock(timeID)
 	if !ok {
 		return 0, errForbidden
 	}
-
-	block.Lock()
-	defer block.Unlock()
-	ikey := iKey(false, key)
-	if err := block.put(ikey, data); err != nil {
+	sh := db.index.shard(key)
+	sh.Lock()
+	// A value in another block is deleted, and the delete written to the WAL
+	// before the put: one in this block is replaced.
+	loc, had := sh.keys[key]
+	var emptied bool
+	if had && loc.block != block {
+		var err error
+		if emptied, err = db.replace(loc, key); err != nil {
+			sh.Unlock()
+			return int64(timeID), err
+		}
+		delete(sh.keys, key)
+	}
+	err := db.putEntry(block, key, data)
+	if err == nil {
+		sh.keys[key] = _Loc{timeID: timeID, block: block}
+	}
+	sh.Unlock()
+	if err != nil {
 		return int64(timeID), err
 	}
-	db.addTimeFilter(timeID, key)
+	return int64(timeID), db.releaseEmptied(emptied, loc.timeID)
+}
 
-	db.internal.meter.Puts.Inc(1)
-
-	return int64(timeID), nil
+// Replace is Put, which replaces a key's value: it deleted the newest of a
+// key's versions, and put data, in one log.
+func (db *DB) Replace(key uint64, data []byte) (int64, error) {
+	return db.Put(key, data)
 }
 
 // NewBatch returns unmanaged Batch so caller can perform Put, Write, Commit, Abort to the Batch.
@@ -402,15 +355,14 @@ func (db *DB) Free(timeID int64) error {
 	return db.releaseLog(_TimeID(timeID))
 }
 
-// Size returns the total number of entries in DB.
+// Size returns the number of keys the DB holds a value of.
 func (db *DB) Size() int64 {
-	size := int64(0)
-
-	for _, block := range db.blocks() {
-		block.RLock()
-		size += block.count
-		block.RUnlock()
+	var size int64
+	for i := range db.index.shards {
+		sh := &db.index.shards[i]
+		sh.RLock()
+		size += int64(len(sh.keys))
+		sh.RUnlock()
 	}
-
 	return size
 }

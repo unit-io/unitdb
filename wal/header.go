@@ -22,20 +22,33 @@ import (
 )
 
 var (
-	// logHeaderSize is the size of a version 2 header; version 1 headers have
-	// no checksum.
-	logHeaderSize   = 22
+	// logHeaderSize is the size of a version 3 header; version 2 headers have
+	// no block, and version 1 headers no checksum either.
+	logHeaderSize   = 30
+	logHeaderSizeV2 = 22
 	logHeaderSizeV1 = 18
 
 	crcTable = crc32.MakeTable(crc32.Castagnoli)
 )
 
+// _LogInfo is a log's header, then its data, as records of a length, 4
+// bytes counting itself, and the bytes appended:
+//
+//	0   2  version
+//	2   8  time ID: the log's, which names its file
+//	10  4  records
+//	14  4  data size
+//	18  4  CRC32C of the data, since version 2
+//	22  8  block ID, since version 3; 0 for none
 type _LogInfo struct {
 	version  uint16
 	timeID   int64
 	count    uint32
 	size     uint32
 	checksum uint32 // CRC32C of the log data, since version 2.
+	// blockID is the block of the writer's the log holds entries of, 0 for
+	// none given; since version 3.
+	blockID int64
 
 	_ [24]byte
 }
@@ -47,6 +60,7 @@ func (l _LogInfo) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint32(buf[10:14], l.count)
 	binary.LittleEndian.PutUint32(buf[14:18], l.size)
 	binary.LittleEndian.PutUint32(buf[18:22], l.checksum)
+	binary.LittleEndian.PutUint64(buf[22:30], uint64(l.blockID))
 
 	return buf, nil
 }
@@ -56,8 +70,11 @@ func (l *_LogInfo) UnmarshalBinary(data []byte) error {
 	l.timeID = int64(binary.LittleEndian.Uint64(data[2:10]))
 	l.count = binary.LittleEndian.Uint32(data[10:14])
 	l.size = binary.LittleEndian.Uint32(data[14:18])
-	if l.version >= 2 && len(data) >= logHeaderSize {
+	if l.version >= 2 && len(data) >= logHeaderSizeV2 {
 		l.checksum = binary.LittleEndian.Uint32(data[18:22])
+	}
+	if l.version >= 3 && len(data) >= logHeaderSize {
+		l.blockID = int64(binary.LittleEndian.Uint64(data[22:30]))
 	}
 
 	return nil
@@ -65,8 +82,11 @@ func (l *_LogInfo) UnmarshalBinary(data []byte) error {
 
 // headerSize returns the header size for a log of the given version.
 func headerSize(version uint16) int {
-	if version < 2 {
+	switch {
+	case version < 2:
 		return logHeaderSizeV1
+	case version < 3:
+		return logHeaderSizeV2
 	}
 	return logHeaderSize
 }

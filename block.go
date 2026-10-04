@@ -80,42 +80,39 @@ func (b _IndexBlock) marshalBinary() []byte {
 	data := buf
 
 	b.baseSeq = b.entries[0].seq
-	binary.LittleEndian.PutUint64(buf[:8], b.baseSeq)
-	buf = buf[8:]
+	binary.LittleEndian.PutUint64(buf[indexBaseOff:], b.baseSeq)
 	for i := 0; i < entriesPerIndexBlock; i++ {
 		s := b.entries[i]
+		e := buf[indexEntriesOff+i*indexEntrySize:]
 		seq := uint16(0)
 		if s.seq != 0 {
 			seq = uint16(int16(s.seq-b.baseSeq) + entriesPerIndexBlock)
 		}
-		binary.LittleEndian.PutUint16(buf[:2], seq) // marshal relative seq
-		binary.LittleEndian.PutUint16(buf[2:4], s.topicSize)
-		binary.LittleEndian.PutUint32(buf[4:8], s.valueSize)
-		binary.LittleEndian.PutUint64(buf[8:16], uint64(s.msgOffset))
-		buf = buf[16:]
+		binary.LittleEndian.PutUint16(e[indexRelSeqOff:], seq) // marshal relative seq
+		binary.LittleEndian.PutUint16(e[indexTopicSizeOff:], s.topicSize)
+		binary.LittleEndian.PutUint32(e[indexValueSizeOff:], s.valueSize)
+		binary.LittleEndian.PutUint64(e[indexMsgOffsetOff:], uint64(s.msgOffset))
 	}
-	binary.LittleEndian.PutUint16(buf[:2], b.entryIdx)
+	binary.LittleEndian.PutUint16(buf[indexEntryIdxOff:], b.entryIdx)
 	putChecksum(data, indexChecksumOff)
 	return data
 }
 
 // unmarshalBinary de-serialized entries block from binary data.
 func (b *_IndexBlock) unmarshalBinary(data []byte) error {
-	b.baseSeq = binary.LittleEndian.Uint64(data[:8])
-	data = data[8:]
+	b.baseSeq = binary.LittleEndian.Uint64(data[indexBaseOff:])
 	for i := 0; i < entriesPerIndexBlock; i++ {
-		_ = data[16] // bounds check hint to compiler; see golang.org/issue/14808
-		seq := int16(binary.LittleEndian.Uint16(data[:2]))
+		e := data[indexEntriesOff+i*indexEntrySize : indexEntriesOff+(i+1)*indexEntrySize]
+		seq := int16(binary.LittleEndian.Uint16(e[indexRelSeqOff:]))
 		if seq == 0 {
 			b.entries[i].seq = uint64(seq)
 		} else {
 			b.entries[i].seq = b.baseSeq + uint64(seq) - entriesPerIndexBlock // unmarshal from relative sequence
 		}
-		b.entries[i].topicSize = binary.LittleEndian.Uint16(data[2:4])
-		b.entries[i].valueSize = binary.LittleEndian.Uint32(data[4:8])
-		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(data[8:16]))
-		data = data[16:]
+		b.entries[i].topicSize = binary.LittleEndian.Uint16(e[indexTopicSizeOff:])
+		b.entries[i].valueSize = binary.LittleEndian.Uint32(e[indexValueSizeOff:])
+		b.entries[i].msgOffset = int64(binary.LittleEndian.Uint64(e[indexMsgOffsetOff:]))
 	}
-	b.entryIdx = binary.LittleEndian.Uint16(data[:2])
+	b.entryIdx = binary.LittleEndian.Uint16(data[indexEntryIdxOff:])
 	return nil
 }

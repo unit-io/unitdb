@@ -37,6 +37,19 @@ import (
 	"github.com/unit-io/unitdb/wal"
 )
 
+// Lock order. A goroutine holding one takes only those below it:
+//
+//  1. syncLockC, a semaphore: held by a sync, a delete of an entry on disk,
+//     expiry, Verify, recovery, and Close for good.
+//  2. the mutex of a query's prefix (_Mutex), which Get holds for reading;
+//     nothing holds it for writing.
+//  3. memdb's locks, in its order (memdb/locks.go, which the tests check).
+//  4. the trie's; a time window bucket's, then one of its blocks'; a lease
+//     shard's; the file set's; the expiry window's: none held taking
+//     another but the bucket's.
+//
+// A sync never takes the prefix mutex, and Get never takes syncLockC.
+
 // DB represents the message storage for topic->keys-values.
 // All DB methods are safe for concurrent use by multiple goroutines.
 type DB struct {
@@ -140,7 +153,12 @@ func Open(path string, opts ...Options) (*DB, error) {
 		return nil, err
 	}
 
-	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile, sumFile}}
+	topicsFile, err := newFile(path, 1, _FileDesc{fileType: typeTopics})
+	if err != nil {
+		return nil, err
+	}
+
+	fileset := &_FileSet{mu: new(sync.RWMutex), list: []_FileSet{infoFile, winFile, indexFile, dataFile, leaseFile, filterFile, sumFile, topicsFile}}
 	internal := &_DB{
 		mutex: newMutex(),
 		start: time.Now(),
@@ -157,7 +175,8 @@ func Open(path string, opts ...Options) (*DB, error) {
 		timeWindow: newTimeWindowBucket(timeOptions),
 
 		// Trie
-		trie: newTrie(),
+		trie:   newTrie(),
+		topics: newTopicNames(topicsFile),
 
 		// Block reader
 		reader: newBlockReader(fileset),
@@ -192,6 +211,10 @@ func Open(path string, opts ...Options) (*DB, error) {
 		logger.Error().Err(err).Str("context", "db.checkFiles")
 		return abort(err)
 	}
+	if err := db.deriveFromIndex(); err != nil {
+		logger.Error().Err(err).Str("context", "db.deriveFromIndex")
+		return abort(err)
+	}
 
 	// Create a new MAC from the key. Without one, the database neither
 	// encrypts nor decrypts.
@@ -219,24 +242,33 @@ func Open(path string, opts ...Options) (*DB, error) {
 	}
 	internal.mem = memdb
 
+	if err := db.internal.topics.load(); err != nil {
+		logger.Error().Err(err).Str("context", "topics.load")
+		return abort(err)
+	}
 	if err := db.loadTrie(); err != nil {
 		logger.Error().Err(err).Str("context", "db.loadTrie")
 		return abort(err)
 	}
 
-	if err := db.loadFilter(); err != nil {
-		logger.Error().Err(err).Str("context", "db.loadFilter")
-		return abort(err)
-	}
 
 	// Read freeList.
 	if err := db.internal.freeList.read(); err != nil {
 		logger.Error().Err(err).Str("context", "db.readHeader")
 		return abort(err)
 	}
+	if err := db.checkFreeList(); err != nil {
+		logger.Error().Err(err).Str("context", "db.checkFreeList")
+		return abort(err)
+	}
 
 	if err := db.recoverLog(); err != nil {
 		logger.Error().Err(err).Str("context", "db.recoverLog")
+		return abort(err)
+	}
+	// The topics named by their entries, in a DB from before the topics
+	// file, are recorded now (addTopic).
+	if err := db.internal.topics.sync(); err != nil {
 		return abort(err)
 	}
 
@@ -444,13 +476,6 @@ func (db *DB) PutEntry(e *Entry) error {
 		return errForbidden
 	}
 
-	if e.entry.topicSize != 0 {
-		t := new(message.Topic)
-		rawTopic := e.entry.cache[entrySize+idSize : entrySize+idSize+e.entry.topicSize]
-		t.Unmarshal(rawTopic)
-		db.internal.trie.add(newTopic(e.entry.topicHash, 0), t.Parts, t.Depth)
-	}
-
 	db.internal.meter.Puts.Inc(1)
 
 	// reset message entry.
@@ -539,12 +564,7 @@ func (db *DB) Flush() error {
 // Sync write window entries into summary file and write index, and data to respective index and data files.
 // In case of any error during sync operation recovery is performed on log file (write ahead log).
 func (db *DB) Sync() error {
-	if err := db.syncOnce(); err != nil {
-		return err
-	}
-	// Deletes that waited for their entries to reach disk.
-	db.applyDeferred()
-	return nil
+	return db.syncOnce()
 }
 
 func (db *DB) syncOnce() error {

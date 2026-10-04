@@ -27,6 +27,44 @@ jobs:
       - run: go vet ./...
       - run: go test -timeout 25m ./...
 
+  # The race detector, on every package but the end-to-end tests, which take
+  # ten minutes without it. Most engine fixes were races found by luck. The
+  # lockcheck tag checks memdb's locks are taken in their order, on the
+  # packages that drive memdb's paths: it reads a stack trace on every lock,
+  # which slows the server's tests past their timeouts.
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go test -race -timeout 20m $(go list ./... | grep -v /server/e2e)
+      - run: go test -race -tags lockcheck -timeout 20m ./memdb .
+
+  # Each fuzz target for half a minute: the on-disk formats and recovery, on
+  # bytes a bug or a bad disk could leave. Inputs that fail are kept under
+  # testdata/fuzz, which go test runs.
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pkg: ./wal, target: FuzzReadLog }
+          - { pkg: ./memdb, target: FuzzRecovery }
+          - { pkg: ., target: FuzzDecode }
+          - { pkg: ., target: FuzzOpenCorrupt }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go test ${{ matrix.pkg }} -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 30s
+
   staticcheck:
     runs-on: ubuntu-latest
     steps:

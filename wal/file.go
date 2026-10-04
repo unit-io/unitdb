@@ -141,6 +141,17 @@ func (fs *_FileStore) read(timeID int64, data *bpool.Buffer) (_LogInfo, error) {
 		return info, corrupted(log, fmt.Sprintf("bad header version %d", info.version))
 	}
 
+	if info.size == 0 {
+		// Nothing to read: the pool's buffers don't extend by nothing.
+		return info, nil
+	}
+	// The header's size is checked against the file before the buffer is
+	// extended to it: a corrupt one asked for up to 4GB.
+	if st, err := f.Stat(); err != nil {
+		return info, err
+	} else if int64(hdrSize)+int64(info.size) > st.Size() {
+		return info, corrupted(log, fmt.Sprintf("data size %d past the end of the file, %d bytes", info.size, st.Size()))
+	}
 	if _, err := data.Extend(int64(info.size)); err != nil {
 		return info, err
 	}

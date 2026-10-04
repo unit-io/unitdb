@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	version = 2 // file format version; 2 adds a checksum of the log data
+	version = 3 // file format version; 2 adds a checksum of the log data, 3 the log's block
 
 	logExt     = ".log"
 	tmpExt     = ".tmp"
@@ -176,7 +176,6 @@ func (wal *WAL) ok() error {
 // were never signaled as fully completed.
 //
 // If no WAL exists, a new one will be created.
-//
 func New(opts Options) (*WAL, error) {
 	// Create a wal
 	return newWal(opts)

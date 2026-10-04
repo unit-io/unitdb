@@ -50,12 +50,12 @@ type (
 // MarshalBinary serializes db info into binary data.
 func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, fixed)
-	copy(buf[:7], inf.header.signature[:])
-	binary.LittleEndian.PutUint32(buf[7:11], inf.header.version)
-	buf[11] = uint8(inf.encryption)
-	binary.LittleEndian.PutUint64(buf[12:20], inf.sequence)
-	binary.LittleEndian.PutUint64(buf[20:28], inf.count)
-	binary.LittleEndian.PutUint64(buf[28:36], uint64(inf.syncing))
+	copy(buf[infoSignatureOff:infoVersionOff], inf.header.signature[:])
+	binary.LittleEndian.PutUint32(buf[infoVersionOff:], inf.header.version)
+	buf[infoEncryptionOff] = uint8(inf.encryption)
+	binary.LittleEndian.PutUint64(buf[infoSequenceOff:], inf.sequence)
+	binary.LittleEndian.PutUint64(buf[infoCountOff:], inf.count)
+	binary.LittleEndian.PutUint64(buf[infoSyncingOff:], uint64(inf.syncing))
 	putChecksum(buf, infoChecksumOff)
 
 	return buf, nil
@@ -63,16 +63,16 @@ func (inf _DBInfo) MarshalBinary() ([]byte, error) {
 
 // UnmarshalBinary de-serializes db info from binary data.
 func (inf *_DBInfo) UnmarshalBinary(data []byte) error {
-	copy(inf.header.signature[:], data[:7])
-	inf.header.version = binary.LittleEndian.Uint32(data[7:11])
-	inf.encryption = int8(data[11])
-	inf.sequence = binary.LittleEndian.Uint64(data[12:20])
-	inf.count = binary.LittleEndian.Uint64(data[20:28])
+	copy(inf.header.signature[:], data[infoSignatureOff:infoVersionOff])
+	inf.header.version = binary.LittleEndian.Uint32(data[infoVersionOff:])
+	inf.encryption = int8(data[infoEncryptionOff])
+	inf.sequence = binary.LittleEndian.Uint64(data[infoSequenceOff:])
+	inf.count = binary.LittleEndian.Uint64(data[infoCountOff:])
 	if inf.header.version < 3 || len(data) < int(fixed) {
 		inf.validChecksum = validChecksum(data[:infoChecksumOffV2+checksumSize], infoChecksumOffV2)
 		return nil
 	}
-	inf.syncing = int64(binary.LittleEndian.Uint64(data[28:36]))
+	inf.syncing = int64(binary.LittleEndian.Uint64(data[infoSyncingOff:]))
 	inf.validChecksum = validChecksum(data[:infoChecksumOff+checksumSize], infoChecksumOff)
 
 	return nil

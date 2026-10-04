@@ -19,6 +19,7 @@ package memdb
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,7 +33,7 @@ const (
 )
 
 type _TinyLog struct {
-	mu sync.RWMutex
+	mu rwMutex[tinyLogRank]
 	id _TimeID
 	_TimeID
 
@@ -86,11 +87,15 @@ type (
 		logCount int
 	}
 	_TinyLogManager struct {
-		mu sync.RWMutex
+		mu rwMutex[managerRank]
 		// rotateMu is held for reading by Put from reading timeID until its entry
 		// is written, and for writing while the tiny log rotates. This keeps a Put
 		// from writing into a time block after its last tiny log was queued to the WAL.
-		rotateMu   sync.RWMutex
+		rotateMu rwMutex[rotateRank]
+		// current is the time ID of the current tiny log, read without a
+		// lock: the commit loop reads it, and rotation holds mu waiting on
+		// the commit loop (see the lock order).
+		current    atomic.Int64
 		db         *DB
 		opts       *_TinyLogOptions
 		tinyLog    *_TinyLog
@@ -127,11 +132,12 @@ func (src *_TinyLogOptions) withDefaultOptions() *_TinyLogOptions {
 }
 
 func (p *_TinyLogManager) newTinyLog() {
-	timeNow := time.Now().UTC()
-	timeID := _TimeID(timeNow.Truncate(p.opts.blockDuration).UnixNano())
+	id := p.db.newLogID()
+	timeID := _TimeID(time.Unix(0, int64(id)).UTC().Truncate(p.opts.blockDuration).UnixNano())
 	p.db.addTimeBlock(timeID)
 	p.db.internal.timeMark.add(timeID)
-	p.tinyLog = &_TinyLog{id: _TimeID(timeNow.UnixNano()), _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
+	p.tinyLog = &_TinyLog{id: id, _TimeID: timeID, managed: false, doneChan: make(chan struct{})}
+	p.current.Store(int64(timeID))
 }
 
 func (db *DB) newLogManager(opts *_TinyLogOptions) {
@@ -146,6 +152,8 @@ func (db *DB) newLogManager(opts *_TinyLogOptions) {
 	}
 
 	logManager.newTinyLog()
+	// The loops read it: the commit loop asks for the current block.
+	db.internal.logManager = logManager
 
 	// start the write loop
 	go logManager.writeLoop(opts.writeInterval)
@@ -159,15 +167,11 @@ func (db *DB) newLogManager(opts *_TinyLogOptions) {
 		logManager.stopWg.Add(1)
 		go logManager.dispatch(opts.timeout)
 	}
-
-	db.internal.logManager = logManager
 }
 
 // timeID returns tinyLog timeID.
 func (p *_TinyLogManager) timeID() _TimeID {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.tinyLog.timeID()
+	return _TimeID(p.current.Load())
 }
 
 // size returns maximum number of concurrent jobs.
@@ -189,6 +193,19 @@ func (p *_TinyLogManager) closeWait() {
 	p.close(true)
 }
 
+// rotate makes a new tiny log current and enqueues the last to write, in
+// that order: the commit loop releases a written log's block if it is past
+// (releaseEmpty), and enqueued first, a log could be written while its
+// block was still current, and its empty block was never released. The
+// caller holds rotateMu and mu.
+func (p *_TinyLogManager) rotate() {
+	last := p.tinyLog
+	p.newTinyLog()
+	if last != nil {
+		p.writeQueue <- last
+	}
+}
+
 // write enqueues a log to write.
 func (p *_TinyLogManager) write() {
 	if p.tinyLog != nil {
@@ -208,21 +225,31 @@ func (p *_TinyLogManager) flush() error {
 	}
 	p.mu.Lock()
 	tinyLog := p.tinyLog
-	p.write()
-	p.newTinyLog()
+	p.rotate()
 	p.mu.Unlock()
 	p.rotateMu.Unlock()
 	<-tinyLog.doneChan
 	return tinyLog.err
 }
 
-// writeWait enqueues the log and waits for it to be executed.
-func (p *_TinyLogManager) writeWait(tinyLog *_TinyLog) {
-	if tinyLog == nil {
-		return
+// writeBatch writes a batch's log, after take makes its values its keys'.
+// Recovery replays the WAL in the order logs are written, and the last
+// write of a key wins: the current tiny log, which may hold writes of the
+// batch's keys from before, is written first, and no put or delete comes
+// between, holding rotateMu. The batch's log is waited for without it.
+func (p *_TinyLogManager) writeBatch(tinyLog *_TinyLog, take func() error) error {
+	p.rotateMu.Lock()
+	p.mu.Lock()
+	p.rotate()
+	p.mu.Unlock()
+	if err := take(); err != nil {
+		p.rotateMu.Unlock()
+		return err
 	}
 	p.writeQueue <- tinyLog
+	p.rotateMu.Unlock()
 	<-tinyLog.doneChan
+	return tinyLog.err
 }
 
 // writeLoop enqueue the tiny log to the log pool.
@@ -263,8 +290,7 @@ func (p *_TinyLogManager) writeLoop(interval time.Duration) {
 			default:
 				p.rotateMu.Lock()
 				p.mu.Lock()
-				p.write()
-				p.newTinyLog()
+				p.rotate()
 				p.mu.Unlock()
 				p.rotateMu.Unlock()
 			}

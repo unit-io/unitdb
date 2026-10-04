@@ -20,6 +20,7 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sync"
@@ -37,6 +38,7 @@ const (
 	typeLease
 	typeFilter
 	typeChecksum
+	typeTopics
 
 	typeAll = typeInfo | typeTimeWindow | typeIndex | typeData | typeLease | typeFilter | typeChecksum
 
@@ -85,6 +87,9 @@ func filePath(dirName string, fd _FileDesc) string {
 		return path.Join(dirName, suffix)
 	case typeChecksum:
 		suffix := fmt.Sprintf("%s.sum", prefix)
+		return path.Join(dirName, suffix)
+	case typeTopics:
+		suffix := fmt.Sprintf("%s.topics", prefix)
 		return path.Join(dirName, suffix)
 	default:
 		return fmt.Sprintf("%#x-%d", fd.fileType, fd.num)
@@ -169,8 +174,17 @@ func (f *_File) extend(size uint32) (int64, error) {
 	return off, nil
 }
 
-// slice provide the data for start and end offset.
+// slice provide the data for start and end offset. Offsets and sizes come
+// from disk, and a corrupt one asked for gigabytes: a large range is checked
+// against the file before it is allocated. A small one past the end fails
+// reading.
 func (f *_File) slice(start int64, end int64) ([]byte, error) {
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("%s: bad range %d to %d", f.Name(), start, end)
+	}
+	if end-start > 1<<20 && end > f.Size() {
+		return nil, io.EOF
+	}
 	buf := make([]byte, end-start)
 	_, err := f.ReadAt(buf, start)
 	return buf, err

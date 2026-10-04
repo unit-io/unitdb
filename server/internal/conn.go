@@ -72,6 +72,10 @@ type _Conn struct {
 	// Batch
 	batchManager *batchManager
 
+	// wmu serializes writes to the socket: the write loop's, and the last
+	// of a connection refused (writeNow).
+	wmu sync.Mutex
+
 	// Close.
 	closeW  sync.WaitGroup
 	closeC  chan struct{}
@@ -171,6 +175,24 @@ func (c *_Conn) SendMessage(msg *message.Message) bool {
 	return true
 }
 
+// writeNow writes msgs to the socket, in order, without the write loop: a
+// connection refused closes once its handler returns, and the write loop
+// stops at the close, maybe before writing what was queued for it.
+func (c *_Conn) writeNow(msgs ...lp.MessagePack) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	for _, m := range msgs {
+		buf, err := lp.Encode(m)
+		if err != nil {
+			return err
+		}
+		if _, err := c.socket.Write(buf.Bytes()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // queue queues m for the write loop, unless the connection closes first.
 func (c *_Conn) queue(m lp.MessagePack) bool {
 	select {
@@ -195,7 +217,9 @@ func (c *_Conn) SendRawBytes(buf []byte) bool {
 	case <-time.After(time.Microsecond * 50):
 		return false
 	default:
+		c.wmu.Lock()
 		c.socket.Write(buf)
+		c.wmu.Unlock()
 	}
 
 	return true

@@ -18,7 +18,6 @@ package memdb
 
 import (
 	"fmt"
-	"time"
 )
 
 // Batch is a write batch.
@@ -28,7 +27,10 @@ type Batch struct {
 	managed bool
 
 	//tiny Log
-	tinyLog    *_TinyLog
+	tinyLog *_TinyLog
+	// ownsBlock is set when the batch made the time block of its tiny log:
+	// a time ID it shares with another block is not the batch's to release.
+	ownsBlock  bool
 	writeLockC chan struct{}
 	batchGroup []_TimeID
 
@@ -37,8 +39,13 @@ type Batch struct {
 }
 
 func (b *Batch) newTinyLog() {
-	timeID := _TimeID(time.Now().UTC().UnixNano())
-	b.db.addTimeBlock(timeID)
+	// A batch's block is named by its log's ID, which must not name the
+	// block of a time either: those are multiples of the block duration.
+	timeID := b.db.newLogID()
+	if int64(timeID)%int64(b.db.opts.timeBlockDuration) == 0 {
+		timeID = b.db.newLogID()
+	}
+	b.ownsBlock = b.db.addTimeBlock(timeID)
 	b.tinyLog = &_TinyLog{id: timeID, _TimeID: timeID, managed: true, doneChan: make(chan struct{})}
 }
 
@@ -55,7 +62,9 @@ func (b *Batch) TimeID() int64 {
 	return int64(b.tinyLog.timeID())
 }
 
-// Put adds a new key-value pair to the batch.
+// Put adds a new key-value pair to the batch. It is the key's value once
+// the batch is written (Write, Commit), and not before: an aborted batch
+// leaves the values it would have replaced.
 func (b *Batch) Put(key uint64, data []byte) error {
 	if err := b.db.ok(); err != nil {
 		return err
@@ -66,17 +75,7 @@ func (b *Batch) Put(key uint64, data []byte) error {
 		return errForbidden
 	}
 
-	block.Lock()
-	defer block.Unlock()
-	ikey := iKey(false, key)
-	if err := block.put(ikey, data); err != nil {
-		return err
-	}
-	b.db.addTimeFilter(b.tinyLog.timeID(), key)
-
-	b.db.internal.meter.Puts.Inc(1)
-
-	return nil
+	return b.db.putEntry(block, key, data)
 }
 
 // Write starts writing entries into DB.
@@ -85,10 +84,50 @@ func (b *Batch) Write() error {
 	defer func() {
 		<-b.writeLockC
 	}()
+	if err := b.db.internal.logManager.writeBatch(b.tinyLog, func() error {
+		return b.db.takeKeys(b.tinyLog.timeID())
+	}); err != nil {
+		return err
+	}
 	b.batchGroup = append(b.batchGroup, b.tinyLog.timeID())
-	b.db.internal.logManager.writeWait(b.tinyLog)
 	b.newTinyLog()
 
+	return nil
+}
+
+// takeKeys makes the values the batch block timeID holds its keys' values:
+// a value in another block is deleted, and the delete appended to the
+// batch's block, so that its log writes both or neither.
+func (db *DB) takeKeys(timeID _TimeID) error {
+	block, ok := db.timeBlock(timeID)
+	if !ok {
+		return errForbidden
+	}
+	block.RLock()
+	keys := block.liveKeys()
+	block.RUnlock()
+	var emptied []_TimeID
+	for _, key := range keys {
+		sh := db.index.shard(key)
+		sh.Lock()
+		if loc, ok := sh.keys[key]; ok && loc.block != block {
+			e, err := db.deleteEntry(loc.block, loc.timeID, block, key)
+			if err != nil {
+				sh.Unlock()
+				return err
+			}
+			if e {
+				emptied = append(emptied, loc.timeID)
+			}
+		}
+		sh.keys[key] = _Loc{timeID: timeID, block: block}
+		sh.Unlock()
+	}
+	for _, id := range emptied {
+		if err := db.releaseEmptied(true, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -116,11 +155,22 @@ func (b *Batch) Commit() error {
 	return nil
 }
 
-//Abort aborts batch or perform cleanup operation on batch complete.
+// Abort aborts batch or perform cleanup operation on batch complete. The
+// block of the tiny log not written is released either way: after a commit
+// it is empty, and on an abort it holds the entries put since the last
+// Write, which must not be found.
 func (b *Batch) Abort() error {
 	_assert(!b.managed, "managed batch abort not allowed")
+	if b.db == nil {
+		return nil
+	}
 	for _, ID := range b.batchGroup {
 		if err := b.db.releaseLog(ID); err != nil {
+			return err
+		}
+	}
+	if b.ownsBlock {
+		if err := b.db.releaseLog(b.tinyLog.timeID()); err != nil && err != errEntryDoesNotExist {
 			return err
 		}
 	}

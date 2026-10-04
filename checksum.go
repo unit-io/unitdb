@@ -29,10 +29,10 @@ import (
 const (
 	checksumSize = 4
 
-	infoChecksumOff   = 36                                       // after syncing
-	infoChecksumOffV2 = 28                                       // after count, in format 2
-	indexChecksumOff  = 8 + entriesPerIndexBlock*16 + 2          // after entryIdx
-	windowChecksumOff = entriesPerWindowBlock*12 + 8 + 8 + 8 + 2 // after entryIdx
+	infoChecksumOff   = infoSyncingOff + 8   // after syncing
+	infoChecksumOffV2 = infoCountOff + 8     // after count, in format 2
+	indexChecksumOff  = indexEntryIdxOff + 2 // after entryIdx
+	windowChecksumOff = winEntryIdxOff + 2   // after entryIdx
 )
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)

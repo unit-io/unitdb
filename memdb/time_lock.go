@@ -17,15 +17,13 @@
 package memdb
 
 import (
-	"sync"
-
 	"github.com/unit-io/unitdb/hash"
 )
 
 // _TimeLock mutex to perform time based lock/unlock.
 type (
 	_Internal struct {
-		*sync.RWMutex
+		*rwMutex[timeLockRank]
 	}
 	_TimeLock struct {
 		locks      []_Internal
@@ -41,7 +39,7 @@ func newTimeLock() _TimeLock {
 	}
 
 	for i := 0; i < nLocks; i++ {
-		timeLock.locks[i] = _Internal{new(sync.RWMutex)}
+		timeLock.locks[i] = _Internal{new(rwMutex[timeLockRank])}
 	}
 
 	return timeLock

@@ -119,6 +119,44 @@ func TestCrashChild(t *testing.T) {
 		}
 		flush()
 		ack("done")
+	case "delete-first":
+		// Delete a topic's first entry, which holds the topic's name,
+		// before a sync: it stays in memory, deleted, until a sync writes
+		// it. The delete must survive the kill.
+		first := db.NewID()
+		for i, id := range [][]byte{first, db.NewID()} {
+			if err := db.PutEntry(NewEntry(crashTopic, []byte(fmt.Sprintf("m%d", i))).WithID(id)); err != nil {
+				fmt.Println("error", err)
+				os.Exit(2)
+			}
+		}
+		if err := db.Delete(first, crashTopic); err != nil {
+			fmt.Println("error", err)
+			os.Exit(2)
+		}
+		flush()
+		ack("done")
+	case "delete-count":
+		// Stop in a delete of an entry on disk, its tombstone written and
+		// the count not.
+		var ids [][]byte
+		for i := 0; i < 20; i++ {
+			id := db.NewID()
+			if err := db.PutEntry(NewEntry(crashTopic, []byte(fmt.Sprintf("m%d", i))).WithID(id)); err != nil {
+				fmt.Println("error", err)
+				os.Exit(2)
+			}
+			ids = append(ids, id)
+		}
+		syncAllChild(20)
+		testHookBeforeDecount = func() {
+			ack("tombstone written")
+			select {}
+		}
+		if err := db.Delete(ids[5], crashTopic); err != nil {
+			fmt.Println("error", err)
+			os.Exit(2)
+		}
 	case "sync-count":
 		// Stop in a sync, its entries written and their count not.
 		for i := 0; i < 100; i++ {
@@ -172,13 +210,20 @@ func TestCrashChild(t *testing.T) {
 	select {} // wait to be killed
 }
 
+// The test crashChild runs as the child, and more of its environment.
+var (
+	crashChildTest = "^TestCrashChild$"
+	crashChildEnv  []string
+)
+
 // crashChild runs scenario in a child process on dir and kills it with
 // SIGKILL once kill returns true for an acknowledged line. It returns the
 // last acknowledgement.
 func crashChild(t *testing.T, scenario, dir string, start int, kill func(ack string) bool) string {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashChild$", "-test.count=1")
+	cmd := exec.Command(os.Args[0], "-test.run="+crashChildTest, "-test.count=1")
 	cmd.Env = append(os.Environ(), crashScenarioEnv+"="+scenario, crashDirEnv+"="+dir, crashStartEnv+"="+strconv.Itoa(start))
+	cmd.Env = append(cmd.Env, crashChildEnv...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +362,40 @@ func TestCrashAfterDeletes(t *testing.T) {
 	assertEqualMsgs(t, want, msgs)
 	if count := db.Count(); count != uint64(len(want)) {
 		t.Fatalf("expected count %d; got %d", len(want), count)
+	}
+}
+
+// TestCrashAfterDeleteFirst kills the process after deleting a topic's
+// first entry before any sync, and flushing. The delete waited in memory for
+// the entry to reach disk, and was lost: the entry came back.
+func TestCrashAfterDeleteFirst(t *testing.T) {
+	dir := t.TempDir()
+	crashChild(t, "delete-first", dir, 0, func(string) bool { return true })
+
+	db, msgs := restore(t, dir)
+	defer db.Close()
+	assertEqualMsgs(t, []string{"m1"}, msgs)
+	if err := db.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCrashBeforeDecount kills a delete after it has written its tombstone
+// and before it has written the count without the entry: the count was one
+// high after the reopen.
+func TestCrashBeforeDecount(t *testing.T) {
+	dir := t.TempDir()
+	crashChild(t, "delete-count", dir, 0, func(string) bool { return true })
+	db, msgs := restore(t, dir)
+	defer db.Close()
+	if len(msgs) != 19 {
+		t.Fatalf("%d messages restored; want 19", len(msgs))
+	}
+	if count := db.Count(); count != uint64(len(msgs)) {
+		t.Fatalf("count %d does not match %d restored messages", count, len(msgs))
+	}
+	if err := db.Verify(); err != nil {
+		t.Fatal(err)
 	}
 }
 
