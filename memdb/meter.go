@@ -34,6 +34,9 @@ type Meter struct {
 	Syncs      metrics.Counter
 	Recovers   metrics.Counter
 	Dels       metrics.Counter
+	// Compactions counts Compact's runs, and Moves the values they moved.
+	Compactions metrics.Counter
+	Moves       metrics.Counter
 }
 
 // NewMeter provide meter to capture statistics.
@@ -47,6 +50,9 @@ func NewMeter() *Meter {
 		Syncs:      metrics.NewCounter(),
 		Recovers:   metrics.NewCounter(),
 		Dels:       metrics.NewCounter(),
+
+		Compactions: metrics.NewCounter(),
+		Moves:       metrics.NewCounter(),
 	}
 
 	c.TimeSeries.Time(func() {})
@@ -55,6 +61,8 @@ func NewMeter() *Meter {
 	Metrics.GetOrRegister("Syncs", c.Syncs)
 	Metrics.GetOrRegister("Recovers", c.Recovers)
 	Metrics.GetOrRegister("Dels", c.Dels)
+	Metrics.GetOrRegister("Compactions", c.Compactions)
+	Metrics.GetOrRegister("Moves", c.Moves)
 
 	return c
 }
@@ -75,17 +83,20 @@ type Varz struct {
 	Syncs    int64     `json:"syncs"`
 	Recovers int64     `json:"recovers"`
 	Dels     int64     `json:"Dels"`
-	HMean    float64   `json:"hmean"` // Event duration harmonic mean.
-	P50      float64   `json:"p50"`   // Event duration nth percentiles.
-	P75      float64   `json:"p75"`
-	P95      float64   `json:"p95"`
-	P99      float64   `json:"p99"`
-	P999     float64   `json:"p999"`
-	Long5p   float64   `json:"long_5p"`  // Average of the longest 5% event durations.
-	Short5p  float64   `json:"short_5p"` // Average of the shortest 5% event durations.
-	Max      float64   `json:"max"`      // Highest event duration.
-	Min      float64   `json:"min"`      // Lowest event duration.
-	StdDev   float64   `json:"stddev"`   // Standard deviation.
+	// Compactions counts Compact's runs, and Moves the values they moved.
+	Compactions int64   `json:"compactions"`
+	Moves       int64   `json:"moves"`
+	HMean       float64 `json:"hmean"` // Event duration harmonic mean.
+	P50         float64 `json:"p50"`   // Event duration nth percentiles.
+	P75         float64 `json:"p75"`
+	P95         float64 `json:"p95"`
+	P99         float64 `json:"p99"`
+	P999        float64 `json:"p999"`
+	Long5p      float64 `json:"long_5p"`  // Average of the longest 5% event durations.
+	Short5p     float64 `json:"short_5p"` // Average of the shortest 5% event durations.
+	Max         float64 `json:"max"`      // Highest event duration.
+	Min         float64 `json:"min"`      // Lowest event duration.
+	StdDev      float64 `json:"stddev"`   // Standard deviation.
 }
 
 func uptime(d time.Duration) string {
@@ -122,6 +133,8 @@ func (db *DB) Varz() (*Varz, error) {
 	v.Syncs = db.internal.meter.Syncs.Count()
 	v.Recovers = db.internal.meter.Recovers.Count()
 	v.Dels = db.internal.meter.Dels.Count()
+	v.Compactions = db.internal.meter.Compactions.Count()
+	v.Moves = db.internal.meter.Moves.Count()
 	ts := db.internal.meter.TimeSeries.Snapshot()
 	v.HMean = float64(ts.HMean())
 	v.P50 = float64(ts.P50())

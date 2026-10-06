@@ -2,7 +2,9 @@ package adapter
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/unit-io/unitdb/memdb"
 )
@@ -112,4 +114,50 @@ func TestDeleteClosed(t *testing.T) {
 	if n := a.Count(); n != 0 {
 		t.Errorf("Count on a closed store: %d", n)
 	}
+}
+
+// TestCompactorFreesLogs keeps a message while others are put and deleted
+// over several seconds: the kept message holds its block, and the WAL kept
+// every log chaining back to it, until the compactor moved it.
+func TestCompactorFreesLogs(t *testing.T) {
+	saved := compactEvery
+	compactEvery = 100 * time.Millisecond
+	defer func() { compactEvery = saved }()
+	dir := t.TempDir()
+	a := &adapter{}
+	if err := a.Open(dir, `{}`, false); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.PutMessage(1, []byte("kept")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for i := 0; time.Now().Before(deadline); i++ {
+		key := uint64(i%64)<<32 | 0x40dd7a16
+		if err := a.PutMessage(key, []byte("publish")); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.DeleteMessage(key); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.PutMessage(2, []byte(fmt.Sprintf("row-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var logs []string
+	for wait := time.Now().Add(3 * time.Second); time.Now().Before(wait); time.Sleep(100 * time.Millisecond) {
+		logs, _ = filepath.Glob(filepath.Join(dir, "logs", "*.log"))
+		if len(logs) <= 20 {
+			break
+		}
+	}
+	if len(logs) > 20 {
+		t.Fatalf("%d logs after the churn, with the compactor running", len(logs))
+	}
+	if got, err := a.GetMessage(1); err != nil || string(got) != "kept" {
+		t.Fatalf("the kept message reads %q, %v", got, err)
+	}
+	t.Logf("%d logs", len(logs))
 }
