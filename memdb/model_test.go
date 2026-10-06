@@ -188,9 +188,17 @@ func runModel(t *testing.T, seed int64, ops int) error {
 			}
 			op = fmt.Sprintf("Batch(%v, kept %v) in %d", keys, keep, timeID)
 			opKeys = keys
-		case p < 88:
+		case p < 84:
 			time.Sleep(time.Duration(rnd.Intn(int(2 * modelBlockDuration))))
 			op = "sleep"
+			opKeys = nil
+		case p < 88:
+			// Compacting moves values; it changes none.
+			moved, err := db.Compact()
+			if err != nil {
+				return fail(fmt.Errorf("op %d: Compact: %v", i, err))
+			}
+			op = fmt.Sprintf("Compact (moved %d)", moved)
 			opKeys = nil
 		case p < 94:
 			if err := db.Flush(); err != nil {

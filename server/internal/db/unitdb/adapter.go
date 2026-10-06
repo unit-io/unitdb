@@ -19,6 +19,7 @@ package adapter
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -66,6 +67,8 @@ type adapter struct {
 	wmu sync.RWMutex
 	// lastWrite is when the DB was last written to, in unix nanoseconds.
 	lastWrite atomic.Int64
+	// stop stops the compactor (startCompactor).
+	stop chan struct{}
 
 	// close
 	closer io.Closer
@@ -107,14 +110,59 @@ func (a *adapter) Open(path, jsonconfig string, reset bool) error {
 
 	a.config = &config
 	a.path = path
+	a.compact()
+	a.startCompactor(compactEvery)
 
 	return nil
+}
+
+// compactEvery is how often a running store compacts its message log.
+var compactEvery = time.Minute
+
+// startCompactor compacts the message log every interval, until Close: a
+// message kept for long, a session's row or a publish waiting on a
+// subscriber away, holds its block, and the WAL keeps every log chaining
+// deletes back to it (memdb's Compact).
+func (a *adapter) startCompactor(interval time.Duration) {
+	stop := make(chan struct{})
+	a.stop = stop
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				a.compact()
+			}
+		}
+	}()
+}
+
+// compact moves the messages left in mostly dead blocks, so that the blocks,
+// and the WAL's logs of them, go. It is a write: a checkpoint waits for it.
+func (a *adapter) compact() {
+	a.wmu.RLock()
+	defer a.wmu.RUnlock()
+	if a.mem == nil {
+		return
+	}
+	if n, err := a.mem.Compact(); err != nil {
+		log.Error("adapter.compact", err.Error())
+	} else if n > 0 {
+		log.Info("adapter.compact", fmt.Sprintf("moved %d messages", n))
+	}
 }
 
 // Close closes the underlying database connection
 func (a *adapter) Close() error {
 	a.wmu.Lock()
 	defer a.wmu.Unlock()
+	if a.stop != nil {
+		close(a.stop)
+		a.stop = nil
+	}
 	var err error
 	if a.db != nil {
 		err = a.db.Close()
