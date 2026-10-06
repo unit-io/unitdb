@@ -111,15 +111,22 @@ func TestCompactFreesPinnedBlocks(t *testing.T) {
 }
 
 // TestCompactLeavesMostlyLiveBlocks compacts a store whose blocks are mostly
-// live: nothing moves.
+// live: nothing moves. Each round of writes goes in one block: it starts once
+// the log has rotated into a new block, and takes far less than a block. A
+// write goes to the block of the log's last rotation, every log interval, so
+// a round that started as a block began could put its first writes in the
+// block before: split, it could leave one mostly dead, and rightly compacted.
 func TestCompactLeavesMostlyLiveBlocks(t *testing.T) {
-	const d = 10 * time.Millisecond
+	const d = 50 * time.Millisecond
 	db, err := Open(WithLogFilePath(t.TempDir()), WithTimeBlockInterval(d), WithLogInterval(2*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	for i := 0; i < 5; i++ {
+		// Into the next block, a few log intervals after it begins.
+		now := time.Now()
+		time.Sleep(now.Truncate(d).Add(d + 5*time.Millisecond).Sub(now))
 		for k := 0; k < 10; k++ {
 			if _, err := db.Put(uint64(i*10+k), []byte("value")); err != nil {
 				t.Fatal(err)
@@ -129,8 +136,9 @@ func TestCompactLeavesMostlyLiveBlocks(t *testing.T) {
 		if err := db.Delete(uint64(i * 10)); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(2 * d)
 	}
+	// The last round's block in the past too.
+	time.Sleep(2 * d)
 	if moved, err := db.Compact(); err != nil || moved != 0 {
 		t.Fatalf("Compact moved %d, %v; want none", moved, err)
 	}
