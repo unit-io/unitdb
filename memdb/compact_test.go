@@ -110,6 +110,86 @@ func TestCompactFreesPinnedBlocks(t *testing.T) {
 	}
 }
 
+// TestCompactFreesMostlyLivePinningBlock keeps many keys put first, as a
+// server keeps its session rows, and rewrites one of them in each later
+// block, with messages put and deleted: the first block stays mostly live,
+// and every block chains deletes back to it. Compacting as a server does,
+// now and then, moves its values once it holds more logs than it has
+// values, and the logs stay few.
+func TestCompactFreesMostlyLivePinningBlock(t *testing.T) {
+	const d = 10 * time.Millisecond
+	dir := t.TempDir()
+	db, err := Open(WithLogFilePath(dir), WithTimeBlockInterval(d), WithLogInterval(2*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const kept = 40
+	for k := 0; k < kept; k++ {
+		if _, err := db.Put(uint64(k), []byte(fmt.Sprintf("session-%d", k))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	most := 0
+	for i := 0; i < 200; i++ {
+		if _, err := db.Put(5, []byte(fmt.Sprintf("row-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+		k := uint64(1000 + i)
+		if _, err := db.Put(k, []byte("message")); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(d)
+		if i%20 == 19 {
+			if _, err := db.Compact(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n := walLogs(t, dir); n > most {
+			most = n
+		}
+	}
+	// Moved after it holds more than kept logs, and freed by the next
+	// compaction: twenty blocks later.
+	if most > 2*kept+40 {
+		t.Fatalf("up to %d logs while writing: the first block held them", most)
+	}
+	t.Logf("up to %d logs while writing", most)
+	check := func(db *DB, when string) {
+		t.Helper()
+		for k := 0; k < kept; k++ {
+			want := fmt.Sprintf("session-%d", k)
+			if k == 5 {
+				want = "row-199"
+			}
+			if v, err := db.Get(uint64(k)); err != nil || string(v) != want {
+				t.Errorf("%s: key %d reads %q, %v; want %q", when, k, v, err, want)
+			}
+		}
+		if v, err := db.Get(1000); err == nil {
+			t.Errorf("%s: a deleted key reads %q", when, v)
+		}
+		if n := db.Size(); n != kept {
+			t.Errorf("%s: %d keys; want %d", when, n, kept)
+		}
+		if err := db.Verify(); err != nil {
+			t.Error(err)
+		}
+	}
+	check(db, "compacted")
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(WithLogFilePath(dir), WithTimeBlockInterval(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	check(db, "reopened")
+}
+
 // TestCompactLeavesMostlyLiveBlocks compacts a store whose blocks are mostly
 // live: nothing moves. Each round of writes goes in one block: it starts once
 // the log has rotated into a new block, and takes far less than a block. A
