@@ -307,20 +307,27 @@ func (db *DB) GetWithIDs(q *Query) (ids, items [][]byte, err error) {
 }
 
 func (db *DB) get(q *Query, withIDs bool) (items, ids [][]byte, err error) {
+	items, ids, _, err = db.getEntries(q, withIDs, false)
+	return items, ids, err
+}
+
+// getEntries is get, also returning the topic hash of each item when
+// withTopics is set.
+func (db *DB) getEntries(q *Query, withIDs, withTopics bool) (items, ids [][]byte, topics []uint64, err error) {
 	if err := db.ok(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	switch {
 	case len(q.Topic) == 0:
-		return nil, nil, errTopicEmpty
+		return nil, nil, nil, errTopicEmpty
 	case len(q.Topic) > maxTopicLength:
-		return nil, nil, errTopicTooLarge
+		return nil, nil, nil, errTopicTooLarge
 	}
 	// // CPU profiling by default
 	// defer profile.Start().Stop()
 	q.internal.opts = &_QueryOptions{defaultQueryLimit: db.opts.queryOptions.defaultQueryLimit, maxQueryLimit: db.opts.queryOptions.maxQueryLimit}
 	if err := q.parse(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	mu := db.internal.mutex.getMutex(q.internal.prefix)
 	mu.RLock()
@@ -346,17 +353,20 @@ func (db *DB) get(q *Query, withIDs bool) (items, ids [][]byte, err error) {
 		}
 		q.internal.winEntries = uniq
 
-		items, ids, outBytes = nil, nil, 0
+		items, ids, topics, outBytes = nil, nil, nil, 0
 		for _, we := range q.internal.winEntries {
 			if len(items) == q.Limit {
 				break
 			}
 			val, stored, size, ok, err := db.readValue(q, we)
 			if err != nil {
-				return items, ids, err
+				return items, ids, topics, err
 			}
 			if ok {
 				items = append(items, val)
+				if withTopics {
+					topics = append(topics, we.topicHash)
+				}
 				outBytes += int64(size)
 				if withIDs {
 					// The stored prefix: the time the entry was put, and its
@@ -374,7 +384,7 @@ func (db *DB) get(q *Query, withIDs bool) (items, ids [][]byte, err error) {
 	db.internal.meter.OutBytes.Inc(outBytes)
 	db.internal.meter.Gets.Inc(int64(len(items)))
 	db.internal.meter.OutMsgs.Inc(int64(len(items)))
-	return items, ids, nil
+	return items, ids, topics, nil
 }
 
 // readValue reads and decodes the message for a window entry, and returns
@@ -478,8 +488,10 @@ func (db *DB) PutEntry(e *Entry) error {
 
 	db.internal.meter.Puts.Inc(1)
 
+	ev := db.writeEvent(OpPut, e)
 	// reset message entry.
 	e.reset()
+	db.fire(ev)
 	return nil
 }
 
@@ -509,19 +521,23 @@ func (db *DB) DeleteEntry(e *Entry) error {
 		return errTopicTooLarge
 	}
 	id := message.ID(e.ID)
+	if e.Contract == 0 {
+		e.Contract = message.MasterContract
+	}
+	// Parsed in the contract, as PutEntry does, for the same topic hash.
 	topic, _, err := db.parseTopic(e.Contract, e.Topic)
 	if err != nil {
 		return err
 	}
-	if e.Contract == 0 {
-		e.Contract = message.MasterContract
-	}
 	topic.AddContract(e.Contract)
 
-	if err := db.delete(topic.GetHash(e.Contract), message.ID(id).Sequence()); err != nil {
+	hash := topic.GetHash(e.Contract)
+	if err := db.delete(hash, message.ID(id).Sequence()); err != nil {
 		return err
 	}
-
+	if db.internal.hooks.active() {
+		db.fire(WriteEvent{Op: OpDelete, Topic: append([]byte(nil), e.Topic...), TopicHash: hash, Contract: e.Contract, ID: append([]byte(nil), e.ID...)})
+	}
 	return nil
 }
 

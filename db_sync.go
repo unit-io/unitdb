@@ -47,7 +47,20 @@ type (
 
 		rawWindow *bpool.Buffer
 		rawBlock  *bpool.Buffer
+
+		// group holds the blocks written since the last sync: a sync, with
+		// its fsyncs, covers several blocks (flushGroup).
+		group []int64
 	}
+)
+
+// A sync covers up to this many memdb blocks, entries or bytes. Each batch
+// commits its own block, and syncing each block on its own cost three
+// fsyncs a block (about 20 ms on macOS): recovering 300 batches took 6 s.
+const (
+	syncGroupBlocks  = 512
+	syncGroupEntries = 1 << 16
+	syncGroupBytes   = 64 << 20
 )
 
 func (db *_SyncHandle) startSync() bool {
@@ -267,6 +280,9 @@ func (db *_SyncHandle) Sync() error {
 		return db.syncBlock(timeID, seqs, false, pending, timeRelease)
 	})
 	if err == nil {
+		err = db.flushGroup(false, timeRelease)
+	}
+	if err == nil {
 		err = db.writePending(pending)
 	}
 	if err != nil {
@@ -330,7 +346,10 @@ func (db *_SyncHandle) syncBlock(timeID int64, seqs []uint64, recovery bool, pen
 	// The block a sync was writing when the process stopped: the entries
 	// of it already written are not in the count kept, if Open didn't
 	// recount (deriveFromIndex).
-	countWritten := recovery && !db.internal.recounted && timeID == db.internal.dbInfo.syncing
+	// A sync writes a group of blocks from the first, which it records:
+	// any block from it on may have been written.
+	syncing := db.internal.dbInfo.syncing
+	countWritten := recovery && !db.internal.recounted && syncing != 0 && timeID >= syncing
 
 	winEntries := make(map[uint64]_WindowEntries)
 	var err1 error
@@ -403,16 +422,36 @@ func (db *_SyncHandle) syncBlock(timeID int64, seqs []uint64, recovery bool, pen
 		return true, err
 	}
 
-	if err := db.sync(recovery, timeID); err != nil {
-		return true, err
-	}
-	if db.syncInfo.syncComplete {
-		if err := timeRelease(timeID); err != nil {
-			return false, err
-		}
-		if err := db.internal.mem.Free(timeID); err != nil {
+	db.group = append(db.group, timeID)
+	if len(db.group) >= syncGroupBlocks || db.syncInfo.count >= syncGroupEntries || db.syncInfo.inBytes >= syncGroupBytes {
+		if err := db.flushGroup(recovery, timeRelease); err != nil {
 			return true, err
 		}
 	}
 	return false, nil
+}
+
+// flushGroup syncs the blocks written since the last sync, and frees them
+// once their entries are on disk.
+func (db *_SyncHandle) flushGroup(recovery bool, timeRelease func(int64) error) error {
+	if len(db.group) == 0 {
+		return nil
+	}
+	group := db.group
+	db.group = nil
+	if err := db.sync(recovery, group[0]); err != nil {
+		return err
+	}
+	if !db.syncInfo.syncComplete {
+		return nil
+	}
+	for _, timeID := range group {
+		if err := timeRelease(timeID); err != nil {
+			return err
+		}
+		if err := db.internal.mem.Free(timeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
