@@ -16,29 +16,34 @@
 
 // Package uql is a small query language for unitdb.
 //
-// This is level 0: it says in text what the Go API already does, using only
-// the public API of the engine.
-//
 //	FROM teams.alpha.ch1 SINCE 1h LIMIT 100
-//	FROM teams.alpha.ch1 SINCE '2026-10-08T00:00:00Z' UNTIL 30m IN CONTRACT $1
-//	PUT teams.alpha.ch1 VALUE $1 TTL 1h
-//	PUT teams.*.ch1 VALUE $1          -- read from every teams.<x>.ch1
+//	SELECT topic, title FROM app.project.* LATEST PER TOPIC WHERE workspaceId = $1
+//	SELECT workspaceId, COUNT(*) AS n FROM app.project.* GROUP BY workspaceId ORDER BY n DESC
+//	TOPICS app.project.*
+//	PUT teams.*.ch1 VALUE $1 TTL 1h       -- a wildcard write: read by every teams.<x>.ch1
 //	DELETE FROM teams.alpha.ch1 ID $1
-//	EXPLAIN FROM teams.alpha.ch1 LIMIT 10
+//	DELETE FROM logs.* BEFORE 7d
+//	CREATE INDEX by_ws ON app.project.* (workspaceId) LATEST
+//	CREATE RANGE INDEX by_updated ON app.project.* (updatedAt) LATEST
+//	EXPLAIN SELECT ...
 //
-// A topic is dot-separated parts. A part is a word, a quoted string or a
-// parameter. In PUT and DELETE a part may also be "*" (one part), and a
-// topic may end in "..." (every part after): that is unitdb's wildcard
-// write, an entry every matching topic returns. FROM reads one topic, and
-// its entries include such wildcard entries; reading many topics at once is
-// level 1.
+// A topic is dot-separated parts: words, quoted strings or parameters. A
+// part may be "*" (any one part) and a topic may end in "..." (any parts
+// after). FROM one topic reads it as unitdb does, with the entries put to
+// wildcard topics that match it; FROM a pattern reads each matching topic's
+// own entries, newest first.
 //
-// Values are always passed as parameters ($1, $2, ...), never spliced into
-// the text, and a parameter in a topic must be exactly one part.
+// Values are always parameters ($1, $2, ...), never spliced into the text,
+// and a parameter in a topic is exactly one part.
 //
-// Keywords are not case sensitive. "--" starts a comment.
+// Fields are topic, id and time, which every entry has, and payload fields
+// of JSON payloads: title, data.workspaceId, tags[0].name, or payload.id for
+// a field a built-in name hides.
 //
-// Later levels (SELECT, WHERE, LATEST PER TOPIC, ORDER BY, GROUP BY, TOPICS,
-// indexes) are parsed far enough to say they are not available yet. The tests show each
+// UQL watches the database's writes to name topics (the engine keeps only
+// hashes) and keep indexes, in topics starting with "$uql.". Open it with
+// New in every process that writes, and Close it.
+//
+// Keywords are not case sensitive. "--" starts a comment. The tests show each
 // level at work.
 package uql

@@ -34,7 +34,12 @@ func openDB(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return New(db)
+	d, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
 }
 
 func payloads(r *Rows) []string {
@@ -200,16 +205,16 @@ func TestExplain(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := p.String()
-	for _, want := range []string{"Read topic \"teams.alpha\"", "wildcard topics that match it", "contract 9", "older than 1h0m0s", "filtered after reading", "Stop at 5"} {
+	for _, want := range []string{"Read topic \"teams.alpha\"", "wildcard topics that match it", "contract 9", "Keep entries since", "filtered after reading", "Return up to 5 rows"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("plan lacks %q:\n%s", want, s)
 		}
 	}
-	if p.Contract != 9 || p.Limit != scanAll {
+	if p.Contract != 9 || p.Topic != "teams.alpha" {
 		t.Errorf("plan = %+v", p)
 	}
 	p, _ = d.Explain("FROM a.b LIMIT $1", 3)
-	if p.Limit != 3 || !strings.Contains(p.String(), "master contract") {
+	if !strings.Contains(p.String(), "newest 3 entries") || !strings.Contains(p.String(), "master contract") {
 		t.Errorf("plan = %s", p)
 	}
 	if _, err := d.Explain("PUT a VALUE $1", "x"); err == nil {

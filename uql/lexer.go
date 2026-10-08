@@ -35,11 +35,14 @@ const (
 	tComma              // ,
 	tLParen             // (
 	tRParen             // )
-	tOp                 // = != < <= > >= (level 1)
+	tOp                 // = != < <= > >=
+	tLBrack             // [
+	tRBrack             // ]
+	tArrow              // ->
 )
 
 func (k tokenKind) String() string {
-	return [...]string{"end of query", "word", "string", "parameter", "'.'", "'...'", "'*'", "','", "'('", "')'", "operator"}[k]
+	return [...]string{"end of query", "word", "string", "parameter", "'.'", "'...'", "'*'", "','", "'('", "')'", "operator", "'['", "']'", "'->'"}[k]
 }
 
 type token struct {
@@ -77,6 +80,15 @@ func lex(src string) ([]token, error) {
 			for i < len(src) && src[i] != '\n' {
 				i++
 			}
+		case c == '-' && i+1 < len(src) && src[i+1] == '>':
+			toks = append(toks, token{kind: tArrow, text: "->", pos: i})
+			i += 2
+		case c == '[':
+			toks = append(toks, token{kind: tLBrack, text: "[", pos: i})
+			i++
+		case c == ']':
+			toks = append(toks, token{kind: tRBrack, text: "]", pos: i})
+			i++
 		case c == '.':
 			if strings.HasPrefix(src[i:], "...") {
 				toks = append(toks, token{kind: tEllipsis, text: "...", pos: i})
@@ -143,7 +155,7 @@ func lex(src string) ([]token, error) {
 			toks = append(toks, token{kind: tString, text: b.String(), pos: start})
 		case isWordByte(c):
 			start := i
-			for i < len(src) && isWordByte(src[i]) {
+			for i < len(src) && isWordByte(src[i]) && !(src[i] == '-' && i+1 < len(src) && src[i+1] == '>') {
 				i++
 			}
 			toks = append(toks, token{kind: tWord, text: src[start:i], pos: start})

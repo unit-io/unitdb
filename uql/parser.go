@@ -24,10 +24,11 @@ import (
 	"time"
 )
 
-// ErrNotAvailable is returned for syntax of a later UQL level.
-var ErrNotAvailable = errors.New("uql: not available at level 0")
+// ErrNotAvailable is returned for syntax a later UQL level brings.
+var ErrNotAvailable = errors.New("uql: not available yet")
 
-// Statement is a parsed statement: *Query, *Put, *Delete or *Explain.
+// Statement is a parsed statement: *Query, *Topics, *Put, *Delete,
+// *CreateIndex, *DropIndex or *Explain.
 type Statement interface {
 	stmt()
 	String() string
@@ -43,7 +44,7 @@ type Part struct {
 // Pattern is a topic pattern, such as teams.*.ch1 or teams.alpha...
 type Pattern struct {
 	Parts []Part
-	Multi bool // ends in "...": every part after
+	Multi bool // ends in "...": the rest of the parts, or none
 	pos   int
 }
 
@@ -76,13 +77,44 @@ type Int struct {
 	pos   int
 }
 
-// Query is FROM topic [SINCE t] [UNTIL t] [LIMIT n] [IN CONTRACT c]. The
-// topic has no wildcards; its entries include those put to wildcard topics
-// that match it.
+// SelectItem is one column of SELECT.
+type SelectItem struct {
+	Expr  Expr
+	Alias string
+}
+
+// OrderItem is one key of ORDER BY.
+type OrderItem struct {
+	Expr Expr // a *Path "time" for ORDER BY TIME
+	Desc bool
+}
+
+// Query is
+//
+//	[SELECT items] FROM pattern [LATEST n PER TOPIC] [SINCE t] [UNTIL t]
+//	[WHERE cond] [GROUP BY exprs] [ORDER BY keys] [LIMIT n [OFFSET m]]
+//	[IN CONTRACT c]
+//
+// FROM one topic reads it as unitdb does: with the entries put to wildcard
+// topics that match it. FROM a pattern reads the entries put to each topic
+// that matches it.
 type Query struct {
+	Select   []SelectItem // nil for every entry
 	From     Pattern
+	Latest   *Int
 	Since    *Time
 	Until    *Time
+	Where    Expr
+	GroupBy  []Expr
+	OrderBy  []OrderItem
+	Limit    *Int
+	Offset   *Int
+	Contract *Int
+}
+
+// Topics is TOPICS pattern [LIMIT n] [IN CONTRACT c].
+type Topics struct {
+	Pattern  Pattern
 	Limit    *Int
 	Contract *Int
 }
@@ -97,12 +129,32 @@ type Put struct {
 	Contract *Int
 }
 
-// Delete is DELETE FROM topic ID $n [IN CONTRACT c]. The topic is the one
-// the entry was put to: a wildcard topic for a broadcast entry.
+// Delete is DELETE FROM pattern (ID $n | BEFORE t | KEEP LATEST n)
+// [IN CONTRACT c]. With ID, the topic is the one the entry was put to: a
+// wildcard topic for a broadcast entry. BEFORE and KEEP LATEST delete the
+// entries put to each matching topic.
 type Delete struct {
-	From     Pattern
-	ID       int // parameter
+	From       Pattern
+	ID         int   // parameter, for DELETE ... ID
+	Before     *Time // DELETE ... BEFORE t
+	KeepLatest *Int  // DELETE ... KEEP LATEST n
+	Contract   *Int
+}
+
+// CreateIndex is CREATE [RANGE] INDEX name ON pattern (paths) [LATEST]
+// [IN CONTRACT c].
+type CreateIndex struct {
+	Name     string
+	On       Pattern
+	Paths    []*Path
+	Latest   bool
+	Range    bool // ordered by value: ranges and ORDER BY (level 3)
 	Contract *Int
+}
+
+// DropIndex is DROP INDEX name.
+type DropIndex struct {
+	Name string
 }
 
 // Explain is EXPLAIN query.
@@ -110,16 +162,13 @@ type Explain struct {
 	Query *Query
 }
 
-func (*Query) stmt()   {}
-func (*Put) stmt()     {}
-func (*Delete) stmt()  {}
-func (*Explain) stmt() {}
-
-// later-level keywords, with the level that brings them.
-var laterLevel = map[string]int{
-	"SELECT": 1, "WHERE": 1, "LATEST": 1, "ORDER": 1, "GROUP": 1, "TOPICS": 1, "OFFSET": 1,
-	"BEFORE": 1, "KEEP": 1, "CREATE": 2, "DROP": 2, "INDEX": 2,
-}
+func (*Query) stmt()       {}
+func (*Topics) stmt()      {}
+func (*Put) stmt()         {}
+func (*Delete) stmt()      {}
+func (*CreateIndex) stmt() {}
+func (*DropIndex) stmt()   {}
+func (*Explain) stmt()     {}
 
 type parser struct {
 	toks []token
@@ -160,9 +209,6 @@ func keyword(t token) string {
 }
 
 func (p *parser) unexpected(t token, want string) error {
-	if kw := keyword(t); laterLevel[kw] > 0 {
-		return fmt.Errorf("%w: %s comes with level %d (at offset %d)", ErrNotAvailable, kw, laterLevel[kw], t.pos)
-	}
 	got := t.kind.String()
 	if t.kind == tWord || t.kind == tString || t.kind == tOp {
 		got = fmt.Sprintf("%q", t.text)
@@ -189,80 +235,280 @@ func (p *parser) expect(kw string) error {
 func (p *parser) statement() (Statement, error) {
 	t := p.peek()
 	switch keyword(t) {
-	case "FROM":
+	case "FROM", "SELECT":
 		return p.query()
 	case "EXPLAIN":
 		p.next()
-		if keyword(p.peek()) != "FROM" {
-			return nil, p.unexpected(p.peek(), "FROM")
+		if kw := keyword(p.peek()); kw != "FROM" && kw != "SELECT" {
+			return nil, p.unexpected(p.peek(), "a query (FROM or SELECT)")
 		}
 		q, err := p.query()
 		if err != nil {
 			return nil, err
 		}
 		return &Explain{Query: q}, nil
+	case "TOPICS":
+		return p.topics()
 	case "PUT":
 		return p.put()
 	case "DELETE":
 		return p.delete()
+	case "CREATE":
+		return p.createIndex()
+	case "DROP":
+		p.next()
+		if err := p.expect("INDEX"); err != nil {
+			return nil, err
+		}
+		name, err := p.name()
+		if err != nil {
+			return nil, err
+		}
+		return &DropIndex{Name: name}, nil
 	}
-	return nil, p.unexpected(t, "FROM, PUT, DELETE or EXPLAIN")
+	return nil, p.unexpected(t, "SELECT, FROM, TOPICS, PUT, DELETE, CREATE INDEX, DROP INDEX or EXPLAIN")
 }
 
 func (p *parser) query() (*Query, error) {
+	q := &Query{}
+	var err error
+	if p.accept("SELECT") {
+		if q.Select, err = p.selectItems(); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.expect("FROM"); err != nil {
 		return nil, err
 	}
-	q := &Query{}
-	var err error
 	if q.From, err = p.pattern(); err != nil {
 		return nil, err
 	}
-	if !q.From.Static() {
-		// unitdb's wildcards are for writing: an entry put to teams.*.ch1 is
-		// read from every matching topic. Reading many topics at once needs
-		// an engine change.
-		return nil, fmt.Errorf("%w: reading many topics with a wildcard comes with level 1; FROM takes one topic, and its entries include those put to matching wildcard topics (at offset %d)", ErrNotAvailable, q.From.pos)
+	seen := map[string]bool{}
+	once := func(t token, what string) error {
+		if seen[what] {
+			return errorf(t.pos, "%s is given twice", what)
+		}
+		seen[what] = true
+		return nil
 	}
 	for {
 		t := p.peek()
-		switch keyword(t) {
+		kw := keyword(t)
+		switch kw {
+		case "LATEST":
+			if err := once(t, kw); err != nil {
+				return nil, err
+			}
+			p.next()
+			q.Latest = &Int{Value: 1, pos: t.pos}
+			if keyword(p.peek()) != "PER" {
+				if q.Latest, err = p.int("LATEST"); err != nil {
+					return nil, err
+				}
+			}
+			if err := p.expect("PER"); err != nil {
+				return nil, err
+			}
+			if err := p.expect("TOPIC"); err != nil {
+				return nil, err
+			}
 		case "SINCE":
-			if q.Since != nil {
-				return nil, errorf(t.pos, "SINCE is given twice")
+			if err := once(t, kw); err != nil {
+				return nil, err
 			}
 			p.next()
 			if q.Since, err = p.time(); err != nil {
 				return nil, err
 			}
 		case "UNTIL":
-			if q.Until != nil {
-				return nil, errorf(t.pos, "UNTIL is given twice")
+			if err := once(t, kw); err != nil {
+				return nil, err
 			}
 			p.next()
 			if q.Until, err = p.time(); err != nil {
 				return nil, err
 			}
+		case "WHERE":
+			if err := once(t, kw); err != nil {
+				return nil, err
+			}
+			p.next()
+			if q.Where, err = p.expr(); err != nil {
+				return nil, err
+			}
+			if isAggregate(q.Where) {
+				return nil, errorf(t.pos, "WHERE can't use aggregates")
+			}
+		case "GROUP":
+			if err := once(t, "GROUP BY"); err != nil {
+				return nil, err
+			}
+			p.next()
+			if err := p.expect("BY"); err != nil {
+				return nil, err
+			}
+			for {
+				e, err := p.expr()
+				if err != nil {
+					return nil, err
+				}
+				q.GroupBy = append(q.GroupBy, e)
+				if p.peek().kind != tComma {
+					break
+				}
+				p.next()
+			}
+		case "ORDER":
+			if err := once(t, "ORDER BY"); err != nil {
+				return nil, err
+			}
+			p.next()
+			if err := p.expect("BY"); err != nil {
+				return nil, err
+			}
+			for {
+				e, err := p.expr()
+				if err != nil {
+					return nil, err
+				}
+				item := OrderItem{Expr: e}
+				if p.accept("DESC") {
+					item.Desc = true
+				} else {
+					p.accept("ASC")
+				}
+				q.OrderBy = append(q.OrderBy, item)
+				if p.peek().kind != tComma {
+					break
+				}
+				p.next()
+			}
 		case "LIMIT":
-			if q.Limit != nil {
-				return nil, errorf(t.pos, "LIMIT is given twice")
+			if err := once(t, kw); err != nil {
+				return nil, err
 			}
 			p.next()
 			if q.Limit, err = p.int("LIMIT"); err != nil {
 				return nil, err
 			}
+			if p.accept("OFFSET") {
+				if q.Offset, err = p.int("OFFSET"); err != nil {
+					return nil, err
+				}
+			}
 		case "IN":
-			if q.Contract != nil {
-				return nil, errorf(t.pos, "IN CONTRACT is given twice")
+			if err := once(t, "IN CONTRACT"); err != nil {
+				return nil, err
 			}
 			if q.Contract, err = p.contract(); err != nil {
 				return nil, err
 			}
 		default:
 			if t.kind == tEOF {
-				return q, nil
+				return q, q.check()
 			}
-			return nil, p.unexpected(t, "SINCE, UNTIL, LIMIT, IN CONTRACT or end of query")
+			return nil, p.unexpected(t, "LATEST, SINCE, UNTIL, WHERE, GROUP BY, ORDER BY, LIMIT, IN CONTRACT or end of query")
+		}
+	}
+}
+
+// check rejects queries whose clauses don't fit together.
+func (q *Query) check() error {
+	agg := false
+	for _, it := range q.Select {
+		if isAggregate(it.Expr) {
+			agg = true
+		}
+	}
+	if len(q.GroupBy) > 0 && !agg {
+		return errorf(q.From.pos, "GROUP BY needs SELECT with an aggregate, such as COUNT(*)")
+	}
+	for _, e := range q.GroupBy {
+		if isAggregate(e) {
+			return errorf(q.From.pos, "GROUP BY can't use aggregates")
+		}
+	}
+	return nil
+}
+
+func (p *parser) selectItems() ([]SelectItem, error) {
+	if p.peek().kind == tStar {
+		p.next()
+		return nil, nil // SELECT * is every entry, as FROM alone
+	}
+	var items []SelectItem
+	for {
+		e, err := p.expr()
+		if err != nil {
+			return nil, err
+		}
+		it := SelectItem{Expr: e}
+		if p.accept("AS") {
+			if it.Alias, err = p.name(); err != nil {
+				return nil, err
+			}
+		}
+		items = append(items, it)
+		if p.peek().kind != tComma {
+			return items, nil
+		}
+		p.next()
+	}
+}
+
+func (p *parser) name() (string, error) {
+	t := p.next()
+	if t.kind != tWord && t.kind != tString {
+		return "", p.unexpected(t, "a name")
+	}
+	if !isName(t.text) {
+		return "", errorf(t.pos, "names are letters, digits, '_' and '-': %q", t.text)
+	}
+	return t.text, nil
+}
+
+func isName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isWordByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *parser) topics() (*Topics, error) {
+	p.next() // TOPICS
+	st := &Topics{}
+	var err error
+	if st.Pattern, err = p.pattern(); err != nil {
+		return nil, err
+	}
+	for {
+		t := p.peek()
+		switch keyword(t) {
+		case "LIMIT":
+			if st.Limit != nil {
+				return nil, errorf(t.pos, "LIMIT is given twice")
+			}
+			p.next()
+			if st.Limit, err = p.int("LIMIT"); err != nil {
+				return nil, err
+			}
+		case "IN":
+			if st.Contract != nil {
+				return nil, errorf(t.pos, "IN CONTRACT is given twice")
+			}
+			if st.Contract, err = p.contract(); err != nil {
+				return nil, err
+			}
+		default:
+			if t.kind == tEOF {
+				return st, nil
+			}
+			return nil, p.unexpected(t, "LIMIT, IN CONTRACT or end of query")
 		}
 	}
 }
@@ -323,14 +569,87 @@ func (p *parser) delete() (*Delete, error) {
 	if st.From, err = p.pattern(); err != nil {
 		return nil, err
 	}
-	if err := p.expect("ID"); err != nil {
+	t := p.next()
+	switch keyword(t) {
+	case "ID":
+		pt := p.next()
+		if pt.kind != tParam {
+			return nil, errorf(pt.pos, "ID takes a parameter, such as $1")
+		}
+		st.ID = pt.param
+	case "BEFORE":
+		if st.Before, err = p.time(); err != nil {
+			return nil, err
+		}
+	case "KEEP":
+		if err := p.expect("LATEST"); err != nil {
+			return nil, err
+		}
+		if st.KeepLatest, err = p.int("KEEP LATEST"); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, p.unexpected(t, "ID, BEFORE or KEEP LATEST")
+	}
+	if keyword(p.peek()) == "IN" {
+		if st.Contract, err = p.contract(); err != nil {
+			return nil, err
+		}
+	}
+	return st, nil
+}
+
+func (p *parser) createIndex() (*CreateIndex, error) {
+	p.next() // CREATE
+	st := &CreateIndex{}
+	st.Range = p.accept("RANGE")
+	if err := p.expect("INDEX"); err != nil {
 		return nil, err
 	}
-	t := p.next()
-	if t.kind != tParam {
-		return nil, errorf(t.pos, "ID takes a parameter, such as $1")
+	var err error
+	if st.Name, err = p.name(); err != nil {
+		return nil, err
 	}
-	st.ID = t.param
+	if err := p.expect("ON"); err != nil {
+		return nil, err
+	}
+	if st.On, err = p.pattern(); err != nil {
+		return nil, err
+	}
+	for _, x := range st.On.Parts {
+		if x.Param > 0 {
+			return nil, errorf(st.On.pos, "an index pattern can't have parameters")
+		}
+	}
+	if t := p.next(); t.kind != tLParen {
+		return nil, p.unexpected(t, "'(' and the indexed fields")
+	}
+	for {
+		t := p.next()
+		if t.kind != tWord {
+			return nil, p.unexpected(t, "a field")
+		}
+		e, err := p.path(t)
+		if err != nil {
+			return nil, err
+		}
+		path := e.(*Path)
+		if builtins[path.Root] && len(path.Steps) == 0 {
+			return nil, errorf(t.pos, "indexes are on payload fields; %s is not one", path.Root)
+		}
+		st.Paths = append(st.Paths, path)
+		c := p.next()
+		if c.kind == tRParen {
+			break
+		}
+		if c.kind != tComma {
+			return nil, p.unexpected(c, "',' or ')'")
+		}
+	}
+	if st.Range && len(st.Paths) != 1 {
+		return nil, errorf(st.On.pos, "a range index is on one field")
+	}
+	st.Latest = p.accept("LATEST")
 	if keyword(p.peek()) == "IN" {
 		if st.Contract, err = p.contract(); err != nil {
 			return nil, err
@@ -387,13 +706,15 @@ func (p *parser) pattern() (Pattern, error) {
 
 // checkPart rejects text that would change a topic's shape in unitdb: a dot
 // adds parts, '*' and "..." are wildcards, '?' starts topic options and '/'
-// separates a key.
+// separates a key. A part can't start with '$': those topics are UQL's own.
 func checkPart(s string) error {
 	switch {
 	case s == "":
 		return errors.New("a topic part can't be empty")
 	case strings.ContainsAny(s, ".*?/"):
 		return fmt.Errorf("a topic part can't contain '.', '*', '?' or '/': %q", s)
+	case strings.HasPrefix(s, "$"):
+		return fmt.Errorf("topic parts starting with '$' are reserved: %q", s)
 	}
 	for i := 0; i < len(s); i++ {
 		if s[i] < 0x20 || s[i] == 0x7f {
@@ -466,8 +787,9 @@ func (p Pattern) String() string {
 		case x.Param > 0:
 			parts = append(parts, "$"+strconv.Itoa(x.Param))
 		case strings.HasPrefix(x.Lit, "--") || // would start a comment
+			strings.Contains(x.Lit, "->") ||
 			strings.IndexFunc(x.Lit, func(r rune) bool { return r > 127 || !isWordByte(byte(r)) }) >= 0:
-			parts = append(parts, "'"+strings.ReplaceAll(x.Lit, "'", "''")+"'")
+			parts = append(parts, quoteString(x.Lit))
 		default:
 			parts = append(parts, x.Lit)
 		}
@@ -496,19 +818,77 @@ func (n *Int) String() string {
 	return strconv.FormatInt(n.Value, 10)
 }
 
+func nameString(s string) string {
+	if isName(s) && !strings.HasPrefix(s, "--") && !strings.Contains(s, "->") && !reserved[strings.ToUpper(s)] {
+		return s
+	}
+	return quoteString(s)
+}
+
 func (q *Query) String() string {
-	s := "FROM " + q.From.String()
+	var b strings.Builder
+	if q.Select != nil {
+		b.WriteString("SELECT ")
+		for i, it := range q.Select {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(it.Expr.String())
+			if it.Alias != "" {
+				b.WriteString(" AS " + nameString(it.Alias))
+			}
+		}
+		b.WriteString(" ")
+	}
+	b.WriteString("FROM " + q.From.String())
+	if q.Latest != nil {
+		b.WriteString(" LATEST " + q.Latest.String() + " PER TOPIC")
+	}
 	if q.Since != nil {
-		s += " SINCE " + q.Since.String()
+		b.WriteString(" SINCE " + q.Since.String())
 	}
 	if q.Until != nil {
-		s += " UNTIL " + q.Until.String()
+		b.WriteString(" UNTIL " + q.Until.String())
+	}
+	if q.Where != nil {
+		b.WriteString(" WHERE " + q.Where.String())
+	}
+	if len(q.GroupBy) > 0 {
+		parts := make([]string, len(q.GroupBy))
+		for i, e := range q.GroupBy {
+			parts[i] = e.String()
+		}
+		b.WriteString(" GROUP BY " + strings.Join(parts, ", "))
+	}
+	if len(q.OrderBy) > 0 {
+		parts := make([]string, len(q.OrderBy))
+		for i, o := range q.OrderBy {
+			parts[i] = o.Expr.String()
+			if o.Desc {
+				parts[i] += " DESC"
+			}
+		}
+		b.WriteString(" ORDER BY " + strings.Join(parts, ", "))
 	}
 	if q.Limit != nil {
-		s += " LIMIT " + q.Limit.String()
+		b.WriteString(" LIMIT " + q.Limit.String())
+		if q.Offset != nil {
+			b.WriteString(" OFFSET " + q.Offset.String())
+		}
 	}
 	if q.Contract != nil {
-		s += " IN CONTRACT " + q.Contract.String()
+		b.WriteString(" IN CONTRACT " + q.Contract.String())
+	}
+	return b.String()
+}
+
+func (st *Topics) String() string {
+	s := "TOPICS " + st.Pattern.String()
+	if st.Limit != nil {
+		s += " LIMIT " + st.Limit.String()
+	}
+	if st.Contract != nil {
+		s += " IN CONTRACT " + st.Contract.String()
 	}
 	return s
 }
@@ -525,11 +905,40 @@ func (st *Put) String() string {
 }
 
 func (st *Delete) String() string {
-	s := "DELETE FROM " + st.From.String() + " ID $" + strconv.Itoa(st.ID)
+	s := "DELETE FROM " + st.From.String()
+	switch {
+	case st.Before != nil:
+		s += " BEFORE " + st.Before.String()
+	case st.KeepLatest != nil:
+		s += " KEEP LATEST " + st.KeepLatest.String()
+	default:
+		s += " ID $" + strconv.Itoa(st.ID)
+	}
 	if st.Contract != nil {
 		s += " IN CONTRACT " + st.Contract.String()
 	}
 	return s
 }
+
+func (st *CreateIndex) String() string {
+	paths := make([]string, len(st.Paths))
+	for i, p := range st.Paths {
+		paths[i] = p.String()
+	}
+	kind := "CREATE INDEX "
+	if st.Range {
+		kind = "CREATE RANGE INDEX "
+	}
+	s := kind + nameString(st.Name) + " ON " + st.On.String() + " (" + strings.Join(paths, ", ") + ")"
+	if st.Latest {
+		s += " LATEST"
+	}
+	if st.Contract != nil {
+		s += " IN CONTRACT " + st.Contract.String()
+	}
+	return s
+}
+
+func (st *DropIndex) String() string { return "DROP INDEX " + nameString(st.Name) }
 
 func (e *Explain) String() string { return "EXPLAIN " + e.Query.String() }
