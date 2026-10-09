@@ -71,7 +71,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          # staticcheck 2026.2.1 can't read Go 1.27's export data: the Go it
+          # was built for, until a staticcheck release that reads it.
+          go-version: '1.26.x'
       # The correctness checks only: the style and unused-code checks report
       # findings that have not been worked through.
       - run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 -checks 'SA*' ./...
