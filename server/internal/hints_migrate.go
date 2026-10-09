@@ -66,7 +66,7 @@ var (
 
 // hintContent is what a hint is stored with, but its id: a hint copied
 // before a crash is found by it.
-func hintContent(h replicaHint) string {
+func hintContent(h hintRecord) string {
 	h.ID = nil
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(h); err != nil {
@@ -95,7 +95,7 @@ func moveLegacyHintsOf(node string) (int, error) {
 		}
 		there := make(map[string]int, len(have))
 		for _, b := range have {
-			var h replicaHint
+			var h hintRecord
 			if gob.NewDecoder(bytes.NewReader(b)).Decode(&h) == nil {
 				there[hintContent(h)]++
 			}
@@ -109,7 +109,7 @@ func moveLegacyHintsOf(node string) (int, error) {
 			if deleted[string(ids[i])] {
 				return moved, errors.New("an old hint is still there after it was deleted")
 			}
-			var h replicaHint
+			var h hintRecord
 			if err := gob.NewDecoder(bytes.NewReader(raw[i])).Decode(&h); err != nil {
 				// As v0.6.0 does: kept, never handed off.
 				log.ErrLogger.Error().Err(err).Str("context", "cluster.moveLegacyHints").Msg("unreadable hint for " + node + ": left where it is")
@@ -131,7 +131,7 @@ func moveLegacyHintsOf(node string) (int, error) {
 				there[k]--
 				continue
 			}
-			if err := storeHint(node, h, ttl); err != nil {
+			if err := storeLegacyHint(node, h, ttl); err != nil {
 				return moved, err
 			}
 			moved++
@@ -150,4 +150,19 @@ func moveLegacyHintsOf(node string) (int, error) {
 			deleted[string(id)] = true
 		}
 	}
+}
+
+// storeLegacyHint stores a moved hint under a new id, before the cluster
+// starts (Cluster.storeHint needs a running cluster).
+func storeLegacyHint(node string, h hintRecord, ttl string) error {
+	id, err := store.Hint.NewID()
+	if err != nil {
+		return err
+	}
+	h.ID = id
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(&h); err != nil {
+		return err
+	}
+	return putHint(node, id, buf.Bytes(), ttl)
 }

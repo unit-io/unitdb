@@ -235,6 +235,6 @@ during a failover, and fan-out to many subscribers.
 `server/e2e/cluster_tls_test.go` runs one over mutual TLS (delivery, failover,
 replicated relays; callers without a node's certificate and calls naming
 another sender are refused) and moves a plain one to TLS node by node;
-`server/e2e/release3_test.go` runs one with TLS required from the start, one
-mixing a v0.6.0 node with v0.7.0 ones, and upgrades a v0.6.0 one node by
-node.
+`server/e2e/release3_test.go` runs one with TLS required from the start.
+(Clusters mixing versions are no longer tested: nodes of the peerwire
+protocol don't talk to earlier ones.)

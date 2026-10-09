@@ -44,7 +44,7 @@ func TestMoveLegacyHints(t *testing.T) {
 	openTestStore(t)
 	node := fmt.Sprintf("legacy-hint-node-%d", time.Now().UnixNano())
 	f := &fakeLegacyHints{}
-	add := func(h replicaHint) {
+	add := func(h hintRecord) {
 		id, err := store.Hint.NewID()
 		if err != nil {
 			t.Fatal(err)
@@ -57,10 +57,10 @@ func TestMoveLegacyHints(t *testing.T) {
 		f.ids, f.raw = append(f.ids, id), append(f.raw, buf.Bytes())
 	}
 	now := time.Now().Unix()
-	add(replicaHint{Entry: ReplicaEntry{ID: "legacy/1", Contract: 1, Topic: "groups.legacy", Payload: []byte("m1"), Ttl: "1h", ExpiresAt: now + 3600}})
-	add(replicaHint{Entry: ReplicaEntry{ID: "legacy/2", Contract: 1, Topic: "groups.legacy", Payload: []byte("m2")}})
-	add(replicaHint{Entry: ReplicaEntry{ID: "legacy/3", Contract: 1, Topic: "groups.legacy", Payload: []byte("gone"), ExpiresAt: now - 1}})
-	add(replicaHint{Op: &store.LogOp{Block: 7, Key: 7}})
+	add(hintRecord{Entry: ReplicaEntry{ID: "legacy/1", Contract: 1, Topic: "groups.legacy", Payload: []byte("m1"), Ttl: "1h", ExpiresAt: now + 3600}})
+	add(hintRecord{Entry: ReplicaEntry{ID: "legacy/2", Contract: 1, Topic: "groups.legacy", Payload: []byte("m2")}})
+	add(hintRecord{Entry: ReplicaEntry{ID: "legacy/3", Contract: 1, Topic: "groups.legacy", Payload: []byte("gone"), ExpiresAt: now - 1}})
+	add(hintRecord{Op: &store.LogOp{Block: 7, Key: 7}})
 	unreadableID, _ := store.Hint.NewID()
 	f.ids, f.raw = append(f.ids, unreadableID), append(f.raw, []byte("not a hint"))
 
@@ -85,7 +85,7 @@ func TestMoveLegacyHints(t *testing.T) {
 	}
 	got := map[string]int{}
 	for _, b := range raw {
-		var h replicaHint
+		var h hintRecord
 		if err := gob.NewDecoder(bytes.NewReader(b)).Decode(&h); err != nil {
 			t.Fatal(err)
 		}

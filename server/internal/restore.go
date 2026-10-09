@@ -105,19 +105,12 @@ func CheckStart(dbPath string, restored bool) error {
 // startedFrom asks the node which checkpoint it was started at. answered is
 // false if it can't be reached: a node that is down doesn't stop a start.
 func (n *ClusterNode) startedFrom() (cp *store.CheckpointInfo, answered bool, err error) {
-	endpoint, _, err := n.dial()
-	if err != nil {
+	var resp StartedFromResp
+	answered, err = n.oneShot("Cluster.StartedFrom", &StartedFromReq{Node: n.owner.thisNodeName}, &resp, 2*time.Second)
+	if !answered {
 		return nil, false, nil
 	}
-	defer endpoint.Close()
-	var resp StartedFromResp
-	call := endpoint.Go("Cluster.StartedFrom", &StartedFromReq{Node: Globals.Cluster.thisNodeName}, &resp, nil)
-	select {
-	case <-call.Done:
-		return resp.Checkpoint, true, call.Error
-	case <-time.After(2 * time.Second):
-		return nil, true, fmt.Errorf("no answer in 2s")
-	}
+	return resp.Checkpoint, true, err
 }
 
 // sameBackupRun reports whether two checkpoints are of one backup run: the

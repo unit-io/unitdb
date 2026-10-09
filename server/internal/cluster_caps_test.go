@@ -2,8 +2,9 @@ package internal
 
 import (
 	"errors"
-	"net/rpc"
 	"testing"
+
+	"github.com/unit-io/unitdb/server/internal/peerwire"
 )
 
 // TestNodeCapabilities checks how this node learns what another can do: what
@@ -15,7 +16,7 @@ func TestNodeCapabilities(t *testing.T) {
 	}
 
 	// A method the node lacks, as an older node answers.
-	missing := rpc.ServerError("rpc: can't find method Cluster.Deliver")
+	missing := &peerwire.RemoteError{Code: peerwire.CodeNoMethod, Message: "cluster: no method Cluster.Deliver"}
 	if !n.lacks(missing, capDeliver) || n.supports(capDeliver) {
 		t.Fatal("a missing method should mark the capability missing")
 	}
@@ -24,7 +25,7 @@ func TestNodeCapabilities(t *testing.T) {
 	}
 
 	// A capability the node has turned off names it.
-	off := rpc.ServerError(errCapabilityOff(capSessions).Error())
+	off := errCapabilityOff(capSessions)
 	if n.lacks(off, capReplicate) {
 		t.Fatal("refusing sessions should not mark replicate missing")
 	}
@@ -33,6 +34,9 @@ func TestNodeCapabilities(t *testing.T) {
 	}
 	if n.lacks(errors.New("connection reset"), capResync) {
 		t.Fatal("a failed call is not a missing method")
+	}
+	if n.lacks(&peerwire.RemoteError{Code: peerwire.CodeFailed, Message: "cluster: no method in the handler's words"}, capResync) {
+		t.Fatal("a handler's error is not a missing method")
 	}
 
 	// What the node tells replaces what was learned from refusals.

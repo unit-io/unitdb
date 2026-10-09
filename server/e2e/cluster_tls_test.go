@@ -33,12 +33,13 @@ import (
 	"fmt"
 	"math/big"
 	"net"
-	"net/rpc"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/unit-io/unitdb/server/internal/peerwire"
 )
 
 // testPKI is a cluster CA and the certificates it signs.
@@ -114,7 +115,7 @@ func (p *testPKI) tlsConf(t *testing.T, name string, require bool) map[string]in
 
 // dialPeer connects to a node's TLS address with a certificate of p naming
 // name, expecting the node's certificate to name serverName.
-func (p *testPKI) dialPeer(t *testing.T, addr, name, serverName string) (*rpc.Client, error) {
+func (p *testPKI) dialPeer(t *testing.T, addr, name, serverName string) (*peerwire.Link, error) {
 	t.Helper()
 	certFile, keyFile := p.cert(t, name)
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -125,35 +126,34 @@ func (p *testPKI) dialPeer(t *testing.T, addr, name, serverName string) (*rpc.Cl
 	if err != nil {
 		return nil, err
 	}
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	return rpc.NewClient(conn), nil
+	return helloAs(conn, name, serverName)
 }
 
-// Requests with the fields of the cluster's that gob matches: the sender's
-// name, and nothing else. Each names its sender as Node, but a ping, which
-// names it as Leader.
-type (
-	senderReq struct{ Node string }
-	pingReq   struct{ Leader string }
-)
+// clusterProtocol is the peer protocol the nodes speak (peerwire).
+const clusterProtocol = 3
 
-// spoofable are the calls that name their sender, with a request naming
-// sender.
-func spoofable(sender string) map[string]interface{} {
-	req := &senderReq{Node: sender}
-	return map[string]interface{}{
-		"Cluster.Ping":           &pingReq{Leader: sender},
-		"Cluster.Vote":           req,
-		"Cluster.Master":         req,
-		"Cluster.Deliver":        req,
-		"Cluster.RebuildTopics":  req,
-		"Cluster.RebuildHistory": req,
-		"Cluster.FetchSession":   req,
-		"Cluster.ForgetSession":  req,
-		"Cluster.Replicate":      req,
-		"Cluster.Resync":         req,
-		"Cluster.Revocations":    req,
+// helloAs opens a peer link on conn, as node from to node to.
+func helloAs(conn net.Conn, from, to string) (*peerwire.Link, error) {
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	l, err := peerwire.Dial(conn, peerwire.Hello{Protocol: clusterProtocol, From: from, To: to}, 3*time.Second)
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
+	conn.SetDeadline(time.Time{})
+	return l, nil
+}
+
+// senderReq has the one field of the cluster's requests that gob matches
+// here: the sender's name. Every peer call names its sender as Node.
+type senderReq struct{ Node string }
+
+// peerCalls are the calls a node serves its peers, each naming its sender.
+var peerCalls = []string{
+	"Cluster.Heartbeat", "Cluster.Vote", "Cluster.Leave", "Cluster.Forward", "Cluster.ToClient",
+	"Cluster.Deliver", "Cluster.Resync", "Cluster.Replicate", "Cluster.RebuildTopics",
+	"Cluster.RebuildHistory", "Cluster.FetchSession", "Cluster.ForgetSession", "Cluster.Revocations",
+	"Cluster.StartedFrom", "Cluster.ReconcileTopics", "Cluster.Digests", "Cluster.Reconcile",
 }
 
 // deliversEach checks delivery on a topic owned by each node, with the
@@ -188,54 +188,61 @@ func TestClusterTLS(t *testing.T) {
 
 	t.Run("refused", func(t *testing.T) {
 		one := c.node("one")
-		call := func(cl *rpc.Client, method string, req interface{}) error {
-			defer cl.Close()
-			var unused bool
-			return cl.Call(method, req, &unused)
-		}
-		// No client certificate.
+		// No client certificate: no link.
 		if conn, err := tls.Dial("tcp", one.tlsAddr, &tls.Config{RootCAs: p.pool, ServerName: "one"}); err == nil {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
-			if err := call(rpc.NewClient(conn), "Cluster.Replicate", &senderReq{Node: "two"}); err == nil {
-				t.Error("a caller without a certificate was served")
+			if l, err := helloAs(conn, "two", "one"); err == nil {
+				l.Close()
+				t.Error("a caller without a certificate was taken")
 			}
 		}
 		// A certificate of another CA, naming a node.
 		other := newTestPKI(t)
-		if cl, err := other.dialPeer(t, one.tlsAddr, "two", "one"); err == nil {
-			if err := call(cl, "Cluster.Replicate", &senderReq{Node: "two"}); err == nil {
-				t.Error("a caller with a certificate of another CA was served")
-			}
+		if l, err := other.dialPeer(t, one.tlsAddr, "two", "one"); err == nil {
+			l.Close()
+			t.Error("a caller with a certificate of another CA was taken")
 		}
 		// A certificate of the CA naming no node.
-		if cl, err := p.dialPeer(t, one.tlsAddr, "intruder", "one"); err == nil {
-			if err := call(cl, "Cluster.Replicate", &senderReq{Node: "intruder"}); err == nil {
-				t.Error("a caller whose certificate names no node was served")
-			}
+		if l, err := p.dialPeer(t, one.tlsAddr, "intruder", "one"); err == nil {
+			l.Close()
+			t.Error("a caller whose certificate names no node was taken")
 		}
 		// Plain TCP to the TLS address.
 		if conn, err := net.DialTimeout("tcp", one.tlsAddr, time.Second); err == nil {
-			conn.SetDeadline(time.Now().Add(2 * time.Second))
-			if err := call(rpc.NewClient(conn), "Cluster.Replicate", &senderReq{Node: "two"}); err == nil {
-				t.Error("a plain caller was served on the TLS address")
+			if l, err := helloAs(conn, "two", "one"); err == nil {
+				l.Close()
+				t.Error("a plain caller was taken on the TLS address")
 			}
 		}
-		// Node two's certificate, for each call that names a sender, naming
-		// node three.
-		for method, req := range spoofable("three") {
-			cl, err := p.dialPeer(t, one.tlsAddr, "two", "one")
-			if err != nil {
-				t.Fatalf("node two's certificate: %v", err)
-			}
-			if err := call(cl, method, req); err == nil || !strings.Contains(err.Error(), `names "three"`) {
-				t.Errorf("%s from two naming three: %v, want it refused", method, err)
+		// Node two's certificate, saying it is node three.
+		certFile, keyFile := p.cert(t, "two")
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if conn, err := tls.Dial("tcp", one.tlsAddr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: p.pool, ServerName: "one"}); err == nil {
+			l, err := helloAs(conn, "three", "one")
+			if err == nil {
+				l.Close()
+				t.Error("node two's certificate was taken as node three")
+			} else if !strings.Contains(err.Error(), `names "three"`) {
+				t.Errorf("node two's certificate as node three: %v, want it refused for naming three", err)
 			}
 		}
-		cl, err := p.dialPeer(t, one.tlsAddr, "two", "one")
+		// Node two, for each call, naming node three as the sender.
+		l, err := p.dialPeer(t, one.tlsAddr, "two", "one")
 		if err != nil {
 			t.Fatalf("node two's certificate: %v", err)
 		}
-		if err := call(cl, "Cluster.Replicate", &senderReq{Node: "two"}); err != nil {
+		defer l.Close()
+		for _, method := range peerCalls {
+			var unused bool
+			if err := l.Call(method, &senderReq{Node: "three"}, &unused, 3*time.Second); err == nil || !strings.Contains(err.Error(), `names "three"`) {
+				t.Errorf("%s from two naming three: %v, want it refused", method, err)
+			}
+		}
+		// And a call naming itself, which is served.
+		var unused bool
+		if err := l.Call("Cluster.Replicate", &senderReq{Node: "two"}, &unused, 3*time.Second); err != nil {
 			t.Errorf("a call from two naming itself: %v", err)
 		}
 		c.assertAlive(t, c.nodes, "after the refused calls")

@@ -66,6 +66,8 @@ type _Conn struct {
 	routes map[string]*subRoute
 	// Reference to the cluster node where the connection has originated. Set only for cluster RPC sessions
 	clnode *ClusterNode
+	// remoteID is a stand-in's client's connection id on its node.
+	remoteID uid.LID
 	// Cluster nodes to inform when disconnected
 	nodes map[string]bool
 
@@ -107,10 +109,13 @@ func (s *_Service) newConn(t net.Conn) *_Conn {
 	return c
 }
 
-// newRpcConn a new connection in cluster
-func (s *_Service) newRpcConn(conn interface{}, connID, sessID uid.LID, clientID uid.ID) *_Conn {
+// newRpcConn makes a stand-in for a client of node, whose connection there
+// is remoteID. Its own connection id is this process's, so it never clashes
+// with another connection here.
+func (s *_Service) newRpcConn(node *ClusterNode, remoteID, sessID uid.LID, clientID uid.ID) *_Conn {
 	c := &_Conn{
-		connID:     connID,
+		connID:     uid.NewLID(),
+		remoteID:   remoteID,
 		clientID:   clientID,
 		sessID:     sessID,
 		MessageIds: message.NewMessageIds(),
@@ -120,7 +125,7 @@ func (s *_Service) newRpcConn(conn interface{}, connID, sessID uid.LID, clientID
 		stop:       make(chan interface{}, 1), // Buffered by 1 just to make it non-blocking
 		service:    s,
 		subs:       message.NewStats(),
-		clnode:     conn.(*ClusterNode),
+		clnode:     node,
 		nodes:      make(map[string]bool, 3),
 		closeC:     make(chan struct{}),
 	}
@@ -518,7 +523,7 @@ func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.Publ
 		// subscriber fetches the message from the log.
 		reliable := isReliable(pub.DeliveryMode) && isReliable(subscription.DeliveryMode)
 		if sub.clnode != nil {
-			remote[sub.clnode] = append(remote[sub.clnode], Delivery{ConnID: sub.connID, Message: &out, Reliable: reliable})
+			remote[sub.clnode] = append(remote[sub.clnode], Delivery{ConnID: sub.remoteID, Message: &out, Reliable: reliable})
 			if !reliable {
 				msgCount++
 			}
@@ -545,12 +550,7 @@ func (c *_Conn) publish(pub utp.Publish, topic *security.Topic, pubMsg *utp.Publ
 // same way, so the client's flow control and message ids stay on one node.
 func (c *_Conn) deliver(m *message.Message, reliable bool) bool {
 	if c.clnode != nil {
-		var unused bool
-		if err := c.clnode.call("Cluster.Proxy", &ClusterResp{Message: m, Reliable: reliable, FromConnID: c.connID}, &unused); err != nil {
-			log.ErrLogger.Err(err).Str("context", "conn.deliver").Int64("connid", int64(c.connID)).Msg("unable to forward message to origin node")
-			return false
-		}
-		return true
+		return Globals.Cluster.proxyDeliver(c, m, reliable)
 	}
 	if !reliable {
 		return c.SendMessage(m)
