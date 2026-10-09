@@ -382,8 +382,6 @@ func (c *Cluster) Revocations(req *RevocationsReq, resp *RevocationsResp) error 
 	if n == nil {
 		return errUnknownNode
 	}
-	// The sender has the capability, whatever it told before.
-	n.hasNow(capRevocations)
 	r := securityState.Load()
 	if r == nil {
 		return errors.New("cluster: the security state is not loaded yet")

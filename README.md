@@ -17,7 +17,9 @@ Don't forget to ⭐ this repo if you like Unitdb!
 - Supports database encryption
 - Supports time-to-live on message entries
 - Supports writing to wildcard topics
+- A query language, UQL: patterns over topics, JSON payload fields, aggregates and indexes
 - Data is safely written to disk with accuracy and high performant block sync technique
+- A server that runs as a cluster: replication, failover by term elections, mutual TLS between nodes
 
 ## Quick Start
 To build Unitdb from source code use go get command.
@@ -34,6 +36,20 @@ Make use of the client by importing it in your Go client source code. For exampl
 Unitdb supports Get, Put, Delete operations. It also supports encryption, batch operations, and writing to wildcard topics. See [usage guide](https://github.com/unit-io/unitdb/tree/master/docs/usage.md). 
 
 Samples are available in the examples directory for reference.
+
+### Querying with UQL
+The [`uql`](uql/doc.go) package is a small query language over the same database: read a topic or a pattern of topics, select and filter on fields of JSON payloads, group and count, write to wildcard topics, delete by id or age, and keep indexes. Values are always parameters, never spliced into the text.
+
+```go
+q, err := uql.New(db) // in every process that writes, before it writes
+defer q.Close()
+
+rows, err := q.Query(ctx, `SELECT topic, title FROM app.project.* LATEST PER TOPIC WHERE workspaceId = $1`, ws)
+rows, err = q.Query(ctx, `SELECT workspaceId, COUNT(*) AS n FROM app.project.* GROUP BY workspaceId ORDER BY n DESC`)
+_, err = q.Exec(ctx, `CREATE INDEX by_ws ON app.project.* (workspaceId) LATEST`)
+```
+
+UQL is built on the engine's query layer, which other tools can use too: `DB.OnWrite` (a callback for each write, with its topic), `DB.MatchTopics` (the topics a pattern matches), `DB.ReadTopic` and `DB.GetEntries` (a topic's entries with their ids and times) and `DB.DeleteTopicEntry`.
 
 ## Running the server
 The server signs client IDs and topic keys with a key only it knows, and refuses to start without one. Generate a key and set it as `encryption_config`'s `key` in `unitdb.conf`, or in the `UNITDB_ENCRYPTION_KEY` environment variable:
@@ -122,6 +138,10 @@ To bring up the Unitdb cluster start 2 or more nodes. For fault tolerance 3 node
 
 Above example shows each Unitdb node running on the same host, so each node must listen on different ports. This would not be necessary if each node ran on a different host.
 
+Nodes keep one connection to each other (`server/internal/peerwire`: length-prefixed frames, a hello that names both ends, and many calls at once on the connection). One node leads, chosen by term elections with a pre-vote, so a node that was cut off can't unseat a leader the others still hear from; it keeps the ring of nodes that places each topic on its owner and its replicas, and a node that leaves says so first. Messages, sessions and the security state replicate to a topic's replicas, with hints kept for a node that is down and handed to it when it is back. [docs/design/cluster-spec.md](docs/design/cluster-spec.md) is the cluster's specification: its behaviour, its contracts with the rest of the server, and its tests.
+
+**Upgrading a cluster to this version:** nodes of this version and of earlier ones can't talk to each other, so stop every node and start them all on the new version together; a mixed cluster never forms. What the nodes stored (messages, sessions, hints, the security state) is read as before.
+
 Nodes talk over mutual TLS when `cluster_config.tls` names the cluster's CA and the node's certificate and key: each node needs a certificate signed by the CA, with its node name as a DNS name and for both server and client use, and a `tls_addr` beside its `addr` in `cluster_config.nodes`. A node takes a cluster connection only from a certificate naming another configured node, and refuses a call on it that names another node as its sender. It still listens on its plain `addr` too, so that a cluster can move to TLS node by node ([docs/rolling-deploys.md](docs/rolling-deploys.md#moving-a-cluster-to-tls)); set `"require": true` once every node is on TLS to close it. Until then, firewall the plain cluster ports to the other nodes.
 
 ```
@@ -161,11 +181,7 @@ The tiny-log queue is maintained in memory with a pre-configured size, and durin
 ## Next steps
 In the future, we intend to enhance the Unitdb with the following features:
 
-- Distributed design: We are working on building out the distributed design of Unitdb, including replication and sharding management to improve its scalability.
 - Developer support and tooling: We are working on building more intuitive tooling, refactoring code structures, and enriching documentation to improve the onboarding experience, enabling developers to quickly integrate Unitdb to their time-series database stack.
 
-## Contributing
-As Unitdb is under active development and at this time Unitdb is not seeking major changes or new features; however, small bugfixes are encouraged. Unitdb is seeking contibution to improve test coverage and documentation.
-
 ## Licensing
-This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE).
+This project is licensed under [Apache-2.0 License](https://github.com/unit-io/unitdb/blob/master/LICENSE). [NOTICE](NOTICE) lists the third-party work it includes, all under permissive licenses. The cluster layer is an independent implementation written from its [specification](docs/design/cluster-spec.md), and replaces the earlier one that was derived from GPL-licensed code.

@@ -18,6 +18,8 @@ package unitdb
 
 import (
 	"encoding/binary"
+
+	"github.com/unit-io/unitdb/message"
 	"strconv"
 	"time"
 	"unsafe"
@@ -35,8 +37,9 @@ type (
 		expiresAt uint32 // expiresAt for recovery from log and not persisted to index file but persisted to the time window file.
 
 		parsed    bool
-		topicHash uint64 // topicHash for recovery from log and not persisted to the DB.
-		cache     []byte // entry from memdb if it exist.
+		topicHash uint64     // topicHash for recovery from log and not persisted to the DB.
+		id        message.ID // the entry's id, as setEntry made it, for write hooks
+		cache     []byte     // entry from memdb if it exist.
 	}
 	// Entry entry is a message entry structure.
 	Entry struct {

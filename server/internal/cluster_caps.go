@@ -18,12 +18,11 @@ package internal
 
 import (
 	"errors"
-	"net/rpc"
 	"os"
 	"strings"
 	"sync"
 
-	"github.com/unit-io/unitdb/server/internal/pkg/log"
+	"github.com/unit-io/unitdb/server/internal/peerwire"
 )
 
 // Nodes of different versions can run in one cluster: each node tells the
@@ -31,13 +30,14 @@ import (
 // only for what that one can do, falling back otherwise. See
 // docs/rolling-deploys.md.
 //
-// The leader's pings carry what each node can do, and a ping's answer what
-// the pinged node can. A node not heard from yet is taken to do everything:
-// a call it then refuses, as a method it lacks, marks that capability as
-// missing, and the call falls back.
+// A node's hello on each connection says what it can do, and so do the
+// leader's heartbeats, for every node, and their answers. A node not heard
+// from yet is taken to do everything: a call it then refuses, as a method
+// it lacks, marks that capability as missing, and the call falls back.
 
-// clusterProtocolVersion is the version of the protocol between nodes.
-const clusterProtocolVersion = 2
+// clusterProtocolVersion is the version of the protocol between nodes. 3 is
+// the peerwire protocol (cluster_transport.go); 2 and before spoke net/rpc.
+const clusterProtocolVersion = 3
 
 // Capabilities a node can have.
 const (
@@ -52,30 +52,19 @@ const (
 	// capResync: a node back in the ring asked for its clients'
 	// subscriptions (Resync).
 	capResync = "resync"
-	// capService: the node sets a forwarded connection's Insecure only for a
-	// trusted service's connection (a client id with uid.AllowService, or a
-	// connection one vouched for with unitdb/service), so the flag can be
-	// taken from it. An older node sends its client's own CONNECT flag.
+	// capRevocations: the security state sent between nodes (Revocations).
+	capRevocations = "revocations"
+	// capService: the node sets a forwarded connection's insecure flag only
+	// for a trusted service (a client id with uid.AllowService, or a
+	// connection one vouched for), so its flag can be taken.
 	capService = "service"
-	// capV2Keys: the node reads v2 client ids and v2 topic keys. A v0.6.0
-	// node issues v2 ones only once every other node is known to have it,
-	// and v1 ones until then, so it is still sent although no call depends
-	// on it: since v0.7.0 a node issues and reads v2 ones only. A node
-	// without it (v0.5.0 or before) can't serve a v0.7.0 node's clients, nor
-	// take its keys: it is warned of (warnV1Peer).
-	capV2Keys = "v2keys"
 	// capTLS: the node listens for cluster connections over mutual TLS. It
 	// is not in allCapabilities: a node has it when cluster_config.tls is
-	// set. No call depends on it; it tells which nodes have moved to TLS.
+	// set.
 	capTLS = "tls"
-	// capRevocations: the node holds the cluster's security state, what
-	// was revoked in each contract (unitdb/revoke), and takes it from the
-	// others (Revocations). An older node is sent none, and refuses no id
-	// or key for being revoked.
-	capRevocations = "revocations"
 )
 
-var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capService, capV2Keys, capRevocations, capReconcile}
+var allCapabilities = []string{capReplicate, capDeliver, capSessions, capResync, capRevocations, capService, capReconcile}
 
 // ownCapabilities are what this node can do: all of them, unless the
 // UNITDB_CLUSTER_CAPS environment variable lists fewer ("none" for none), so
@@ -128,7 +117,7 @@ func ownNodeCapabilities() NodeCapabilities {
 // errCapabilityOff is what a node answers for a call it cannot take, as a
 // method it lacks, so that the caller falls back as for an older node.
 func errCapabilityOff(cap string) error {
-	return errors.New("rpc: can't find method (capability " + cap + " not enabled)")
+	return &peerwire.RemoteError{Code: peerwire.CodeNoMethod, Message: "cluster: method off (capability " + cap + " not enabled)"}
 }
 
 // refuse returns an error for a call that needs cap, if this node lacks it.
@@ -142,12 +131,12 @@ func refuse(cap string) error {
 // missingMethod reports whether err is a node's answer that it lacks the
 // method called, or the capability cap it needs.
 func missingMethod(err error, cap string) bool {
-	var se rpc.ServerError
-	if !errors.As(err, &se) || !strings.Contains(string(se), "can't find method") {
+	var re *peerwire.RemoteError
+	if !errors.As(err, &re) || re.Code != peerwire.CodeNoMethod {
 		return false
 	}
-	i := strings.Index(string(se), "capability ")
-	return i < 0 || strings.Contains(string(se)[i:], cap)
+	i := strings.Index(re.Message, "capability ")
+	return i < 0 || strings.Contains(re.Message[i:], cap)
 }
 
 // peerCapabilities is what this node knows of what another node can do.
@@ -161,32 +150,8 @@ type peerCapabilities struct {
 func (n *ClusterNode) setCapabilities(nc NodeCapabilities) {
 	n.caps.mu.Lock()
 	defer n.caps.mu.Unlock()
-	if n.caps.known == nil || hasCap(n.caps.known.Capabilities, capV2Keys) {
-		warnV1Peer(n.name, nc)
-	}
 	n.caps.known = &nc
 	n.caps.missing = nil
-}
-
-// hasCap reports whether caps holds cap.
-func hasCap(caps []string, cap string) bool {
-	for _, c := range caps {
-		if c == cap {
-			return true
-		}
-	}
-	return false
-}
-
-// warnV1Peer warns, when node first tells it can't do capV2Keys, that the
-// node reads no v2 client ids or topic keys, the only ones this node issues
-// and reads: such a node runs v0.5.0 or before, and must be upgraded to
-// v0.6.0 before the cluster moves to v0.7.0 (docs/rolling-deploys.md).
-func warnV1Peer(node string, nc NodeCapabilities) {
-	if hasCap(nc.Capabilities, capV2Keys) {
-		return
-	}
-	log.ErrLogger.Warn().Str("context", "cluster").Str("node", node).Msg("the node reads no v2 client ids or topic keys, the only ones this node issues and takes: it runs v0.5.0 or before; upgrade it to v0.6.0 first, then to v0.7.0")
 }
 
 // capabilities returns what the node told it can do, if it did.
@@ -218,46 +183,6 @@ func (n *ClusterNode) supports(cap string) bool {
 	return false
 }
 
-// knownToSupport reports whether the node told it can do cap. Unlike
-// supports, a node not heard from yet is taken not to: for what a node is
-// trusted with, rather than a call that falls back.
-func (n *ClusterNode) knownToSupport(cap string) bool {
-	nc, ok := n.capabilities()
-	if !ok {
-		return false
-	}
-	for _, c := range nc.Capabilities {
-		if c == cap {
-			return true
-		}
-	}
-	return false
-}
-
-// hasOlderPeers reports whether a node of the cluster is known to run a
-// version before capService, such as v0.5.0. A node not heard from yet is
-// taken not to be: what this enables (sessions found as such nodes find
-// them, see the CONNECT handler) is weaker than what replaces it.
-func (c *Cluster) hasOlderPeers() bool {
-	if c == nil {
-		return false
-	}
-	for _, n := range c.nodes {
-		if !n.supports(capService) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasNow records that the node can do cap after all, as a call of it the
-// node made shows, until the node tells what it can do again.
-func (n *ClusterNode) hasNow(cap string) {
-	n.caps.mu.Lock()
-	defer n.caps.mu.Unlock()
-	delete(n.caps.missing, cap)
-}
-
 // lacks reports whether err is the node's answer that it cannot do cap, and
 // if so records it, until the node tells what it can do again.
 func (n *ClusterNode) lacks(err error, cap string) bool {
@@ -271,4 +196,11 @@ func (n *ClusterNode) lacks(err error, cap string) bool {
 	}
 	n.caps.missing[cap] = true
 	return true
+}
+
+// knownToSupport reports whether the node told this one it can do cap. Unlike
+// supports, a node not heard from yet is taken not to.
+func (n *ClusterNode) knownToSupport(cap string) bool {
+	nc, ok := n.capabilities()
+	return ok && contains(nc.Capabilities, cap)
 }

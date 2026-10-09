@@ -14,7 +14,7 @@ import (
 	"github.com/unit-io/unitdb/server/internal/store"
 )
 
-// Reconciliation after a restore (docs/backup-restore.md): a
+// Reconciliation after a restore (docs/backup-restore-plan.md, phase 4): a
 // node started with -restored, at a checkpoint, settles each topic it holds
 // with the topic's other holders on the union of their messages, before it
 // takes clients. A message one took in the seconds between two nodes'
@@ -29,9 +29,10 @@ import (
 // and how many the sender holds of it; the receiver, under the topic's
 // lock, stores only as many as it lacks of that count. So two nodes both
 // restored, reconciling the same topic with each other at once, settle on
-// the larger count, not the sum. Nothing is deleted: clients can't delete
-// messages, and the security state merges by itself, as every node holds it
-// all.
+// the larger count, not the sum. Nothing is deleted: clients
+// can't delete messages, and the records the server deletes (WebAuthn
+// credentials, users) are merged by their owners with their revocations
+// instead (TestRestoreKeepsRevocationBetweenCheckpoints).
 //
 // A topic's holders are those of the full ring, as for a rebuild; a holder
 // that isn't live is skipped: when it starts, with -restored, it reconciles

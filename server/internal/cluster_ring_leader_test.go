@@ -3,20 +3,18 @@ package internal
 import (
 	"bytes"
 	"log"
-	"net"
-	"net/rpc"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// routedFollower answers a leader's pings as a follower that saw the cluster
-// route by ring version routed, and supports versions 1 and 2.
+// routedFollower answers a leader's heartbeats as a follower that saw the
+// cluster route by ring version routed, and supports versions 1 and 2.
 type routedFollower struct{ routed int }
 
-func (f *routedFollower) Ping(_ *ClusterPing, pong *ClusterPong) error {
-	*pong = ClusterPong{Node: "follower", NodeCapabilities: NodeCapabilities{Version: clusterProtocolVersion, RingVersions: []int{1, 2}}, RingVersion: f.routed}
+func (f *routedFollower) Heartbeat(req *HeartbeatReq, resp *HeartbeatResp) error {
+	*resp = HeartbeatResp{Node: "follower", Term: req.Term, Ok: true, Caps: NodeCapabilities{Version: clusterProtocolVersion, RingVersions: []int{1, 2}}, RoutedBy: f.routed}
 	return nil
 }
 
@@ -41,9 +39,9 @@ func (s *syncBuffer) String() string {
 // TestNewLeaderMovesHistory starts a node at ring version 2 that leads before
 // it saw the cluster route by any version, as a node upgraded and restarted
 // does when it wins the next election, while its followers route by version
-// 1: its first pings switch them to 2, and it moves the messages it stores by
-// version 1, as they do. With its followers on 2 already, or on none, it moves
-// none.
+// 1: its first round switches them to 2, and it moves the messages it stores
+// by version 1, as they do. With its followers on 2 already, or on none, it
+// moves none.
 func TestNewLeaderMovesHistory(t *testing.T) {
 	logOut := log.Writer()
 	defer log.SetOutput(logOut)
@@ -51,32 +49,22 @@ func TestNewLeaderMovesHistory(t *testing.T) {
 		routed   int
 		wantMove bool
 	}{{1, true}, {2, false}, {0, false}} {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		srv := rpc.NewServer()
-		if err := srv.RegisterName("Cluster", &routedFollower{routed: tc.routed}); err != nil {
-			t.Fatal(err)
-		}
-		go srv.Accept(l)
+		f := &routedFollower{routed: tc.routed}
+		srv := startTestPeer(t, map[string]peerMethod{"Cluster.Heartbeat": method(f.Heartbeat)})
 
 		var out syncBuffer
 		log.SetOutput(&out)
-		n := connectedNode(t, l.Addr().String())
-		n.name = "follower"
-		c := &Cluster{
-			thisNodeName: "leader",
-			ringVersion:  initialRingVersion(0),
-			allNodes:     []string{"leader", "follower"},
-			nodes:        map[string]*ClusterNode{"follower": n},
-			replicas:     2,
-			fo:           &clusterFailover{leader: "leader", heartBeat: time.Second, nodeFailCountLimit: 3},
-		}
+		n := testNode(t, "follower", srv.addr)
+		c := n.owner
+		c.thisNodeName = "leader"
+		c.ringVersion = initialRingVersion(0)
+		c.allNodes = []string{"follower", "leader"}
+		c.replicas = 2
+		c.fo = &clusterFailover{leader: "leader", heartBeat: time.Second, voteTimeout: 3, nodeFailCountLimit: 3}
 		c.fullRing = newRing(c.ringVersion, c.allNodes)
-		c.rehash(nil)
+		c.setLive(c.allNodes)
 
-		c.sendPings()
+		c.leaderRound()
 		if got := c.clusterRing.Load(); got != 2 {
 			t.Errorf("followers on %d: the leader sees the cluster route by %d, want 2", tc.routed, got)
 		}
@@ -87,6 +75,6 @@ func TestNewLeaderMovesHistory(t *testing.T) {
 		if moved != tc.wantMove {
 			t.Errorf("followers on %d: moved history %v, want %v; log:\n%s", tc.routed, moved, tc.wantMove, out.String())
 		}
-		l.Close()
+		srv.stop()
 	}
 }

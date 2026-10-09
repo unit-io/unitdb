@@ -27,10 +27,13 @@ import "encoding/binary"
 //
 // Compact moves the values left in mostly dead blocks to the current block,
 // so that those blocks hold none, and go, with the logs that waited on them.
-// A block is mostly dead when its values take up at most half its data: one
-// mostly live isn't worth moving, and goes as its values are replaced. A
-// value moves under its key's index lock, as a put does: a put or delete of
-// the key waits, and other writes go on.
+// A block is mostly dead when its values take up at most half its data. A
+// mostly live block is moved too once it holds more logs than it has values:
+// the logs of the blocks emptied since that delete from it, and from those,
+// and so on. Its values may never be replaced, a server's session rows put
+// at its start, and moving them costs a write each, which frees a log at
+// least. A value moves under its key's index lock, as a put does: a put or
+// delete of the key waits, and other writes go on.
 //
 // A store that keeps a value per entry and frees blocks itself, as the
 // engine's does, doesn't compact: it finds an entry by its block.
@@ -62,13 +65,19 @@ func (db *DB) Compact() (int, error) {
 				live += b.entryLen(off)
 			}
 		}
-		mostlyDead := live*2 <= b.size()
+		move := live*2 <= b.size()
+		if !move {
+			db.internal.logMu.Lock()
+			pinned := b.pinned()
+			db.internal.logMu.Unlock()
+			move = pinned > int(b.count)
+		}
 		var keys []uint64
-		if mostlyDead {
+		if move {
 			keys = b.liveKeys()
 		}
 		b.RUnlock()
-		if mostlyDead {
+		if move {
 			candidates = append(candidates, candidate{block: b, keys: keys})
 		}
 	}
@@ -138,6 +147,28 @@ func (db *DB) move(key uint64, from *_Block) (bool, error) {
 		return false, err
 	}
 	return true, db.releaseEmptied(emptied, loc.timeID)
+}
+
+// pinned returns the number of logs of released blocks that wait on b,
+// through deletes: they stay in the WAL until b goes (applyLogs). The caller
+// holds logMu.
+func (b *_Block) pinned() int {
+	n := 0
+	seen := map[*_Block]bool{b: true}
+	stack := append([]*_Block(nil), b.waiters...)
+	for len(stack) > 0 {
+		x := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[x] {
+			continue
+		}
+		seen[x] = true
+		if x.state == blockReleased {
+			n += len(x.timeRefs)
+		}
+		stack = append(stack, x.waiters...)
+	}
+	return n
 }
 
 // blocksByID returns the blocks in use, by time ID.

@@ -53,6 +53,10 @@ type (
 
 		// commitComplete is used to signal if batch commit is complete and batch is fully written to DB.
 		commitComplete chan struct{}
+
+		// events are the batch's puts and deletes, for write hooks once it
+		// is committed.
+		events []WriteEvent
 	}
 )
 
@@ -94,6 +98,9 @@ func (b *Batch) PutEntry(e *Entry) error {
 
 	b.index = append(b.index, _BatchIndex{delFlag: false, offset: b.size})
 	b.size += int64(len(e.entry.cache) + 4)
+	if b.db.internal.hooks.active() {
+		b.events = append(b.events, b.db.writeEvent(OpPut, e))
+	}
 
 	// reset message entry
 	e.reset()
@@ -138,6 +145,11 @@ func (b *Batch) DeleteEntry(e *Entry) error {
 
 	b.index = append(b.index, _BatchIndex{delFlag: true, offset: b.size})
 	b.size += int64(len(e.entry.cache) + 4)
+	if b.db.internal.hooks.active() {
+		ev := b.db.writeEvent(OpDelete, e)
+		ev.Payload = nil
+		b.events = append(b.events, ev)
+	}
 
 	// reset message entry
 	e.reset()
@@ -243,7 +255,11 @@ func (b *Batch) Commit() error {
 	if err := b.mem.Commit(); err != nil {
 		return err
 	}
-
+	events := b.events
+	b.events = nil
+	for _, ev := range events {
+		b.db.fire(ev)
+	}
 	return nil
 }
 
@@ -257,6 +273,7 @@ func (b *Batch) reset() {
 func (b *Batch) Abort() {
 	_assert(!b.managed, "managed batch abort not allowed")
 
+	b.events = nil
 	b.reset()
 	b.mem.Abort()
 	b.db.internal.bufPool.Put(b.buffer)

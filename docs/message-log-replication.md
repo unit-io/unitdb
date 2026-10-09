@@ -179,6 +179,6 @@ The store's own records: `TestNewStoreLayout`, `TestMigrateFromV060`,
 `TestMigrateInterrupted`, `TestMigrateSharedNamespace` and
 `TestReservedContracts` (`server/internal/store`), `TestMoveLegacyHints`
 (`server/internal`), `TestGetWithIDs` (the engine); and in
-`server/e2e/release3_test.go`, `TestRollingUpgradeFromV060` and
-`TestClusterMixedV060`, which build the v0.6.0 server from its tag (skipped
-without git and the tag), and `TestSysTopicsOutOfReach`.
+`server/e2e/release3_test.go`, `TestSysTopicsOutOfReach`. (A v0.6.0 node
+can't join a cluster of the peerwire protocol: a store of v0.6.0 is upgraded
+by starting the new version on it, `TestMigrateFromV060`.)

@@ -1,8 +1,6 @@
 package internal
 
 import (
-	"net"
-	"net/rpc"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,23 +17,14 @@ func (s *replicaService) Replicate(req *ReplicateReq, _ *bool) error {
 // TestReplicationDelayLetsWaitersThrough checks that a write someone waits
 // for is not held by the test delay of an asynchronous batch queued before it.
 func TestReplicationDelayLetsWaitersThrough(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
 	svc := &replicaService{}
-	srv := rpc.NewServer()
-	if err := srv.RegisterName("Cluster", svc); err != nil {
-		t.Fatal(err)
-	}
-	go srv.Accept(l)
+	srv := startTestPeer(t, map[string]peerMethod{"Cluster.Replicate": method(svc.Replicate)})
 
 	old := replicationDelay
 	replicationDelay = 5 * time.Second
 	defer func() { replicationDelay = old }()
 
-	n := connectedNode(t, l.Addr().String())
+	n := testNode(t, "replica", srv.addr)
 	n.repl = make(chan replicaItem, replicationQueueSize)
 	n.replDone = make(chan struct{})
 	defer close(n.replDone)
@@ -55,5 +44,27 @@ func TestReplicationDelayLetsWaitersThrough(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&svc.entries); got != 2 {
 		t.Fatalf("replica got %d entries, want both, in one batch", got)
+	}
+}
+
+// TestSeenIDs checks the replicated ids a replica remembers: each once, the
+// oldest dropped past the limit, and one forgotten stored again.
+func TestSeenIDs(t *testing.T) {
+	s := seenIDs{limit: 3}
+	for _, id := range []string{"a", "b", "c"} {
+		if !s.add(id) {
+			t.Fatalf("%s new, taken as seen", id)
+		}
+	}
+	if s.add("b") {
+		t.Fatal("b seen, taken as new")
+	}
+	s.add("d") // drops a
+	if !s.add("a") {
+		t.Fatal("a dropped, still taken as seen")
+	}
+	s.remove("c")
+	if !s.add("c") {
+		t.Fatal("c forgotten, still taken as seen")
 	}
 }

@@ -1,14 +1,19 @@
 package internal
 
 import (
-	"io"
+	"errors"
 	"net"
-	"net/rpc"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/unit-io/unitdb/server/internal/peerwire"
 )
+
+// testReq is a test call's request: it names its sender, as every call must.
+type testReq struct{ Node string }
 
 // countingService counts the calls it receives. Slow blocks until released.
 type countingService struct {
@@ -17,92 +22,99 @@ type countingService struct {
 	release chan struct{}
 }
 
-func (s *countingService) Fast(_ int, _ *int) error {
+func (s *countingService) Fast(_ *testReq, _ *int) error {
 	atomic.AddInt32(&s.calls, 1)
 	return nil
 }
 
-func (s *countingService) Slow(_ int, _ *int) error {
+func (s *countingService) Slow(_ *testReq, _ *int) error {
 	atomic.AddInt32(&s.calls, 1)
 	s.started <- struct{}{}
 	<-s.release
 	return nil
 }
 
-// rpcNode serves countingService on a fixed address and can be restarted
-// there, modelling a cluster node process going away and coming back.
-type rpcNode struct {
-	t    *testing.T
-	addr string
-	svc  *countingService
+// testPeer serves methods as a peer node on a fixed address, and can be
+// restarted there, modelling a node's process going away and coming back.
+type testPeer struct {
+	t       *testing.T
+	addr    string
+	methods map[string]peerMethod
 
 	mu    sync.Mutex
 	l     net.Listener
 	conns []net.Conn
 }
 
-func startRPCNode(t *testing.T) *rpcNode {
-	n := &rpcNode{t: t, addr: "127.0.0.1:0", svc: &countingService{started: make(chan struct{}, 1), release: make(chan struct{})}}
-	n.start()
-	n.addr = n.l.Addr().String()
-	t.Cleanup(n.stop)
-	return n
+func startTestPeer(t *testing.T, methods map[string]peerMethod) *testPeer {
+	p := &testPeer{t: t, addr: "127.0.0.1:0", methods: methods}
+	p.start()
+	p.addr = p.l.Addr().String()
+	t.Cleanup(p.stop)
+	return p
 }
 
-func (n *rpcNode) start() {
-	l, err := net.Listen("tcp", n.addr)
+func (p *testPeer) start() {
+	l, err := net.Listen("tcp", p.addr)
 	if err != nil {
-		n.t.Fatal(err)
+		p.t.Fatal(err)
 	}
-	srv := rpc.NewServer()
-	if err := srv.RegisterName("Test", n.svc); err != nil {
-		n.t.Fatal(err)
-	}
-	n.mu.Lock()
-	n.l = l
-	n.mu.Unlock()
+	p.mu.Lock()
+	p.l = l
+	p.mu.Unlock()
+	incarnation := time.Now().UnixNano()
 	go func() {
 		for {
-			c, err := l.Accept()
+			conn, err := l.Accept()
 			if err != nil {
 				return
 			}
-			n.mu.Lock()
-			n.conns = append(n.conns, c)
-			n.mu.Unlock()
-			go srv.ServeConn(c)
+			p.mu.Lock()
+			p.conns = append(p.conns, conn)
+			p.mu.Unlock()
+			go peerwire.Serve(conn, func(h *peerwire.Hello) (peerwire.Hello, peerwire.Dispatcher, error) {
+				answer := peerwire.Hello{Protocol: clusterProtocolVersion, From: h.To, To: h.From, Incarnation: incarnation}
+				return answer, (&Cluster{}).dispatcher(h.From, p.methods), nil
+			})
 		}
 	}()
 }
 
-func (n *rpcNode) stop() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.l.Close()
-	for _, c := range n.conns {
+func (p *testPeer) stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.l.Close()
+	for _, c := range p.conns {
 		c.Close()
 	}
-	n.conns = nil
+	p.conns = nil
 }
 
-func connectedNode(t *testing.T, addr string) *ClusterNode {
-	n := &ClusterNode{name: "peer", address: addr, connected: true, done: make(chan bool, 1)}
-	endpoint, conn, err := n.dial()
-	if err != nil {
-		t.Fatal(err)
-	}
-	n.endpoint, n.conn = endpoint, conn
-	t.Cleanup(func() { n.done <- true; endpoint.Close() })
+// testNode returns peer name at addr, of a cluster of one node, "this".
+func testNode(t *testing.T, name, addr string) *ClusterNode {
+	c := &Cluster{thisNodeName: "this", allNodes: []string{name, "this"}, nodes: map[string]*ClusterNode{}, quit: make(chan struct{}), departing: map[string]bool{}, proxies: map[proxyKey]*standIn{}}
+	n := &ClusterNode{name: name, address: addr, owner: c}
+	c.nodes[name] = n
+	t.Cleanup(c.shutdown)
 	return n
+}
+
+func countingPeer(t *testing.T) (*testPeer, *countingService) {
+	svc := &countingService{started: make(chan struct{}, 1), release: make(chan struct{})}
+	p := startTestPeer(t, map[string]peerMethod{
+		"Test.Fast": method(svc.Fast),
+		"Test.Slow": method(svc.Slow),
+	})
+	return p, svc
 }
 
 // TestClusterCallAfterRestart checks the first call after the node restarted
 // while the connection was idle reaches the node, exactly once.
 func TestClusterCallAfterRestart(t *testing.T) {
-	srv := startRPCNode(t)
-	node := connectedNode(t, srv.addr)
+	srv, svc := countingPeer(t)
+	node := testNode(t, "peer", srv.addr)
 	var unused int
-	if err := node.call("Test.Fast", 0, &unused); err != nil {
+	if err := node.call("Test.Fast", &testReq{Node: "this"}, &unused); err != nil {
 		t.Fatal(err)
 	}
 
@@ -110,117 +122,141 @@ func TestClusterCallAfterRestart(t *testing.T) {
 	srv.start()
 	time.Sleep(100 * time.Millisecond) // let the client see its connection close
 
-	if err := node.call("Test.Fast", 0, &unused); err != nil {
+	if err := node.call("Test.Fast", &testReq{Node: "this"}, &unused); err != nil {
 		t.Fatalf("first call after restart: %v", err)
 	}
-	if got := atomic.LoadInt32(&srv.svc.calls); got != 2 {
+	if got := atomic.LoadInt32(&svc.calls); got != 2 {
 		t.Fatalf("node received %d calls; want 2", got)
 	}
 }
 
-// eofConn reports io.EOF from reads once closed, as when the node's side of
-// the connection ends at the moment the client is closed.
-type eofConn struct {
-	net.Conn
-	closed int32
-}
-
-func (c *eofConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	if err != nil && atomic.LoadInt32(&c.closed) == 1 {
-		err = io.EOF
-	}
-	return n, err
-}
-
-func (c *eofConn) Close() error {
-	atomic.StoreInt32(&c.closed, 1)
-	return c.Conn.Close()
-}
-
-// TestClusterCallNotRepeated checks a call in flight when the client is closed
-// fails without being sent again: the node may already have processed it.
-// net/rpc fails such a call with ErrShutdown, the same error it returns for a
-// call made on an already shut down client, which was never sent.
+// TestClusterCallNotRepeated checks a call in flight when its connection
+// fails fails as sent, without being sent again: the node may already have
+// processed it.
 func TestClusterCallNotRepeated(t *testing.T) {
-	srv := startRPCNode(t)
-	raw, err := net.Dial("tcp", srv.addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn := &watchedConn{Conn: &eofConn{Conn: raw}}
-	endpoint := rpc.NewClient(conn)
-	node := &ClusterNode{name: "peer", address: srv.addr, endpoint: endpoint, conn: conn, connected: true, done: make(chan bool, 1)}
-	t.Cleanup(func() { node.done <- true })
+	srv, svc := countingPeer(t)
+	node := testNode(t, "peer", srv.addr)
 
 	errc := make(chan error, 1)
 	go func() {
 		var unused int
-		errc <- node.call("Test.Slow", 0, &unused)
+		errc <- node.call("Test.Slow", &testReq{Node: "this"}, &unused)
 	}()
-	<-srv.svc.started
-	endpoint.Close() // as another failed call or reconnect would
-	close(srv.svc.release)
-	if err := <-errc; err == nil {
-		t.Fatal("call on a closed client succeeded")
+	<-svc.started
+	node.closeLink() // as a transport failure would
+	close(svc.release)
+	err := <-errc
+	if err == nil {
+		t.Fatal("call on a failed connection succeeded")
+	}
+	if notSent(err) || retryable(err) {
+		t.Fatalf("a call in flight when its connection failed was taken as not sent: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if got := atomic.LoadInt32(&srv.svc.calls); got != 1 {
+	if got := atomic.LoadInt32(&svc.calls); got != 1 {
 		t.Fatalf("node received the call %d times; want 1", got)
 	}
 }
 
 // TestClusterErrorAnswerKeepsConnection checks that a call the node answers
 // with an error, such as a method it lacks, does not close the connection
-// and fail the calls in flight on it. A peer without a capability answered
-// "can't find method", and a publish forwarded meanwhile was lost.
+// and fail the calls in flight on it.
 func TestClusterErrorAnswerKeepsConnection(t *testing.T) {
-	srv := startRPCNode(t)
-	n := connectedNode(t, srv.addr)
+	srv, svc := countingPeer(t)
+	n := testNode(t, "peer", srv.addr)
 
 	slow := make(chan error, 1)
 	go func() {
 		var r int
-		slow <- n.call("Test.Slow", 0, &r)
+		slow <- n.call("Test.Slow", &testReq{Node: "this"}, &r)
 	}()
-	<-srv.svc.started
+	<-svc.started
+	link := n.currentLink()
 
 	var r int
-	if err := n.call("Test.Missing", 0, &r); !missingMethod(err, "") {
-		t.Fatalf("call of a missing method: %v, want can't find method", err)
+	if err := n.call("Test.Missing", &testReq{Node: "this"}, &r); !missingMethod(err, "") {
+		t.Fatalf("call of a missing method: %v, want no such method", err)
 	}
-	srv.svc.release <- struct{}{}
+	svc.release <- struct{}{}
 	if err := <-slow; err != nil {
 		t.Fatalf("a call in flight failed after another was answered with an error: %v", err)
 	}
-	if _, connected := n.client(); !connected {
-		t.Fatal("the node was disconnected by an error answer")
+	if l := n.currentLink(); l == nil || l != link {
+		t.Fatal("the connection was dropped by an error answer")
 	}
-	if err := n.call("Test.Fast", 0, &r); err != nil {
+	if err := n.call("Test.Fast", &testReq{Node: "this"}, &r); err != nil {
 		t.Fatalf("a call after the error answer: %v", err)
 	}
 }
 
+// TestCallErrorKinds checks how failed calls are told apart: not sent
+// (may be sent again), sent and failed (may have been processed), and
+// answered.
 func TestCallErrorKinds(t *testing.T) {
-	closedWrite := &net.OpError{Op: "write", Net: "tcp", Err: net.ErrClosed}
-	closedRead := &net.OpError{Op: "read", Net: "tcp", Err: net.ErrClosed}
-	answer := rpc.ServerError("rpc: can't find method Cluster.Deliver")
+	srv, svc := countingPeer(t)
+	n := testNode(t, "peer", srv.addr)
+	var r int
+
+	// Answered: the connection works, the call was processed or refused.
+	err := n.call("Test.Missing", &testReq{Node: "this"}, &r)
+	if !peerwire.Answered(err) || notSent(err) || retryable(err) {
+		t.Errorf("answer: %v: answered %v, not sent %v, retryable %v", err, peerwire.Answered(err), notSent(err), retryable(err))
+	}
+
+	// Sent and not answered in time: it may still complete.
+	err = n.callTimeout("Test.Slow", &testReq{Node: "this"}, &r, 50*time.Millisecond)
+	if err == nil || !errors.Is(err, peerwire.ErrTimeout) || notSent(err) || retryable(err) {
+		t.Errorf("timeout: %v: not sent %v, retryable %v", err, notSent(err), retryable(err))
+	}
+	<-svc.started
+	close(svc.release)
+
+	// On a connection closed before: not sent.
+	l := n.currentLink()
+	l.Close()
+	if err := l.Call("Test.Fast", &testReq{Node: "this"}, &r, 0); !notSent(err) || !retryable(err) {
+		t.Errorf("call on a closed connection: %v: not sent %v", err, notSent(err))
+	}
+
+	// To a node that isn't there: not sent.
+	down := testNode(t, "down", "127.0.0.1:1")
+	if err := down.call("Test.Fast", &testReq{Node: "this"}, &r); !notSent(err) || !retryable(err) {
+		t.Errorf("call to a node that is down: %v: not sent %v", err, notSent(err))
+	}
+	// Rejected by the receiver's ring: not processed.
+	if !retryable(errRejected) || notSent(errRejected) {
+		t.Error("a rejected request should be retryable, as sent")
+	}
+	if retryable(nil) || notSent(nil) {
+		t.Error("no error is neither")
+	}
+}
+
+// TestPeerHelloNamesBothEnds checks that a connection is refused when its
+// hello names the wrong node, or a sender its certificate does not name.
+func TestPeerHelloNamesBothEnds(t *testing.T) {
+	c := &Cluster{thisNodeName: "one", allNodes: []string{"one", "three", "two"}, nodes: map[string]*ClusterNode{}}
+	for _, name := range []string{"two", "three"} {
+		c.nodes[name] = &ClusterNode{name: name, owner: c}
+	}
 	for _, tc := range []struct {
-		name           string
-		err            error
-		failed, unsent bool
+		name, cert string
+		hello      peerwire.Hello
+		refused    string
 	}{
-		{"answer", answer, false, false},
-		{"write on a closed connection", closedWrite, true, true},
-		{"read on a closed connection", closedRead, true, false},
-		{"shut down", rpc.ErrShutdown, true, false},
-		{"none", nil, false, false},
+		{"plain", "", peerwire.Hello{Protocol: clusterProtocolVersion, From: "two", To: "one"}, ""},
+		{"own certificate", "two", peerwire.Hello{Protocol: clusterProtocolVersion, From: "two", To: "one"}, ""},
+		{"another node's name", "two", peerwire.Hello{Protocol: clusterProtocolVersion, From: "three", To: "one"}, `names "three"`},
+		{"not a node", "", peerwire.Hello{Protocol: clusterProtocolVersion, From: "intruder", To: "one"}, "not a peer"},
+		{"another node", "", peerwire.Hello{Protocol: clusterProtocolVersion, From: "two", To: "three"}, "not"},
+		{"old protocol", "", peerwire.Hello{Protocol: 2, From: "two", To: "one"}, "protocol"},
 	} {
-		if got := connectionFailed(tc.err); got != tc.failed {
-			t.Errorf("%s: connectionFailed = %v, want %v", tc.name, got, tc.failed)
-		}
-		if got := notSent(tc.err); got != tc.unsent {
-			t.Errorf("%s: notSent = %v, want %v", tc.name, got, tc.unsent)
+		_, d, err := c.acceptPeer(tc.cert)(&tc.hello)
+		switch {
+		case tc.refused == "" && (err != nil || d == nil):
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)):
+			t.Errorf("%s: %v, want it refused (%s)", tc.name, err, tc.refused)
 		}
 	}
 }

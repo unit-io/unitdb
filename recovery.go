@@ -75,6 +75,9 @@ func (db *_SyncHandle) startRecovery() error {
 		return db.syncBlock(timeID, seqs, true, pending, noRelease)
 	})
 	if err == nil {
+		err = db.flushGroup(true, noRelease)
+	}
+	if err == nil {
 		err = db.writePending(pending)
 	}
 	if err != nil {

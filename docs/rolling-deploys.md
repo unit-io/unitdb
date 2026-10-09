@@ -1,5 +1,15 @@
 # Rolling deploys
 
+> **Upgrading to the clean-room cluster layer** (peer protocol 3,
+> `server/internal/peerwire`; [design/cluster-spec.md](design/cluster-spec.md)):
+> its nodes don't talk to nodes of earlier versions, so this upgrade is not a
+> rolling one. Stop every node and start them all on the new version
+> together; what they stored is read as before. Once every node speaks
+> protocol 3, the rest of this document applies to later upgrades between
+> versions that speak it: capabilities, draining, and moving to TLS node by
+> node. The sections on upgrading from v0.3.0 and v0.6.0 node by node are
+> kept as history.
+
 How to upgrade a cluster one node at a time, with the cluster serving
 throughout, and how to make the first upgrade from unitdb v0.3.0. The build order
 below is built: capabilities between nodes (`server/internal/cluster_caps.go`),

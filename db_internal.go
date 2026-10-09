@@ -92,6 +92,9 @@ type (
 		// (deriveFromIndex).
 		recounted bool
 
+		// hooks are called after each put and delete (OnWrite).
+		hooks _Hooks
+
 		// Trie
 		trie *_Trie
 		// topics names the topics: see _TopicNames.
@@ -451,6 +454,7 @@ func (db *DB) setEntry(e *Entry) error {
 	}
 
 	id.SetContract(e.Contract)
+	e.entry.id = id
 	e.entry.seq = seq
 	e.entry.expiresAt = e.ExpiresAt
 	val := snappy.Encode(nil, e.Payload)

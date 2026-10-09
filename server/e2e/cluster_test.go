@@ -30,8 +30,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/rpc"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2495,39 +2493,6 @@ type OldPing struct {
 }
 
 func (OldCluster) Ping(ping *OldPing, unused *bool) error { return nil }
-
-// TestClusterRefusesOldPeer starts a node whose cluster has a node of
-// v0.3.0 up: the node refuses to start, rather than run in a cluster with
-// it, and says why.
-func TestClusterRefusesOldPeer(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	srv := rpc.NewServer()
-	if err := srv.RegisterName("Cluster", OldCluster{}); err != nil {
-		t.Fatal(err)
-	}
-	go srv.Accept(l)
-
-	conf, _ := json.Marshal(map[string]interface{}{
-		"self": "",
-		"nodes": []map[string]string{
-			{"name": "one", "addr": fmt.Sprintf("127.0.0.1:%d", freePort(t))},
-			{"name": "old", "addr": l.Addr().String()},
-		},
-	})
-	s := startServerWith(t, serverOpts{cluster: string(conf), args: []string{"-cluster_self", "one"}, expectExit: true})
-	select {
-	case <-s.exited:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the node started next to a v0.3.0 node")
-	}
-	if logs := s.logs.String(); !strings.Contains(logs, "runs a version from before replication") {
-		t.Errorf("the node exited without saying why:\n%s", logs)
-	}
-}
 
 func followerOf(leader string) string {
 	for _, n := range names {
