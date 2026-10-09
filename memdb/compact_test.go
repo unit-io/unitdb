@@ -197,7 +197,9 @@ func TestCompactFreesMostlyLivePinningBlock(t *testing.T) {
 // a round that started as a block began could put its first writes in the
 // block before: split, it could leave one mostly dead, and rightly compacted.
 func TestCompactLeavesMostlyLiveBlocks(t *testing.T) {
-	const d = 50 * time.Millisecond
+	// Blocks are cut by the clock: wide enough that a slow runner doesn't
+	// cut one between a key's put and the rest of its batch.
+	const d = 100 * time.Millisecond
 	db, err := Open(WithLogFilePath(t.TempDir()), WithTimeBlockInterval(d), WithLogInterval(2*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
