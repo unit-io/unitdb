@@ -44,6 +44,6 @@
 // hashes) and keep indexes, in topics starting with "$uql.". Open it with
 // New in every process that writes, and Close it.
 //
-// Keywords are not case sensitive. "--" starts a comment. The tests show each
-// level at work.
+// Keywords are not case sensitive. "--" starts a comment. The tests
+// (level_test.go) show each level at work.
 package uql
